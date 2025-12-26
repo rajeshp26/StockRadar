@@ -7,7 +7,7 @@ import { Button } from '../ui/button';
 import { PlusCircle, TrendingUp } from 'lucide-react';
 import { AddStockDialog } from './add-stock-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { getStockData } from '@/ai/flows/stock-flow';
+import { getStockData, type StockData } from '@/ai/flows/stock-flow';
 
 type WatchlistProps = {
   initialStocks: Stock[];
@@ -23,37 +23,35 @@ export function Watchlist({ initialStocks }: WatchlistProps) {
 
     try {
       const symbols = stocks.map(s => s.symbol);
-      const stockData = await getStockData({ symbols });
+      const updatedStockData = await getStockData({ symbols });
       
-      setStocks(currentStocks => {
-        return currentStocks.map(stock => {
-          const newData = stockData.find(d => d.symbol === stock.symbol);
-          if (!newData) return stock;
-
-          const newPrice = newData.price;
-          // Check for alerts
-          if (stock.targetBuy && newPrice <= stock.targetBuy) {
-            toast({
-              title: 'Buy Alert!',
-              description: `${stock.symbol} has reached your buy target of $${stock.targetBuy.toFixed(2)}. Current price: $${newPrice.toFixed(2)}`,
-            });
-          }
-          if (stock.targetSell && newPrice >= stock.targetSell) {
-             toast({
-              title: 'Sell Alert!',
-              description: `${stock.symbol} has reached your sell target of $${stock.targetSell.toFixed(2)}. Current price: $${newPrice.toFixed(2)}`,
-            });
-          }
-
-          return {
-            ...stock,
-            price: newPrice,
-            change: newData.change,
-            changePercent: newData.changePercent,
-            name: newData.name,
-          };
-        });
+      const newStocks = stocks.map(stock => {
+        const newData = updatedStockData.find(d => d.symbol === stock.symbol);
+        return newData ? { ...stock, ...newData } : stock;
       });
+
+      setStocks(newStocks);
+
+      // Handle alerts outside of the state setter
+      newStocks.forEach(stock => {
+        const newData = updatedStockData.find(d => d.symbol === stock.symbol);
+        if (!newData) return;
+
+        const newPrice = newData.price;
+        if (stock.targetBuy && newPrice <= stock.targetBuy) {
+          toast({
+            title: 'Buy Alert!',
+            description: `${stock.symbol} has reached your buy target of $${stock.targetBuy.toFixed(2)}. Current price: $${newPrice.toFixed(2)}`,
+          });
+        }
+        if (stock.targetSell && newPrice >= stock.targetSell) {
+          toast({
+            title: 'Sell Alert!',
+            description: `${stock.symbol} has reached your sell target of $${stock.targetSell.toFixed(2)}. Current price: $${newPrice.toFixed(2)}`,
+          });
+        }
+      });
+
     } catch (error) {
       console.error('Error fetching stock data:', error);
       toast({
@@ -65,9 +63,12 @@ export function Watchlist({ initialStocks }: WatchlistProps) {
   }, [stocks, toast]);
 
   useEffect(() => {
+    if (stocks.length > 0) {
+      fetchStockData(); // Initial fetch
+    }
     const interval = setInterval(fetchStockData, 5000); // Update every 5 seconds
     return () => clearInterval(interval);
-  }, [fetchStockData]);
+  }, [fetchStockData, stocks.length]);
 
   const handleAddStock = async (newStockData: Omit<Stock, 'id' | 'name' | 'price' | 'change' | 'changePercent'>) => {
     try {
