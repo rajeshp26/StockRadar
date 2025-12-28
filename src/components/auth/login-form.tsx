@@ -3,14 +3,16 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { useForm, FormProvider } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { KeyRound } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
+import { useAuth } from './auth-provider';
+import { useToast } from '@/hooks/use-toast';
+
 
 const formSchema = z.object({
   email: z.string().email({ message: "Please enter a valid email." }),
@@ -19,6 +21,9 @@ const formSchema = z.object({
 
 export function LoginForm() {
   const router = useRouter();
+   const { signInWithEmail, signInWithPasskey } = useAuth();
+  const { toast } = useToast();
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -27,12 +32,32 @@ export function LoginForm() {
     },
   });
 
-  function onSubmit(values: z.infer<typeof formSchema>) {
-    // In a real app, you would handle authentication here.
-    console.log(values);
-    // On successful login, redirect to the dashboard.
-    router.push('/dashboard');
+  async function onSubmit(values: z.infer<typeof formSchema>) {
+    try {
+      await signInWithEmail(values.email, values.password);
+      router.push('/dashboard');
+    } catch (error: any) {
+      toast({
+        title: 'Login Failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
   }
+
+  async function handlePasskeySignIn() {
+    try {
+      await signInWithPasskey();
+      router.push('/dashboard');
+    } catch (error: any) {
+      toast({
+        title: 'Passkey Sign-in Failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
+  }
+
 
   return (
     <Card className="w-full max-w-sm">
@@ -82,7 +107,7 @@ export function LoginForm() {
             <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
           </div>
         </div>
-        <Button variant="outline" className="w-full">
+        <Button variant="outline" className="w-full" onClick={handlePasskeySignIn}>
           <KeyRound className="mr-2 h-4 w-4" />
           Sign in with Passkey
         </Button>

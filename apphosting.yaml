@@ -1,7 +1,15 @@
 # Settings to manage and configure a Firebase App Hosting backend.
 # https://firebase.google.com/docs/app-hosting/configure
-
 runConfig:
   # Increase this value if you'd like to automatically spin up
   # more instances in response to increased traffic.
   maxInstances: 1
+backend:
+  # The ID of the backend service.
+  id: backend
+  # The location of the backend source code.
+  source: backend
+  # The runtime to use for the backend.
+  runtime: python
+  # The command to start the backend.
+  entrypoint: uvicorn backend.main:app --host 0.0.0.0 --port $PORT

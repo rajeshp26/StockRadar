@@ -1,3 +1,4 @@
+
 'use client';
 
 import { Button } from '@/components/ui/button';
@@ -11,20 +12,33 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { Stock } from '@/lib/types';
+import type { WatchlistItem } from '@/lib/types';
 import { useState } from 'react';
 
+/**
+ * Props for the AddStockDialog component.
+ */
 type AddStockDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAddStock: (stock: Omit<Stock, 'id' | 'name' | 'price' | 'change' | 'changePercent'>) => void;
+  onAddStock: (stock: Omit<WatchlistItem, 'id' | 'userId'>) => void;
 };
 
+/**
+ * A dialog component for adding a new stock to the user's watchlist.
+ * It captures the stock symbol and optional buy/sell targets.
+ * @param {AddStockDialogProps} props - The component props.
+ * @returns {JSX.Element} The rendered dialog component.
+ */
 export function AddStockDialog({ open, onOpenChange, onAddStock }: AddStockDialogProps) {
   const [symbol, setSymbol] = useState('');
   const [targetBuy, setTargetBuy] = useState('');
   const [targetSell, setTargetSell] = useState('');
 
+  /**
+   * Handles the 'Add' button click. It calls the onAddStock callback with the new
+   * stock information and then resets the form fields and closes the dialog.
+   */
   const handleAdd = () => {
     onAddStock({
       symbol: symbol.toUpperCase(),

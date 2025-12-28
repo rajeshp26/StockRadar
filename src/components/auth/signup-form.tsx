@@ -3,13 +3,15 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { useForm, FormProvider } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { KeyRound } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
+import { useAuth } from './auth-provider';
+import { useToast } from '@/hooks/use-toast';
 
 const formSchema = z.object({
   fullName: z.string().min(2, { message: "Name must be at least 2 characters." }),
@@ -19,6 +21,9 @@ const formSchema = z.object({
 
 export function SignupForm() {
   const router = useRouter();
+  const { signUpWithEmail, signUpWithPasskey } = useAuth();
+  const { toast } = useToast();
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -28,11 +33,30 @@ export function SignupForm() {
     },
   });
 
-  function onSubmit(values: z.infer<typeof formSchema>) {
-    // In a real app, you would handle user creation here.
-    console.log(values);
-    // On successful signup, redirect to the dashboard.
-    router.push('/dashboard');
+  async function onSubmit(values: z.infer<typeof formSchema>) {
+    try {
+      await signUpWithEmail(values.email, values.password, values.fullName);
+      router.push('/dashboard');
+    } catch (error: any) {
+      toast({
+        title: 'Sign-up Failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
+  }
+
+  async function handlePasskeySignUp() {
+    try {
+      await signUpWithPasskey();
+      router.push('/dashboard');
+    } catch (error: any) {
+      toast({
+        title: 'Passkey Sign-up Failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
   }
 
   return (
@@ -96,7 +120,7 @@ export function SignupForm() {
             <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
           </div>
         </div>
-        <Button variant="outline" className="w-full mt-4">
+        <Button variant="outline" className="w-full mt-4" onClick={handlePasskeySignUp}>
           <KeyRound className="mr-2 h-4 w-4" />
           Sign up with Passkey
         </Button>

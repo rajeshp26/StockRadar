@@ -1,22 +1,15 @@
+
+'use client';
+
 import {
   Bell,
   Home,
-  LineChart,
   Package2,
   Settings,
-  Users,
 } from 'lucide-react';
 import Link from 'next/link';
-
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
 import { UserNav } from '@/components/user-nav';
 import {
   Sheet,
@@ -24,12 +17,32 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { Logo } from '@/components/icons';
+import { useAuth, AuthProvider } from '@/components/auth/auth-provider';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 
-export default function AuthenticatedLayout({
+function AuthenticatedLayoutContent({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login');
+    }
+  }, [user, loading, router]);
+
+  if (loading || !user) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="h-16 w-16 animate-spin rounded-full border-4 border-dashed border-primary"></div>
+      </div>
+    );
+  }
+
   return (
     <div className="grid min-h-screen w-full md:grid-cols-[220px_1fr] lg:grid-cols-[280px_1fr]">
       <div className="hidden border-r bg-muted/40 md:block">
@@ -129,5 +142,18 @@ export default function AuthenticatedLayout({
         </main>
       </div>
     </div>
+  );
+}
+
+
+export default function AuthenticatedLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <AuthProvider>
+      <AuthenticatedLayoutContent>{children}</AuthenticatedLayoutContent>
+    </AuthProvider>
   );
 }

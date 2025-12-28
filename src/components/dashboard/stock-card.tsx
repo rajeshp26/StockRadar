@@ -1,3 +1,4 @@
+
 'use client';
 
 import {
@@ -19,14 +20,25 @@ import type { Stock } from '@/lib/types';
 import { MoreHorizontal, TrendingDown, TrendingUp, Trash2, Edit } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+/**
+ * Props for the StockCard component.
+ */
 type StockCardProps = {
   stock: Stock;
   onRemove: (stockId: string) => void;
 };
 
+/**
+ * A card component that displays detailed information about a single stock
+ * from the user's watchlist, including its price, daily change, and target prices.
+ * It also provides options to edit or remove the stock.
+ * @param {StockCardProps} props - The component props.
+ * @returns {JSX.Element} The rendered stock card.
+ */
 export function StockCard({ stock, onRemove }: StockCardProps) {
   const [priceFlash, setPriceFlash] = useState('');
 
+  // Creates a visual "flash" effect on the price when it updates.
   useEffect(() => {
     setPriceFlash(stock.change > 0 ? 'bg-green-500/20' : 'bg-red-500/20');
     const timer = setTimeout(() => setPriceFlash(''), 500);

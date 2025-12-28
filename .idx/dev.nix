@@ -1,36 +1,50 @@
-# To learn more about how to use Nix to configure your environment
-# see: https://firebase.google.com/docs/studio/customize-workspace
-{pkgs}: {
-  # Which nixpkgs channel to use.
-  channel = "stable-24.11"; # or "unstable"
-  # Use https://search.nixos.org/packages to find packages
+{pkgs, ...}:
+
+let
+  # Only include packages that are definitely in Nixpkgs
+  # We use Nix for the environment, and Pip for the specific libraries
+  python-with-packages = pkgs.python311.withPackages (ps: with ps; [
+    pip
+    uvicorn
+    fastapi
+    pydantic
+    psycopg2 # Use the standard nix name here
+    pytest
+  ]);
+in
+{
+  channel = "stable-24.11"; 
+
   packages = [
     pkgs.nodejs_20
     pkgs.zulu
+    pkgs.postgresql
+    python-with-packages
   ];
-  # Sets environment variables in the workspace
-  env = {};
-  # This adds a file watcher to startup the firebase emulators. The emulators will only start if
-  # a firebase.json file is written into the user's directory
+
+  env = {
+    LD_LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
+  };
+
   services.firebase.emulators = {
-    # Disabling because we are using prod backends right now
     detect = false;
     projectId = "demo-app";
-    services = ["auth" "firestore"];
+    services = [ "auth" "firestore" ];
   };
+
   idx = {
-    # Search for the extensions you want on https://open-vsx.org/ and use "publisher.id"
-    extensions = [
-      # "vscodevim.vim"
-    ];
+    extensions = [];
     workspace = {
+      # This runs once when the project is first created
       onCreate = {
-        default.openFiles = [
-          "src/app/page.tsx"
-        ];
+        # Install the libraries that Nix couldn't find
+        install-python-libs = ''
+          pip install supabase yfinance
+        '';
+        default.openFiles = [ "src/app/page.tsx" ];
       };
     };
-    # Enable previews and customize configuration
+
     previews = {
       enable = true;
       previews = {
