@@ -1,3 +1,4 @@
+
 'use client';
 
 import { Button } from '@/components/ui/button';
@@ -21,7 +22,7 @@ const formSchema = z.object({
 
 export function SignupForm() {
   const router = useRouter();
-  const { signUpWithEmail } = useAuth();
+  const { signUpWithEmail, syncWithBackend } = useAuth();
   const { toast } = useToast();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -36,6 +37,7 @@ export function SignupForm() {
   async function onSubmit(values: z.infer<typeof formSchema>) {
     try {
       await signUpWithEmail(values.email, values.password, values.fullName);
+      await syncWithBackend(); // Explicitly trigger sync after successful signup
       router.push('/dashboard');
     } catch (error: any) {
       toast({

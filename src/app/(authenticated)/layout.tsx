@@ -26,14 +26,18 @@ function AuthenticatedLayoutContent({
 }: {
   children: React.ReactNode;
 }) {
-  const { user, loading } = useAuth();
+  const { user, loading, appUser, syncWithBackend } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (!loading && !user) {
       router.push('/login');
     }
-  }, [user, loading, router]);
+    // If we have a firebase user but haven't synced our backend profile yet.
+    if (user && !appUser && !loading) {
+      syncWithBackend();
+    }
+  }, [user, appUser, loading, router, syncWithBackend]);
 
   if (loading || !user) {
     return (

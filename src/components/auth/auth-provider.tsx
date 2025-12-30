@@ -1,7 +1,7 @@
 
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
 import { 
   getAuth, 
   onAuthStateChanged, 
@@ -30,6 +30,7 @@ interface AuthContextType {
   signUpWithEmail: (email: string, password: string, fullName: string) => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  syncWithBackend: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,7 +44,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   // This function performs the background sync with our Python backend
-  const syncWithBackend = async () => {
+  const syncWithBackend = useCallback(async () => {
+    // Prevent sync if there is no firebase user.
+    if (!auth.currentUser) {
+        console.warn('syncWithBackend called without a logged-in user.');
+        return;
+    }
     try {
       console.log('Syncing user profile with Python backend...');
       const response = await api.post<AppUser>('/users/sync');
@@ -53,17 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Backend sync failed:', error);
       // We don't block the app here, just log the error.
     }
-  };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       setLoading(false);
-      
-      // If the user just logged in (or we refreshed), trigger the sync in the background
-      if (firebaseUser) {
-        syncWithBackend();
-      } else {
+      // We no longer automatically sync here. Sync is now triggered explicitly.
+      if (!firebaseUser) {
         setAppUser(null);
       }
     });
@@ -74,13 +77,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUpWithEmail = async (email: string, password: string, fullName: string) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(userCredential.user, { displayName: fullName });
-    // Calling setUser will trigger the onAuthStateChanged listener, which then calls syncWithBackend
-    setUser(auth.currentUser);
+    setUser(auth.currentUser); // Update React state immediately
+    // syncWithBackend will be called explicitly from the form now.
   };
 
   const signInWithEmail = async (email: string, password: string) => {
     await signInWithEmailAndPassword(auth, email, password);
-    // onAuthStateChanged will handle the user state update and backend sync
+    // syncWithBackend will be called explicitly from the form now.
   };
 
   const signOut = async () => {
@@ -96,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signUpWithEmail,
     signInWithEmail,
     signOut,
+    syncWithBackend,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
