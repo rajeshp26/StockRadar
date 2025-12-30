@@ -19,10 +19,12 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
             raise HTTPException(status_code=403, detail=f"Invalid Firebase token: {e}")
 
         # Upsert the user and immediately select the record to get the user_id
+        # FIXED: Added 'preferred_currency' to satisfy the NOT NULL constraint in the database.
         user_upsert_res = supabase.table('users').upsert({
             'firebase_uid': firebase_uid,
             'email': email,
             'username': user_record.display_name or email.split('@')[0],
+            'preferred_currency': 'USD',
         }, on_conflict='firebase_uid').select('user_id, email, username').single().execute()
 
         if user_upsert_res.error:
@@ -65,4 +67,3 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-```

@@ -9,8 +9,8 @@ router = APIRouter()
 stock_provider = YFinanceProvider()
 
 # --- Response Models ---
-
-class WatchlistItemOut(BaseModel):
+# FIXED: Renamed to avoid conflict and be more descriptive.
+class WatchlistItemData(BaseModel):
     watchlist_item_id: int
     watchlist_id: int
     company_id: int
@@ -29,10 +29,12 @@ class StockData(BaseModel):
     change: float
     changePercent: float
 
+# FIXED: This is the actual response model for the POST endpoint.
 class AddStockResponse(BaseModel):
-    watchlist_item: WatchlistItemOut
+    watchlist_item: WatchlistItemData
     stock_data: StockData
 
+# --- Input Model ---
 class WatchlistItemIn(BaseModel):
     watchlist_id: int
     symbol: str
@@ -126,7 +128,7 @@ def add_item_to_watchlist(item: WatchlistItemIn, firebase_uid: str = Depends(get
     new_item_db = item_res.data
 
     # 7. Final Response Construction
-    stock_data = StockData(
+    stock_data_out = StockData(
         id=new_item_db['watchlist_item_id'],
         symbol=stock_details.ticker_symbol,
         name=stock_details.long_name,
@@ -135,9 +137,9 @@ def add_item_to_watchlist(item: WatchlistItemIn, firebase_uid: str = Depends(get
         changePercent=stock_details.change_percent
     )
 
-    watchlist_item_out = WatchlistItemOut.model_validate(new_item_db)
+    watchlist_item_out = WatchlistItemData.model_validate(new_item_db)
 
-    return AddStockResponse(watchlist_item=watchlist_item_out, stock_data=stock_data)
+    return AddStockResponse(watchlist_item=watchlist_item_out, stock_data=stock_data_out)
 
 @router.delete("/watchlist-items/{item_id}", status_code=204)
 def remove_item_from_watchlist(item_id: int, firebase_uid: str = Depends(get_user_id_from_header)):
