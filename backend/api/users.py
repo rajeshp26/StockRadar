@@ -41,10 +41,11 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
         db_user = user_upsert_res.data
 
         # 4. Return the user's database profile.
+        # Ensure we safely access the dictionary keys.
         return {
-            "user_id": db_user['user_id'],
-            "email": db_user['email'],
-            "username": db_user['username'],
+            "user_id": db_user.get('user_id'),
+            "email": db_user.get('email'),
+            "username": db_user.get('username'),
         }
 
     except Exception as e:
