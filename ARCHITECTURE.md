@@ -80,14 +80,16 @@ The following SQL schema defines the structure of the Supabase database.
 ```sql
 create table public.users (
   user_id serial not null,
-  firebase_uid character varying(255) not null,
   email character varying(255) not null,
-  username character varying(50) null,
+  username character varying(100) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
-  updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  last_signed_in timestamp with time zone null default CURRENT_TIMESTAMP,
+  preferred_currency character varying(3) not null,
+  firebase_uid text null,
   constraint users_pkey primary key (user_id),
+  constraint users_email_key unique (email),
   constraint users_firebase_uid_key unique (firebase_uid),
-  constraint users_email_key unique (email)
+  constraint fk_users_currency foreign KEY (preferred_currency) references currencies (code)
 ) TABLESPACE pg_default;
 
 create table public.watchlists (
