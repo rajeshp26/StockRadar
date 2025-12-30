@@ -1,3 +1,4 @@
+
 'use client';
 
 import type { Stock, WatchlistItem } from '@/lib/types';
@@ -7,19 +8,10 @@ import { Button } from '../ui/button';
 import { PlusCircle, TrendingUp, DollarSign, Target } from 'lucide-react';
 import { AddStockDialog } from './add-stock-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { getStockData, type StockData } from '@/ai/flows/stock-flow';
-import {
-  useCollection,
-  useFirestore,
-  useMemoFirebase,
-  useUser,
-  addDocumentNonBlocking,
-  deleteDocumentNonBlocking,
-} from '@/firebase';
-import { collection, doc } from 'firebase/firestore';
+import { useAuth } from '../auth/auth-provider';
+import api from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { cn } from '@/lib/utils';
-
 
 type AlertType = 'buy' | 'sell';
 type TriggeredAlerts = {
@@ -36,72 +28,59 @@ type Notification = {
 
 /**
  * The main component for displaying and managing the user's stock watchlist.
- * It handles fetching watchlist items from Firestore, fetching simulated stock data,
+ * It handles fetching watchlist items, fetching real-time stock data from the backend,
  * and orchestrating add/remove operations.
  */
 export function Watchlist() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [isAddDialogOpen, setAddDialogOpen] = useState(false);
+  const { toast } = useToast();
+  const { appUser, loading: isAuthLoading } = useAuth();
+  const [isLoading, setIsLoading] = useState(true);
+  const [watchlistItems, setWatchlistItems] = useState<any[]>([]);
+
   const [triggeredAlerts, setTriggeredAlerts] = useState<TriggeredAlerts>({});
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<'all' | 'buy' | 'sell'>('all');
 
-  const { toast } = useToast();
-  const { user } = useUser();
-  const firestore = useFirestore();
+  const watchlistId = appUser?.default_watchlist_id;
 
-  // Memoize the Firestore collection reference to prevent re-renders.
-  const watchlistCollectionRef = useMemoFirebase(
-    () => (user ? collection(firestore, `users/${user.uid}/watchlist`) : null),
-    [user, firestore]
-  );
-
-  // Subscribe to the user's watchlist collection in Firestore.
-  const { data: watchlistItems, isLoading } =
-    useCollection<WatchlistItem>(watchlistCollectionRef);
-
-  /**
-   * Fetches simulated stock data for the symbols in the user's watchlist,
-   * merges it with the watchlist item data (targets), and updates the local state.
-   * Also triggers buy/sell toast notifications if targets are met.
-   */
-  const fetchStockData = useCallback(async () => {
-    if (!watchlistItems) {
-      if (watchlistItems === null) { // Explicitly check for null (initial state or empty)
-        setStocks([]);
-      }
-      return;
-    }
-    if (watchlistItems.length === 0) {
+  const fetchWatchlist = useCallback(async () => {
+    if (!watchlistId) {
+      if (!isAuthLoading) setIsLoading(false);
       setStocks([]);
+      setWatchlistItems([]);
       return;
     }
-
+    setIsLoading(true);
     try {
-      const symbols = watchlistItems.map((s) => s.symbol);
-      const updatedStockData = await getStockData({ symbols });
+      const response = await api.get(`/watchlists/${watchlistId}`);
+      const { items, stocks: fetchedStocks } = response.data;
+      setWatchlistItems(items || []);
+      setStocks(fetchedStocks || []);
+    } catch (error) {
+      console.error('Failed to fetch watchlist:', error);
+      toast({
+        title: 'Error',
+        description: 'Could not fetch your watchlist.',
+        variant: 'destructive',
+      });
+      setStocks([]);
+      setWatchlistItems([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [watchlistId, toast, isAuthLoading]);
 
-      const newStocks: Stock[] = watchlistItems
-        .map((item) => {
-          const newData = updatedStockData.find((d) => d.symbol === item.symbol);
-          if (!newData) return null;
+  const pollStockData = useCallback(async () => {
+    if (!watchlistId || watchlistItems.length === 0) return;
+    try {
+      const response = await api.get(`/watchlists/${watchlistId}`);
+      const { stocks: updatedStocks } = response.data;
 
-          return {
-            id: item.id,
-            symbol: item.symbol,
-            targetBuy: item.targetBuy ?? null,
-            targetSell: item.targetSell ?? null,
-            name: newData.name,
-            price: newData.price,
-            change: newData.change,
-            changePercent: newData.changePercent,
-          };
-        })
-        .filter((s): s is Stock => s !== null);
-
+      const newStocks: Stock[] = updatedStocks || [];
       setStocks(newStocks);
       
-      // Check for alerts
       const newTriggeredAlerts: TriggeredAlerts = { ...triggeredAlerts };
       const newNotifications: Notification[] = [];
 
@@ -128,7 +107,7 @@ export function Watchlist() {
             timestamp: new Date(),
           };
           newNotifications.push(notification);
-          if (!newTriggeredAlerts[stock.id]) newTriggeredAlerts[stock.id] = {};
+if (!newTriggeredAlerts[stock.id]) newTriggeredAlerts[stock.id] = {};
           newTriggeredAlerts[stock.id].sell = true;
         }
       });
@@ -140,68 +119,72 @@ export function Watchlist() {
       }
 
     } catch (error) {
-      console.error('Error fetching stock data:', error);
-      toast({
-        title: 'Error',
-        description: 'Could not fetch latest stock data.',
-        variant: 'destructive',
-      });
+      console.error('Error polling stock data:', error);
     }
-  }, [watchlistItems, toast, triggeredAlerts]);
+  }, [watchlistId, watchlistItems.length, toast, triggeredAlerts]);
 
-
-  // Effect to periodically refresh stock data.
   useEffect(() => {
-    fetchStockData();
-    const interval = setInterval(fetchStockData, 5000); // Update every 5 seconds
-    return () => clearInterval(interval);
-  }, [fetchStockData]);
+    fetchWatchlist();
+  }, [fetchWatchlist]);
 
-  /**
-   * Handles adding a new stock to the watchlist.
-   * It validates the stock symbol and then adds it to the Firestore collection.
-   * @param {Omit<WatchlistItem, 'id' | 'userId'>} newStockData - The data for the new stock.
-   */
-  const handleAddStock = async (
-    newStockData: Omit<WatchlistItem, 'id' | 'userId'>
-  ) => {
-    if (!watchlistCollectionRef || !user) return;
+  useEffect(() => {
+    const interval = setInterval(pollStockData, 5000); // Poll every 5 seconds
+    return () => clearInterval(interval);
+  }, [pollStockData]);
+
+  const handleAddStock = async (newStockData: Omit<WatchlistItem, 'id' | 'userId'>) => {
+    if (!watchlistId) return;
+
     try {
-      // Validate that the stock symbol exists before adding.
-      const stockInfo = await getStockData({ symbols: [newStockData.symbol] });
-      if (stockInfo && stockInfo.length > 0) {
-        const itemToAdd: Omit<WatchlistItem, 'id'> = {
-          ...newStockData,
-          userId: user.uid,
-        };
-        addDocumentNonBlocking(watchlistCollectionRef, itemToAdd);
-      } else {
-        toast({
-          title: 'Error',
-          description: `Could not find stock with symbol ${newStockData.symbol}.`,
-          variant: 'destructive',
-        });
-      }
-    } catch (error) {
+      const response = await api.post('/watchlist-items', {
+        watchlist_id: watchlistId,
+        symbol: newStockData.symbol,
+        target_buy: newStockData.targetBuy,
+        target_sell: newStockData.targetSell,
+      });
+
+      const { stock_data, watchlist_item } = response.data;
+
+      // Optimistically update UI
+      setStocks(prev => [...prev, {
+        ...stock_data,
+        targetBuy: watchlist_item.target_buy,
+        targetSell: watchlist_item.target_sell
+      }]);
+      setWatchlistItems(prev => [...prev, watchlist_item]);
+
+      toast({
+        title: 'Stock Added',
+        description: `${stock_data.name} has been added to your watchlist.`,
+      });
+    } catch (error: any) {
       console.error('Error adding stock:', error);
       toast({
-        title: 'Error',
-        description: 'An error occurred while adding the stock.',
+        title: 'Error Adding Stock',
+        description: error.response?.data?.detail || 'Could not add the stock.',
         variant: 'destructive',
       });
     }
   };
 
-  /**
-   * Handles removing a stock from the user's watchlist in Firestore.
-   * @param {string} stockId - The document ID of the stock to remove.
-   */
-  const handleRemoveStock = (stockId: string) => {
-    if (!watchlistCollectionRef) return;
-    const docRef = doc(watchlistCollectionRef, stockId);
-    deleteDocumentNonBlocking(docRef);
+  const handleRemoveStock = async (stockId: number) => {
+    try {
+      await api.delete(`/watchlist-items/${stockId}`);
+      setStocks(prev => prev.filter(s => s.id !== stockId));
+      toast({
+        title: 'Stock Removed',
+        description: 'The stock has been removed from your watchlist.',
+      });
+    } catch (error) {
+      console.error('Error removing stock:', error);
+      toast({
+        title: 'Error',
+        description: 'Could not remove the stock.',
+        variant: 'destructive',
+      });
+    }
   };
-  
+
   const buyTriggeredStocks = useMemo(() => stocks.filter(stock => stock.targetBuy && stock.price <= stock.targetBuy), [stocks]);
   const sellTriggeredStocks = useMemo(() => stocks.filter(stock => stock.targetSell && stock.price >= stock.targetSell), [stocks]);
 
@@ -217,16 +200,14 @@ export function Watchlist() {
   }, [filter, stocks, buyTriggeredStocks, sellTriggeredStocks]);
 
 
-  // Display a loading spinner while fetching initial watchlist data.
-  if (isLoading) {
-     return (
+  if (isLoading || isAuthLoading) {
+    return (
       <div className="flex flex-1 items-start justify-center rounded-lg border border-dashed shadow-sm p-8">
         <div className="h-16 w-16 animate-spin rounded-full border-4 border-dashed border-primary"></div>
       </div>
     );
   }
 
-  // Display a welcome/empty state message if the watchlist is empty.
   if (stocks.length === 0 && watchlistItems?.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center p-8">
@@ -249,10 +230,9 @@ export function Watchlist() {
     );
   }
 
-  // Display the grid of stock cards.
   return (
     <div className="w-full max-w-6xl mx-auto p-4 md:p-0">
-      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-3 mb-6">
+       <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-3 mb-6">
         <Card
             className={cn('cursor-pointer hover:bg-muted/50', filter === 'all' && 'bg-muted')}
             onClick={() => setFilter('all')}
@@ -296,7 +276,7 @@ export function Watchlist() {
             <p className="text-xs text-muted-foreground">
               Stocks at or above your sell target
             </p>
-          </CardHeader>
+          </CardContent>
         </Card>
       </div>
 
@@ -312,16 +292,12 @@ export function Watchlist() {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredStocks.map((stock) => (
-          <StockCard key={stock.id} stock={stock} onRemove={handleRemoveStock} />
+          <StockCard key={stock.id} stock={stock} onRemove={() => handleRemoveStock(stock.id)} />
         ))}
       </div>
        {filteredStocks.length === 0 && (
           <div className="col-span-1 md:col-span-2 lg:col-span-3 text-center text-muted-foreground py-10">
-             {stocks.length === 0 && !isLoading ? (
-               <div className="flex flex-1 items-start justify-center rounded-lg p-8">
-                  <div className="h-16 w-16 animate-spin rounded-full border-4 border-dashed border-primary"></div>
-               </div>
-             ) : 'No stocks match the current filter.'}
+             {stocks.length > 0 && 'No stocks match the current filter.'}
           </div>
         )}
       <AddStockDialog
