@@ -8,60 +8,43 @@ router = APIRouter()
 
 @router.post("/users/sync", status_code=200, tags=["Users"])
 def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_header)):
-    # DEBUG LOG
+    """
+    Synchronizes a Firebase user with the Supabase database.
+    This endpoint's sole responsibility is to create or update a user profile.
+    It does NOT handle watchlist creation.
+    """
     print(f"[DEBUG] Python Backend: Received sync request for Firebase UID: {firebase_uid}")
     
     try:
         try:
+            # 1. Get user details from Firebase Admin SDK
             user_record = firebase_admin.auth.get_user(firebase_uid)
             email = user_record.email
         except Exception as e:
             print(f"Firebase Auth Error: {e}")
             raise HTTPException(status_code=403, detail=f"Invalid Firebase token: {e}")
 
-        # Upsert the user and immediately select the record to get the user_id
+        # 2. Upsert the user into the Supabase 'users' table.
+        # This will create a new user or update an existing one based on firebase_uid.
         user_upsert_res = supabase.table('users').upsert({
             'firebase_uid': firebase_uid,
             'email': email,
             'username': user_record.display_name or email.split('@')[0],
-            'preferred_currency': 'USD',
+            'preferred_currency': 'USD', # Default value as per schema
         }, on_conflict='firebase_uid').select('user_id, email, username').single().execute()
 
+        # 3. Handle potential database errors
         if user_upsert_res.error:
             print(f"Supabase Error: {user_upsert_res.error}")
             raise HTTPException(status_code=500, detail=user_upsert_res.error.message)
         
         db_user = user_upsert_res.data
-        db_user_id = db_user['user_id']
 
-        # Ensure a default watchlist exists for the user
-        watchlist_check_res = supabase.table('watchlists').select('id').eq('user_id', db_user_id).eq('is_default', True).execute()
-        
-        if watchlist_check_res.error:
-            raise HTTPException(status_code=500, detail="Failed to check for default watchlist.")
-
-        default_watchlist_id = None
-        # Check if a default watchlist exists by looking at the result data
-        if not watchlist_check_res.data:
-            # If no default watchlist, create one
-            new_watchlist_res = supabase.table('watchlists').insert({
-                'user_id': db_user_id, 
-                'watchlist_name': 'My Watchlist', 
-                'is_default': True
-            }).select('id').single().execute()
-            if new_watchlist_res.error:
-                 raise HTTPException(status_code=500, detail="Failed to create default watchlist.")
-            default_watchlist_id = new_watchlist_res.data['id']
-        else:
-            # If it exists, get the id from the first result
-            default_watchlist_id = watchlist_check_res.data[0]['id']
-
-
+        # 4. Return the user's database profile.
         return {
-            "user_id": db_user_id,
+            "user_id": db_user['user_id'],
             "email": db_user['email'],
             "username": db_user['username'],
-            "default_watchlist_id": default_watchlist_id
         }
 
     except Exception as e:

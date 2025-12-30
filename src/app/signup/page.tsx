@@ -1,3 +1,6 @@
+
+'use client';
+
 import { SignupForm } from '@/components/auth/signup-form';
 import { AuthProvider } from '@/components/auth/auth-provider';
 

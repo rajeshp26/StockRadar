@@ -16,11 +16,19 @@ import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 
 // --- Types for our Backend User ---
+// This now includes the default watchlist id, which will be fetched separately.
 export interface AppUser {
   user_id: number;
   email: string;
   username: string;
   default_watchlist_id: number | null;
+}
+
+// Intermediate type for the user profile from the /users/sync endpoint
+export interface UserProfile {
+    user_id: number;
+    email: string;
+    username: string;
 }
 
 interface AuthContextType {
@@ -45,16 +53,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // This function performs the background sync with our Python backend
   const syncWithBackend = useCallback(async () => {
-    // Prevent sync if there is no firebase user.
     if (!auth.currentUser) {
         console.warn('syncWithBackend called without a logged-in user.');
         return;
     }
     try {
+      // Step 1: Sync user profile
       console.log('Syncing user profile with Python backend...');
-      const response = await api.post<AppUser>('/users/sync');
-      setAppUser(response.data);
-      console.log('Backend sync successful:', response.data);
+      const profileResponse = await api.post<UserProfile>('/users/sync');
+      const userProfile = profileResponse.data;
+      console.log('Backend user sync successful:', userProfile);
+
+      // Step 2: Get or create the default watchlist
+      console.log('Ensuring default watchlist exists...');
+      const watchlistResponse = await api.post<{ id: number }>('/watchlists/default');
+      const defaultWatchlistId = watchlistResponse.data.id;
+      console.log('Default watchlist ID:', defaultWatchlistId);
+
+      // Step 3: Combine into the final AppUser object
+      setAppUser({
+        ...userProfile,
+        default_watchlist_id: defaultWatchlistId,
+      });
+
     } catch (error) {
       console.error('Backend sync failed:', error);
       // We don't block the app here, just log the error.

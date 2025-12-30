@@ -13,6 +13,38 @@ def get_db_user_id(firebase_uid: str) -> int:
         raise HTTPException(status_code=403, detail="User not found.")
     return user_res.data['user_id']
 
+
+@router.post("/watchlists/default", tags=["Watchlists"], status_code=200)
+def get_or_create_default_watchlist(firebase_uid: str = Depends(get_user_id_from_header)):
+    """
+    Idempotent endpoint to get or create a default watchlist for the authenticated user.
+    """
+    db_user_id = get_db_user_id(firebase_uid)
+
+    # 1. Check if a default watchlist already exists for this user.
+    watchlist_check_res = supabase.table('watchlists').select('id').eq('user_id', db_user_id).eq('is_default', True).execute()
+    
+    if watchlist_check_res.error:
+        raise HTTPException(status_code=500, detail="Failed to check for default watchlist.")
+
+    # 2. If a default watchlist is found, return its ID.
+    if watchlist_check_res.data:
+        return {"id": watchlist_check_res.data[0]['id']}
+
+    # 3. If no default watchlist exists, create one.
+    new_watchlist_res = supabase.table('watchlists').insert({
+        'user_id': db_user_id, 
+        'watchlist_name': 'My Watchlist', 
+        'is_default': True
+    }).select('id').single().execute()
+
+    if new_watchlist_res.error:
+         raise HTTPException(status_code=500, detail="Failed to create default watchlist.")
+
+    # 4. Return the ID of the newly created watchlist.
+    return {"id": new_watchlist_res.data['id']}
+
+
 @router.get("/watchlists/{watchlist_id}", tags=["Watchlists"])
 def get_watchlist_by_id(watchlist_id: int, firebase_uid: str = Depends(get_user_id_from_header)):
     db_user_id = get_db_user_id(firebase_uid)
