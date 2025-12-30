@@ -296,7 +296,7 @@ export function Watchlist() {
             <p className="text-xs text-muted-foreground">
               Stocks at or above your sell target
             </p>
-          </CardContent>
+          </CardHeader>
         </Card>
       </div>
 

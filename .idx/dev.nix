@@ -1,15 +1,8 @@
 {pkgs, ...}:
-
 let
-  # Only include packages that are definitely in Nixpkgs
-  # We use Nix for the environment, and Pip for the specific libraries
+  # The only thing Nix needs to provide is the base Python interpreter and pip
   python-with-packages = pkgs.python311.withPackages (ps: with ps; [
-    pip
-    uvicorn
-    fastapi
-    pydantic
-    psycopg2 # Use the standard nix name here
-    pytest
+    pip # Pip is used to manage libraries in the virtual environment
   ]);
 in
 {
@@ -35,16 +28,12 @@ in
   idx = {
     extensions = [];
     workspace = {
-      # This runs once when the project is first created
+      # The onCreate hook is removed as it is no longer needed.
+      # Dependencies are now managed in the .venv virtual environment.
       onCreate = {
-        # Install the libraries that Nix couldn't find
-        install-python-libs = ''
-          pip install supabase yfinance
-        '';
         default.openFiles = [ "src/app/page.tsx" ];
       };
     };
-
     previews = {
       enable = true;
       previews = {

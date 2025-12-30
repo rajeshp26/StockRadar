@@ -3,3 +3,4 @@ uvicorn
 supabase
 pydantic
 yfinance
+firebase-admin
