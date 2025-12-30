@@ -8,20 +8,14 @@ To get started, take a look at src/app/page.tsx.
 
 The application's backend is a separate Python server that the Next.js frontend communicates with. You must run this server manually for the application to be fully functional.
 
-### First-Time Setup
+A convenient script has been created to handle this for you.
 
-If you haven't set up the backend before, run this command in your terminal once:
+### How to Run the Backend
 
-```bash
-python -m venv .venv && source .venv/bin/activate && pip install -r backend/requirements.txt
-```
-
-### Running the Server
-
-To start the backend server, run the following command in your terminal. This will keep the server running and automatically reload it when you make changes to the backend code.
+To set up the environment, install dependencies, and start the backend server, simply run the following command in your terminal:
 
 ```bash
-source .venv/bin/activate && cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+bash start-backend.sh
 ```
 
-You will need to keep this terminal window open. You should see output indicating the server has started, like: `INFO: Uvicorn running on http://0.0.0.0:8000`.
+This will perform all the necessary steps and start the server in the background. You only need to run this command once per session. You will see log output indicating the server has started.
