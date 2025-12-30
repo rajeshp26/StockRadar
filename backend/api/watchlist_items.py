@@ -135,7 +135,7 @@ def add_item_to_watchlist(item: WatchlistItemIn, firebase_uid: str = Depends(get
         changePercent=stock_details.change_percent
     )
 
-    watchlist_item_out = WatchlistItemOut.from_orm(new_item_db)
+    watchlist_item_out = WatchlistItemOut.model_validate(new_item_db)
 
     return AddStockResponse(watchlist_item=watchlist_item_out, stock_data=stock_data)
 

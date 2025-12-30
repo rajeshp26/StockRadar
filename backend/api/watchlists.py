@@ -18,7 +18,7 @@ def get_watchlist_by_id(watchlist_id: int, firebase_uid: str = Depends(get_user_
     db_user_id = get_db_user_id(firebase_uid)
     
     # 1. Authorize and Fetch Watchlist
-    watchlist_res = supabase.table('watchlists').select('id, user_id, watchlist_items!inner(watchlist_item_id, target_buy, target_sell, companies!inner(ticker_symbol, company_name))').eq('id', watchlist_id).single().execute()
+    watchlist_res = supabase.table('watchlists').select('id, user_id, watchlist_items!inner(watchlist_item_id, target_buy, target_sell, companies!inner(company_id, ticker_symbol, company_name))').eq('id', watchlist_id).single().execute()
 
     if watchlist_res.error or not watchlist_res.data:
         raise HTTPException(status_code=404, detail="Watchlist not found.")
@@ -53,9 +53,19 @@ def get_watchlist_by_id(watchlist_id: int, firebase_uid: str = Depends(get_user_
         ticker_symbol = company['ticker_symbol']
         ticker_data = all_tickers_data.get(ticker_symbol)
         
-        current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
-        previous_close = ticker_data.info.get('previousClose')
-        
+        current_price = None
+        previous_close = None
+
+        if ticker_data:
+          current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
+          previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
+
+        if current_price is None:
+            db_market_data = market_data_map.get(company['company_id'])
+            if db_market_data:
+                current_price = float(db_market_data.get('current_price', 0))
+                previous_close = float(db_market_data.get('close_price')) if db_market_data.get('close_price') else current_price
+
         if current_price is None or previous_close is None:
             continue
 
