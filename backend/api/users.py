@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from database import supabase
 import firebase_admin.auth
@@ -67,3 +68,4 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
