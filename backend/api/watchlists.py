@@ -1,11 +1,24 @@
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from database import supabase
-from dependencies import get_user_id_from_header
 from providers.yfinance_provider import YFinanceProvider
+import firebase_admin.auth
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
+
+def get_firebase_uid_from_token(authorization: str) -> str:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header not provided")
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
+    token = parts[1]
+    try:
+        decoded_token = firebase_admin.auth.verify_id_token(token)
+        return decoded_token['uid']
+    except Exception as e:
+        raise HTTPException(status_code=403, detail=f"Invalid Firebase token: {e}")
 
 def get_db_user_id(firebase_uid: str) -> int:
     user_res = supabase.table('users').select('user_id').eq('firebase_uid', firebase_uid).single().execute()
@@ -15,108 +28,114 @@ def get_db_user_id(firebase_uid: str) -> int:
 
 
 @router.post("/watchlists/default", tags=["Watchlists"], status_code=200)
-def get_or_create_default_watchlist(firebase_uid: str = Depends(get_user_id_from_header)):
+def get_or_create_default_watchlist(authorization: str = Header(None)):
     """
     Idempotent endpoint to get or create a default watchlist for the authenticated user.
     """
-    db_user_id = get_db_user_id(firebase_uid)
+    try:
+        firebase_uid = get_firebase_uid_from_token(authorization)
+        db_user_id = get_db_user_id(firebase_uid)
 
-    # 1. Check if a default watchlist already exists for this user.
-    watchlist_check_res = supabase.table('watchlists').select('id').eq('user_id', db_user_id).eq('is_default', True).execute()
-    
-    if watchlist_check_res.error:
-        raise HTTPException(status_code=500, detail="Failed to check for default watchlist.")
+        watchlist_check_res = supabase.table('watchlists').select('id').eq('user_id', db_user_id).eq('is_default', True).execute()
+        
+        if watchlist_check_res.error:
+            raise HTTPException(status_code=500, detail="Failed to check for default watchlist.")
 
-    # 2. If a default watchlist is found, return its ID.
-    if watchlist_check_res.data:
-        return {"id": watchlist_check_res.data[0]['id']}
+        if watchlist_check_res.data:
+            return {"id": watchlist_check_res.data[0]['id']}
 
-    # 3. If no default watchlist exists, create one.
-    new_watchlist_res = supabase.table('watchlists').insert({
-        'user_id': db_user_id, 
-        'watchlist_name': 'My Watchlist', 
-        'is_default': True
-    }).select('id').single().execute()
+        new_watchlist_res = supabase.table('watchlists').insert({
+            'user_id': db_user_id, 
+            'watchlist_name': 'My Watchlist', 
+            'is_default': True
+        }).select('id').single().execute()
 
-    if new_watchlist_res.error:
-         raise HTTPException(status_code=500, detail="Failed to create default watchlist.")
+        if new_watchlist_res.error:
+             raise HTTPException(status_code=500, detail="Failed to create default watchlist.")
 
-    # 4. Return the ID of the newly created watchlist.
-    return {"id": new_watchlist_res.data['id']}
+        return {"id": new_watchlist_res.data['id']}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"[ERROR] get_or_create_default_watchlist: {e}")
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 
 @router.get("/watchlists/{watchlist_id}", tags=["Watchlists"])
-def get_watchlist_by_id(watchlist_id: int, firebase_uid: str = Depends(get_user_id_from_header)):
-    db_user_id = get_db_user_id(firebase_uid)
-    
-    # 1. Authorize and Fetch Watchlist
-    watchlist_res = supabase.table('watchlists').select('id, user_id, watchlist_items!inner(watchlist_item_id, target_buy, target_sell, companies!inner(company_id, ticker_symbol, company_name))').eq('id', watchlist_id).single().execute()
+def get_watchlist_by_id(watchlist_id: int, authorization: str = Header(None)):
+    try:
+        firebase_uid = get_firebase_uid_from_token(authorization)
+        db_user_id = get_db_user_id(firebase_uid)
+        
+        watchlist_res = supabase.table('watchlists').select('id, user_id, watchlist_items!inner(watchlist_item_id, target_buy, target_sell, companies!inner(company_id, ticker_symbol, company_name))').eq('id', watchlist_id).single().execute()
 
-    if watchlist_res.error or not watchlist_res.data:
-        raise HTTPException(status_code=404, detail="Watchlist not found.")
-    if watchlist_res.data['user_id'] != db_user_id:
-        raise HTTPException(status_code=403, detail="Permission denied.")
+        if watchlist_res.error or not watchlist_res.data:
+            raise HTTPException(status_code=404, detail="Watchlist not found.")
+        if watchlist_res.data['user_id'] != db_user_id:
+            raise HTTPException(status_code=403, detail="Permission denied.")
 
-    watchlist_data = watchlist_res.data
-    watchlist_items = watchlist_data.get('watchlist_items', [])
+        watchlist_data = watchlist_res.data
+        watchlist_items = watchlist_data.get('watchlist_items', [])
 
-    if not watchlist_items:
-        return {"id": watchlist_id, "items": [], "stocks": []}
+        if not watchlist_items:
+            return {"id": watchlist_id, "items": [], "stocks": []}
 
-    # 2. Get symbols and fetch real-time data
-    symbols = [item['companies']['ticker_symbol'] for item in watchlist_items if item.get('companies')]
-    if not symbols:
-         return {"id": watchlist_id, "items": watchlist_items, "stocks": []}
-         
-    all_tickers_data = stock_provider.get_tickers_data(symbols)
-    
-    # 3. Get market data from our DB
-    company_ids = [item['companies']['company_id'] for item in watchlist_items if item.get('companies')]
-    market_data_res = supabase.table('current_market_data').select('*').in_('company_id', company_ids).execute()
-    market_data_map = {item['company_id']: item for item in market_data_res.data}
-    
-    # 4. Construct final response
-    stocks_list = []
-    for item in watchlist_items:
-        company = item.get('companies')
-        if not company:
-            continue
+        symbols = [item['companies']['ticker_symbol'] for item in watchlist_items if item.get('companies')]
+        if not symbols:
+             return {"id": watchlist_id, "items": watchlist_items, "stocks": []}
+             
+        all_tickers_data = stock_provider.get_tickers_data(symbols)
+        
+        company_ids = [item['companies']['company_id'] for item in watchlist_items if item.get('companies')]
+        market_data_res = supabase.table('current_market_data').select('*').in_('company_id', company_ids).execute()
+        market_data_map = {item['company_id']: item for item in market_data_res.data}
+        
+        stocks_list = []
+        for item in watchlist_items:
+            company = item.get('companies')
+            if not company:
+                continue
+                
+            ticker_symbol = company['ticker_symbol']
+            ticker_data = all_tickers_data.get(ticker_symbol)
             
-        ticker_symbol = company['ticker_symbol']
-        ticker_data = all_tickers_data.get(ticker_symbol)
-        
-        current_price = None
-        previous_close = None
+            current_price = None
+            previous_close = None
 
-        if ticker_data:
-          current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
-          previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
+            if ticker_data:
+              current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
+              previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
 
-        if current_price is None:
-            db_market_data = market_data_map.get(company['company_id'])
-            if db_market_data:
-                current_price = float(db_market_data.get('current_price', 0))
-                previous_close = float(db_market_data.get('close_price')) if db_market_data.get('close_price') else current_price
+            if current_price is None:
+                db_market_data = market_data_map.get(company['company_id'])
+                if db_market_data:
+                    current_price = float(db_market_data.get('current_price', 0))
+                    previous_close = float(db_market_data.get('close_price')) if db_market_data.get('close_price') else current_price
 
-        if current_price is None or previous_close is None:
-            continue
+            if current_price is None or previous_close is None:
+                continue
 
-        change = current_price - previous_close
-        change_percent = (change / previous_close) * 100 if previous_close else 0
-        
-        stocks_list.append({
-            "id": item['watchlist_item_id'],
-            "symbol": ticker_symbol,
-            "name": company['company_name'],
-            "price": current_price,
-            "change": change,
-            "changePercent": change_percent,
-            "targetBuy": item.get('target_buy'),
-            "targetSell": item.get('target_sell')
-        })
+            change = current_price - previous_close
+            change_percent = (change / previous_close) * 100 if previous_close else 0
+            
+            stocks_list.append({
+                "id": item['watchlist_item_id'],
+                "symbol": ticker_symbol,
+                "name": company['company_name'],
+                "price": current_price,
+                "change": change,
+                "changePercent": change_percent,
+                "targetBuy": item.get('target_buy'),
+                "targetSell": item.get('target_sell')
+            })
 
-    return {
-        "id": watchlist_id,
-        "items": watchlist_items,
-        "stocks": stocks_list
-    }
+        return {
+            "id": watchlist_id,
+            "items": watchlist_items,
+            "stocks": stocks_list
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"[ERROR] get_watchlist_by_id: {e}")
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
