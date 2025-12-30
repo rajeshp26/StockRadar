@@ -10,7 +10,7 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { useAuth } from './auth-provider';
+import { useAuth, AuthProvider } from './auth-provider';
 import { useToast } from '@/hooks/use-toast';
 
 
@@ -19,7 +19,7 @@ const formSchema = z.object({
   password: z.string().min(8, { message: "Password must be at least 8 characters." }),
 });
 
-export function LoginForm() {
+function LoginFormComponent() {
   const router = useRouter();
   const { signInWithEmail } = useAuth();
   const { toast } = useToast();
@@ -114,4 +114,12 @@ export function LoginForm() {
       </CardContent>
     </Card>
   );
+}
+
+export function LoginForm() {
+  return (
+    <AuthProvider>
+      <LoginFormComponent />
+    </AuthProvider>
+  )
 }
