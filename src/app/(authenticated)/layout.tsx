@@ -21,6 +21,18 @@ import { useAuth, AuthProvider } from '@/components/auth/auth-provider';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
+export default function AuthenticatedLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <AuthProvider>
+      <AuthenticatedLayoutContent>{children}</AuthenticatedLayoutContent>
+    </AuthProvider>
+  );
+}
+
 function AuthenticatedLayoutContent({
   children,
 }: {
@@ -146,18 +158,5 @@ function AuthenticatedLayoutContent({
         </main>
       </div>
     </div>
-  );
-}
-
-
-export default function AuthenticatedLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <AuthProvider>
-      <AuthenticatedLayoutContent>{children}</AuthenticatedLayoutContent>
-    </AuthProvider>
   );
 }
