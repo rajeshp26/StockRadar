@@ -17,23 +17,27 @@ def sync_user(sync_request: UserSyncRequest):
     This endpoint's sole responsibility is to create or update a user profile.
     It does NOT handle watchlist creation. It trusts the firebase_uid provided by the frontend.
     """
+    print(">>> DEBUG: SYNC REQUEST RECEIVED")
     try:
         print(f"[DEBUG] Python Backend: Received sync request for Firebase UID: {sync_request.firebase_uid}")
 
-        # Upsert the user into the Supabase 'users' table.
-        user_upsert_res = supabase.table('users').upsert({
+        print("[DEBUG] Python Backend: Attempting Supabase upsert...")
+        # 1. Perform the upsert. .execute() returns the data if successful.
+        # Note: In Python, we don't chain .select() after .upsert()
+        response = supabase.table('users').upsert({
             'firebase_uid': sync_request.firebase_uid,
             'email': sync_request.email,
             'username': sync_request.display_name or sync_request.email.split('@')[0],
             'preferred_currency': 'USD',
-        }, on_conflict='firebase_uid').select('user_id, email, username').single().execute()
+        }, on_conflict='firebase_uid').execute()
+        print("[DEBUG] Python Backend: Supabase upsert executed.")
 
-        # Handle potential database errors
-        if user_upsert_res.error:
-            print(f"Supabase Error: {user_upsert_res.error}")
-            raise HTTPException(status_code=500, detail=user_upsert_res.error.message)
-        
-        db_user = user_upsert_res.data
+        # 2. In Python, the data is in the .data attribute (which is a list)
+        if not response.data:
+            raise Exception("No data returned from database")
+
+        db_user = response.data[0] # Get the first (and likely only) returned row
+        print(f"[DEBUG] Python Backend: User data retrieved: {db_user}")
 
         # Return the user's database profile.
         return {
@@ -42,11 +46,8 @@ def sync_user(sync_request: UserSyncRequest):
             "username": db_user.get('username'),
         }
 
-    except HTTPException as http_exc:
-        # If it's already an HTTPException, just re-raise it.
-        raise http_exc
     except Exception as e:
-        # Catch any other unexpected errors and return a clean 500.
+        # This catches database errors, connection issues, etc.
         print(f"[ERROR] Python Backend Crash in /users/sync: {e}")
         import traceback
         traceback.print_exc()

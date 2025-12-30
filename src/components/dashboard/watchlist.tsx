@@ -43,11 +43,12 @@ export function Watchlist() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<'all' | 'buy' | 'sell'>('all');
 
+  // watchlistId might still be used for add/remove operations, but not for initial fetch anymore
   const watchlistId = appUser?.default_watchlist_id;
   const firebase_uid = user?.uid;
 
   const fetchWatchlist = useCallback(async () => {
-    if (!watchlistId || !firebase_uid) {
+    if (!firebase_uid) {
       if (!isAuthLoading) setIsLoading(false);
       setStocks([]);
       setWatchlistItems([]);
@@ -55,10 +56,10 @@ export function Watchlist() {
     }
     setIsLoading(true);
     try {
-      const response = await api.post(`/watchlists/details`, {
+      const response = await api.post(`/watchlists/default-with-items`, {
          firebase_uid: firebase_uid,
-         watchlist_id: watchlistId 
       });
+      // The new endpoint returns watchlist_id, name, is_default, items, and stocks
       const { items, stocks: fetchedStocks } = response.data;
       setWatchlistItems(items || []);
       setStocks(fetchedStocks || []);
@@ -74,14 +75,13 @@ export function Watchlist() {
     } finally {
       setIsLoading(false);
     }
-  }, [watchlistId, firebase_uid, toast, isAuthLoading]);
+  }, [firebase_uid, toast, isAuthLoading]); // Removed watchlistId from dependencies
 
   const pollStockData = useCallback(async () => {
-    if (!watchlistId || !firebase_uid || watchlistItems.length === 0) return;
+    if (!firebase_uid) return; // Only need firebase_uid, backend handles default watchlist
     try {
-      const response = await api.post(`/watchlists/details`, {
+      const response = await api.post(`/watchlists/default-with-items`, {
          firebase_uid: firebase_uid,
-         watchlist_id: watchlistId 
       });
       const { stocks: updatedStocks } = response.data;
 
@@ -128,7 +128,7 @@ export function Watchlist() {
     } catch (error) {
       console.error('Error polling stock data:', error);
     }
-  }, [watchlistId, firebase_uid, watchlistItems.length, toast, triggeredAlerts]);
+  }, [firebase_uid, watchlistItems.length, toast, triggeredAlerts]); // Removed watchlistId from dependencies
 
   useEffect(() => {
     fetchWatchlist();

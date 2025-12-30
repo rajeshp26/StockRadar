@@ -10,7 +10,7 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 export const metadata: Metadata = {
   title: 'StockerPro - Your Personal Stock Watchlist',
   description: 'Track your favorite stocks, set price targets, and get instant alerts with StockerPro. Your ultimate tool for smart investing.',
-  manifest: '/manifest.json',
+  // Removed: manifest: '/manifest.json',
 };
 
 export const viewport: Viewport = {
@@ -24,6 +24,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="manifest" href="/manifest.json" crossOrigin="use-credentials" />
+      </head>
       <body className={cn('min-h-screen bg-background font-sans antialiased', inter.variable)}>
         <FirebaseClientProvider>
           {children}

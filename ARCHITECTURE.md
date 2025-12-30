@@ -29,6 +29,24 @@ The system uses a decoupled authentication and data architecture: **Firebase for
 4.  **Token Validation (Backend):** The FastAPI backend receives the request, extracts the JWT, and would need to be configured to validate it with Firebase to ensure it is authentic.
 5.  **Database Operation (Backend):** Once the token is validated, the backend uses the `supabase-py` client to execute the requested database operations against the Supabase database.
 
+### 2.1 Dashboard Initial Load & Watchlist Flow
+
+This section details the communication flow specifically for loading the user dashboard and displaying their default watchlist.
+
+1.  **Authentication Completed (Frontend):** The user is successfully authenticated via Firebase.
+2.  **User Profile Sync (Frontend -> Backend `POST /users/sync`):** The frontend sends the user's `firebase_uid`, `email`, and `display_name` to the backend. The backend `upserts` this user data into the Supabase `users` table and returns the user's `user_id`, `email`, and `username`.
+3.  **Default Watchlist Request (Frontend -> Backend `POST /watchlists/default-with-items` - *NEW ENDPOINT*):** The frontend makes a single API call to a new backend endpoint, e.g., `POST /watchlists/default-with-items`, providing the `firebase_uid`.
+4.  **Backend Processes Default Watchlist Request:**
+    *   Receives `firebase_uid`.
+    *   Retrieves the internal `user_id` from the `users` table.
+    *   **Ensures Default Watchlist Exists:** Checks if a default watchlist (`is_default: True`) already exists for this `user_id` in the `watchlists` table.
+        *   If it doesn't exist, a new default watchlist is created.
+    *   **Fetches Watchlist Items & Market Data:** In the same operation, it fetches all items associated with the identified (or newly created) default watchlist from `watchlist_items` and `companies` tables.
+    *   It also integrates real-time or cached market data for each stock (e.g., current price, change, change percentage).
+    *   Structures all this data into a comprehensive JSON response.
+5.  **Backend Response (Single JSON Object):** The backend returns a `200 OK` response with a single JSON object containing the `watchlist_id`, `name`, `is_default` flag, and a detailed `items` array, where each item includes stock details and current market data.
+6.  **Frontend Populates UI:** The frontend receives this single, complete response, extracts the default watchlist details and its items, and populates the dashboard UI efficiently.
+
 ## 3. Running the Application
 
 ### Frontend
@@ -198,7 +216,7 @@ create table public.dividend_metrics (
   dividend_payout_ratio numeric(5, 2) null,
   dividend_yield numeric(5, 2) null,
   dividend_growth_rate_3yr numeric(5, 2) null,
-  dividend_growth_rate_5yr numeric(5: 2) null,
+  dividend_growth_rate_5yr numeric(5, 2) null,
   dividend_growth_rate_10yr numeric(5, 2) null,
   consecutive_years_paid integer null,
   fcfe_coverage_ratio numeric(5, 2) null,
@@ -327,4 +345,3 @@ create table public.income_statements (
 
 create unique INDEX IF not exists unique_annual_income_idx on public.income_statements using btree (company_id, fiscal_year) TABLESPACE pg_default
 where (fiscal_quarter is null);
-```

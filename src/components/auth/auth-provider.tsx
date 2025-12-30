@@ -68,12 +68,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const userProfile = profileResponse.data;
       console.log('Backend user sync successful:', userProfile);
 
-      // Step 2: Get or create the default watchlist
+      // Step 2: Get or create the default watchlist using the new consolidated endpoint
       console.log('Ensuring default watchlist exists...');
-      const watchlistResponse = await api.post<{ id: number }>('/watchlists/default', {
+      // The new endpoint /watchlists/default-with-items returns the full watchlist object
+      const watchlistResponse = await api.post<{ watchlist_id: number, name: string, is_default: boolean, items: any[], stocks: any[] }>('/watchlists/default-with-items', {
         firebase_uid: currentUser.uid,
       });
-      const defaultWatchlistId = watchlistResponse.data.id;
+      // Extract the default_watchlist_id from the response
+      const defaultWatchlistId = watchlistResponse.data.watchlist_id;
       console.log('Default watchlist ID:', defaultWatchlistId);
 
       // Step 3: Combine into the final AppUser object
