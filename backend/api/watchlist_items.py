@@ -11,14 +11,15 @@ stock_provider = YFinanceProvider()
 # --- Response Models ---
 
 class WatchlistItemOut(BaseModel):
-    id: int = Field(alias='watchlist_item_id')
+    watchlist_item_id: int
     watchlist_id: int
-    symbol: str 
+    company_id: int
     target_buy: float | None
     target_sell: float | None
 
     class Config:
         populate_by_name = True
+        from_attributes = True
 
 class StockData(BaseModel):
     id: int 
@@ -134,13 +135,7 @@ def add_item_to_watchlist(item: WatchlistItemIn, firebase_uid: str = Depends(get
         changePercent=stock_details.change_percent
     )
 
-    watchlist_item_out = WatchlistItemOut(
-        id=new_item_db['watchlist_item_id'],
-        watchlist_id=new_item_db['watchlist_id'],
-        symbol=stock_details.ticker_symbol,
-        target_buy=new_item_db['target_buy'],
-        target_sell=new_item_db['target_sell']
-    )
+    watchlist_item_out = WatchlistItemOut.from_orm(new_item_db)
 
     return AddStockResponse(watchlist_item=watchlist_item_out, stock_data=stock_data)
 

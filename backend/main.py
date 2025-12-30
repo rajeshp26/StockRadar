@@ -7,6 +7,8 @@ from firebase_admin import credentials
 app = FastAPI()
 
 # Initialize Firebase Admin SDK
+# This will automatically use the GOOGLE_APPLICATION_CREDENTIALS environment
+# variable in the production environment.
 if not firebase_admin._apps:
     firebase_admin.initialize_app()
 
