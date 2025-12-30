@@ -1,5 +1,5 @@
 export type Stock = {
-  id: string;
+  id: number;
   symbol: string;
   name: string;
   price: number;
@@ -10,7 +10,7 @@ export type Stock = {
 };
 
 export type WatchlistItem = {
-  id: string;
+  id: number;
   userId: string;
   symbol: string;
   targetBuy: number | null;
