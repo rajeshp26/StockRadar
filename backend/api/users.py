@@ -20,7 +20,6 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
             raise HTTPException(status_code=403, detail=f"Invalid Firebase token: {e}")
 
         # Upsert the user and immediately select the record to get the user_id
-        # FIXED: Added 'preferred_currency' to satisfy the NOT NULL constraint in the database.
         user_upsert_res = supabase.table('users').upsert({
             'firebase_uid': firebase_uid,
             'email': email,
@@ -36,11 +35,14 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
         db_user_id = db_user['user_id']
 
         # Ensure a default watchlist exists for the user
-        watchlist_check_res = supabase.table('watchlists').select('id', count='exact').eq('user_id', db_user_id).eq('is_default', True).execute()
+        watchlist_check_res = supabase.table('watchlists').select('id').eq('user_id', db_user_id).eq('is_default', True).execute()
         
+        if watchlist_check_res.error:
+            raise HTTPException(status_code=500, detail="Failed to check for default watchlist.")
+
         default_watchlist_id = None
-        # Check if a default watchlist exists by looking at the count
-        if watchlist_check_res.count == 0:
+        # Check if a default watchlist exists by looking at the result data
+        if not watchlist_check_res.data:
             # If no default watchlist, create one
             new_watchlist_res = supabase.table('watchlists').insert({
                 'user_id': db_user_id, 
@@ -52,8 +54,7 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
             default_watchlist_id = new_watchlist_res.data['id']
         else:
             # If it exists, get the id from the first result
-            watchlist_data = supabase.table('watchlists').select('id').eq('user_id', db_user_id).eq('is_default', True).limit(1).single().execute()
-            default_watchlist_id = watchlist_data.data['id']
+            default_watchlist_id = watchlist_check_res.data[0]['id']
 
 
         return {
@@ -68,4 +69,3 @@ def sync_user(request: Request, firebase_uid: str = Depends(get_user_id_from_hea
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
