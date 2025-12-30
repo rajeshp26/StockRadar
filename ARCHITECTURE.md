@@ -78,6 +78,18 @@ To run the backend server with automatic reloading, which is ideal for developme
 The following SQL schema defines the structure of the Supabase database.
 
 ```sql
+create table public.users (
+  user_id serial not null,
+  firebase_uid character varying(255) not null,
+  email character varying(255) not null,
+  username character varying(50) null,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint users_pkey primary key (user_id),
+  constraint users_firebase_uid_key unique (firebase_uid),
+  constraint users_email_key unique (email)
+) TABLESPACE pg_default;
+
 create table public.watchlists (
   id serial not null,
   user_id integer not null,
@@ -184,7 +196,7 @@ create table public.dividend_metrics (
   dividend_payout_ratio numeric(5, 2) null,
   dividend_yield numeric(5, 2) null,
   dividend_growth_rate_3yr numeric(5, 2) null,
-  dividend_growth_rate_5yr numeric(5, 2) null,
+  dividend_growth_rate_5yr numeric(5: 2) null,
   dividend_growth_rate_10yr numeric(5, 2) null,
   consecutive_years_paid integer null,
   fcfe_coverage_ratio numeric(5, 2) null,
