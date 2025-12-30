@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 
 type AlertType = 'buy' | 'sell';
 type TriggeredAlerts = {
-  [stockId: string]: {
+  [stockId: number]: {
     [key in AlertType]?: boolean;
   };
 };
@@ -35,7 +35,7 @@ export function Watchlist() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [isAddDialogOpen, setAddDialogOpen] = useState(false);
   const { toast } = useToast();
-  const { appUser, loading: isAuthLoading } = useAuth();
+  const { user, appUser, loading: isAuthLoading } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [watchlistItems, setWatchlistItems] = useState<any[]>([]);
 
@@ -44,9 +44,10 @@ export function Watchlist() {
   const [filter, setFilter] = useState<'all' | 'buy' | 'sell'>('all');
 
   const watchlistId = appUser?.default_watchlist_id;
+  const firebase_uid = user?.uid;
 
   const fetchWatchlist = useCallback(async () => {
-    if (!watchlistId) {
+    if (!watchlistId || !firebase_uid) {
       if (!isAuthLoading) setIsLoading(false);
       setStocks([]);
       setWatchlistItems([]);
@@ -54,7 +55,10 @@ export function Watchlist() {
     }
     setIsLoading(true);
     try {
-      const response = await api.get(`/watchlists/${watchlistId}`);
+      const response = await api.post(`/watchlists/details`, {
+         firebase_uid: firebase_uid,
+         watchlist_id: watchlistId 
+      });
       const { items, stocks: fetchedStocks } = response.data;
       setWatchlistItems(items || []);
       setStocks(fetchedStocks || []);
@@ -70,12 +74,15 @@ export function Watchlist() {
     } finally {
       setIsLoading(false);
     }
-  }, [watchlistId, toast, isAuthLoading]);
+  }, [watchlistId, firebase_uid, toast, isAuthLoading]);
 
   const pollStockData = useCallback(async () => {
-    if (!watchlistId || watchlistItems.length === 0) return;
+    if (!watchlistId || !firebase_uid || watchlistItems.length === 0) return;
     try {
-      const response = await api.get(`/watchlists/${watchlistId}`);
+      const response = await api.post(`/watchlists/details`, {
+         firebase_uid: firebase_uid,
+         watchlist_id: watchlistId 
+      });
       const { stocks: updatedStocks } = response.data;
 
       const newStocks: Stock[] = updatedStocks || [];
@@ -107,7 +114,7 @@ export function Watchlist() {
             timestamp: new Date(),
           };
           newNotifications.push(notification);
-if (!newTriggeredAlerts[stock.id]) newTriggeredAlerts[stock.id] = {};
+          if (!newTriggeredAlerts[stock.id]) newTriggeredAlerts[stock.id] = {};
           newTriggeredAlerts[stock.id].sell = true;
         }
       });
@@ -121,7 +128,7 @@ if (!newTriggeredAlerts[stock.id]) newTriggeredAlerts[stock.id] = {};
     } catch (error) {
       console.error('Error polling stock data:', error);
     }
-  }, [watchlistId, watchlistItems.length, toast, triggeredAlerts]);
+  }, [watchlistId, firebase_uid, watchlistItems.length, toast, triggeredAlerts]);
 
   useEffect(() => {
     fetchWatchlist();
@@ -133,10 +140,11 @@ if (!newTriggeredAlerts[stock.id]) newTriggeredAlerts[stock.id] = {};
   }, [pollStockData]);
 
   const handleAddStock = async (newStockData: Omit<WatchlistItem, 'id' | 'userId'>) => {
-    if (!watchlistId) return;
+    if (!watchlistId || !firebase_uid) return;
 
     try {
       const response = await api.post('/watchlist-items', {
+        firebase_uid: firebase_uid,
         watchlist_id: watchlistId,
         symbol: newStockData.symbol,
         target_buy: newStockData.targetBuy,
@@ -168,8 +176,12 @@ if (!newTriggeredAlerts[stock.id]) newTriggeredAlerts[stock.id] = {};
   };
 
   const handleRemoveStock = async (stockId: number) => {
+     if (!firebase_uid) return;
     try {
-      await api.delete(`/watchlist-items/${stockId}`);
+      await api.post(`/watchlist-items/delete`, { 
+        firebase_uid: firebase_uid,
+        item_id: stockId 
+      });
       setStocks(prev => prev.filter(s => s.id !== stockId));
       toast({
         title: 'Stock Removed',

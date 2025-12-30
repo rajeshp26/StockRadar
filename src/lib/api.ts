@@ -13,18 +13,9 @@ api.interceptors.request.use(async (config) => {
   const fullUrl = `${config.baseURL}${config.url}`;
   console.log(`[DEBUG] Frontend: Initiating ${config.method?.toUpperCase()} request to ${fullUrl}`);
   
-  const user = auth.currentUser;
-  if (user) {
-    try {
-      const token = await user.getIdToken();
-      config.headers.Authorization = `Bearer ${token}`;
-      console.log(`[DEBUG] Frontend: Auth token attached.`);
-    } catch (error) {
-      console.error('[DEBUG] Frontend: Failed to get auth token', error);
-    }
-  } else {
-    console.warn('[DEBUG] Frontend: No user logged in, sending request without token.');
-  }
+  // The backend no longer verifies JWT tokens, so we don't need to send the Authorization header.
+  // The firebase_uid is now expected in the request body for authenticated endpoints.
+  
   return config;
 });
 

@@ -8,7 +8,9 @@ import { NextRequest, NextResponse } from 'next/server';
 async function handleProxy(request: NextRequest, method: string, pathParts: string[]) {
   const path = pathParts.join('/');
   const targetUrl = `http://127.0.0.1:8000/${path}`;
-  const authHeader = request.headers.get('Authorization');
+  
+  // Auth header is no longer needed as backend trusts the UID in the body
+  // const authHeader = request.headers.get('Authorization');
 
   console.log(`[DEBUG] Bridge: Received ${method} for ${path}`);
   console.log(`[DEBUG] Bridge: Forwarding to ${targetUrl}`);
@@ -18,11 +20,10 @@ async function handleProxy(request: NextRequest, method: string, pathParts: stri
       method: method,
       headers: {
         'Content-Type': 'application/json',
-        ...(authHeader ? { 'Authorization': authHeader } : {}),
       },
     };
 
-    if (method !== 'GET' && method !== 'DELETE') {
+    if (method !== 'GET') { // Adjusted to allow body for POST, DELETE etc.
        const body = await request.json();
        fetchOptions.body = JSON.stringify(body);
        console.log(`[DEBUG] Bridge: Payload attached.`);
@@ -56,5 +57,6 @@ export async function GET(request: NextRequest, { params }: { params: { path: st
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: { path: string[] } }) {
+  // NOTE: DELETE requests with a body are unconventional but supported here for simplicity.
   return handleProxy(request, 'DELETE', (await params).path);
 }

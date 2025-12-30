@@ -1,28 +1,13 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from database import supabase
-from providers.yfinance_provider import YFinanceProvider, StockDetails
-import firebase_admin.auth
+from providers.yfinance_provider import YFinanceProvider
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
 
 # --- Helpers ---
-
-def get_firebase_uid_from_token(authorization: str) -> str:
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header not provided")
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
-    token = parts[1]
-    try:
-        decoded_token = firebase_admin.auth.verify_id_token(token)
-        return decoded_token['uid']
-    except Exception as e:
-        raise HTTPException(status_code=403, detail=f"Invalid Firebase token: {e}")
-
 def get_db_user_id(firebase_uid: str) -> int:
     res = supabase.table('users').select('user_id').eq('firebase_uid', firebase_uid).single().execute()
     if not res.data:
@@ -54,18 +39,22 @@ class AddStockResponse(BaseModel):
     stock_data: StockData
 
 class WatchlistItemIn(BaseModel):
+    firebase_uid: str
     watchlist_id: int
     symbol: str
     target_buy: float | None = None
     target_sell: float | None = None
 
+class DeleteItemRequest(BaseModel):
+    firebase_uid: str
+    item_id: int
+
 # --- Endpoints ---
 
 @router.post("/watchlist-items", status_code=201, response_model=AddStockResponse)
-def add_item_to_watchlist(item: WatchlistItemIn, authorization: str = Header(None)):
+def add_item_to_watchlist(item: WatchlistItemIn):
     try:
-        firebase_uid = get_firebase_uid_from_token(authorization)
-        db_user_id = get_db_user_id(firebase_uid)
+        db_user_id = get_db_user_id(item.firebase_uid)
         
         watchlist_res = supabase.table('watchlists').select('user_id').eq('id', item.watchlist_id).single().execute()
         if not watchlist_res.data or watchlist_res.data['user_id'] != db_user_id:
@@ -147,17 +136,16 @@ def add_item_to_watchlist(item: WatchlistItemIn, authorization: str = Header(Non
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 
-@router.delete("/watchlist-items/{item_id}", status_code=204)
-def remove_item_from_watchlist(item_id: int, authorization: str = Header(None)):
+@router.post("/watchlist-items/delete", status_code=204)
+def remove_item_from_watchlist(req: DeleteItemRequest):
     try:
-        firebase_uid = get_firebase_uid_from_token(authorization)
-        db_user_id = get_db_user_id(firebase_uid)
+        db_user_id = get_db_user_id(req.firebase_uid)
         
-        item_res = supabase.table('watchlist_items').select('watchlist_item_id, watchlists!inner(user_id)').eq('watchlist_item_id', item_id).single().execute()
+        item_res = supabase.table('watchlist_items').select('watchlist_item_id, watchlists!inner(user_id)').eq('watchlist_item_id', req.item_id).single().execute()
         if not item_res.data or item_res.data['watchlists']['user_id'] != db_user_id:
             raise HTTPException(status_code=404, detail="Item not found or permission denied.")
 
-        delete_res = supabase.table('watchlist_items').delete().eq('watchlist_item_id', item_id).execute()
+        delete_res = supabase.table('watchlist_items').delete().eq('watchlist_item_id', req.item_id).execute()
 
         if delete_res.error:
             raise HTTPException(status_code=500, detail=f"Database error: {delete_res.error.message}")

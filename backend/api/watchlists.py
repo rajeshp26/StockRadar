@@ -1,24 +1,14 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from database import supabase
 from providers.yfinance_provider import YFinanceProvider
-import firebase_admin.auth
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
 
-def get_firebase_uid_from_token(authorization: str) -> str:
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header not provided")
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
-    token = parts[1]
-    try:
-        decoded_token = firebase_admin.auth.verify_id_token(token)
-        return decoded_token['uid']
-    except Exception as e:
-        raise HTTPException(status_code=403, detail=f"Invalid Firebase token: {e}")
+class UidRequest(BaseModel):
+    firebase_uid: str
 
 def get_db_user_id(firebase_uid: str) -> int:
     user_res = supabase.table('users').select('user_id').eq('firebase_uid', firebase_uid).single().execute()
@@ -28,13 +18,12 @@ def get_db_user_id(firebase_uid: str) -> int:
 
 
 @router.post("/watchlists/default", tags=["Watchlists"], status_code=200)
-def get_or_create_default_watchlist(authorization: str = Header(None)):
+def get_or_create_default_watchlist(req: UidRequest):
     """
     Idempotent endpoint to get or create a default watchlist for the authenticated user.
     """
     try:
-        firebase_uid = get_firebase_uid_from_token(authorization)
-        db_user_id = get_db_user_id(firebase_uid)
+        db_user_id = get_db_user_id(req.firebase_uid)
 
         watchlist_check_res = supabase.table('watchlists').select('id').eq('user_id', db_user_id).eq('is_default', True).execute()
         
@@ -61,11 +50,14 @@ def get_or_create_default_watchlist(authorization: str = Header(None)):
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 
-@router.get("/watchlists/{watchlist_id}", tags=["Watchlists"])
-def get_watchlist_by_id(watchlist_id: int, authorization: str = Header(None)):
+@router.post("/watchlists/details", tags=["Watchlists"])
+def get_watchlist_by_id(req: UidRequest, body: dict):
     try:
-        firebase_uid = get_firebase_uid_from_token(authorization)
-        db_user_id = get_db_user_id(firebase_uid)
+        watchlist_id = body.get("watchlist_id")
+        if not watchlist_id:
+            raise HTTPException(status_code=400, detail="watchlist_id is required.")
+
+        db_user_id = get_db_user_id(req.firebase_uid)
         
         watchlist_res = supabase.table('watchlists').select('id, user_id, watchlist_items!inner(watchlist_item_id, target_buy, target_sell, companies!inner(company_id, ticker_symbol, company_name))').eq('id', watchlist_id).single().execute()
 

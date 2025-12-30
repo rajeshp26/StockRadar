@@ -16,7 +16,6 @@ import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 
 // --- Types for our Backend User ---
-// This now includes the default watchlist id, which will be fetched separately.
 export interface AppUser {
   user_id: number;
   email: string;
@@ -57,16 +56,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('syncWithBackend called without a logged-in user.');
         return;
     }
+    const currentUser = auth.currentUser;
     try {
       // Step 1: Sync user profile
       console.log('Syncing user profile with Python backend...');
-      const profileResponse = await api.post<UserProfile>('/users/sync');
+      const profileResponse = await api.post<UserProfile>('/users/sync', {
+        firebase_uid: currentUser.uid,
+        email: currentUser.email,
+        display_name: currentUser.displayName,
+      });
       const userProfile = profileResponse.data;
       console.log('Backend user sync successful:', userProfile);
 
       // Step 2: Get or create the default watchlist
       console.log('Ensuring default watchlist exists...');
-      const watchlistResponse = await api.post<{ id: number }>('/watchlists/default');
+      const watchlistResponse = await api.post<{ id: number }>('/watchlists/default', {
+        firebase_uid: currentUser.uid,
+      });
       const defaultWatchlistId = watchlistResponse.data.id;
       console.log('Default watchlist ID:', defaultWatchlistId);
 
