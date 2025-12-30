@@ -21,7 +21,7 @@ const formSchema = z.object({
 
 export function SignupForm() {
   const router = useRouter();
-  const { signUpWithEmail, signUpWithPasskey } = useAuth();
+  const { signUpWithEmail } = useAuth();
   const { toast } = useToast();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -47,16 +47,10 @@ export function SignupForm() {
   }
 
   async function handlePasskeySignUp() {
-    try {
-      await signUpWithPasskey();
-      router.push('/dashboard');
-    } catch (error: any) {
-      toast({
-        title: 'Passkey Sign-up Failed',
-        description: error.message,
-        variant: 'destructive',
+    toast({
+        title: 'Coming Soon!',
+        description: 'Passkey support is not yet implemented.',
       });
-    }
   }
 
   return (

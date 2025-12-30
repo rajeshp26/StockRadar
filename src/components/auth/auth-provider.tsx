@@ -32,14 +32,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  appUser: null,
-  loading: true,
-  signUpWithEmail: async () => {},
-  signInWithEmail: async () => {},
-  signOut: async () => {},
-});
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const { auth } = initializeFirebase();
 
@@ -81,11 +74,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUpWithEmail = async (email: string, password: string, fullName: string) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(userCredential.user, { displayName: fullName });
+    // Calling setUser will trigger the onAuthStateChanged listener, which then calls syncWithBackend
     setUser(auth.currentUser);
   };
 
   const signInWithEmail = async (email: string, password: string) => {
     await signInWithEmailAndPassword(auth, email, password);
+    // onAuthStateChanged will handle the user state update and backend sync
   };
 
   const signOut = async () => {
@@ -107,5 +102,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export const useAuth = () => {
-  return useContext(AuthContext);
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };
