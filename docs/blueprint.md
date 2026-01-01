@@ -1,19 +1,23 @@
-# **App Name**: StockerPro
+# **Product Blueprint**: StockerPro
 
-## Core Features:
+## Core Vision:
+To provide investors with a comprehensive, data-driven stock companion that goes beyond price tracking. StockerPro combines real-time price monitoring with automated, deep fundamental analysis and AI-driven insights.
 
-- Stock Watchlist Management: Users can add stocks to their watchlist, specify target buy and sell prices, and track their portfolio.
-- Market Price Sync: The app automatically syncs stock data such as stock prices.
-- Buy/Sell Alerts: The app provides notifications when stocks hit their target buy or sell prices.
-- User Authentication: Enable user registration and login with email/password and passkey. Supports OAuth in the future.
-- PWA Compatibility: The app functions as a Progressive Web App (PWA) for use on mobile devices and can be converted to iOS and Android apps.
+## Key Product Pillars:
 
-## Style Guidelines:
+- **Intelligent Watchlist Management:** Users add stocks with custom target prices. The system identifies buy/sell opportunities based on deep data, not just current price.
+- **Deep Fundamental Analytics:** Automated ingestion of full historical financial statements (Income, Balance, Cash Flow) and key ratios (P/E, Margins, Liquidity) for every tracked stock.
+- **Buy/Sell Alerts:** Instant notifications when market conditions align with user-defined target thresholds.
+- **AI-Driven Stock Analysis (Future):** Leveraging Google Genkit for automated fundamental qualitative analysis based on the ingested financial database.
+- **Cross-Platform Accessibility:** Progressive Web App (PWA) compatibility for a native feel on iOS, Android, and desktop.
+- **Secure Data Bridge:** A decoupled architecture ensuring high performance and data security through a secure backend proxy.
 
-- Primary color: Deep blue (#3F51B5) to represent stability and trust in financial data.
-- Background color: Light gray (#F0F0F0) for a clean, modern interface.
-- Accent color: Green (#4CAF50) to highlight positive trends and investment opportunities.
-- Body and headline font: 'Inter', a grotesque-style sans-serif with a modern look suitable for displaying financial data and general information.
-- Use financial-themed icons for navigation and data visualization.
-- Clean and intuitive layout with clear data presentation.
-- Smooth transitions when updating stock prices.
+## Style & Experience Guidelines:
+
+- **Trust-Focused Aesthetics:**
+    - Primary color: Deep blue (#3F51B5) for stability.
+    - Background: Light gray (#F0F0F0) for clarity.
+    - Accent: Green (#4CAF50) for growth indicators.
+- **Modern Typography:** Uses 'Inter' (sans-serif) for high readability of complex financial figures.
+- **Performance First:** The "Fast Add, Deep Sync" pattern ensures the UI stays responsive while heavy data ingestion happens in the background.
+- **Clean Layout:** Intuitive grid-based presentation of stock cards with clear hierarchy for fundamental vs. price data.

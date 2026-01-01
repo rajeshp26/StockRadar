@@ -1,21 +1,69 @@
-# Firebase Studio
+# StockerPro: Deep Financial Analytics Platform
 
-This is a NextJS starter in Firebase Studio.
+StockerPro is a comprehensive personal stock analytics tool built with Next.js 15, FastAPI, and Supabase. It is designed to automatically build a local financial database for stocks you track, enabling deep fundamental analysis.
 
-To get started, take a look at src/app/page.tsx.
+## 🚀 Key Features
 
-## Running the Backend (Python Server)
+*   **Deep Financial Sync:** Adding a stock triggers an automated background ingestion process. The system fetches the last 4+ years of Income Statements, Balance Sheets, and Cash Flow statements.
+*   **Comprehensive Statistics:** Automatically captures TTM (Trailing Twelve Months) metrics, including P/E ratios, Margins, Return on Assets (ROA), Return on Equity (ROE), and Liquidity ratios.
+*   **Dividend & Earnings Tracking:** Maintains a full historical record of dividend payments and earnings surprise data for tracked companies.
+*   **Secure API Bridge:** Utilizes a Next.js API Bridge to facilitate secure, authenticated communication between the frontend and the Python backend.
+*   **Scalable Architecture:** Implements a "Fast Add, Deep Sync" pattern, where the UI responds immediately while heavy data fetching occurs in the background.
 
-The application's backend is a separate Python server that the Next.js frontend communicates with. You must run this server manually for the application to be fully functional.
+---
 
-A convenient script has been created to handle this for you.
+## 🛠️ Getting Started
 
-### How to Run the Backend
+### 1. Frontend Setup
+The Next.js frontend is managed automatically by the environment.
+*   **Port:** 9002
+*   **Command:** `npm run dev`
 
-To set up the environment, install dependencies, and start the backend server, simply run the following command in your terminal:
+### 2. Backend Setup (Python)
+The backend requires a dedicated virtual environment and specific path configurations to handle its service-oriented architecture.
 
+**Automatic Startup:**
 ```bash
 bash start-backend.sh
 ```
 
-This will perform all the necessary steps and start the server in the background. You only need to run this command once per session. You will see log output indicating the server has started.
+**Manual Startup (Recommended for Debugging):**
+```bash
+# 1. Activate Environment
+source .venv/bin/activate
+
+# 2. Install Dependencies
+pip install -r backend/requirements.txt
+
+# 3. Start the Server
+export PYTHONPATH=$PYTHONPATH:$(pwd)/backend
+cd backend
+uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+---
+
+## 🧪 Testing
+
+The project includes functional test cases to verify the data ingestion pipeline independently of the UI.
+
+1.  Ensure the backend server is running.
+2.  Follow the detailed instructions in the **[Functional Testing Guide](docs/test_deep_sync_guide.md)** to execute the `test_deep_sync.py` suite.
+
+---
+
+## 📂 Project Structure
+
+*   `src/app/`: Next.js App Router (Dashboard, Auth, Landing).
+*   `src/app/api/proxy/`: The Secure API Bridge implementation.
+*   `backend/api/`: FastAPI feature routers (Watchlists, Users, Items).
+*   `backend/services/`: Core synchronization and data transformation services.
+*   `backend/providers/`: External data source abstractions (yfinance).
+*   `docs/`: Detailed technical specifications and manuals.
+
+---
+
+## 🔗 Documentation
+
+*   **[Full Architecture Guide](ARCHITECTURE.md):** Deep dive into the data flow, trust models, and schemas.
+*   **[Testing Guide](docs/test_deep_sync_guide.md):** Steps for independent backend verification.

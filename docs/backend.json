@@ -1,102 +1,70 @@
 
 {
+  "project": "StockerPro",
+  "architecture": "Next.js Bridge Proxy <-> FastAPI <-> Supabase",
   "entities": {
     "User": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "User",
-      "type": "object",
-      "description": "Represents a user of the StockerPro application, managed by Firebase Authentication. User data is not stored in a separate Firestore collection.",
+      "table": "users",
       "properties": {
-        "uid": {
-          "type": "string",
-          "description": "The unique identifier for the user, provided by Firebase Authentication."
-        },
-        "email": {
-          "type": "string",
-          "description": "Email address of the user.",
-          "format": "email"
-        },
-        "displayName": {
-          "type": "string",
-          "description": "The user's display name."
-        }
-      },
-      "required": [
-        "uid",
-        "email"
-      ]
+        "user_id": "serial (PK)",
+        "firebase_uid": "text (unique)",
+        "email": "varchar(255)",
+        "username": "varchar(100)",
+        "preferred_currency": "varchar(3) default USD"
+      }
+    },
+    "Watchlist": {
+      "table": "watchlists",
+      "properties": {
+        "id": "serial (PK)",
+        "user_id": "integer (FK)",
+        "watchlist_name": "varchar(100)",
+        "is_default": "boolean"
+      }
     },
     "WatchlistItem": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "WatchlistItem",
-      "type": "object",
-      "description": "Represents a stock in a user's watchlist. This is stored in a subcollection under the user's implicit document.",
+      "table": "watchlist_items",
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique identifier for the watchlist item document."
-        },
-        "userId": {
-          "type": "string",
-          "description": "The UID of the user who owns this watchlist item. Used for security rules."
-        },
-        "symbol": {
-          "type": "string",
-          "description": "The stock ticker symbol (e.g., AAPL, GOOG)."
-        },
-        "targetBuy": {
-          "type": ["number", "null"],
-          "description": "The user's target buy price for the stock."
-        },
-        "targetSell": {
-          "type": ["number", "null"],
-          "description": "The user's target sell price for the stock."
-        }
-      },
-      "required": [
-        "id",
-        "userId",
-        "symbol"
-      ]
+        "watchlist_item_id": "serial (PK)",
+        "watchlist_id": "integer (FK)",
+        "company_id": "integer (FK)",
+        "target_buy": "numeric(10,2)",
+        "target_sell": "numeric(10,2)"
+      }
+    },
+    "FinancialData": {
+      "tables": [
+        "income_statements",
+        "balance_sheets",
+        "cash_flow_statements",
+        "statistics",
+        "dividend_history",
+        "earnings"
+      ],
+      "sync_strategy": "Asynchronous background ingestion via yfinance"
     }
   },
-  "auth": {
-    "providers": [
-      "password"
-    ]
-  },
-  "firestore": {
-    "structure": [
-      {
-        "path": "/users/{userId}/watchlist/{watchlistItemId}",
-        "definition": {
-          "entityName": "WatchlistItem",
-          "schema": {
-            "$ref": "#/entities/WatchlistItem"
-          },
-          "description": "Stores watchlist items for each user. This path uses a wildcard for a `users` collection that doesn't store documents itself, but acts as a parent path for user-specific subcollections. Each `WatchlistItem` document contains a `userId` field matching the `{userId}` in the path to enforce ownership-based security rules.",
-          "params": [
-            {
-              "name": "userId",
-              "description": "The unique identifier for the user (their Firebase Auth UID)."
-            },
-            {
-              "name": "watchlistItemId",
-              "description": "The unique identifier for the watchlist item."
-            }
-          ]
-        }
-      ]
+  "endpoints": {
+    "sync_user": {
+      "path": "/users/sync",
+      "method": "POST",
+      "purpose": "Ensures Firebase user exists in Supabase PostgreSQL"
     },
-    "reasoning": "The Firestore structure is designed for strong user-based data isolation and security. There is no top-level `/users` collection containing public user profiles, which enhances privacy. Instead, all user-specific data, such as their stock watchlist, is stored in a nested path `/users/{userId}/watchlist/{watchlistItemId}`. This path-based ownership model is highly secure and scalable. The `{userId}` in the path corresponds to the user's Firebase Authentication UID. Security rules leverage this path structure to ensure that a user can only ever access the `watchlist` subcollection located under their own UID. Each `WatchlistItem` document also contains a redundant `userId` field, which is validated against the path's `{userId}` on write operations. This ensures data integrity and makes the security rules simple, powerful, and efficient, as they don't require extra database reads to verify ownership."
+    "get_watchlist": {
+      "path": "/watchlists/default-with-items",
+      "method": "POST",
+      "purpose": "Retrieves watchlist structure and synchronous market snapshot"
+    },
+    "add_stock": {
+      "path": "/watchlist-items",
+      "method": "POST",
+      "purpose": "Adds stock to watchlist and triggers asynchronous deep sync",
+      "patterns": ["Fast Add", "Deep Sync Worker"]
+    }
   },
-  "genkit": {
-    "flows": [
-      {
-        "name": "getStockDataFlow",
-        "description": "A Genkit flow that simulates fetching real-time stock data. It takes an array of stock symbols and returns simulated price, change, and other details for each valid symbol. This is used to dynamically populate the user's watchlist with up-to-date information without needing a real financial data API.",
-        "path": "src/ai/flows/stock-flow.ts"
-      }
-    ]
+  "real_time": {
+    "protocol": "Server-Sent Events (SSE)",
+    "path": "/watchlists/stream",
+    "strategy": "Pub/Sub based on symbol interest map"
   }
 }
