@@ -2,11 +2,11 @@
 'use client';
 
 import type { Stock, WatchlistItem } from '@/lib/types';
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { StockCard } from './stock-card';
 import { Button } from '../ui/button';
 import { PlusCircle, TrendingUp, DollarSign, Target } from 'lucide-react';
-import { AddStockDialog } from './add-stock-dialog';
+import { StockTargetDialog } from './add-stock-dialog'; // Renamed import
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '../auth/auth-provider';
 import api from '@/lib/api';
@@ -16,6 +16,9 @@ import { cn } from '@/lib/utils';
 export function Watchlist() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [isAddDialogOpen, setAddDialogOpen] = useState(false);
+  const [isEditDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingStock, setEditingStock] = useState<Stock | null>(null);
+
   const { toast } = useToast();
   const { user, appUser, loading: isAuthLoading } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
@@ -47,23 +50,16 @@ export function Watchlist() {
     }
   }, [firebase_uid, toast, isAuthLoading]);
 
-  // Real-time Subscription (SSE) with Reconnection
+  // Real-time Subscription (SSE)
   useEffect(() => {
     if (!firebase_uid || isLoading) return;
-
     let eventSource: EventSource | null = null;
     let reconnectTimeout: NodeJS.Timeout;
 
     const connect = () => {
-      console.log('[DEBUG] SSE: Connecting...');
       const url = `/api/proxy/watchlists/stream?firebase_uid=${firebase_uid}`;
       eventSource = new EventSource(url);
-
-      eventSource.onopen = () => {
-        console.log('[DEBUG] SSE: Connection established.');
-        setIsLive(true);
-      };
-
+      eventSource.onopen = () => setIsLive(true);
       eventSource.onmessage = (event) => {
         try {
           const update = JSON.parse(event.data);
@@ -74,23 +70,16 @@ export function Watchlist() {
                 : s
             )
           );
-        } catch (e) {
-          // Keep-alive or malformed data
-        }
+        } catch (e) {}
       };
-
-      eventSource.onerror = (err) => {
-        console.error('[DEBUG] SSE: Connection lost. Retrying in 5s...');
+      eventSource.onerror = () => {
         setIsLive(false);
         eventSource?.close();
         reconnectTimeout = setTimeout(connect, 5000);
       };
     };
-
     connect();
-
     return () => {
-      console.log('[DEBUG] SSE: Cleaning up...');
       eventSource?.close();
       clearTimeout(reconnectTimeout);
     };
@@ -100,15 +89,15 @@ export function Watchlist() {
     fetchWatchlist();
   }, [fetchWatchlist]);
 
-  const handleAddStock = async (newStockData: Omit<WatchlistItem, 'id' | 'userId'>) => {
+  const handleAddStock = async (data: { symbol: string; targetBuy: number | null; targetSell: number | null }) => {
     if (!watchlistId || !firebase_uid) return;
     try {
       const response = await api.post('/watchlist-items', {
         firebase_uid: firebase_uid,
         watchlist_id: watchlistId,
-        symbol: newStockData.symbol,
-        target_buy: newStockData.targetBuy,
-        target_sell: newStockData.targetSell,
+        symbol: data.symbol,
+        target_buy: data.targetBuy,
+        target_sell: data.targetSell,
       });
       const { stock_data, watchlist_item } = response.data;
       setStocks(prev => [...prev, {
@@ -116,10 +105,31 @@ export function Watchlist() {
         targetBuy: watchlist_item.target_buy,
         targetSell: watchlist_item.target_sell
       }]);
-      setWatchlistItems(prev => [...prev, watchlist_item]);
       toast({ title: 'Stock Added' });
     } catch (error: any) {
       toast({ title: 'Error', description: 'Could not add stock.', variant: 'destructive' });
+    }
+  };
+
+  const handleUpdateStock = async (data: { targetBuy: number | null; targetSell: number | null }) => {
+    if (!editingStock || !firebase_uid) return;
+    try {
+      const response = await api.patch(`/watchlist-items/${editingStock.id}`, {
+        firebase_uid: firebase_uid,
+        target_buy: data.targetBuy,
+        target_sell: data.targetSell,
+      });
+      
+      const updatedItem = response.data;
+      setStocks(prev => prev.map(s => 
+        s.id === editingStock.id 
+          ? { ...s, targetBuy: updatedItem.target_buy, targetSell: updatedItem.target_sell } 
+          : s
+      ));
+      
+      toast({ title: 'Targets Updated' });
+    } catch (error: any) {
+      toast({ title: 'Error', description: 'Could not update targets.', variant: 'destructive' });
     }
   };
 
@@ -156,7 +166,7 @@ export function Watchlist() {
     );
   }
 
-  if (stocks.length === 0 && watchlistItems?.length === 0) {
+  if (stocks.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center p-8">
         <TrendingUp className="h-16 w-16 text-muted-foreground" />
@@ -164,7 +174,7 @@ export function Watchlist() {
         <Button onClick={() => setAddDialogOpen(true)}>
           <PlusCircle className="mr-2 h-4 w-4" /> Add Stock
         </Button>
-        <AddStockDialog open={isAddDialogOpen} onOpenChange={setAddDialogOpen} onAddStock={handleAddStock} />
+        <StockTargetDialog open={isAddDialogOpen} onOpenChange={setAddDialogOpen} onSave={handleAddStock} />
       </div>
     );
   }
@@ -213,10 +223,38 @@ export function Watchlist() {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredStocks.map((stock) => (
-          <StockCard key={stock.id} stock={stock} onRemove={() => handleRemoveStock(stock.id)} />
+          <StockCard 
+            key={stock.id} 
+            stock={stock} 
+            onRemove={() => handleRemoveStock(stock.id)} 
+            onEdit={(s) => {
+              setEditingStock(s);
+              setEditDialogOpen(true);
+            }}
+          />
         ))}
       </div>
-      <AddStockDialog open={isAddDialogOpen} onOpenChange={setAddDialogOpen} onAddStock={handleAddStock} />
+      
+      {/* Add Dialog */}
+      <StockTargetDialog 
+        open={isAddDialogOpen} 
+        onOpenChange={setAddDialogOpen} 
+        onSave={handleAddStock} 
+        mode="add"
+      />
+      
+      {/* Edit Dialog */}
+      <StockTargetDialog 
+        open={isEditDialogOpen} 
+        onOpenChange={setEditDialogOpen} 
+        onSave={handleUpdateStock} 
+        mode="edit"
+        initialData={editingStock ? {
+          symbol: editingStock.symbol,
+          targetBuy: editingStock.targetBuy,
+          targetSell: editingStock.targetSell
+        } : undefined}
+      />
     </div>
   );
 }

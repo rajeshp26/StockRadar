@@ -12,42 +12,56 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { WatchlistItem } from '@/lib/types';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /**
- * Props for the AddStockDialog component.
+ * Reusable dialog for adding or editing stock target prices.
  */
-type AddStockDialogProps = {
+type StockTargetDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAddStock: (stock: Omit<WatchlistItem, 'id' | 'userId'>) => void;
+  onSave: (data: { symbol: string; targetBuy: number | null; targetSell: number | null }) => void;
+  mode?: 'add' | 'edit';
+  initialData?: {
+    symbol: string;
+    targetBuy: number | null;
+    targetSell: number | null;
+  };
 };
 
-/**
- * A dialog component for adding a new stock to the user's watchlist.
- * It captures the stock symbol and optional buy/sell targets.
- * @param {AddStockDialogProps} props - The component props.
- * @returns {JSX.Element} The rendered dialog component.
- */
-export function AddStockDialog({ open, onOpenChange, onAddStock }: AddStockDialogProps) {
-  const [symbol, setSymbol] = useState('');
-  const [targetBuy, setTargetBuy] = useState('');
-  const [targetSell, setTargetSell] = useState('');
+export function StockTargetDialog({ 
+  open, 
+  onOpenChange, 
+  onSave, 
+  mode = 'add',
+  initialData 
+}: StockTargetDialogProps) {
+  const [symbol, setSymbol] = useState(initialData?.symbol || '');
+  const [targetBuy, setTargetBuy] = useState(initialData?.targetBuy?.toString() || '');
+  const [targetSell, setTargetSell] = useState(initialData?.targetSell?.toString() || '');
 
-  /**
-   * Handles the 'Add' button click. It calls the onAddStock callback with the new
-   * stock information and then resets the form fields and closes the dialog.
-   */
-  const handleAdd = () => {
-    onAddStock({
+  // Reset or populate fields when initialData changes
+  useEffect(() => {
+    if (open) {
+      setSymbol(initialData?.symbol || '');
+      setTargetBuy(initialData?.targetBuy?.toString() || '');
+      setTargetSell(initialData?.targetSell?.toString() || '');
+    }
+  }, [open, initialData]);
+
+  const handleSave = () => {
+    onSave({
       symbol: symbol.toUpperCase(),
       targetBuy: targetBuy ? parseFloat(targetBuy) : null,
       targetSell: targetSell ? parseFloat(targetSell) : null,
     });
-    setSymbol('');
-    setTargetBuy('');
-    setTargetSell('');
+    // Don't reset in edit mode if you want to keep the UI stable, 
+    // but the parent usually handles the 'open' state.
+    if (mode === 'add') {
+      setSymbol('');
+      setTargetBuy('');
+      setTargetSell('');
+    }
     onOpenChange(false);
   };
 
@@ -55,9 +69,11 @@ export function AddStockDialog({ open, onOpenChange, onAddStock }: AddStockDialo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Add Stock to Watchlist</DialogTitle>
+          <DialogTitle>{mode === 'add' ? 'Add Stock' : `Edit ${symbol}`}</DialogTitle>
           <DialogDescription>
-            Enter the stock symbol and your target prices.
+            {mode === 'add' 
+              ? 'Enter the stock symbol and your target prices.' 
+              : 'Update your target prices for this stock.'}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
@@ -70,6 +86,7 @@ export function AddStockDialog({ open, onOpenChange, onAddStock }: AddStockDialo
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
               className="col-span-3"
+              disabled={mode === 'edit'} // Symbol cannot be changed in edit mode
               placeholder="e.g., AAPL"
             />
           </div>
@@ -80,6 +97,7 @@ export function AddStockDialog({ open, onOpenChange, onAddStock }: AddStockDialo
             <Input
               id="target-buy"
               type="number"
+              step="0.01"
               value={targetBuy}
               onChange={(e) => setTargetBuy(e.target.value)}
               className="col-span-3"
@@ -93,6 +111,7 @@ export function AddStockDialog({ open, onOpenChange, onAddStock }: AddStockDialo
             <Input
               id="target-sell"
               type="number"
+              step="0.01"
               value={targetSell}
               onChange={(e) => setTargetSell(e.target.value)}
               className="col-span-3"
@@ -101,7 +120,9 @@ export function AddStockDialog({ open, onOpenChange, onAddStock }: AddStockDialo
           </div>
         </div>
         <DialogFooter>
-          <Button onClick={handleAdd}>Add Stock</Button>
+          <Button onClick={handleSave}>
+            {mode === 'add' ? 'Add to Watchlist' : 'Save Changes'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

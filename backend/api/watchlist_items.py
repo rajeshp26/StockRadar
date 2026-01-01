@@ -46,6 +46,11 @@ class WatchlistItemIn(BaseModel):
     target_buy: float | None = None
     target_sell: float | None = None
 
+class WatchlistItemUpdate(BaseModel):
+    firebase_uid: str
+    target_buy: float | None = None
+    target_sell: float | None = None
+
 class DeleteItemRequest(BaseModel):
     firebase_uid: str
     item_id: int
@@ -84,7 +89,6 @@ async def add_item_to_watchlist(item: WatchlistItemIn, background_tasks: Backgro
             'next_earnings_date': stock_details.next_earnings_date.isoformat() if stock_details.next_earnings_date else None
         }
         
-        # In Python, upsert returns the data automatically if successful
         company_res = supabase.table('companies').upsert(
             company_data, on_conflict='ticker_symbol,exchange'
         ).execute()
@@ -145,6 +149,40 @@ async def add_item_to_watchlist(item: WatchlistItemIn, background_tasks: Backgro
         print(f"[ERROR] add_item_to_watchlist: {e}")
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+
+
+@router.patch("/watchlist-items/{item_id}", response_model=WatchlistItemData)
+def update_watchlist_item_targets(item_id: int, update: WatchlistItemUpdate):
+    """
+    Updates the target buy and sell prices for a specific watchlist item.
+    """
+    try:
+        db_user_id = get_db_user_id(update.firebase_uid)
+        
+        # Verify ownership
+        item_res = supabase.table('watchlist_items') \
+            .select('watchlist_item_id, watchlists!inner(user_id)') \
+            .eq('watchlist_item_id', item_id) \
+            .single().execute()
+            
+        if not item_res.data or item_res.data['watchlists']['user_id'] != db_user_id:
+            raise HTTPException(status_code=404, detail="Item not found or permission denied.")
+
+        # Perform update
+        update_res = supabase.table('watchlist_items').update({
+            'target_buy': update.target_buy,
+            'target_sell': update.target_sell
+        }).eq('watchlist_item_id', item_id).execute()
+
+        if not update_res.data:
+            raise HTTPException(status_code=500, detail="Failed to update watchlist item.")
+
+        return WatchlistItemData.model_validate(update_res.data[0])
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"[ERROR] update_watchlist_item_targets: {e}")
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 
