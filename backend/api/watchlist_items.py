@@ -1,8 +1,9 @@
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from database import supabase
 from providers.yfinance_provider import YFinanceProvider
+from services.sync_service import sync_service
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
@@ -52,7 +53,7 @@ class DeleteItemRequest(BaseModel):
 # --- Endpoints ---
 
 @router.post("/watchlist-items", status_code=201, response_model=AddStockResponse)
-def add_item_to_watchlist(item: WatchlistItemIn):
+async def add_item_to_watchlist(item: WatchlistItemIn, background_tasks: BackgroundTasks):
     try:
         db_user_id = get_db_user_id(item.firebase_uid)
         
@@ -60,6 +61,7 @@ def add_item_to_watchlist(item: WatchlistItemIn):
         if not watchlist_res.data or watchlist_res.data['user_id'] != db_user_id:
             raise HTTPException(status_code=403, detail="Permission denied.")
 
+        # 1. Validation & Basic Info (Synchronous)
         stock_details = stock_provider.get_stock_details(item.symbol)
         if not stock_details:
             raise HTTPException(status_code=404, detail=f"Stock symbol '{item.symbol}' not found.")
@@ -82,15 +84,17 @@ def add_item_to_watchlist(item: WatchlistItemIn):
             'next_earnings_date': stock_details.next_earnings_date.isoformat() if stock_details.next_earnings_date else None
         }
         
+        # In Python, upsert returns the data automatically if successful
         company_res = supabase.table('companies').upsert(
             company_data, on_conflict='ticker_symbol,exchange'
-        ).select('company_id').single().execute()
+        ).execute()
         
-        if hasattr(company_res, 'error') and company_res.error:
-            raise HTTPException(status_code=500, detail=f"Database Error (Company): {company_res.error.message}")
+        if not company_res.data:
+            raise HTTPException(status_code=500, detail="Database Error: Failed to upsert company.")
         
-        company_id = company_res.data['company_id']
+        company_id = company_res.data[0]['company_id']
 
+        # 2. Market Data Update (Synchronous)
         market_data = {
             'company_id': company_id,
             'current_price': stock_details.price,
@@ -103,19 +107,25 @@ def add_item_to_watchlist(item: WatchlistItemIn):
         }
         supabase.table('current_market_data').upsert(market_data, on_conflict='company_id').execute()
 
+        # 3. Add to Watchlist (Synchronous)
         item_res = supabase.table('watchlist_items').insert({
             'watchlist_id': item.watchlist_id,
             'company_id': company_id,
             'target_buy': item.target_buy,
             'target_sell': item.target_sell
-        }).select().single().execute()
+        }).execute()
         
-        if hasattr(item_res, 'error') and item_res.error:
-            if "unique_watchlist_company" in str(item_res.error.message):
+        if not item_res.data:
+            # Check if it was a duplicate
+            check_dup = supabase.table('watchlist_items').select('*').eq('watchlist_id', item.watchlist_id).eq('company_id', company_id).execute()
+            if check_dup.data:
                 raise HTTPException(status_code=409, detail="This stock is already in your watchlist.")
-            raise HTTPException(status_code=500, detail=f"Database Error: {item_res.error.message}")
+            raise HTTPException(status_code=500, detail="Database Error: Failed to insert watchlist item.")
 
-        new_item_db = item_res.data
+        new_item_db = item_res.data[0]
+
+        # 4. Trigger Deep Sync (Asynchronous Background Task)
+        background_tasks.add_task(sync_service.sync_full_company_data, company_id, stock_details.ticker_symbol)
 
         stock_data_out = StockData(
             id=new_item_db['watchlist_item_id'],
@@ -133,6 +143,8 @@ def add_item_to_watchlist(item: WatchlistItemIn):
         raise e
     except Exception as e:
         print(f"[ERROR] add_item_to_watchlist: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 

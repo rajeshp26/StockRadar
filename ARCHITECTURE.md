@@ -5,95 +5,137 @@ This document provides a comprehensive overview of the project's technical archi
 ## 1. Core Technologies
 
 *   **Frontend:**
-    *   **Framework:** Next.js (React)
+    *   **Framework:** Next.js 15 (App Router), React 19.
     *   **Authentication:** [Firebase Authentication](https://firebase.google.com/docs/auth). The client-side application uses the Firebase Web SDK to manage user sign-in and retrieve authentication tokens.
     *   **UI Components:** Tailwind CSS with shadcn/ui.
+    *   **Reactivity:** Firebase Firestore for reactive document synchronization where needed.
 
 *   **Backend:**
-    *   **Framework:** FastAPI (Python)
+    *   **Framework:** FastAPI (Python 3.11+).
     *   **Database:** [Supabase](https://supabase.io/). The backend uses the `supabase-py` library to interact with the Supabase database.
     *   **Data Provider:** `yfinance` for fetching financial stock data.
+    *   **AI Layer:** Google Genkit AI (`src/ai/`) for advanced stock analysis and flow orchestration.
 
-*   **Development Environment:**
-    *   **Orchestration:** Nix (`.idx/dev.nix`) configures the base development shell, providing Node.js, Python, and other system-level packages.
-    *   **Python Dependencies:** Managed via a local virtual environment (`.venv`) located in the project root. Requirements are listed in `backend/requirements.txt`.
-    *   **Node.js Dependencies:** Managed via `npm` and defined in `package.json`.
+*   **Communication:**
+    *   **Secure Bridge:** Next.js API Bridge (`src/app/api/proxy/`) for REST commands.
+    *   **Real-time:** Server-Sent Events (SSE) for stock price synchronization.
 
-## 2. Authentication and Data Flow
+---
 
-The system uses a decoupled authentication and data architecture: **Firebase for authentication** and **Supabase for the database**.
+## 2. System Architecture & The "Secure Bridge"
 
-1.  **User Login (Frontend):** A user signs in through the Next.js frontend, which uses the Firebase Authentication SDK.
-2.  **Token Generation (Frontend):** Upon successful login, Firebase provides the client with a JSON Web Token (JWT).
-3.  **API Request (Frontend):** When the frontend needs to communicate with the backend (e.g., to fetch a watchlist), it sends a request to the FastAPI server and includes the `Authorization: Bearer <token>` header.
-4.  **Token Validation (Backend):** The FastAPI backend receives the request, extracts the JWT, and would need to be configured to validate it with Firebase to ensure it is authentic.
-5.  **Database Operation (Backend):** Once the token is validated, the backend uses the `supabase-py` client to execute the requested database operations against the Supabase database.
+The system uses a decoupled architecture: **Firebase for authentication** and **Supabase for the database**. To avoid CORS and simplify security, the frontend communicates with the Python backend via a **Secure Bridge**.
 
-### 2.1 Dashboard Initial Load & Watchlist Flow
+`Browser` <---> `Next.js API Bridge (Proxy)` <---> `FastAPI Backend` <---> `Supabase / yfinance`
 
-This section details the communication flow specifically for loading the user dashboard and displaying their default watchlist.
+### 2.1 The Authentication "Trust" Model
+Instead of traditional JWT headers for internal calls, this project uses an **Identity Propagation** model:
+1.  **Client-Side Auth:** Firebase validates the user on the frontend.
+2.  **The Payload:** The frontend includes the `firebase_uid` directly in the **JSON request body** for all authenticated POST/DELETE requests.
+3.  **Backend Trust:** The Python backend, running in a protected internal network, trusts the `firebase_uid` provided by the Next.js Bridge.
 
-1.  **Authentication Completed (Frontend):** The user is successfully authenticated via Firebase.
-2.  **User Profile Sync (Frontend -> Backend `POST /users/sync`):** The frontend sends the user's `firebase_uid`, `email`, and `display_name` to the backend. The backend `upserts` this user data into the Supabase `users` table and returns the user's `user_id`, `email`, and `username`.
-3.  **Default Watchlist Request (Frontend -> Backend `POST /watchlists/default-with-items` - *NEW ENDPOINT*):** The frontend makes a single API call to a new backend endpoint, e.g., `POST /watchlists/default-with-items`, providing the `firebase_uid`.
-4.  **Backend Processes Default Watchlist Request:**
-    *   Receives `firebase_uid`.
-    *   Retrieves the internal `user_id` from the `users` table.
-    *   **Ensures Default Watchlist Exists:** Checks if a default watchlist (`is_default: True`) already exists for this `user_id` in the `watchlists` table.
-        *   If it doesn't exist, a new default watchlist is created.
-    *   **Fetches Watchlist Items & Market Data:** In the same operation, it fetches all items associated with the identified (or newly created) default watchlist from `watchlist_items` and `companies` tables.
-    *   It also integrates real-time or cached market data for each stock (e.g., current price, change, change percentage).
-    *   Structures all this data into a comprehensive JSON response.
-5.  **Backend Response (Single JSON Object):** The backend returns a `200 OK` response with a single JSON object containing the `watchlist_id`, `name`, `is_default` flag, and a detailed `items` array, where each item includes stock details and current market data.
-6.  **Frontend Populates UI:** The frontend receives this single, complete response, extracts the default watchlist details and its items, and populates the dashboard UI efficiently.
+### 2.2 Real-time Synchronization (Pub/Sub via SSE)
+To optimize performance, the application uses a **Publish-Subscribe** model for real-time stock updates:
+1.  **Subscription:** The frontend establishes a persistent connection via `GET /watchlists/stream`.
+2.  **Monitoring:** The Backend runs a background task that fetches market data only for symbols with active subscribers.
+3.  **Targeted Broadcast:** When a price change occurs, the backend pushes a JSON event over the SSE connection specifically to interested users.
 
-## 3. Running the Application
+---
+
+## 3. Directory Map
+
+| Path | Description |
+| :--- | :--- |
+| `src/app/(authenticated)/` | Protected route group. These routes are guarded by the `AuthProvider`. |
+| `src/app/api/proxy/` | The Secure Bridge implementation (Next.js Route Handlers). |
+| `src/lib/api.ts` | Axios instance configured to communicate with the Bridge. |
+| `src/firebase/` | Firebase Client SDK initialization, Firestore hooks, and Auth providers. |
+| `src/ai/` | Genkit AI flows and configuration. |
+| `backend/api/` | FastAPI routers (feature-based: users, watchlists, etc.). |
+| `backend/providers/` | External data abstractions (e.g., `yfinance_provider.py`). |
+
+---
+
+## 4. User Flows & Technical Sequences
+
+This section details the interaction between frontend components, the API bridge, and backend services.
+
+### 4.1 Flow: Startup & Authentication Guarding
+**Trigger:** User visits the root URL.
+
+*   **Frontend (UI):** `LandingPage` (`src/app/page.tsx`) renders the hero section.
+*   **Frontend (Auth):** `AuthProvider` (`src/components/auth/auth-provider.tsx`) initializes the Firebase SDK.
+*   **Frontend (Guard):** `middleware.ts` inspects the session. If authenticated, it redirects to `/dashboard`.
+*   **Frontend (State):** If unauthenticated, the user remains on the landing page, and `user-nav.tsx` displays "Login/Signup" buttons.
+
+### 4.2 Flow: New User Signup
+**Trigger:** User submits the signup form.
+
+1.  **Frontend (Component):** `SignupForm` captures email and password.
+2.  **Frontend (Service):** Calls Firebase Auth `createUserWithEmailAndPassword`. Firebase returns a `UserCredential` with a unique `uid`.
+3.  **Frontend (Bridge):** `api.ts` sends a `POST /users/sync` request containing the `firebase_uid`, `email`, and `display_name`.
+4.  **Backend (Router):** `users.py` receives the sync request.
+5.  **Backend (DB):** Performs a Supabase `upsert` on the `users` table, linking the `firebase_uid` to a new internal `user_id`.
+6.  **Backend (Response):** Returns the user's synchronized profile.
+7.  **Frontend (Routing):** `SignupForm` triggers a redirect to the `/dashboard`.
+
+### 4.3 Flow: Dashboard Loading & Real-time Handshake
+**Trigger:** User enters the authenticated dashboard.
+
+1.  **Frontend (Component):** `Watchlist` (`src/components/dashboard/watchlist.tsx`) mounts and initiates `fetchWatchlist`.
+2.  **Frontend (Data Fetch):** Calls `POST /watchlists/default-with-items` via the bridge.
+3.  **Backend (Logic):** `watchlists.py` retrieves the default watchlist for the user and joins it with the `watchlist_items` and `companies` tables.
+4.  **Backend (Provider):** `YFinanceProvider` fetches a synchronous market snapshot for all watchlist symbols.
+5.  **Backend (Response):** Returns a unified JSON object containing the watchlist ID and an array of `stocks` (including prices and names).
+6.  **Frontend (UI):** `Watchlist` renders multiple `StockCard` components using the snapshot.
+7.  **Frontend (SSE Init):** `useEffect` in `Watchlist` opens an `EventSource` connection to `/api/proxy/watchlists/stream?firebase_uid=...`.
+8.  **Backend (Subscription):** `watchlists.py` adds the user's `firebase_uid` and their watchlist symbols to the `symbol_subscribers` map and creates a dedicated `asyncio.Queue` for the connection.
+
+### 4.4 Flow: Adding a Stock (Fast Add, Deep Sync)
+**Trigger:** User clicks "Add Stock" and enters a ticker symbol.
+
+1.  **Frontend (Component):** `AddStockDialog` captures the ticker (e.g., "AAPL") and target prices.
+2.  **Frontend (Bridge):** Sends `POST /watchlist-items` containing the `firebase_uid`, `watchlist_id`, and stock details.
+3.  **Backend (Router - Fast Path):** `watchlist_items.py` validates the ticker existence via `yfinance.Ticker(symbol).info`.
+4.  **Backend (DB):** Inserts/Upserts records into Supabase `companies`, `current_market_data`, and `watchlist_items` tables using the basic info received.
+5.  **Backend (Worker Trigger):** The router triggers a **FastAPI BackgroundTask** to perform a "Deep Sync".
+6.  **Backend (Response):** Immediately returns the basic stock data to the frontend so it appears in the UI instantly.
+7.  **Backend (Deep Sync Worker):** Running in the background, the worker fetches full DataFrames from `yfinance` (Income Statement, Balance Sheet, Cash Flow, Dividends, Earnings) and performs batch upserts into the corresponding Supabase tables (Section 7.1).
+
+---
+
+## 5. Responsibilities Matrix
+
+| Feature | Frontend Responsibility | Backend Responsibility |
+| :--- | :--- | :--- |
+| **Authentication** | Sign-in UI, Session management. | Mapping `firebase_uid` to internal `user_id`. |
+| **Data Fetching** | Initial Snapshot request. | `yfinance` fetch + DB lookups. |
+| **Real-time** | `EventSource` lifecycle/reconnection. | Background monitoring, per-user queues. |
+| **Persistence** | Optimistic UI updates. | DB Integrity, Deep background data synchronization. |
+
+---
+
+## 6. Running the Application
 
 ### Frontend
-
 The frontend server is managed by the IDE's preview manager.
-
-*   **Command:** `npm run dev`
-*   **Action:** This command starts the Next.js development server. The IDE should automatically handle this.
+*   **Command:** `npm run dev` (Starts on port 9002).
 
 ### Backend (Python)
-
 The Python backend **must** be run from within its own virtual environment.
 
 #### First-Time Setup
-If the `.venv` directory does not exist in the project root, you must create and provision it:
+1.  **Create Virtual Environment:** `python -m venv .venv`
+2.  **Activate & Install:** `source .venv/bin/activate && pip install -r backend/requirements.txt`
 
-1.  **Create Virtual Environment:**
-    ```bash
-    python -m venv .venv
-    ```
-2.  **Activate Environment & Install Dependencies:**
-    ```bash
-    source .venv/bin/activate && pip install -r backend/requirements.txt
-    ```
+#### Running the Server
+```bash
+source .venv/bin/activate && cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-#### Development and Running the Server
+---
 
-To run the backend server with automatic reloading, which is ideal for development, use the following command. The `--reload` flag ensures that the server will automatically restart when you make changes to the code.
-
-1.  **Activate Environment and Run Server:**
-    ```bash
-    source .venv/bin/activate && cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    ```
-    To run the server in the background, you can append `&` to the command:
-    ```bash
-    source .venv/bin/activate && cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
-    ```
-
-**Important Notes:**
-
-*   **`--host 0.0.0.0`**: This is important to ensure the server is accessible from outside its container in a development environment.
-*   **`--reload`**: This flag automatically reloads the server when code changes are detected. This is very useful during development.
-*   **Stopping the Server:** If you run the server in the background with `&`, you can stop it by finding its Process ID (PID) with `pgrep -f uvicorn` and then using `kill <PID>`.
-
-## 4. Database Schema
-
-The following SQL schema defines the structure of the Supabase database.
+## 7. Database Schema (Supabase)
 
 ```sql
 create table public.users (
@@ -102,12 +144,11 @@ create table public.users (
   username character varying(100) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
   last_signed_in timestamp with time zone null default CURRENT_TIMESTAMP,
-  preferred_currency character varying(3) not null,
+  preferred_currency character varying(3) not null default 'USD',
   firebase_uid text null,
   constraint users_pkey primary key (user_id),
   constraint users_email_key unique (email),
-  constraint users_firebase_uid_key unique (firebase_uid),
-  constraint fk_users_currency foreign KEY (preferred_currency) references currencies (code)
+  constraint users_firebase_uid_key unique (firebase_uid)
 ) TABLESPACE pg_default;
 
 create table public.watchlists (
@@ -122,12 +163,6 @@ create table public.watchlists (
   constraint unique_user_watchlist_name unique (user_id, watchlist_name),
   constraint watchlists_user_id_fkey foreign KEY (user_id) references users (user_id) on delete CASCADE
 ) TABLESPACE pg_default;
-
-create unique INDEX IF not exists unique_default_watchlist_per_user on public.watchlists using btree (user_id) TABLESPACE pg_default
-where
-  (is_default = true);
-
-create index IF not exists idx_watchlists_user_id on public.watchlists using btree (user_id) TABLESPACE pg_default;
 
 create table public.watchlist_items (
   watchlist_item_id serial not null,
@@ -145,10 +180,6 @@ create table public.watchlist_items (
   constraint watchlist_items_watchlist_id_fkey foreign KEY (watchlist_id) references watchlists (id) on delete CASCADE
 ) TABLESPACE pg_default;
 
-create index IF not exists idx_watchlist_items_watchlist_id on public.watchlist_items using btree (watchlist_id) TABLESPACE pg_default;
-create index IF not exists idx_watchlist_items_company_id on public.watchlist_items using btree (company_id) TABLESPACE pg_default;
-create index IF not exists idx_watchlist_items_position on public.watchlist_items using btree (watchlist_id, "position") TABLESPACE pg_default;
-
 create table public.companies (
   company_id serial not null,
   ticker_symbol character varying(10) not null,
@@ -157,20 +188,14 @@ create table public.companies (
   sector character varying(100) null,
   industry character varying(100) null,
   currency character varying(3) not null default 'USD'::character varying,
-  fiscal_year_end_month integer null,
   description text null,
   website character varying(255) null,
   created_at timestamp with time zone not null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone not null default CURRENT_TIMESTAMP,
   next_earnings_date date null,
   constraint companies_new_pkey primary key (company_id),
-  constraint companies_ticker_exchange_unique unique (ticker_symbol, exchange),
-  constraint companies_currency_fkey foreign KEY (currency) references currencies (code)
+  constraint companies_ticker_exchange_unique unique (ticker_symbol, exchange)
 ) TABLESPACE pg_default;
-
-create index IF not exists idx_companies_exchange on public.companies using btree (exchange) TABLESPACE pg_default;
-create index IF not exists idx_companies_sector on public.companies using btree (sector) TABLESPACE pg_default;
-create index IF not exists idx_companies_industry on public.companies using btree (industry) TABLESPACE pg_default;
 
 create table public.current_market_data (
   company_id integer not null,
@@ -185,62 +210,56 @@ create table public.current_market_data (
   constraint current_market_data_pkey primary key (company_id),
   constraint current_market_data_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
 ) TABLESPACE pg_default;
+```
 
-create table public.currencies (
-  code character varying(3) not null,
-  name character varying(50) not null,
-  symbol character varying(5) null,
-  constraint currencies_pkey primary key (code)
-) TABLESPACE pg_default;
+### 7.1 Deep Sync Financial Tables
 
-create table public.dividend_history (
-  dividend_id serial not null,
-  company_id integer null,
-  ex_dividend_date date null,
-  payment_date date null,
-  record_date date null,
-  dividend_amount numeric(10, 4) null,
-  dividend_type character varying(20) null,
+```sql
+create table public.income_statements (
+  is_id serial not null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  fiscal_quarter smallint null,
+  period_end_date date not null,
+  revenue numeric(15, 2) null,
+  cost_of_goods_sold numeric(15, 2) null,
+  gross_profit numeric(15, 2) null,
+  operating_expenses numeric(15, 2) null,
+  rd_expenses numeric(15, 2) null,
+  sga_expenses numeric(15, 2) null,
+  operating_income numeric(15, 2) null,
+  interest_expense numeric(15, 2) null,
+  tax_expense numeric(15, 2) null,
+  net_income numeric(15, 2) null,
+  ebitda numeric(15, 2) null,
   currency character varying(3) null,
-  frequency character varying(20) null,
   data_source character varying(50) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
-  constraint dividend_history_pkey primary key (dividend_id)
-) TABLESPACE pg_default;
-
-create table public.dividend_metrics (
-  metric_id serial not null,
-  company_id integer null,
-  fiscal_year integer null,
-  annual_dps numeric(10, 4) null,
-  dividend_payout_ratio numeric(5, 2) null,
-  dividend_yield numeric(5, 2) null,
-  dividend_growth_rate_3yr numeric(5, 2) null,
-  dividend_growth_rate_5yr numeric(5, 2) null,
-  dividend_growth_rate_10yr numeric(5, 2) null,
-  consecutive_years_paid integer null,
-  fcfe_coverage_ratio numeric(5, 2) null,
-  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
-  cash_dividend_payout_ratio numeric(10, 2) null,
-  fcf_dividend_payout_ratio numeric(10, 2) null,
-  dividend_coverage_fcf numeric(10, 2) null,
-  ebitda_dividend_coverage numeric(10, 2) null,
-  retention_ratio numeric(10, 2) null,
-  constraint dividend_metrics_pkey primary key (metric_id)
+  updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  non_operating_income_expense numeric(15, 2) null,
+  pretax_income numeric(15, 2) null,
+  equity_in_earnings numeric(15, 2) null,
+  minority_interest numeric(15, 2) null,
+  income_from_continuing_operations numeric(15, 2) null,
+  discontinued_operations numeric(15, 2) null,
+  net_income_to_common numeric(15, 2) null,
+  preferred_dividends numeric(15, 2) null,
+  ebit numeric(15, 2) null,
+  constraint income_statements_pkey primary key (is_id)
 ) TABLESPACE pg_default;
 
 create table public.balance_sheets (
   bs_id serial not null,
-  company_id integer null,
-  fiscal_year integer null,
-  fiscal_quarter integer null,
-  period_end_date date null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  fiscal_quarter smallint null,
+  period_end_date date not null,
   total_assets numeric(15, 2) null,
   current_assets numeric(15, 2) null,
-  cash_equivalents numeric(15, 2) null,
+  cash_and_cash_equivalents numeric(15, 2) null,
   accounts_receivable numeric(15, 2) null,
   inventory numeric(15, 2) null,
-  ppe_net numeric(15, 2) null,
+  property_plant_equipment_net numeric(15, 2) null,
   intangible_assets numeric(15, 2) null,
   goodwill numeric(15, 2) null,
   total_liabilities numeric(15, 2) null,
@@ -252,26 +271,28 @@ create table public.balance_sheets (
   shareholders_equity numeric(15, 2) null,
   retained_earnings numeric(15, 2) null,
   common_stock numeric(15, 2) null,
-  net_debt numeric(15, 2) null,
-  working_capital numeric(15, 2) null,
-  book_value_per_share numeric(10, 4) null,
   currency character varying(3) null,
   data_source character varying(50) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  long_term_investments numeric(15, 2) null,
+  other_non_current_assets numeric(15, 2) null,
+  other_current_liabilities numeric(15, 2) null,
+  minority_interest numeric(15, 2) null,
+  total_liabilities_and_equity numeric(15, 2) null,
   constraint balance_sheets_pkey primary key (bs_id)
 ) TABLESPACE pg_default;
 
 create table public.cash_flow_statements (
   cf_id serial not null,
-  company_id integer null,
-  fiscal_year integer null,
-  fiscal_quarter integer null,
-  period_end_date date null,
-  operating_cash_flow numeric(15, 2) null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  fiscal_quarter smallint null,
+  period_end_date date not null,
+  cash_from_operating_activities numeric(15, 2) null,
   net_income numeric(15, 2) null,
   depreciation_amortization numeric(15, 2) null,
-  changes_working_capital numeric(15, 2) null,
+  change_in_working_capital numeric(15, 2) null,
   deferred_taxes numeric(15, 2) null,
   stock_based_compensation numeric(15, 2) null,
   capital_expenditures numeric(15, 2) null,
@@ -283,65 +304,85 @@ create table public.cash_flow_statements (
   dividends_paid numeric(15, 2) null,
   share_repurchases numeric(15, 2) null,
   share_issuance numeric(15, 2) null,
-  free_cash_flow numeric(15, 2) null,
-  fcf_per_share numeric(10, 4) null,
   currency character varying(3) null,
   data_source character varying(50) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  cash_from_investing_activities numeric(15, 2) null,
+  cash_from_financing_activities numeric(15, 2) null,
   constraint cash_flow_statements_pkey primary key (cf_id)
 ) TABLESPACE pg_default;
 
-create table public.earnings_per_share (
-  eps_id serial not null,
-  company_id integer null,
-  fiscal_year integer null,
-  fiscal_quarter integer null,
-  eps_diluted numeric(10, 4) null,
-  eps_basic numeric(10, 4) null,
-  reporting_date date null,
-  period_end_date date null,
-  data_source character varying(50) null,
-  is_restated boolean null default false,
-  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
-  constraint earnings_per_share_pkey primary key (eps_id)
-) TABLESPACE pg_default;
-
-create index IF not exists idx_eps_company_year on public.earnings_per_share using btree (company_id, fiscal_year) TABLESPACE pg_default;
-create index IF not exists idx_eps_period_end on public.earnings_per_share using btree (period_end_date) TABLESPACE pg_default;
-
-create table public.income_statements (
-  is_id serial not null,
-  company_id integer null,
-  fiscal_year integer null,
-  fiscal_quarter integer null,
-  period_end_date date null,
-  total_revenue numeric(15, 2) null,
-  cost_of_revenue numeric(15, 2) null,
-  gross_profit numeric(15, 2) null,
-  operating_expenses numeric(15, 2) null,
-  rd_expenses numeric(15, 2) null,
-  sga_expenses numeric(15, 2) null,
-  operating_income numeric(15, 2) null,
-  interest_expense numeric(15, 2) null,
-  tax_expense numeric(15, 2) null,
-  net_income numeric(15, 2) null,
-  eps_basic numeric(10, 4) null,
-  eps_diluted numeric(10, 4) null,
+create table public.statistics (
+  stat_id serial not null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  fiscal_quarter smallint null,
+  period_end_date date not null,
+  period_type character varying(10) null default 'fiscal'::character varying,
+  pe_ratio numeric(10, 4) null,
+  ps_ratio numeric(10, 4) null,
+  pcf_ratio numeric(10, 4) null,
+  pb_ratio numeric(10, 4) null,
+  enterprise_value numeric(18, 2) null,
+  ev_to_ebitda numeric(10, 4) null,
+  gross_margin_pct numeric(6, 3) null,
+  operating_margin_pct numeric(6, 3) null,
+  ebitda_margin_pct numeric(6, 3) null,
+  net_margin_pct numeric(6, 3) null,
+  return_on_assets_pct numeric(6, 3) null,
+  return_on_equity_pct numeric(6, 3) null,
+  return_on_invested_capital_pct numeric(6, 3) null,
+  current_ratio numeric(8, 3) null,
+  quick_ratio numeric(8, 3) null,
   shares_outstanding_basic bigint null,
   shares_outstanding_diluted bigint null,
-  gross_margin numeric(5, 2) null,
-  operating_margin numeric(5, 2) null,
-  net_margin numeric(5, 2) null,
-  effective_tax_rate numeric(5, 2) null,
-  ebitda numeric(15, 2) null,
-  ebitda_margin numeric(5, 2) null,
-  currency character varying(3) null,
+  currency character(3) null,
+  data_source character varying(50) null,
+  calculated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint statistics_pkey primary key (stat_id)
+) TABLESPACE pg_default;
+
+create table public.earnings (
+  earnings_id serial not null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  fiscal_quarter smallint null,
+  period_end_date date not null,
+  announcement_date date null,
+  eps_reported_basic numeric(10, 4) null,
+  eps_reported_diluted numeric(10, 4) null,
+  eps_estimate numeric(10, 4) null,
+  eps_surprise_amount numeric(10, 4) null,
+  eps_surprise_percent numeric(8, 3) null,
+  revenue_reported numeric(18, 2) null,
+  revenue_estimate numeric(18, 2) null,
+  revenue_surprise_amount numeric(18, 2) null,
+  revenue_surprise_percent numeric(8, 3) null,
+  shares_outstanding_basic bigint null,
+  shares_outstanding_diluted bigint null,
+  currency character(3) null,
   data_source character varying(50) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
-  constraint income_statements_pkey primary key (is_id)
+  constraint earnings_pkey primary key (earnings_id)
 ) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_annual_income_idx on public.income_statements using btree (company_id, fiscal_year) TABLESPACE pg_default
-where (fiscal_quarter is null);
+create table public.dividend_history (
+  dividend_id serial not null,
+  company_id integer not null,
+  ex_dividend_date date not null,
+  payment_date date null,
+  record_date date null,
+  dividend_amount numeric(10, 4) null,
+  dividend_type character varying(30) null default 'regular'::character varying,
+  currency character(3) null default 'USD'::bpchar,
+  frequency character varying(20) null,
+  data_source character varying(50) null,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint dividend_history_pkey primary key (dividend_id)
+) TABLESPACE pg_default;
+```

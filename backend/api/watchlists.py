@@ -1,11 +1,22 @@
 
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+import json
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from database import supabase
 from providers.yfinance_provider import YFinanceProvider
+from typing import Dict, Set, List
+from collections import defaultdict
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
+
+# SSE state
+# Map of firebase_uid -> List of asyncio.Queues (to support multiple tabs)
+user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
+# Map of symbol -> Set of firebase_uids interested in it
+symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
 
 class UidRequest(BaseModel):
     firebase_uid: str
@@ -20,23 +31,10 @@ def get_db_user_id(firebase_uid: str) -> int:
         print(f"[ERROR] get_db_user_id: {e}")
         raise HTTPException(status_code=403, detail="User not found or database error.")
 
-# Existing /watchlists/default and /watchlists/details will be replaced by the new endpoint.
-# Commenting them out for now during transition.
-
-# @router.post("/watchlists/default", tags=["Watchlists"], status_code=200)
-# def get_or_create_default_watchlist(req: UidRequest):
-#     # ... (existing logic) ...
-
-# @router.post("/watchlists/details", tags=["Watchlists"])
-# def get_watchlist_by_id(req: UidRequest, body: dict):
-#     # ... (existing logic) ...
-
-
 @router.post("/watchlists/default-with-items", tags=["Watchlists"], status_code=200)
 def get_default_watchlist_with_items(req: UidRequest):
     """
-    Idempotent endpoint to get or create a default watchlist for the authenticated user
-    and return all its associated items with current stock data.
+    Idempotent endpoint to get or create a default watchlist.
     """
     try:
         db_user_id = get_db_user_id(req.firebase_uid)
@@ -53,7 +51,6 @@ def get_default_watchlist_with_items(req: UidRequest):
             watchlist_id = watchlist_res.data['id']
             watchlist_name = watchlist_res.data['watchlist_name']
             is_default = watchlist_res.data['is_default']
-            print(f"[DEBUG] Found existing default watchlist: {watchlist_id}")
         else:
             # Create a new default watchlist if not found
             new_watchlist_res = supabase.table('watchlists').insert({
@@ -66,39 +63,35 @@ def get_default_watchlist_with_items(req: UidRequest):
                 raise HTTPException(status_code=500, detail="Failed to create default watchlist.")
             
             watchlist_id = new_watchlist_res.data[0]['id']
-            print(f"[DEBUG] Created new default watchlist: {watchlist_id}")
 
-        # 2. Fetch Watchlist Items with Company Details
-        # Using inner join to get company data directly
+        # 2. Fetch Watchlist Items
         items_res = supabase.table('watchlist_items').select(
             'watchlist_item_id, target_buy, target_sell, companies(company_id, ticker_symbol, company_name)'
         ).eq('watchlist_id', watchlist_id).execute()
 
         if not items_res.data:
-            print(f"[DEBUG] No items found for watchlist {watchlist_id}")
             return {"watchlist_id": watchlist_id, "name": watchlist_name, "is_default": is_default, "items": [], "stocks": []}
         
         raw_watchlist_items = items_res.data
         symbols = [item['companies']['ticker_symbol'] for item in raw_watchlist_items if item.get('companies')]
         company_ids = [item['companies']['company_id'] for item in raw_watchlist_items if item.get('companies')]
 
-        # 3. Fetch Current Market Data for all symbols
+        # 3. Fetch Market Data
         all_tickers_data = {} 
-        if symbols: # Only call yfinance if there are symbols to fetch
+        if symbols:
             all_tickers_data = stock_provider.get_tickers_data(symbols)
 
         market_data_map = {}
-        if company_ids: # Only query Supabase market data if there are company_ids
+        if company_ids:
             market_data_res = supabase.table('current_market_data').select('*').in_('company_id', company_ids).execute()
             if market_data_res.data:
                 market_data_map = {item['company_id']: item for item in market_data_res.data}
 
-        # 4. Combine data and format for frontend
+        # 4. Combine data
         stocks_list = []
         for item in raw_watchlist_items:
             company = item.get('companies')
-            if not company:
-                continue
+            if not company: continue
                 
             ticker_symbol = company['ticker_symbol']
             ticker_data = all_tickers_data.get(ticker_symbol)
@@ -106,21 +99,17 @@ def get_default_watchlist_with_items(req: UidRequest):
             current_price = None
             previous_close = None
 
-            # Prioritize yfinance data
             if ticker_data:
               current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
               previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
 
-            # Fallback to database market data if yfinance is not available or incomplete
             if current_price is None or previous_close is None:
                 db_market_data = market_data_map.get(company['company_id'])
                 if db_market_data:
                     current_price = float(db_market_data.get('current_price', 0))
                     previous_close = float(db_market_data.get('close_price')) if db_market_data.get('close_price') else current_price
 
-            # If still no valid price, skip or handle as appropriate
             if current_price is None or previous_close is None:
-                print(f"[WARN] Could not get current or previous close price for {ticker_symbol}. Skipping.")
                 continue
 
             change = current_price - previous_close
@@ -141,14 +130,81 @@ def get_default_watchlist_with_items(req: UidRequest):
             "watchlist_id": watchlist_id,
             "name": watchlist_name,
             "is_default": is_default,
-            "items": raw_watchlist_items, # Raw items for internal use if needed
-            "stocks": stocks_list # Formatted stock data for display
+            "items": raw_watchlist_items,
+            "stocks": stocks_list
         }
 
     except HTTPException as e:
         raise e
     except Exception as e:
         print(f"[ERROR] get_default_watchlist_with_items: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="An internal server error occurred while fetching watchlist details.")
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+
+@router.get("/watchlists/stream", tags=["Watchlists"])
+async def stream_watchlist_updates(firebase_uid: str, request: Request):
+    """
+    SSE endpoint for real-time stock updates.
+    """
+    if not firebase_uid:
+        raise HTTPException(status_code=400, detail="firebase_uid is required")
+
+    async def event_generator():
+        queue = asyncio.Queue()
+        user_queues[firebase_uid].append(queue)
+        
+        # Track which symbols this user is interested in for targeted broadcasting
+        try:
+            items_res = supabase.table('watchlist_items') \
+                .select('companies(ticker_symbol)') \
+                .eq('watchlists.users.firebase_uid', firebase_uid) \
+                .execute()
+            
+            user_symbols = [item['companies']['ticker_symbol'] for item in items_res.data if item.get('companies')]
+            for sym in user_symbols:
+                symbol_subscribers[sym].add(firebase_uid)
+                
+            print(f"[DEBUG] SSE: User {firebase_uid} connected. Watching: {user_symbols}")
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=2.0)
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    
+        finally:
+            # Cleanup
+            if queue in user_queues[firebase_uid]:
+                user_queues[firebase_uid].remove(queue)
+            if not user_queues[firebase_uid]:
+                del user_queues[firebase_uid]
+                # Remove user from all symbol subscription sets
+                for sym in list(symbol_subscribers.keys()):
+                    symbol_subscribers[sym].discard(firebase_uid)
+                    if not symbol_subscribers[sym]:
+                        del symbol_subscribers[sym]
+            print(f"[DEBUG] SSE: User {firebase_uid} disconnected.")
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+async def broadcast_stock_update(symbol: str, price: float, change: float, change_percent: float):
+    """
+    Targeted broadcast to interested users only.
+    """
+    uids = symbol_subscribers.get(symbol, set())
+    if not uids:
+        return
+
+    update_payload = {
+        "symbol": symbol,
+        "price": price,
+        "change": change,
+        "changePercent": change_percent
+    }
+    
+    for uid in uids:
+        for queue in user_queues.get(uid, []):
+            await queue.put(update_payload)
