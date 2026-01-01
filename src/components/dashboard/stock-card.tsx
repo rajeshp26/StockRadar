@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown, X, Pencil, Target as TargetIcon, Clock } from 'lucide-react';
+import { format, isToday, isYesterday } from 'date-fns';
 
 interface StockCardProps {
   stock: Stock;
@@ -32,12 +33,18 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
 
   const buyVariance = getBuyVariance();
 
-  // Timestamp Formatter
+  // Smart Timestamp Formatter
   const formatLastUpdated = (isoString?: string) => {
     if (!isoString) return null;
     try {
       const date = new Date(isoString);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (isToday(date)) {
+        return format(date, 'h:mm a');
+      } else if (isYesterday(date)) {
+        return `Yesterday, ${format(date, 'h:mm a')}`;
+      } else {
+        return format(date, 'MMM d, h:mm a');
+      }
     } catch (e) {
       return null;
     }
@@ -86,7 +93,7 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
       <CardContent className="grid gap-2">
         <div>
           <div className="text-3xl font-bold tracking-tight">${stock.price.toFixed(2)}</div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className={cn('flex items-center gap-1 text-sm font-medium', isPositiveChange ? 'text-green-500' : 'text-red-500')}>
               {isPositiveChange ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
               <span>
@@ -94,7 +101,7 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
               </span>
             </div>
             {lastUpdatedTime && (
-              <span className="text-[10px] text-muted-foreground/60 flex items-center gap-0.5 ml-auto">
+              <span className="text-[10px] text-muted-foreground/60 flex items-center gap-0.5 ml-auto whitespace-nowrap">
                 <Clock className="h-2.5 w-2.5" /> As of {lastUpdatedTime}
               </span>
             )}
@@ -108,11 +115,11 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
               </div>
               
               {stock.targetBuy && (
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-muted-foreground">Buy at: <b className="text-foreground">${stock.targetBuy.toFixed(2)}</b></span>
+                <div className="flex justify-between items-center text-xs gap-2">
+                  <span className="text-muted-foreground whitespace-nowrap">Buy at: <b className="text-foreground">${stock.targetBuy.toFixed(2)}</b></span>
                   {buyVariance && (
                     <span className={cn(
-                      "font-bold",
+                      "font-bold text-right",
                       buyVariance.isTargetHit ? "text-green-600" : "text-amber-600"
                     )}>
                       {buyVariance.isTargetHit 
@@ -124,12 +131,12 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
               )}
               
               {stock.targetSell && (
-                 <div className="flex justify-between items-center text-xs">
-                   <span className="text-muted-foreground">Sell at: <b className="text-foreground">${stock.targetSell.toFixed(2)}</b></span>
+                 <div className="flex justify-between items-center text-xs gap-2">
+                   <span className="text-muted-foreground whitespace-nowrap">Sell at: <b className="text-foreground">${stock.targetSell.toFixed(2)}</b></span>
                    {stock.price >= stock.targetSell ? (
-                     <span className="text-red-600 font-bold text-xs">HIT</span>
+                     <span className="text-red-600 font-bold text-xs text-right">HIT</span>
                    ) : (
-                     <span className="text-muted-foreground/70 font-medium">
+                     <span className="text-muted-foreground/70 font-medium text-right">
                         Gap: -${(stock.targetSell - stock.price).toFixed(2)} ({(((stock.targetSell - stock.price) / stock.price) * 100).toFixed(1)}%)
                      </span>
                    )}
