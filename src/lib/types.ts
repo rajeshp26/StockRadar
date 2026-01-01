@@ -7,6 +7,7 @@ export type Stock = {
   changePercent: number;
   targetBuy: number | null;
   targetSell: number | null;
+  lastUpdated?: string;
 };
 
 export type WatchlistItem = {

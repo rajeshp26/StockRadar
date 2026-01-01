@@ -8,14 +8,13 @@ from database import supabase
 from providers.yfinance_provider import YFinanceProvider
 from typing import Dict, Set, List
 from collections import defaultdict
+from datetime import datetime
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
 
 # SSE state
-# Map of firebase_uid -> List of asyncio.Queues (to support multiple tabs)
 user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
-# Map of symbol -> Set of firebase_uids interested in it
 symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
 
 class UidRequest(BaseModel):
@@ -98,14 +97,16 @@ def get_default_watchlist_with_items(req: UidRequest):
             
             current_price = None
             previous_close = None
+            last_updated = None
 
             if ticker_data:
               current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
               previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
 
-            if current_price is None or previous_close is None:
-                db_market_data = market_data_map.get(company['company_id'])
-                if db_market_data:
+            db_market_data = market_data_map.get(company['company_id'])
+            if db_market_data:
+                last_updated = db_market_data.get('last_updated')
+                if current_price is None or previous_close is None:
                     current_price = float(db_market_data.get('current_price', 0))
                     previous_close = float(db_market_data.get('close_price')) if db_market_data.get('close_price') else current_price
 
@@ -123,7 +124,8 @@ def get_default_watchlist_with_items(req: UidRequest):
                 "change": change,
                 "changePercent": change_percent,
                 "targetBuy": item.get('target_buy'),
-                "targetSell": item.get('target_sell')
+                "targetSell": item.get('target_sell'),
+                "lastUpdated": last_updated # Changed to camelCase
             })
 
         return {
@@ -152,7 +154,6 @@ async def stream_watchlist_updates(firebase_uid: str, request: Request):
         queue = asyncio.Queue()
         user_queues[firebase_uid].append(queue)
         
-        # Track which symbols this user is interested in for targeted broadcasting
         try:
             items_res = supabase.table('watchlist_items') \
                 .select('companies(ticker_symbol)') \
@@ -163,46 +164,38 @@ async def stream_watchlist_updates(firebase_uid: str, request: Request):
             for sym in user_symbols:
                 symbol_subscribers[sym].add(firebase_uid)
                 
-            print(f"[DEBUG] SSE: User {firebase_uid} connected. Watching: {user_symbols}")
-
             while True:
                 if await request.is_disconnected():
                     break
-                
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=2.0)
                     yield f"data: {json.dumps(data)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
-                    
         finally:
-            # Cleanup
             if queue in user_queues[firebase_uid]:
                 user_queues[firebase_uid].remove(queue)
             if not user_queues[firebase_uid]:
                 del user_queues[firebase_uid]
-                # Remove user from all symbol subscription sets
                 for sym in list(symbol_subscribers.keys()):
                     symbol_subscribers[sym].discard(firebase_uid)
                     if not symbol_subscribers[sym]:
                         del symbol_subscribers[sym]
-            print(f"[DEBUG] SSE: User {firebase_uid} disconnected.")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 async def broadcast_stock_update(symbol: str, price: float, change: float, change_percent: float):
-    """
-    Targeted broadcast to interested users only.
-    """
     uids = symbol_subscribers.get(symbol, set())
-    if not uids:
-        return
+    if not uids: return
 
+    now_iso = datetime.now().isoformat()
+    
     update_payload = {
         "symbol": symbol,
         "price": price,
         "change": change,
-        "changePercent": change_percent
+        "changePercent": change_percent,
+        "lastUpdated": now_iso # Changed to camelCase
     }
     
     for uid in uids:

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from database import supabase
 from providers.yfinance_provider import YFinanceProvider
 from services.sync_service import sync_service
+from datetime import datetime
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
@@ -34,6 +35,11 @@ class StockData(BaseModel):
     price: float
     change: float
     changePercent: float
+    # Frontend expects camelCase 'lastUpdated'
+    lastUpdated: str | None = Field(None, alias="lastUpdated")
+
+    class Config:
+        populate_by_name = True
 
 class AddStockResponse(BaseModel):
     watchlist_item: WatchlistItemData
@@ -99,6 +105,7 @@ async def add_item_to_watchlist(item: WatchlistItemIn, background_tasks: Backgro
         company_id = company_res.data[0]['company_id']
 
         # 2. Market Data Update (Synchronous)
+        now_iso = datetime.now().isoformat()
         market_data = {
             'company_id': company_id,
             'current_price': stock_details.price,
@@ -107,7 +114,8 @@ async def add_item_to_watchlist(item: WatchlistItemIn, background_tasks: Backgro
             'low_price': stock_details.low_price,
             'close_price': stock_details.close_price,
             'volume': stock_details.volume,
-            'market_state': stock_details.market_state
+            'market_state': stock_details.market_state,
+            'last_updated': now_iso
         }
         supabase.table('current_market_data').upsert(market_data, on_conflict='company_id').execute()
 
@@ -137,7 +145,8 @@ async def add_item_to_watchlist(item: WatchlistItemIn, background_tasks: Backgro
             name=stock_details.long_name,
             price=stock_details.price,
             change=stock_details.change,
-            changePercent=stock_details.change_percent
+            changePercent=stock_details.change_percent,
+            lastUpdated=now_iso
         )
 
         watchlist_item_out = WatchlistItemData.model_validate(new_item_db)

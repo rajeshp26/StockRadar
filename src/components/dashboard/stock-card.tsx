@@ -5,7 +5,7 @@ import type { Stock } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { TrendingUp, TrendingDown, X, Pencil, Target as TargetIcon } from 'lucide-react';
+import { TrendingUp, TrendingDown, X, Pencil, Target as TargetIcon, Clock } from 'lucide-react';
 
 interface StockCardProps {
   stock: Stock;
@@ -31,6 +31,19 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
   };
 
   const buyVariance = getBuyVariance();
+
+  // Timestamp Formatter
+  const formatLastUpdated = (isoString?: string) => {
+    if (!isoString) return null;
+    try {
+      const date = new Date(isoString);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const lastUpdatedTime = formatLastUpdated(stock.lastUpdated);
 
   return (
     <Card className="relative overflow-hidden group">
@@ -71,13 +84,23 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
         <CardDescription className="truncate text-xs">{stock.name}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-2">
-        <div className="text-3xl font-bold tracking-tight">${stock.price.toFixed(2)}</div>
-        <div className={cn('flex items-center gap-1 text-sm font-medium mb-2', isPositiveChange ? 'text-green-500' : 'text-red-500')}>
-          {isPositiveChange ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-          <span>
-            {stock.change.toFixed(2)} ({stock.changePercent.toFixed(2)}%)
-          </span>
+        <div>
+          <div className="text-3xl font-bold tracking-tight">${stock.price.toFixed(2)}</div>
+          <div className="flex items-center gap-2">
+            <div className={cn('flex items-center gap-1 text-sm font-medium', isPositiveChange ? 'text-green-500' : 'text-red-500')}>
+              {isPositiveChange ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+              <span>
+                {stock.change.toFixed(2)} ({stock.changePercent.toFixed(2)}%)
+              </span>
+            </div>
+            {lastUpdatedTime && (
+              <span className="text-[10px] text-muted-foreground/60 flex items-center gap-0.5 ml-auto">
+                <Clock className="h-2.5 w-2.5" /> As of {lastUpdatedTime}
+              </span>
+            )}
+          </div>
         </div>
+
          {(stock.targetBuy || stock.targetSell) && (
             <div className="pt-3 border-t space-y-2 mt-1">
               <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 mb-1">
