@@ -31,7 +31,7 @@ The system uses a decoupled architecture: **Firebase for authentication** and **
 ### 2.1 The Authentication "Trust" Model
 Instead of traditional JWT headers for internal calls, this project uses an **Identity Propagation** model:
 1.  **Client-Side Auth:** Firebase validates the user on the frontend.
-2.  **The Payload:** The frontend includes the `firebase_uid` directly in the **JSON request body** for all authenticated POST/DELETE requests.
+2.  **The Payload:** The frontend includes the `firebase_uid` directly in the **JSON request body** for all authenticated POST/DELETE/PATCH requests.
 3.  **Backend Trust:** The Python backend, running in a protected internal network, trusts the `firebase_uid` provided by the Next.js Bridge.
 
 ### 2.2 Real-time Synchronization (Pub/Sub via SSE)
@@ -39,6 +39,16 @@ To optimize performance, the application uses a **Publish-Subscribe** model for 
 1.  **Subscription:** The frontend establishes a persistent connection via `GET /watchlists/stream`.
 2.  **Monitoring:** The Backend runs a background task that fetches market data only for symbols with active subscribers.
 3.  **Targeted Broadcast:** When a price change occurs, the backend pushes a JSON event over the SSE connection specifically to interested users.
+
+### 2.3 Reactive Firebase Patterns (Firestore)
+For features requiring instant reactivity without backend polling, the application utilizes custom Firestore hooks:
+*   **`useCollection` & `useDoc` Hooks:** These wrap Firebase's `onSnapshot`. They handle memoization of references/queries and provide a consistent `{ data, isLoading, error }` interface for real-time document sync.
+*   **Non-Blocking Updates:** Located in `src/firebase/non-blocking-updates.tsx`, these functions (`updateDocumentNonBlocking`) initiate writes without `await`. This ensures the UI stays responsive while the system handles persistence in the background.
+
+### 2.4 Centralized Error Handling
+Errors from non-blocking writes or permission failures are captured by a global listener:
+*   **`FirebaseErrorListener`:** A top-level component that listens to a centralized `errorEmitter`.
+*   **Flow:** Firestore Error -> `errorEmitter` -> `FirebaseErrorListener` -> User Notification via `toast()`.
 
 ---
 
@@ -94,13 +104,23 @@ This section details the interaction between frontend components, the API bridge
 ### 4.4 Flow: Adding a Stock (Fast Add, Deep Sync)
 **Trigger:** User clicks "Add Stock" and enters a ticker symbol.
 
-1.  **Frontend (Component):** `AddStockDialog` captures the ticker (e.g., "AAPL") and target prices.
+1.  **Frontend (Component):** `StockTargetDialog` captures the ticker (e.g., "AAPL") and target prices.
 2.  **Frontend (Bridge):** Sends `POST /watchlist-items` containing the `firebase_uid`, `watchlist_id`, and stock details.
 3.  **Backend (Router - Fast Path):** `watchlist_items.py` validates the ticker existence via `yfinance.Ticker(symbol).info`.
 4.  **Backend (DB):** Inserts/Upserts records into Supabase `companies`, `current_market_data`, and `watchlist_items` tables using the basic info received.
 5.  **Backend (Worker Trigger):** The router triggers a **FastAPI BackgroundTask** to perform a "Deep Sync".
 6.  **Backend (Response):** Immediately returns the basic stock data to the frontend so it appears in the UI instantly.
 7.  **Backend (Deep Sync Worker):** Running in the background, the worker fetches full DataFrames from `yfinance` (Income Statement, Balance Sheet, Cash Flow, Dividends, Earnings) and performs batch upserts into the corresponding Supabase tables (Section 7.1).
+
+### 4.5 Flow: Editing Stock Targets
+**Trigger:** User clicks the Pencil icon on a `StockCard`.
+
+1.  **Frontend (UI):** `StockTargetDialog` opens in `edit` mode with pre-filled target prices.
+2.  **Frontend (Bridge):** Sends `PATCH /watchlist-items/{item_id}` with updated `target_buy` and `target_sell`.
+3.  **Backend (Router):** `watchlist_items.py` verifies user ownership of the `item_id` by joining with the `watchlists` table.
+4.  **Backend (DB):** Updates the record in the Supabase `watchlist_items` table.
+5.  **Backend (Response):** Returns the updated watchlist item data.
+6.  **Frontend (State):** `Watchlist` updates the local `stocks` state array, ensuring the UI and real-time alert logic reflect the new thresholds immediately.
 
 ---
 
@@ -112,6 +132,7 @@ This section details the interaction between frontend components, the API bridge
 | **Data Fetching** | Initial Snapshot request. | `yfinance` fetch + DB lookups. |
 | **Real-time** | `EventSource` lifecycle/reconnection. | Background monitoring, per-user queues. |
 | **Persistence** | Optimistic UI updates. | DB Integrity, Deep background data synchronization. |
+| **API Bridge** | Method propagation (GET/POST/DELETE/PATCH). | JSON Body parsing & Stream transparent piping. |
 
 ---
 
@@ -385,4 +406,3 @@ create table public.dividend_history (
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
   constraint dividend_history_pkey primary key (dividend_id)
 ) TABLESPACE pg_default;
-```

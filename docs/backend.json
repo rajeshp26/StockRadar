@@ -60,6 +60,17 @@
       "method": "POST",
       "purpose": "Adds stock to watchlist and triggers asynchronous deep sync",
       "patterns": ["Fast Add", "Deep Sync Worker"]
+    },
+    "update_stock_targets": {
+      "path": "/watchlist-items/{item_id}",
+      "method": "PATCH",
+      "purpose": "Updates target buy/sell prices for an existing watchlist item",
+      "security": "Ownership verified via backend join"
+    },
+    "remove_stock": {
+      "path": "/watchlist-items/delete",
+      "method": "POST",
+      "purpose": "Removes a stock from the watchlist"
     }
   },
   "real_time": {

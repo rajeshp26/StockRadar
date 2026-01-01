@@ -104,3 +104,7 @@ export async function GET(request: NextRequest, { params }: { params: { path: st
 export async function DELETE(request: NextRequest, { params }: { params: { path: string[] } }) {
   return handleProxy(request, 'DELETE', (await params).path);
 }
+
+export async function PATCH(request: NextRequest, { params }: { params: { path: string[] } }) {
+  return handleProxy(request, 'PATCH', (await params).path);
+}
