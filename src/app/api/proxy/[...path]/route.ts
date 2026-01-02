@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * SECURE BRIDGE: Forwards browser requests to the Python backend on port 8000.
+ * SECURE BRIDGE: Forwards browser requests to the Python backend on port 8001.
  * Supports standard JSON and Server-Sent Events (SSE) streaming.
  */
 
@@ -9,9 +9,11 @@ async function handleProxy(request: NextRequest, method: string, pathParts: stri
   const { searchParams } = new URL(request.url);
   const path = pathParts.join('/');
   const queryString = searchParams.toString();
-  const targetUrl = `http://127.0.0.1:8000/${path}${queryString ? `?${queryString}` : ''}`;
+  
+  // Changed port from 8000 to 8001 and using 127.0.0.1
+  const targetUrl = `http://127.0.0.1:8001/${path}${queryString ? `?${queryString}` : ''}`;
 
-  console.log(`[DEBUG] Bridge: Received ${method} for ${path}`);
+  console.log(`[DEBUG] Bridge: Received ${method} for ${path} -> Forwarding to ${targetUrl}`);
 
   try {
     const fetchOptions: RequestInit = {
@@ -85,9 +87,9 @@ async function handleProxy(request: NextRequest, method: string, pathParts: stri
     }
 
   } catch (error: any) {
-    console.error(`[DEBUG] Bridge FATAL Error:`, error.message);
+    console.error(`[DEBUG] Bridge FATAL Error reaching backend:`, error.message);
     return NextResponse.json(
-      { detail: 'Bridge encountered an unexpected error', error: error.message },
+      { detail: 'Bridge encountered an unexpected error', error: error.message, target: targetUrl },
       { status: 502 }
     );
   }

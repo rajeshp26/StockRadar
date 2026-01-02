@@ -1,0 +1,13 @@
+INFO:     Started server process [32446]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+[DEBUG] Background monitor started.
+>>> DEBUG: SYNC REQUEST RECEIVED
+[DEBUG] Python Backend: Received sync request for Firebase UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[DEBUG] Python Backend: Attempting Supabase upsert...
+[DEBUG] Python Backend: Supabase upsert executed.
+[DEBUG] Python Backend: User data retrieved: {'user_id': 1, 'email': 'rajeshp01@gmail.com', 'username': 'Rajesh', 'created_at': '2025-12-29T00:06:20.105842+00:00', 'last_signed_in': '2025-12-29T00:06:20.105842+00:00', 'preferred_currency': 'USD', 'firebase_uid': 'rGjlsCk0babAUMmtksTJyXfiZh62'}
+INFO:     127.0.0.1:36288 - "POST /users/sync HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36288 - "POST /watchlists/default-with-items HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36288 - "POST /watchlist-items HTTP/1.1" 201 Created

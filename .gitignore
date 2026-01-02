@@ -1,15 +1,25 @@
-# Dependencies
-/node_modules
-
-# Next.js build output
-/.next/
-/out/
-
-# Firebase / IDX specific
-/.firebase/
-/apphosting.yaml
-
-# Other
-*.log
+# Python
+__pycache__/
+*.py[cod]
+*.class
+.venv/
+venv/
+ENV/
+env/
 .env
-.env.local
+
+# Node
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+.idx/

@@ -4,13 +4,13 @@ import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 import { cn } from '@/lib/utils';
 import { FirebaseClientProvider } from '@/firebase/client-provider';
+import { ServiceProvider } from '@/shared/contexts/ServiceContext';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
 export const metadata: Metadata = {
   title: 'StockerPro - Your Personal Stock Watchlist',
   description: 'Track your favorite stocks, set price targets, and get instant alerts with StockerPro. Your ultimate tool for smart investing.',
-  // Removed: manifest: '/manifest.json',
 };
 
 export const viewport: Viewport = {
@@ -29,7 +29,9 @@ export default function RootLayout({
       </head>
       <body className={cn('min-h-screen bg-background font-sans antialiased', inter.variable)}>
         <FirebaseClientProvider>
-          {children}
+          <ServiceProvider>
+            {children}
+          </ServiceProvider>
         </FirebaseClientProvider>
         <Toaster />
       </body>

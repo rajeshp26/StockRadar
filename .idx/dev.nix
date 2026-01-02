@@ -1,8 +1,10 @@
 {pkgs, ...}:
 let
-  # The only thing Nix needs to provide is the base Python interpreter and pip
+  # Only include standard Nix-provided Python tools
   python-with-packages = pkgs.python311.withPackages (ps: with ps; [
-    pip # Pip is used to manage libraries in the virtual environment
+    pip
+    pytest
+    httpx
   ]);
 in
 {
@@ -28,8 +30,6 @@ in
   idx = {
     extensions = [];
     workspace = {
-      # The onCreate hook is removed as it is no longer needed.
-      # Dependencies are now managed in the .venv virtual environment.
       onCreate = {
         default.openFiles = [ "src/app/page.tsx" ];
       };

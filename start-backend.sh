@@ -1,28 +1,29 @@
 #!/bin/bash
 
-# This script sets up and runs the Python backend server.
+# This script sets up and runs the Python backend server using the new architecture.
 
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
-echo ">>> Setting up Python virtual environment..."
-# Create the virtual environment if it doesn't exist
-if [ ! -d ".venv" ]; then
-    python3 -m venv .venv
+# Use the virtual environment in the backend folder
+VENV_DIR="backend/.venv"
+
+echo ">>> Setting up Python virtual environment in $VENV_DIR..."
+if [ ! -d "$VENV_DIR" ]; then
+    python3 -m venv "$VENV_DIR"
     echo "Virtual environment created."
 fi
 
 # Activate the virtual environment
-source .venv/bin/activate
+source "$VENV_DIR/bin/activate"
 
-echo ">>> Installing dependencies from backend/requirements.txt..."
+echo ">>> Installing dependencies..."
 pip install -r backend/requirements.txt
+pip install pytest httpx # Testing dependencies
 
-echo ">>> Starting Python backend server on http://0.0.0.0:8000"
-echo ">>> (Running in the background with --reload)"
+# Set PYTHONPATH so absolute imports work
+export PYTHONPATH=$PYTHONPATH:$(pwd)/backend
 
-# Change to the backend directory and start the Uvicorn server in the background
-cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
-
-echo ">>> Backend server started successfully."
-echo ">>> You can now work on the frontend. The backend will run in the background."
+echo ">>> Starting Python backend server on http://0.0.0.0:8001"
+# Match the port used in src/app/api/proxy/[...path]/route.ts
+uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8001 --reload

@@ -1,10 +1,11 @@
 
 from .base import StockDataProvider, TickerInfo, StockDetails
-from typing import Optional, List, Dict
+from domain.interfaces.stock_provider import StockProvider
+from typing import Optional, List, Dict, Any
 import yfinance as yf
 from datetime import datetime, date
 
-class YFinanceProvider(StockDataProvider):
+class YFinanceProvider(StockDataProvider, StockProvider):
     def __init__(self):
         self._cache: Dict[str, StockDetails] = {}
 
@@ -80,7 +81,7 @@ class YFinanceProvider(StockDataProvider):
             print(f"YFinance Error for {ticker_symbol}: {e}")
             return None
 
-    def get_tickers_data(self, ticker_symbols: List[str]) -> Dict[str, yf.Ticker]:
+    def get_tickers_data(self, ticker_symbols: List[str]) -> Dict[str, Any]:
         if not ticker_symbols:
             return {}
         tickers = yf.Tickers(ticker_symbols)
