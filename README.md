@@ -22,24 +22,26 @@ The Next.js frontend is managed automatically by the environment.
 ### 2. Backend Setup (Python)
 The backend requires a dedicated virtual environment and specific path configurations to handle its service-oriented architecture.
 
-**Automatic Startup:**
+**Automatic Startup (Recommended):**
 ```bash
 bash start-backend.sh
 ```
 
-**Manual Startup (Recommended for Debugging):**
+**Manual Startup (For Debugging):**
 ```bash
-# 1. Activate Environment
-source .venv/bin/activate
+# 1. Activate Environment (from project root)
+source backend/.venv/bin/activate
 
 # 2. Install Dependencies
 pip install -r backend/requirements.txt
 
-# 3. Start the Server
+# 3. Start the Server (Use port 8001 to match the Next.js API Bridge)
 export PYTHONPATH=$PYTHONPATH:$(pwd)/backend
-cd backend
-uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8001 --reload
 ```
+
+> [!IMPORTANT]
+> The Next.js frontend communicates with the Python backend via a proxy bridge on **port 8001**. If you start the backend on port 8000, you will see `502 Bad Gateway` errors in the browser.
 
 ---
 
@@ -47,7 +49,7 @@ uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 
 The project includes functional test cases to verify the data ingestion pipeline independently of the UI.
 
-1.  Ensure the backend server is running.
+1.  Ensure the backend server is running on port 8001.
 2.  Follow the detailed instructions in the **[Functional Testing Guide](docs/test_deep_sync_guide.md)** to execute the `test_deep_sync.py` suite.
 
 ---

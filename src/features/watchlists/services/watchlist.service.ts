@@ -1,8 +1,7 @@
 import { AxiosInstance } from 'axios';
-import { WatchlistWithStocks, StockPriceInfo } from '../types/watchlist.types';
+import { WatchlistWithStocks } from '../types/watchlist.types';
 
 export interface AddStockInput {
-  firebase_uid: string;
   watchlist_id: number;
   symbol: string;
   target_buy: number | null;
@@ -10,7 +9,6 @@ export interface AddStockInput {
 }
 
 export interface UpdateStockInput {
-  firebase_uid: string;
   item_id: number;
   target_buy: number | null;
   target_sell: number | null;
@@ -23,10 +21,10 @@ export class WatchlistService {
     this.api = api;
   }
 
-  async getDefaultWatchlist(firebaseUid: string): Promise<WatchlistWithStocks> {
-    const response = await this.api.post<WatchlistWithStocks>('/watchlists/default-with-items', {
-      firebase_uid: firebaseUid,
-    });
+  async getDefaultWatchlist(): Promise<WatchlistWithStocks> {
+    // SECURITY: We no longer send firebase_uid in the body.
+    // The api client (Axios interceptor) attaches the ID Token automatically.
+    const response = await this.api.post<WatchlistWithStocks>('/watchlists/default-with-items', {});
     return response.data;
   }
 
@@ -41,14 +39,14 @@ export class WatchlistService {
     return response.data;
   }
 
-  async removeStock(firebaseUid: string, itemId: number): Promise<void> {
+  async removeStock(itemId: number): Promise<void> {
     await this.api.post(`/watchlist-items/delete`, {
-      firebase_uid: firebaseUid,
       item_id: itemId,
     });
   }
 
-  getWatchlistStreamUrl(firebaseUid: string): string {
-    return `/api/proxy/watchlists/stream?firebase_uid=${firebaseUid}`;
+  async getWatchlistStreamUrl(idToken: string): Promise<string> {
+    // SSE requires token in URL as headers are not supported by EventSource
+    return `/api/proxy/watchlists/stream?token=${idToken}`;
   }
 }

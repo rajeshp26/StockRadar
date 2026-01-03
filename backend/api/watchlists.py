@@ -4,34 +4,32 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Set, List
+from typing import Dict, Set, List, Optional
 from collections import defaultdict
 from datetime import datetime
+from firebase_admin import auth as firebase_auth
 
-from dependencies import get_watchlist_service
+from dependencies import get_watchlist_service, verify_firebase_token, limiter
 from application.services.watchlist_service import WatchlistService
 from shared.exceptions.base import AppException
 from database import supabase
 
 router = APIRouter()
 
-# SSE state (Keeping here for now as it's transport-layer specific)
+# SSE state
 user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
 symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
 
-class UidRequest(BaseModel):
-    firebase_uid: str
-
 @router.post("/watchlists/default-with-items", tags=["Watchlists"], status_code=200)
+@limiter.limit("20/minute")
 def get_default_watchlist_with_items(
-    req: UidRequest,
-    service: WatchlistService = Depends(get_watchlist_service)
+    request: Request,
+    service: WatchlistService = Depends(get_watchlist_service),
+    user_token: dict = Depends(verify_firebase_token)
 ):
-    """
-    Idempotent endpoint to get or create a default watchlist.
-    """
     try:
-        return service.get_default_watchlist_with_items(req.firebase_uid)
+        firebase_uid = user_token["uid"]
+        return service.get_default_watchlist_with_items(firebase_uid)
     except AppException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     except Exception as e:
@@ -39,12 +37,15 @@ def get_default_watchlist_with_items(
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 @router.get("/watchlists/stream", tags=["Watchlists"])
-async def stream_watchlist_updates(firebase_uid: str, request: Request):
-    """
-    SSE endpoint for real-time stock updates.
-    """
-    if not firebase_uid:
-        raise HTTPException(status_code=400, detail="firebase_uid is required")
+async def stream_watchlist_updates(request: Request, token: Optional[str] = None):
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication token required")
+    
+    try:
+        decoded_token = firebase_auth.verify_id_token(token)
+        firebase_uid = decoded_token["uid"]
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     async def event_generator():
         queue = asyncio.Queue()
@@ -64,7 +65,7 @@ async def stream_watchlist_updates(firebase_uid: str, request: Request):
                 if await request.is_disconnected():
                     break
                 try:
-                    data = await asyncio.wait_for(queue.get(), timeout=2.0)
+                    data = await asyncio.wait_for(queue.get(), timeout=5.0)
                     yield f"data: {json.dumps(data)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
@@ -85,7 +86,6 @@ async def broadcast_stock_update(symbol: str, price: float, change: float, chang
     if not uids: return
 
     now_iso = datetime.now().isoformat()
-    
     update_payload = {
         "symbol": symbol,
         "price": price,

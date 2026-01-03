@@ -14,11 +14,12 @@ export function useWatchlist() {
   const { toast } = useToast();
 
   const fetchWatchlist = useCallback(async () => {
-    if (!user?.uid) return;
+    if (!user) return;
     
     try {
       setIsLoading(true);
-      const data = await watchlistService.getDefaultWatchlist(user.uid);
+      // No longer passing user.uid here
+      const data = await watchlistService.getDefaultWatchlist();
       setStocks(data.stocks);
       setWatchlistId(data.watchlist_id);
     } catch (error) {
@@ -31,13 +32,12 @@ export function useWatchlist() {
     } finally {
       setIsLoading(false);
     }
-  }, [user?.uid, watchlistService, toast]);
+  }, [user, watchlistService, toast]);
 
   const addStock = async (symbol: string, targetBuy: number | null, targetSell: number | null) => {
-    if (!user?.uid || !watchlistId) return;
+    if (!watchlistId) return;
     try {
       await watchlistService.addStock({
-        firebase_uid: user.uid,
         watchlist_id: watchlistId,
         symbol,
         target_buy: targetBuy,
@@ -51,10 +51,8 @@ export function useWatchlist() {
   };
 
   const updateTargets = async (itemId: number, targetBuy: number | null, targetSell: number | null) => {
-    if (!user?.uid) return;
     try {
       await watchlistService.updateStockTargets({
-        firebase_uid: user.uid,
         item_id: itemId,
         target_buy: targetBuy,
         target_sell: targetSell,
@@ -67,9 +65,8 @@ export function useWatchlist() {
   };
 
   const removeStock = async (itemId: number) => {
-    if (!user?.uid) return;
     try {
-      await watchlistService.removeStock(user.uid, itemId);
+      await watchlistService.removeStock(itemId);
       setStocks(prev => prev.filter(s => s.id !== itemId));
       toast({ title: 'Stock Removed' });
     } catch (error) {
@@ -83,34 +80,44 @@ export function useWatchlist() {
 
   // Real-time updates via SSE
   useEffect(() => {
-    if (!user?.uid || !watchlistId) return;
+    if (!user || !watchlistId) return;
 
-    const streamUrl = watchlistService.getWatchlistStreamUrl(user.uid);
-    const eventSource = new EventSource(streamUrl);
+    let eventSource: EventSource | null = null;
 
-    eventSource.onmessage = (event) => {
-      try {
-        const update = JSON.parse(event.data);
-        setStocks((prevStocks) =>
-          prevStocks.map((stock) =>
-            stock.symbol === update.symbol
-              ? { ...stock, ...update }
-              : stock
-          )
-        );
-      } catch (err) {
-        console.error('Error parsing SSE update:', err);
-      }
+    const setupStream = async () => {
+      // Get a fresh token for the SSE URL
+      const idToken = await user.getIdToken();
+      const streamUrl = await watchlistService.getWatchlistStreamUrl(idToken);
+      
+      eventSource = new EventSource(streamUrl);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const update = JSON.parse(event.data);
+          setStocks((prevStocks) =>
+            prevStocks.map((stock) =>
+              stock.symbol === update.symbol
+                ? { ...stock, ...update }
+                : stock
+            )
+          );
+        } catch (err) {
+          console.error('Error parsing SSE update:', err);
+        }
+      };
+
+      eventSource.onerror = (err) => {
+        console.error('SSE Error:', err);
+        eventSource?.close();
+      };
     };
 
-    eventSource.onerror = (err) => {
-      eventSource.close();
-    };
+    setupStream();
 
     return () => {
-      eventSource.close();
+      eventSource?.close();
     };
-  }, [user?.uid, watchlistId, watchlistService]);
+  }, [user, watchlistId, watchlistService]);
 
   return {
     stocks,
