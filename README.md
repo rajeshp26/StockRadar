@@ -1,71 +1,71 @@
 # StockerPro: Deep Financial Analytics Platform
 
-StockerPro is a comprehensive personal stock analytics tool built with Next.js 15, FastAPI, and Supabase. It is designed to automatically build a local financial database for stocks you track, enabling deep fundamental analysis.
+StockerPro is a professional-grade personal stock analytics platform built with **Next.js 15**, **FastAPI**, and **Supabase**. It automates the ingestion of historical financial statements to provide deep fundamental insights and real-time portfolio tracking.
 
-## 🚀 Key Features
+## 📂 Project Structure
 
-*   **Deep Financial Sync:** Adding a stock triggers an automated background ingestion process. The system fetches the last 4+ years of Income Statements, Balance Sheets, and Cash Flow statements.
-*   **Comprehensive Statistics:** Automatically captures TTM (Trailing Twelve Months) metrics, including P/E ratios, Margins, Return on Assets (ROA), Return on Equity (ROE), and Liquidity ratios.
-*   **Dividend & Earnings Tracking:** Maintains a full historical record of dividend payments and earnings surprise data for tracked companies.
-*   **Secure API Bridge:** Utilizes a Next.js API Bridge to facilitate secure, authenticated communication between the frontend and the Python backend.
-*   **Scalable Architecture:** Implements a "Fast Add, Deep Sync" pattern, where the UI responds immediately while heavy data fetching occurs in the background.
+This monorepo is organized into three primary tiers:
+
+*   **`/backend`**: Python FastAPI server. Handles data ingestion, `yfinance` integration, and Supabase data orchestration.
+*   **`/web`**: Primary Web Frontend built with Next.js 15, React 19, and Tailwind CSS.
+*   **`/mobile`**: Cross-platform Mobile App built with Flutter 3.22 and Riverpod.
 
 ---
 
-## 🛠️ Getting Started
+## 🚀 Quick Start (Development)
 
-### 1. Frontend Setup
-The Next.js frontend is managed automatically by the environment.
-*   **Port:** 9002
-*   **Command:** `npm run dev`
+### 1. Prerequisite: The Nix Environment
+This project uses **Nix** to ensure binary compatibility across development environments (resolving common issues with `libstdc++` and `glibc`).
 
-### 2. Backend Setup (Python)
-The backend requires a dedicated virtual environment and specific path configurations to handle its service-oriented architecture.
-
-**Automatic Startup (Recommended):**
+### 2. Launch the Backend
+The backend must run in an isolated Nix shell to support C-extensions like NumPy/Pandas:
 ```bash
-bash start-backend.sh
+# From the project root
+nix-shell shell.nix --run "cd backend && ./start.sh"
 ```
+*   **Port:** 8001
+*   **Health:** `http://localhost:8001/health`
 
-**Manual Startup (For Debugging):**
+### 3. Launch the Web Frontend
 ```bash
-# 1. Activate Environment (from project root)
-source backend/.venv/bin/activate
-
-# 2. Install Dependencies
-pip install -r backend/requirements.txt
-
-# 3. Start the Server (Use port 8001 to match the Next.js API Bridge)
-export PYTHONPATH=$PYTHONPATH:$(pwd)/backend
-uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8001 --reload
+cd web
+npm install
+npm run dev
 ```
-
-> [!IMPORTANT]
-> The Next.js frontend communicates with the Python backend via a proxy bridge on **port 8001**. If you start the backend on port 8000, you will see `502 Bad Gateway` errors in the browser.
+*   **Port:** 9002 (Preview)
+*   **Proxy:** Automatically bridges to the backend on Port 8001.
 
 ---
 
 ## 🧪 Testing
 
-The project includes functional test cases to verify the data ingestion pipeline independently of the UI.
+### Functional Backend Testing
+Verify the data ingestion pipeline independently:
+1.  Ensure backend is running.
+2.  Run the deep sync test suite:
+    ```bash
+    source backend/venv/bin/activate
+    pytest backend/tests/test_deep_sync.py
+    ```
 
-1.  Ensure the backend server is running on port 8001.
-2.  Follow the detailed instructions in the **[Functional Testing Guide](docs/test_deep_sync_guide.md)** to execute the `test_deep_sync.py` suite.
+### Mobile Verification
+```bash
+cd mobile
+flutter analyze
+flutter test
+```
 
 ---
 
-## 📂 Project Structure
+## 🛡️ Architecture Highlights
 
-*   `src/app/`: Next.js App Router (Dashboard, Auth, Landing).
-*   `src/app/api/proxy/`: The Secure API Bridge implementation.
-*   `backend/api/`: FastAPI feature routers (Watchlists, Users, Items).
-*   `backend/services/`: Core synchronization and data transformation services.
-*   `backend/providers/`: External data source abstractions (yfinance).
-*   `docs/`: Detailed technical specifications and manuals.
-
----
+*   **Secure API Bridge:** Next.js acts as a secure proxy between the browser and Python, forwarding Firebase Auth tokens and preventing CORS leaks.
+*   **Real-time Streaming:** Implements **Stream Piping** for Server-Sent Events (SSE) to deliver live stock prices with zero-buffering.
+*   **Nix Isolation:** Uses `shell.nix` to resolve system library conflicts (`libstdc++.so.6`) without affecting the host OS.
+*   **Fail-Fast Initialization:** The mobile app implements a "Bootstrap Guard" to ensure Firebase configuration is valid before the UI renders.
 
 ## 🔗 Documentation
 
-*   **[Full Architecture Guide](ARCHITECTURE.md):** Deep dive into the data flow, trust models, and schemas.
-*   **[Testing Guide](docs/test_deep_sync_guide.md):** Steps for independent backend verification.
+*   **[Full Architecture Guide](ARCHITECTURE.md):** Deep dive into schemas, data flow, and the bridge pattern.
+*   **[Environment Setup Guide](docs/ENVIRONMENT_SETUP_GUIDE.md):** Detailed platform-specific configuration and troubleshooting.
+*   **[Testing Guide](docs/TESTING_GUIDE.md):** Quality assurance protocols for all tiers.

@@ -2,5 +2,10 @@ fastapi
 uvicorn
 supabase
 pydantic
+pydantic-settings
 yfinance
 firebase-admin
+slowapi
+python-dotenv
+httpx
+pytest

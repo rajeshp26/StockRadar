@@ -1,0 +1,55 @@
+INFO:     Started server process [41479]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+[DEBUG] Initializing Firebase Admin for project: studio-5026044967-252d9
+[DEBUG] Firebase Admin initialized successfully.
+[DEBUG] Background monitor started.
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[SECURITY ERROR] Token verification failed: Unexpected response from metadata server: service account info is missing 'email' field.
+INFO:     127.0.0.1:59978 - "POST /users/sync HTTP/1.1" 401 Unauthorized
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[SECURITY ERROR] Token verification failed: Unexpected response from metadata server: service account info is missing 'email' field.
+INFO:     127.0.0.1:60004 - "POST /users/sync HTTP/1.1" 401 Unauthorized
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[SECURITY ERROR] Token verification failed: Unexpected response from metadata server: service account info is missing 'email' field.
+INFO:     127.0.0.1:59978 - "POST /watchlists/default-with-items HTTP/1.1" 401 Unauthorized
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[SECURITY ERROR] Token verification failed: Unexpected response from metadata server: service account info is missing 'email' field.
+INFO:     127.0.0.1:59994 - "POST /watchlists/default-with-items HTTP/1.1" 401 Unauthorized
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[ERROR] /users/sync: {'message': 'new row violates row-level security policy for table "users"', 'code': '42501', 'hint': None, 'details': None}
+INFO:     127.0.0.1:53802 - "POST /users/sync HTTP/1.1" 500 Internal Server Error
+[ERROR] /users/sync: {'message': 'new row violates row-level security policy for table "users"', 'code': '42501', 'hint': None, 'details': None}
+INFO:     127.0.0.1:33426 - "POST /users/sync HTTP/1.1" 500 Internal Server Error
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[ERROR] /users/sync: {'message': 'new row violates row-level security policy for table "users"', 'code': '42501', 'hint': None, 'details': None}
+INFO:     127.0.0.1:33426 - "POST /users/sync HTTP/1.1" 500 Internal Server Error
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[ERROR] get_default_watchlist_with_items: {'message': 'No suitable key or wrong key type', 'code': 'PGRST301', 'hint': None, 'details': 'No suitable key was found to decode the JWT'}
+INFO:     127.0.0.1:53802 - "POST /watchlists/default-with-items HTTP/1.1" 500 Internal Server Error
+[ERROR] get_default_watchlist_with_items: {'message': 'No suitable key or wrong key type', 'code': 'PGRST301', 'hint': None, 'details': 'No suitable key was found to decode the JWT'}
+INFO:     127.0.0.1:60820 - "POST /watchlists/default-with-items HTTP/1.1" 500 Internal Server Error
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[ERROR] /users/sync: {'message': 'new row violates row-level security policy for table "users"', 'code': '42501', 'hint': None, 'details': None}
+INFO:     127.0.0.1:38796 - "POST /users/sync HTTP/1.1" 500 Internal Server Error
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[ERROR] /users/sync: {'message': 'new row violates row-level security policy for table "users"', 'code': '42501', 'hint': None, 'details': None}
+INFO:     127.0.0.1:58788 - "POST /users/sync HTTP/1.1" 500 Internal Server Error
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[DEBUG] verify_firebase_token: Attempting to verify token (len: 980)...
+[DEBUG] verify_firebase_token: Successfully verified token for UID: rGjlsCk0babAUMmtksTJyXfiZh62
+[ERROR] get_default_watchlist_with_items: {'message': 'No suitable key or wrong key type', 'code': 'PGRST301', 'hint': None, 'details': 'No suitable key was found to decode the JWT'}
+INFO:     127.0.0.1:38796 - "POST /watchlists/default-with-items HTTP/1.1" 500 Internal Server Error
+[ERROR] get_default_watchlist_with_items: {'message': 'No suitable key or wrong key type', 'code': 'PGRST301', 'hint': None, 'details': 'No suitable key was found to decode the JWT'}
+INFO:     127.0.0.1:58782 - "POST /watchlists/default-with-items HTTP/1.1" 500 Internal Server Error

@@ -21,27 +21,38 @@ user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
 symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
 
 @router.post("/watchlists/default-with-items", tags=["Watchlists"], status_code=200)
-@limiter.limit("20/minute")
 def get_default_watchlist_with_items(
     request: Request,
     service: WatchlistService = Depends(get_watchlist_service),
     user_token: dict = Depends(verify_firebase_token)
 ):
+    """
+    Retrieves the default watchlist. 
+    IDENTITY: Uses the 'uid' from the verified Firebase token, NOT the request body.
+    """
     try:
         firebase_uid = user_token["uid"]
+        # Logic: We fetch the watchlist belonging to the authenticated user.
         return service.get_default_watchlist_with_items(firebase_uid)
     except AppException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     except Exception as e:
         print(f"[ERROR] get_default_watchlist_with_items: {e}")
-        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.get("/watchlists/stream", tags=["Watchlists"])
-async def stream_watchlist_updates(request: Request, token: Optional[str] = None):
+async def stream_watchlist_updates(
+    request: Request, 
+    token: Optional[str] = None
+):
+    """
+    SSE Stream for real-time stock updates.
+    """
     if not token:
         raise HTTPException(status_code=401, detail="Authentication token required")
     
     try:
+        # VERIFICATION: Always verify the token before opening the stream
         decoded_token = firebase_auth.verify_id_token(token)
         firebase_uid = decoded_token["uid"]
     except Exception:
@@ -52,6 +63,8 @@ async def stream_watchlist_updates(request: Request, token: Optional[str] = None
         user_queues[firebase_uid].append(queue)
         
         try:
+            # IDENTITY-SCOPED QUERY: Only subscribe to symbols in the user's watchlist
+            # Note: This query assumes your schema allows filtering by firebase_uid via joins
             items_res = supabase.table('watchlist_items') \
                 .select('companies(ticker_symbol)') \
                 .eq('watchlists.users.firebase_uid', firebase_uid) \

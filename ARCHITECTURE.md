@@ -1,88 +1,61 @@
 # Project Architecture and Environment Guide
 
-This document provides a comprehensive overview of the project's technical architecture and development environment. It is the single source of truth for understanding how the system is built and how to run it correctly.
+This document is the single source of truth for the StockerPro technical architecture.
 
-## 1. Core Technologies
+## 1. System Topology
 
-*   **Frontend:**
-    *   **Framework:** Next.js 15 (App Router), React 19.
-    *   **Authentication:** [Firebase Authentication](https://firebase.google.com/docs/auth). The client-side application uses the Firebase Web SDK to manage user sign-in and retrieve authentication tokens.
-    *   **UI Components:** Tailwind CSS with shadcn/ui.
-    *   **Reactivity:** Firebase Firestore for reactive document synchronization where needed.
+The system implements a **Decoupled Bridge Architecture**. Authentication is handled by Firebase, while persistent data resides in Supabase.
 
-*   **Backend (SOLID Layered Architecture):**
-    *   **Framework:** FastAPI (Python 3.11+).
-    *   **Database:** [Supabase](https://supabase.io/). 
-    *   **Data Provider:** `yfinance` for fetching financial stock data.
-    *   **AI Layer:** Google Genkit AI (`src/ai/`) for advanced stock analysis and flow orchestration.
+`Browser (Next.js)` <---> `API Proxy (Port 9002)` <---> `FastAPI Backend (Port 8001)` <---> `Supabase / yfinance`
 
-*   **Communication:**
-    *   **Secure Bridge:** Next.js API Bridge (`src/app/api/proxy/`) for REST commands.
-    *   **Real-time:** Server-Sent Events (SSE) for stock price synchronization.
+### 1.1 The Secure Bridge (Next.js API Routes)
+Located in `web/src/app/api/proxy/`, this layer serves three critical professional functions:
+1.  **Identity Forwarding**: Extracts the Firebase JWT from the browser and injects it into the backend request.
+2.  **CORS Management**: Eliminates cross-origin issues by keeping the Backend "private" to the frontend server.
+3.  **Stream Piping**: Uses `ReadableStream` to pipe Server-Sent Events (SSE) from Python directly to the browser for low-latency price updates.
 
 ---
 
-## 2. System Architecture & The "Secure Bridge"
+## 2. Backend Layered Architecture (SOLID)
 
-The system uses a decoupled architecture: **Firebase for authentication** and **Supabase for the database**. To avoid CORS and simplify security, the frontend communicates with the Python backend via a **Secure Bridge**.
+The Python backend follows the **Hexagonal/Clean Architecture** principles to ensure maintainability.
 
-`Browser` <---> `Next.js API Bridge (Proxy)` <---> `FastAPI Backend` <---> `Supabase / yfinance`
-
----
-
-## 3. Backend Layered Architecture (SOLID)
-
-To ensure maintainability and testability, the backend follows a strict layered architecture:
-
-| Layer | Directory | Responsibility |
+| Layer | Path | Responsibility |
 | :--- | :--- | :--- |
-| **API** | `backend/api/` | Route handlers, request/response schemas (Pydantic), and controller logic. |
-| **Application** | `backend/application/` | Orchestration of business logic and use cases (Services). |
-| **Domain** | `backend/domain/` | Core business entities and abstract interfaces (The "Heart" of the system). |
-| **Infrastructure** | `backend/infrastructure/` | Concrete implementations of interfaces (Repositories, external providers). |
-| **Shared** | `backend/shared/` | Common utilities, custom exceptions, and cross-cutting concerns. |
-
-### 3.1 Key Design Patterns
-*   **Repository Pattern:** Data access logic is encapsulated in `backend/infrastructure/repositories/`, allowing the business logic to remain database-agnostic.
-*   **Dependency Inversion:** High-level services depend on abstract interfaces (defined in `domain/interfaces/`) rather than concrete database clients.
-*   **Interface Segregation:** Providers and Repositories are split into focused interfaces (e.g., `StockProvider`, `WatchlistRepository`).
+| **API** | `backend/api/` | FastAPI routers and Pydantic validation schemas. |
+| **Application** | `backend/application/` | Orchestrates use cases (e.g., `WatchlistService`). |
+| **Domain** | `backend/domain/` | Abstract interfaces and core business logic. |
+| **Infrastructure** | `backend/infrastructure/` | Concrete implementations (Repositories, yfinance). |
 
 ---
 
-## 4. Directory Map (Detailed)
+## 3. Deployment Environments
 
-| Path | Description |
+### 3.1 Cloud Workstations (IDX)
+The workstation environment is constrained by RAM (OOM Killer).
+*   **Fix**: Switched from Flutter Web to Next.js for the primary preview to reduce memory footprint by ~3GB.
+*   **Isolation**: Uses `shell.nix` to provide `libstdc++` and `zlib` to Python without poisoning system binaries.
+
+### 3.2 Mobile (Flutter)
+The mobile app targets native Android/iOS and local development.
+*   **Bootstrap Guard**: Implemented in `main.dart`. It prevents initialization if `--dart-define` flags are missing, ensuring developers catch config errors immediately.
+
+---
+
+## 4. Shared Data Contract
+
+All services must align with the following key identifiers:
+*   **User ID**: Linked via `firebase_uid` (UID from Firebase token).
+*   **Schema**: Frontend uses `username` (matching Backend `UserSync` schema) rather than `display_name`.
+*   **Ports**: Backend must always listen on **8001**. Web Preview on **9002**.
+
+---
+
+## 5. Directory Map
+
+| Directory | Content |
 | :--- | :--- |
-| `src/app/(authenticated)/` | Protected Next.js routes. |
-| `src/app/api/proxy/` | The Secure Bridge implementation. |
-| `backend/application/services/` | Use cases like `WatchlistService`. |
-| `backend/domain/interfaces/` | Abstract definitions for Repositories and Providers. |
-| `backend/infrastructure/repositories/` | Supabase-specific data access logic. |
-| `backend/providers/` | Concrete external data providers (e.g., `yfinance`). |
-
----
-
-## 5. User Flows & Technical Sequences
-
-### 5.1 Flow: Startup & Authentication
-**Trigger:** User visits the root URL.
-*   **Frontend:** `AuthProvider` initializes Firebase. `middleware.ts` redirects to `/dashboard` if a session exists.
-
-### 5.2 Flow: Dashboard Loading (Handshake)
-1.  **Frontend:** `Watchlist.tsx` calls `POST /watchlists/default-with-items`.
-2.  **Backend (API):** `watchlists.py` receives the request and calls `WatchlistService`.
-3.  **Backend (Service):** `WatchlistService` uses a `WatchlistRepository` to fetch data and a `StockProvider` for live prices.
-4.  **Backend (Response):** Returns a unified `WatchlistWithStocks` domain object.
-
----
-
-## 6. Running the Application
-
-### Frontend
-*   **Command:** `npm run dev` (Starts on port 9002).
-
-### Backend (Python)
-The backend port **must** be `8001` to match the Secure Bridge configuration.
-```bash
-uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8001 --reload
-```
+| `web/src/components/auth/` | Firebase Auth providers and sync logic. |
+| `backend/providers/` | External data connectors (yfinance, etc). |
+| `mobile/lib/core/api/` | Typed Dio client for backend communication. |
+| `docs/` | Engineering logs and security guidelines. |

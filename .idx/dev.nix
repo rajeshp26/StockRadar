@@ -1,45 +1,51 @@
-{pkgs, ...}:
-let
-  # Only include standard Nix-provided Python tools
-  python-with-packages = pkgs.python311.withPackages (ps: with ps; [
-    pip
-    pytest
-    httpx
-  ]);
-in
-{
-  channel = "stable-24.11"; 
+{ pkgs, ... }: {
+  # Which nixpkgs channel to use.
+  channel = "stable-24.05"; 
 
+  # Use https://search.nixos.org/packages to find packages
   packages = [
     pkgs.nodejs_20
-    pkgs.zulu
-    pkgs.postgresql
-    python-with-packages
+    pkgs.python311
+    pkgs.python311Packages.pip
+    pkgs.nodePackages.firebase-tools
+    pkgs.jdk17
+    pkgs.flutter
   ];
 
+  # Sets environment variables in the workspace
   env = {
-    LD_LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
-  };
-
-  services.firebase.emulators = {
-    detect = false;
-    projectId = "demo-app";
-    services = [ "auth" "firestore" ];
+    # Set the JDK path for Flutter
+    JAVA_HOME = "${pkgs.jdk17.home}";
   };
 
   idx = {
-    extensions = [];
+    # Search for the extensions you want on https://open-vsx.org/ and use "publisher.id"
+    extensions = [
+      "Dart-Code.flutter"
+      "Dart-Code.dart-code"
+      "ms-python.python"
+    ];
+
+    # Workspace lifecycle hooks
     workspace = {
-      onCreate = {
-        default.openFiles = [ "src/app/page.tsx" ];
+      # Runs every time the workstation starts
+      onStart = {
+        # Automatically start the backend in its safe Nix environment
+        # This ensures the API is ready as soon as the workstation is opened
+        start-backend = "nix-shell shell.nix --run 'cd backend && ./start.sh'";
       };
     };
+
+    # Enable previews
     previews = {
       enable = true;
       previews = {
         web = {
-          command = ["npm" "run" "dev" "--" "--port" "$PORT" "--hostname" "0.0.0.0"];
+          # Use Next.js (React) for the web preview instead of memory-heavy Flutter Web
+          # This resolves the OOM (Out of Memory) issues in the workstation
+          command = ["npm" "run" "dev" "--" "-p" "$PORT" "--hostname" "0.0.0.0"];
           manager = "web";
+          cwd = "web";
         };
       };
     };

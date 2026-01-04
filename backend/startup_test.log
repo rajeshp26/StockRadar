@@ -1,0 +1,9 @@
+INFO:     Started server process [41062]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8001): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+[DEBUG] Initializing Firebase Admin for project: studio-5026044967-252d9
+[DEBUG] Firebase Admin initialized successfully.
+[DEBUG] Background monitor started.

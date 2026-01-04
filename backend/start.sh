@@ -1,0 +1,179 @@
+#!/bin/bash
+
+# ============================================
+# StockerPro Backend Startup (Production-Ready)
+# Handles: Nix environment, .env injection, worker processes
+# ============================================
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+echo -e "${GREEN}🚀 StockerPro Backend Startup${NC}\n"
+
+# ============================================
+# STEP 1: Verify Prerequisites
+# ============================================
+
+echo -e "${YELLOW}🔍 Step 1: Prerequisites Check${NC}"
+
+if [ ! -f ".env" ]; then
+    echo -e "${RED}❌ .env file not found at $SCRIPT_DIR/.env${NC}"
+    exit 1
+fi
+
+if [ ! -f "config.py" ]; then
+    echo -e "${RED}❌ config.py not found${NC}"
+    exit 1
+fi
+
+if [ ! -d "venv" ]; then
+    echo -e "${RED}❌ venv not found. Run within nix-shell:${NC}"
+    echo -e "${YELLOW}   nix-shell ../shell.nix${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Prerequisites OK${NC}\n"
+
+# ============================================
+# STEP 2: Load .env Variables into Shell
+# ============================================
+
+echo -e "${YELLOW}🔑 Step 2: Loading environment variables${NC}"
+
+# Safe method: read .env line by line, skip comments and empty lines
+while IFS='=' read -r key value || [ -n "$key" ]; do
+    # Skip comments and empty lines
+    [[ "$key" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$key" ]] && continue
+    
+    # Trim whitespace
+    key=$(echo "$key" | xargs)
+    value=$(echo "$value" | xargs)
+    
+    # Export the variable
+    export "$key=$value"
+done < .env
+
+echo -e "${GREEN}✅ Environment variables loaded${NC}"
+echo -e "   - SUPABASE_URL: ${SUPABASE_URL:0:20}..."
+echo -e "   - FIREBASE_PROJECT_ID: $FIREBASE_PROJECT_ID"
+[ -n "$GEMINI_API_KEY" ] && echo -e "   - GEMINI_API_KEY: configured"
+echo ""
+
+# ============================================
+# STEP 3: Activate Virtual Environment
+# ============================================
+
+echo -e "${YELLOW}🐍 Step 3: Virtual environment${NC}"
+
+source venv/bin/activate
+echo -e "${GREEN}✅ venv activated: $VIRTUAL_ENV${NC}\n"
+
+# ============================================
+# STEP 4: Cleanup Old Processes
+# ============================================
+
+echo -e "${YELLOW}🧹 Step 4: Cleanup${NC}"
+
+PID_FILE="$SCRIPT_DIR/backend.pid"
+LOG_DIR="$SCRIPT_DIR/logs"
+LOG_FILE="$LOG_DIR/backend.log"
+
+mkdir -p "$LOG_DIR"
+
+if [ -f "$PID_FILE" ]; then
+    OLD_PID=$(cat "$PID_FILE")
+    if ps -p "$OLD_PID" > /dev/null 2>&1; then
+        echo -e "${YELLOW}   Stopping old process (PID: $OLD_PID)...${NC}"
+        kill -TERM "$OLD_PID" 2>/dev/null || true
+        sleep 2
+        kill -9 "$OLD_PID" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+fi
+
+echo -e "${GREEN}✅ Cleanup complete${NC}\n"
+
+# ============================================
+# STEP 5: Verify Configuration
+# ============================================
+
+echo -e "${YELLOW}⚙️  Step 5: Configuration validation${NC}"
+
+# Quick test: import config to validate it loads
+if python3 -c "from config import settings; print(f'Project ID: {settings.FIREBASE_PROJECT_ID}')" 2>&1; then
+    echo -e "${GREEN}✅ Configuration valid${NC}\n"
+else
+    echo -e "${RED}❌ Configuration validation failed${NC}"
+    exit 1
+fi
+
+# ============================================
+# STEP 6: Start FastAPI Server
+# ============================================
+
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}🎯 Starting FastAPI Server${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}📍 Host: 0.0.0.0${NC}"
+echo -e "${YELLOW}📍 Port: 8001${NC}"
+echo -e "${YELLOW}📍 API Docs: http://localhost:8001/docs${NC}"
+echo -e "${YELLOW}📍 Logs: tail -f $LOG_FILE${NC}"
+echo -e "${YELLOW}Press Ctrl+C to stop${NC}\n"
+
+# Set PYTHONPATH to ensure imports work correctly
+export PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..${PYTHONPATH:+:$PYTHONPATH}"
+
+# Launch with nohup to survive terminal disconnection
+nohup python -m uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8001 \
+    --log-level info \
+    > "$LOG_FILE" 2>&1 &
+
+NEW_PID=$!
+echo "$NEW_PID" > "$PID_FILE"
+
+# ============================================
+# STEP 7: Verify Server Started
+# ============================================
+
+echo -e "${BLUE}Waiting for server to be ready...${NC}"
+sleep 3
+
+if ps -p "$NEW_PID" > /dev/null 2>&1; then
+    echo -e "${GREEN}✅ Backend is LIVE (PID: $NEW_PID)${NC}\n"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}Status: Backend Ready${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+else
+    echo -e "${RED}❌ Backend failed to start${NC}"
+    echo -e "${YELLOW}Last 30 lines of log:${NC}\n"
+    tail -n 30 "$LOG_FILE"
+    exit 1
+fi
+
+# ============================================
+# STEP 8: Health Check
+# ============================================
+
+echo -e "${YELLOW}🏥 Performing health check...${NC}"
+
+# Give server a moment to fully start
+sleep 2
+
+if curl -s http://localhost:8001/health > /dev/null 2>&1; then
+    echo -e "${GREEN}✅ Health check passed${NC}\n"
+else
+    echo -e "${YELLOW}⚠️  Health endpoint not responding yet (may take a moment)${NC}\n"
+fi
+
+echo -e "${GREEN}Backend startup complete!${NC}"

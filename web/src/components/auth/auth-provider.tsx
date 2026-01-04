@@ -60,17 +60,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       // Step 1: Sync user profile
       console.log('Syncing user profile with Python backend...');
+      // SECURITY: firebase_uid is retrieved from the JWT token on the backend
       const profileResponse = await api.post<UserProfile>('/users/sync', {
-        firebase_uid: currentUser.uid,
         email: currentUser.email,
-        display_name: currentUser.displayName,
+        username: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
       });
       const userProfile = profileResponse.data;
       console.log('Backend user sync successful:', userProfile);
 
       // Step 2: Get or create the default watchlist using the new consolidated endpoint
       console.log('Ensuring default watchlist exists...');
-      // The new endpoint /watchlists/default-with-items returns the full watchlist object
       const watchlistResponse = await api.post<{ watchlist_id: number, name: string, is_default: boolean, items: any[], stocks: any[] }>('/watchlists/default-with-items', {
         firebase_uid: currentUser.uid,
       });

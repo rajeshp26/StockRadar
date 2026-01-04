@@ -1,0 +1,17 @@
+# This file configures the static analysis as described in the
+# http://dart.dev/guides/language/analysis-options page.
+
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+  errors:
+    invalid_annotation_target: ignore # Standard fix for Freezed + JsonSerializable
+
+linter:
+  rules:
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - avoid_print
