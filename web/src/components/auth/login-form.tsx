@@ -11,9 +11,11 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { useAuth } from './auth-provider';
+import { useAuth } from '@/providers/auth-provider';
 import { useToast } from '@/hooks/use-toast';
-
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { initializeFirebase } from '@/firebase';
+import { perf } from '@/lib/performance'; // Import the performance utility
 
 const formSchema = z.object({
   email: z.string().email({ message: "Please enter a valid email." }),
@@ -22,8 +24,9 @@ const formSchema = z.object({
 
 export function LoginForm() {
   const router = useRouter();
-  const { signInWithEmail, syncWithBackend } = useAuth();
   const { toast } = useToast();
+  const { status } = useAuth();
+  const { auth } = initializeFirebase();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -34,14 +37,18 @@ export function LoginForm() {
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    perf.mark('login-start'); // Mark the beginning of the login attempt
     try {
-      await signInWithEmail(values.email, values.password);
-      await syncWithBackend(); // Explicitly trigger sync after successful login
+      await signInWithEmailAndPassword(auth, values.email, values.password);
+      toast({
+        title: 'Login Successful',
+        description: "You are now being redirected...",
+      });
       router.push('/dashboard');
     } catch (error: any) {
       toast({
         title: 'Login Failed',
-        description: error.message,
+        description: error.message || 'An unknown error occurred.',
         variant: 'destructive',
       });
     }
@@ -53,7 +60,6 @@ export function LoginForm() {
         description: 'Passkey support is not yet implemented.',
       });
   }
-
 
   return (
     <Card className="w-full max-w-sm">
@@ -90,8 +96,8 @@ export function LoginForm() {
                 </FormItem>
               )}
             />
-            <Button type="submit" className="w-full">
-              Sign in
+            <Button type="submit" className="w-full" disabled={status === 'initializing'}>
+              {status === 'initializing' ? 'Authenticating...' : 'Sign in'}
             </Button>
           </form>
         </Form>

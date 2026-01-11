@@ -11,7 +11,7 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { useAuth } from './auth-provider';
+import { useAuth } from '@/providers/auth-provider';
 import { useToast } from '@/hooks/use-toast';
 
 const formSchema = z.object({

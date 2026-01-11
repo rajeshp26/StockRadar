@@ -5,15 +5,15 @@ from database import supabase
 from providers.yfinance_provider import YFinanceProvider
 from services.sync_service import sync_service
 from datetime import datetime
-from dependencies import verify_firebase_token, limiter
+from dependencies import get_current_user_dep, limiter
 import re
 
 router = APIRouter()
 stock_provider = YFinanceProvider()
 
 # --- Helpers ---
-def get_db_user_id(firebase_uid: str) -> int:
-    res = supabase.table('users').select('user_id').eq('firebase_uid', firebase_uid).single().execute()
+def get_db_user_id(auth_id: str) -> int:
+    res = supabase.table('users').select('user_id').eq('auth_id', auth_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=403, detail="User not found.")
     return res.data['user_id']
@@ -73,11 +73,11 @@ async def add_item_to_watchlist(
     request: Request,
     item: WatchlistItemIn, 
     background_tasks: BackgroundTasks,
-    user_token: dict = Depends(verify_firebase_token)
+    user_token: dict = Depends(get_current_user_dep)
 ):
     try:
-        firebase_uid = user_token["uid"]
-        db_user_id = get_db_user_id(firebase_uid)
+        auth_id = user_token["uid"]
+        db_user_id = get_db_user_id(auth_id)
         
         watchlist_res = supabase.table('watchlists').select('user_id').eq('id', item.watchlist_id).single().execute()
         if not watchlist_res.data or watchlist_res.data['user_id'] != db_user_id:
@@ -169,11 +169,11 @@ def update_watchlist_item_targets(
     request: Request,
     item_id: int, 
     update: WatchlistItemUpdate,
-    user_token: dict = Depends(verify_firebase_token)
+    user_token: dict = Depends(get_current_user_dep)
 ):
     try:
-        firebase_uid = user_token["uid"]
-        db_user_id = get_db_user_id(firebase_uid)
+        auth_id = user_token["uid"]
+        db_user_id = get_db_user_id(auth_id)
         
         item_res = supabase.table('watchlist_items') \
             .select('watchlist_item_id, watchlists!inner(user_id)') \
@@ -204,11 +204,11 @@ def update_watchlist_item_targets(
 def remove_item_from_watchlist(
     request: Request,
     req: DeleteItemRequest,
-    user_token: dict = Depends(verify_firebase_token)
+    user_token: dict = Depends(get_current_user_dep)
 ):
     try:
-        firebase_uid = user_token["uid"]
-        db_user_id = get_db_user_id(firebase_uid)
+        auth_id = user_token["uid"]
+        db_user_id = get_db_user_id(auth_id)
         
         item_res = supabase.table('watchlist_items').select('watchlist_item_id, watchlists!inner(user_id)').eq('watchlist_item_id', req.item_id).single().execute()
         if not item_res.data or item_res.data['watchlists']['user_id'] != db_user_id:

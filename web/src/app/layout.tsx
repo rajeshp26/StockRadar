@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { cn } from '@/lib/utils';
 import { FirebaseClientProvider } from '@/firebase/client-provider';
 import { ServiceProvider } from '@/shared/contexts/ServiceContext';
+import { AuthProvider } from '@/providers/auth-provider';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
@@ -29,9 +30,11 @@ export default function RootLayout({
       </head>
       <body className={cn('min-h-screen bg-background font-sans antialiased', inter.variable)}>
         <FirebaseClientProvider>
-          <ServiceProvider>
-            {children}
-          </ServiceProvider>
+          <AuthProvider>
+            <ServiceProvider>
+              {children}
+            </ServiceProvider>
+          </AuthProvider>
         </FirebaseClientProvider>
         <Toaster />
       </body>

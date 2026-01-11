@@ -35,5 +35,5 @@ class SupabaseUserRepository:
         self.client = client
 
     def find_by_firebase_uid(self, firebase_uid: str) -> Optional[Dict[str, Any]]:
-        res = self.client.table('users').select('user_id').eq('firebase_uid', firebase_uid).single().execute()
+        res = self.client.table('users').select('user_id').eq('auth_id', firebase_uid).single().execute()
         return res.data

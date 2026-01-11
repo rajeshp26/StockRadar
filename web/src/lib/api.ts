@@ -1,40 +1,24 @@
 import axios from 'axios';
-import { initializeFirebase } from '@/firebase';
 
-const { auth } = initializeFirebase();
-
-/**
- * SECURE API CLIENT:
- * Communicates with the Next.js Proxy Bridge.
- * Automatically attaches the Firebase ID Token for backend verification.
- */
-const api = axios.create({
-  baseURL: '/api/proxy',
+// Create Axios instance
+export const api = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL || '/api/proxy',
+  timeout: 10000,
 });
 
-api.interceptors.request.use(async (config) => {
-  // 1. Get current user
-  const user = auth.currentUser;
-  
-  if (user) {
-    // 2. Retrieve fresh ID Token (Firebase handles caching/refresh internally)
-    try {
-      const token = await user.getIdToken();
-      // 3. Attach to Authorization Header
-      config.headers.Authorization = `Bearer ${token}`;
-    } catch (error) {
-      console.error('[SECURITY] Failed to get ID token:', error);
-    }
-  }
-
+// Optional: Add request logging for debugging
+api.interceptors.request.use((config) => {
+  console.debug('[API Request]', config.method?.toUpperCase(), config.url);
+  console.debug('[Auth Header]', config.headers.Authorization ? 'Present' : 'Missing');
   return config;
 });
 
+// Optional: Handle 401 responses
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      console.warn('[SECURITY] Backend returned 401. Session might be expired.');
+      console.warn('[API] Unauthorized - Token may be invalid or expired');
     }
     return Promise.reject(error);
   }

@@ -1,8 +1,9 @@
 import requests
 import json
+import os
 
-# Configuration
-BACKEND_URL = "http://localhost:8000/users/sync"
+# Configuration: Read from environment variable, with a default
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8001/users/sync")
 
 # Test payload for user sync
 TEST_PAYLOAD = {
@@ -27,7 +28,7 @@ def debug_user_sync():
         print("\nError: Request timed out. The backend did not respond within 10 seconds.")
     except requests.exceptions.ConnectionError as e:
         print(f"\nError: Could not connect to the backend at {BACKEND_URL}.")
-        print("Please ensure your Python backend is running (uvicorn main:app --host 0.0.0.0 --port 8000 --reload) and accessible.")
+        print("Please ensure your Python backend is running and accessible.")
         print(f"Details: {e}")
     except requests.exceptions.RequestException as e:
         print(f"\nError: An HTTP request error occurred.")

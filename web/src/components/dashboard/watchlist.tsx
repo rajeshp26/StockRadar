@@ -3,11 +3,11 @@
 
 import { useState, useMemo } from 'react';
 import { StockCard } from './stock-card';
-import { Button } from '../ui/button';
+import { Button } from '@/components/ui/button';
 import { PlusCircle, TrendingUp, DollarSign } from 'lucide-react';
 import { StockTargetDialog } from './add-stock-dialog';
-import { useAuth } from '../auth/auth-provider';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
+import { useAuth } from '@/providers/auth-provider';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useWatchlist } from '@/features/watchlists/hooks/useWatchlist';
 import { StockPriceInfo } from '@/features/watchlists/types/watchlist.types';

@@ -27,31 +27,117 @@ The Python backend follows the **Hexagonal/Clean Architecture** principles to en
 | **Domain** | `backend/domain/` | Abstract interfaces and core business logic. |
 | **Infrastructure** | `backend/infrastructure/` | Concrete implementations (Repositories, yfinance). |
 
+### 2.1 Dependency Injection in FastAPI
+
+To maintain the separation of concerns, the API layer is responsible for **injecting** concrete infrastructure implementations into the application services. This is done using a factory function with FastAPI's `Depends` system.
+
+**Example from `backend/api/watchlists.py`:**
+
+```python
+from application.services.watchlist_service import WatchlistService
+from infrastructure.repositories.supabase_repository import SupabaseUserRepository, SupabaseWatchlistRepository
+from providers.yfinance_provider import YFinanceProvider
+from database import supabase
+
+# This function acts as a factory and dependency injector.
+def get_watchlist_service() -> WatchlistService:
+    # 1. Instantiate concrete repositories from the Infrastructure layer
+    user_repo = SupabaseUserRepository(client=supabase)
+    watchlist_repo = SupabaseWatchlistRepository(client=supabase)
+    
+    # 2. Instantiate the external service provider
+    stock_provider = YFinanceProvider()
+    
+    # 3. Inject the dependencies into the Application service
+    return WatchlistService(
+        user_repo=user_repo, 
+        watchlist_repo=watchlist_repo, 
+        stock_provider=stock_provider
+    )
+
+# The endpoint uses Depends to get the fully constructed service.
+@router.post("/watchlists/default-with-items")
+def get_default_watchlist_with_items(
+    service: WatchlistService = Depends(get_watchlist_service),
+    # ...
+):
+    # ... service is now ready to use ...
+```
+
+This pattern ensures that the `WatchlistService` remains decoupled from the specific database or stock provider implementation, adhering to the Dependency Inversion Principle.
+
 ---
 
-## 3. Deployment Environments
+## 3. Environment and Operations
 
-### 3.1 Cloud Workstations (IDX)
+### 3.1 The Nix Environment
+
+The entire project is designed to run within a Nix-based sandboxed environment. This ensures that all developers and deployment environments have the exact same system-level dependencies, eliminating "works on my machine" problems.
+
+-   **Definition**: The environment is defined in the `shell.nix` file at the root of the project.
+-   **Activation**: To enter the environment, run `nix-shell` from the project root. **All development and operational scripts MUST be run from within this shell.**
+
+### 3.2 Backend Operations
+
+**Starting the Server:**
+To start the backend server correctly, use the following command from the project root:
+
+```bash
+nix-shell --run 'bash backend/start.sh'
+```
+
+This command ensures the Nix environment is activated before executing the startup script.
+
+**Stopping the Server:**
+To stop the background server process, use the provided script:
+
+```bash
+bash backend/stop.sh
+```
+
+**Troubleshooting: "Address already in use"**
+If the server doesn't shut down cleanly, you must manually find and terminate the process holding the port.
+
+1.  **Find the Process ID (PID)**: `lsof -t -i:8001`
+2.  **Terminate the Process**: `kill -9 <PID>`
+
+### 3.3 Authentication Flow: User Sync Logic
+
+The `POST /api/proxy/users/sync` endpoint contains critical logic for synchronizing users between Firebase and Supabase.
+
+-   **The Problem**: A previous version of this endpoint attempted to create a new user on every login, causing a `duplicate key value` error in the database for existing users.
+
+-   **The Solution (Robust Upsert)**: The corrected logic, implemented in `backend/api/users.py`, now follows a multi-step process:
+    1.  It first checks if a user exists with the provided `auth_id`.
+    2.  If not, it checks if a user exists with the provided `email`.
+    3.  Only if neither exists does it create a new user record.
+    This prevents duplicate user creation and ensures a smooth login experience.
+
+---
+
+## 4. Deployment Environments
+
+### 4.1 Cloud Workstations (IDX)
 The workstation environment is constrained by RAM (OOM Killer).
 *   **Fix**: Switched from Flutter Web to Next.js for the primary preview to reduce memory footprint by ~3GB.
 *   **Isolation**: Uses `shell.nix` to provide `libstdc++` and `zlib` to Python without poisoning system binaries.
 
-### 3.2 Mobile (Flutter)
+### 4.2 Mobile (Flutter)
 The mobile app targets native Android/iOS and local development.
 *   **Bootstrap Guard**: Implemented in `main.dart`. It prevents initialization if `--dart-define` flags are missing, ensuring developers catch config errors immediately.
 
 ---
 
-## 4. Shared Data Contract
+## 5. Shared Data Contract
 
 All services must align with the following key identifiers:
-*   **User ID**: Linked via `firebase_uid` (UID from Firebase token).
+*   **User ID**: Linked via `auth_id` (UID from Firebase token).
 *   **Schema**: Frontend uses `username` (matching Backend `UserSync` schema) rather than `display_name`.
 *   **Ports**: Backend must always listen on **8001**. Web Preview on **9002**.
 
 ---
 
-## 5. Directory Map
+## 6. Directory Map
 
 | Directory | Content |
 | :--- | :--- |

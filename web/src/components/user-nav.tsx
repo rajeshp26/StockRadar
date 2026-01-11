@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { CreditCard, LogOut, Settings, User } from "lucide-react"
 import Link from "next/link"
-import { useAuth } from "./auth/auth-provider"
+import { useAuth } from "@/providers/auth-provider"
 
 /**
  * A component that displays the user's avatar and a dropdown menu

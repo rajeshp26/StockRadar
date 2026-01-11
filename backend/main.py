@@ -1,6 +1,7 @@
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 import asyncio
@@ -10,22 +11,17 @@ import logging
 from api import watchlists, watchlist_items, users
 from config import settings
 from database import supabase
+from auth import get_current_user, initialize_firebase_app
+from dependencies import get_current_user_dep, limiter # Updated import
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_user_identifier(request: Request) -> str:
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return f"auth:{auth_header[-20:]}" 
-    return f"guest:{request.client.host}"
-
-limiter = Limiter(key_func=get_user_identifier)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"StockerPro Backend starting in {settings.ENVIRONMENT} mode.")
+    initialize_firebase_app() 
     monitor_task = asyncio.create_task(background_price_monitor())
     yield
     monitor_task.cancel()
@@ -65,6 +61,10 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs" if not settings.is_production else None,
 )
+
+# Centralized Dependency Injection
+app.dependency_overrides[get_current_user_dep] = get_current_user
+
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

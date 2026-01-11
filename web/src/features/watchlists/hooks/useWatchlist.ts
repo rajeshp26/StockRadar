@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useServices } from '@/shared/contexts/ServiceContext';
 import { StockPriceInfo } from '../types/watchlist.types';
-import { useAuth } from '@/components/auth/auth-provider';
+import { useAuth } from '@/providers/auth-provider';
 import { useToast } from '@/hooks/use-toast';
 
 export function useWatchlist() {

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useMemo } from 'react';
-import api from '@/lib/api';
+import { api } from '@/lib/api';
 import { WatchlistService } from '@/features/watchlists/services/watchlist.service';
 
 interface ServiceContextType {
