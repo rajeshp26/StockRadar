@@ -2,7 +2,7 @@
 'use client';
 
 import { SignupForm } from '@/components/auth/signup-form';
-import { AuthProvider } from '@/components/auth/auth-provider';
+import { AuthProvider } from '@/providers/auth-provider';
 
 export default function SignupPage() {
   return (
