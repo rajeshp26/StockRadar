@@ -60,6 +60,10 @@ async def stream_watchlist_updates(
     """
     SSE Stream for real-time stock updates.
     """
+    print(f"🔴 BACKEND RECEIVED: {request.url}")
+    print(f"🔴 METHOD: {request.method}")
+    print(f"🔴 HEADERS: {dict(request.headers)}")
+    
     if not token:
         raise HTTPException(status_code=401, detail="Authentication token required")
     

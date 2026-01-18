@@ -1,10 +1,10 @@
 import axios from 'axios';
 
 // Create axios instance with base URL for backend API
-// In development: uses Next.js proxy at /api (configured in next.config.js)
+// In development: uses Next.js proxy at /api/proxy (configured in app/api/proxy/[...path]/route.ts)
 // In production: uses direct backend URL from environment or relative path
 export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || '/api',
+  baseURL: process.env.NEXT_PUBLIC_API_URL || '/api/proxy',
   headers: {
     'Content-Type': 'application/json',
   },

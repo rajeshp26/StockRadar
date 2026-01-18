@@ -15,18 +15,7 @@ const nextConfig = {
     root: path.resolve(__dirname), // Absolute path to the web directory itself
   },
   
-  // API proxy configuration
-  async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
-    return {
-      beforeFiles: [
-        {
-          source: '/api/:path*',
-          destination: `${apiUrl}/:path*`,
-        },
-      ],
-    };
-  },
+  
 };
 
 module.exports = nextConfig;

@@ -140,9 +140,9 @@ echo -e "${YELLOW}Press Ctrl+C to stop${NC}\n"
 # Set PYTHONPATH to ensure imports work correctly
 export PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..${PYTHONPATH:+:$PYTHONPATH}"
 
-# Launch in the foreground for development.
-# The process will inherit the correct LD_LIBRARY_PATH from the Nix shell.
+# Launch in the foreground for development with auto-reloading.
 python -m uvicorn main:app \
     --host 0.0.0.0 \
     --port 8001 \
+    --reload \
     --log-level info

@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useMemo } from 'react';
@@ -6,28 +5,31 @@ import { StockCard } from './stock-card';
 import { Button } from '@/components/ui/button';
 import { PlusCircle, TrendingUp, DollarSign } from 'lucide-react';
 import { StockTargetDialog } from './add-stock-dialog';
-import { useAuth } from '@/providers/auth-provider';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { useWatchlist } from '@/features/watchlists/hooks/useWatchlist';
-import { StockPriceInfo } from '@/features/watchlists/types/watchlist.types';
+// The internal hook is aliased to avoid naming conflicts.
+import { useWatchlist as useWatchlistInternal } from '@/features/watchlists/hooks/useWatchlist';
+import { StockPriceInfo, WatchlistWithStocks as WatchlistType } from '@/features/watchlists/types/watchlist.types';
 
-export function Watchlist() {
+// The component now accepts the pre-fetched watchlist data as a prop.
+interface WatchlistProps {
+  watchlist: WatchlistType;
+}
+
+export function Watchlist({ watchlist }: WatchlistProps) {
   const [isAddDialogOpen, setAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setEditDialogOpen] = useState(false);
   const [editingStock, setEditingStock] = useState<StockPriceInfo | null>(null);
   const [filter, setFilter] = useState<'all' | 'buy' | 'sell'>('all');
-
-  const { loading: isAuthLoading } = useAuth();
   
-  // All business logic is now encapsulated in this hook
+  // The internal hook is initialized with the data, preventing its own initial fetch.
   const { 
     stocks, 
-    isLoading, 
+    isLoading, // This loading state now primarily reflects mutations and SSE activity.
     addStock, 
     updateTargets, 
     removeStock 
-  } = useWatchlist();
+  } = useWatchlistInternal({ initialWatchlist: watchlist });
 
   const buyTriggeredStocks = useMemo(() => 
     stocks.filter(stock => stock.targetBuy && stock.price <= stock.targetBuy), 
@@ -47,13 +49,8 @@ export function Watchlist() {
     }
   }, [filter, stocks, buyTriggeredStocks, sellTriggeredStocks]);
 
-  if (isLoading || isAuthLoading) {
-    return (
-      <div className="flex flex-1 items-start justify-center p-8">
-        <div className="h-16 w-16 animate-spin rounded-full border-4 border-dashed border-primary"></div>
-      </div>
-    );
-  }
+  // The primary loading/empty states are now handled by the parent DashboardPage.
+  // This allows the component to focus on displaying the watchlist and its interactions.
 
   if (stocks.length === 0) {
     return (
@@ -76,12 +73,12 @@ export function Watchlist() {
     <div className="w-full max-w-6xl mx-auto p-4 md:p-0">
        <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-3 mb-6">
         <Card 
-          className={cn('cursor-pointer hover:bg-muted/50', filter === 'all' && 'bg-muted')} 
+          className={cn('cursor-pointer hover:bg-muted/50', filter === 'all' && 'bg-muted')}
           onClick={() => setFilter('all')}
         >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">All Stocks</CardTitle>
-            <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+            <div className={cn("h-2 w-2 rounded-full bg-green-500", { "animate-pulse": isLoading})} />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stocks.length}</div>
@@ -89,7 +86,7 @@ export function Watchlist() {
         </Card>
         
         <Card 
-          className={cn('cursor-pointer hover:bg-muted/50', filter === 'buy' && 'bg-muted')} 
+          className={cn('cursor-pointer hover:bg-muted/50', filter === 'buy' && 'bg-muted')}
           onClick={() => setFilter('buy')}
         >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -102,7 +99,7 @@ export function Watchlist() {
         </Card>
         
         <Card 
-          className={cn('cursor-pointer hover:bg-muted/50', filter === 'sell' && 'bg-muted')} 
+          className={cn('cursor-pointer hover:bg-muted/50', filter === 'sell' && 'bg-muted')}
           onClick={() => setFilter('sell')}
         >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

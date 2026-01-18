@@ -1,5 +1,5 @@
 import { api } from '@/lib/api';
-import { User } from '@/features/auth/types';
+import { User } from '@/features/auth/types/auth.types';
 import { User as FirebaseUser } from 'firebase/auth';
 
 /**

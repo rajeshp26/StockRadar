@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useServices } from '@/shared/contexts/ServiceContext';
 import { StockPriceInfo, WatchlistWithStocks } from '../types/watchlist.types';
@@ -19,9 +18,8 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   const [isLoading, setIsLoading] = useState(!options?.initialWatchlist);
   const [watchlistId, setWatchlistId] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
-
   const { watchlistService } = useServices();
-  const { user } = useAuth();
+  const { firebaseUser: user } = useAuth();
   const { toast } = useToast();
 
   // Track if we've initialized to prevent double-fetch
@@ -41,13 +39,10 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     try {
       setIsLoading(true);
       setError(null);
-
       console.log('[useWatchlist] Fetching watchlist from service');
       const data = await watchlistService.getDefaultWatchlist();
-
       setStocks(data.stocks);
       setWatchlistId(data.watchlist_id);
-
       console.log('[useWatchlist] Watchlist fetched successfully:', {
         watchlistId: data.watchlist_id,
         stockCount: data.stocks.length,
@@ -56,7 +51,6 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error('[useWatchlist] Failed to fetch watchlist:', error.message);
       setError(error);
-
       toast({
         title: 'Error',
         description: 'Failed to load watchlist.',
@@ -83,7 +77,6 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       // Use provided initial data
       console.log('[useWatchlist] Using initial watchlist data from parent');
       setWatchlistId(options.initialWatchlist.watchlist_id);
-
       // The initialWatchlist now includes stocks directly
       setStocks(options.initialWatchlist.stocks || []);
       setIsLoading(false);
@@ -95,7 +88,6 @@ export function useWatchlist(options?: UseWatchlistOptions) {
 
     hasInitializedRef.current = true;
   }, [options?.initialWatchlist, user, fetchWatchlist]);
-
 
   /**
    * Add a new stock to the watchlist.
@@ -112,22 +104,18 @@ export function useWatchlist(options?: UseWatchlistOptions) {
 
     try {
       console.log('[useWatchlist] Adding stock:', { symbol, targetBuy, targetSell });
-
       await watchlistService.addStock({
         watchlist_id: watchlistId,
         symbol,
         target_buy: targetBuy,
         target_sell: targetSell,
       });
-
       // Refresh watchlist to get updated data
       await fetchWatchlist();
-
       toast({ title: 'Stock Added' });
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error('[useWatchlist] Failed to add stock:', error.message);
-
       toast({
         title: 'Error',
         description: 'Could not add stock.',
@@ -146,21 +134,17 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   ) => {
     try {
       console.log('[useWatchlist] Updating targets:', { itemId, targetBuy, targetSell });
-
       await watchlistService.updateStockTargets({
         item_id: itemId,
         target_buy: targetBuy,
         target_sell: targetSell,
       });
-
       // Refresh watchlist to get updated data
       await fetchWatchlist();
-
       toast({ title: 'Targets Updated' });
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error('[useWatchlist] Failed to update targets:', error.message);
-
       toast({
         title: 'Error',
         description: 'Could not update targets.',
@@ -176,20 +160,15 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   const removeStock = async (itemId: number) => {
     try {
       console.log('[useWatchlist] Removing stock:', { itemId });
-
       // Optimistic update: remove immediately from UI
       setStocks((prev) => prev.filter((s) => s.id !== itemId));
-
       await watchlistService.removeStock(itemId);
-
       toast({ title: 'Stock Removed' });
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error('[useWatchlist] Failed to remove stock:', error.message);
-
       // On error, refresh to restore the removed stock
       await fetchWatchlist();
-
       toast({
         title: 'Error',
         description: 'Could not remove stock.',
@@ -215,7 +194,6 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         // Get a fresh token for the SSE URL
         const idToken = await user.getIdToken();
         const streamUrl = await watchlistService.getWatchlistStreamUrl(idToken);
-
         console.log('[useWatchlist] Connecting to SSE stream:', streamUrl);
 
         eventSourceRef.current = new EventSource(streamUrl);
@@ -224,13 +202,12 @@ export function useWatchlist(options?: UseWatchlistOptions) {
           try {
             const update = JSON.parse(event.data);
             console.log('[useWatchlist] Received SSE update:', update);
-
             setStocks((prevStocks) =>
               prevStocks.map((stock) =>
                 stock.symbol === update.symbol
                   ? {
                       ...stock,
-                      currentPrice: update.currentPrice || stock.currentPrice,
+                      price: update.price || stock.price,
                       ...update,
                     }
                   : stock
@@ -245,7 +222,6 @@ export function useWatchlist(options?: UseWatchlistOptions) {
           console.error('[useWatchlist] SSE Error:', err);
           eventSourceRef.current?.close();
           eventSourceRef.current = null;
-
           // Attempt to reconnect after delay
           setTimeout(() => {
             if (user && watchlistId) {

@@ -20,11 +20,12 @@ This project uses **Nix** to ensure binary compatibility across development envi
 ### 2. Launch the Backend
 The backend must run in an isolated Nix shell to support C-extensions like NumPy/Pandas:
 ```bash
-# From the project root
-nix-shell shell.nix --run "cd backend && ./start.sh"
+# From the project root, this single command handles the Nix environment and starts the backend.
+nix-shell --run "bash backend/start.sh"
 ```
 *   **Port:** 8001
 *   **Health:** `http://localhost:8001/health`
+*   **API Docs:** `http://localhost:8001/docs`
 
 ### 3. Launch the Web Frontend
 ```bash
@@ -67,5 +68,5 @@ flutter test
 ## 🔗 Documentation
 
 *   **[Full Architecture Guide](ARCHITECTURE.md):** Deep dive into schemas, data flow, and the bridge pattern.
-*   **[Environment Setup Guide](docs/ENVIRONMENT_SETUP_GUIDE.md):** Detailed platform-specific configuration and troubleshooting.
-*   **[Testing Guide](docs/TESTING_GUIDE.md):** Quality assurance protocols for all tiers.
+*   **[Environment Setup Guide](ENVIRONMENT_SETUP_GUIDE.md):** Detailed platform-specific configuration and troubleshooting.
+*   **[Testing Guide](TESTING_GUIDE.md):** Quality assurance protocols for all tiers.

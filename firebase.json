@@ -1,8 +1,22 @@
 {
   "hosting": {
-    "source": ".",
+    "source": "web",
     "frameworksBackend": {
       "id": "backend"
-    }
+    },
+    "env": [
+      {
+        "name": "development",
+        "vars": {
+          "PORT": "3000"
+        }
+      },
+      {
+        "name": "production",
+        "vars": {
+          "PORT": "9002"
+        }
+      }
+    ]
   }
 }

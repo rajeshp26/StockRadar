@@ -115,29 +115,35 @@ The `POST /api/proxy/users/sync` endpoint contains critical logic for synchroniz
 
 ---
 
-## 4. Deployment Environments
+## 4. Port Configuration
 
-### 4.1 Cloud Workstations (IDX)
+- **Backend**: Port `8001`
+- **Web/Frontend**: Port `3000` (by default, but can be configured via the `PORT` environment variable)
+
+---
+
+## 5. Deployment Environments
+
+### 5.1 Cloud Workstations (IDX)
 The workstation environment is constrained by RAM (OOM Killer).
 *   **Fix**: Switched from Flutter Web to Next.js for the primary preview to reduce memory footprint by ~3GB.
 *   **Isolation**: Uses `shell.nix` to provide `libstdc++` and `zlib` to Python without poisoning system binaries.
 
-### 4.2 Mobile (Flutter)
+### 5.2 Mobile (Flutter)
 The mobile app targets native Android/iOS and local development.
 *   **Bootstrap Guard**: Implemented in `main.dart`. It prevents initialization if `--dart-define` flags are missing, ensuring developers catch config errors immediately.
 
 ---
 
-## 5. Shared Data Contract
+## 6. Shared Data Contract
 
 All services must align with the following key identifiers:
 *   **User ID**: Linked via `auth_id` (UID from Firebase token).
 *   **Schema**: Frontend uses `username` (matching Backend `UserSync` schema) rather than `display_name`.
-*   **Ports**: Backend must always listen on **8001**. Web Preview on **9002**.
 
 ---
 
-## 6. Directory Map
+## 7. Directory Map
 
 | Directory | Content |
 | :--- | :--- |

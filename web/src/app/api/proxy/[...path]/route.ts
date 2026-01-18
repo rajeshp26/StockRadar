@@ -11,8 +11,9 @@ async function handleProxy(request: NextRequest, method: string, pathParts: stri
   const queryString = searchParams.toString();
   const targetUrl = `http://127.0.0.1:8001/${path}${queryString ? `?${queryString}` : ''}`;
   const authHeader = request.headers.get('Authorization');
-  
+
   console.log(`[PROXY DEBUG] ${method} /${path} | Auth Header Present: ${!!authHeader}`);
+  console.log(`[PROXY DEBUG] Target URL: ${targetUrl}`);
 
   try {
     const fetchOptions: RequestInit = {
@@ -44,6 +45,7 @@ async function handleProxy(request: NextRequest, method: string, pathParts: stri
     // SUCCESS CASE 1: Server-Sent Events (SSE)
     if (contentType?.includes('text/event-stream')) {
       return new NextResponse(response.body, {
+        status: response.status,
         headers: {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -83,7 +85,7 @@ async function handleProxy(request: NextRequest, method: string, pathParts: stri
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
   const resolvedParams = await params;
   return handleProxy(request, 'POST', resolvedParams.path);
@@ -91,7 +93,7 @@ export async function POST(
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
   const resolvedParams = await params;
   return handleProxy(request, 'GET', resolvedParams.path);
@@ -99,7 +101,7 @@ export async function GET(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
   const resolvedParams = await params;
   return handleProxy(request, 'DELETE', resolvedParams.path);
@@ -107,7 +109,7 @@ export async function DELETE(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
   const resolvedParams = await params;
   return handleProxy(request, 'PATCH', resolvedParams.path);
