@@ -11,3 +11,8 @@ backend/venv/
 # IDE-specific
 .idea/
 .vscode/
+
+# Web
+web/.gitignore
+web/.next/
+web/node_modules/
