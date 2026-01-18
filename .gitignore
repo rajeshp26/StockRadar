@@ -1,18 +1,9 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Virtualenv
-venv/
-backend/venv/
-
-# IDE-specific
+# IDE-specific files
 .idea/
 .vscode/
 
-# Web
-web/.gitignore
-web/.next/
-web/node_modules/
+# Operating System files
+.DS_Store
+
+# Log files
+*.log
