@@ -1,13 +1,14 @@
+
 """
-Pydantic models for Defeat Beta financial data.
-These models represent the data contracts between providers and services.
+Pydantic models for financial data (Defeat Beta + YFinance).
+Aligned 1:1 with Supabase schema.
 Compatible with Pydantic v2.
 """
 
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 # ============================================================================
@@ -15,13 +16,12 @@ from pydantic import BaseModel, Field, field_validator
 # ============================================================================
 
 class IncomeStatementRow(BaseModel):
-    """Single row of income statement data (quarterly or annual)."""
-    
     company_id: int
     fiscal_year: int = Field(..., ge=1900, le=2100)
     fiscal_quarter: Optional[int] = Field(None, ge=1, le=4)
     period_end_date: date
-    
+
+    # Core
     revenue: Optional[Decimal] = None
     cost_of_goods_sold: Optional[Decimal] = None
     gross_profit: Optional[Decimal] = None
@@ -33,9 +33,21 @@ class IncomeStatementRow(BaseModel):
     tax_expense: Optional[Decimal] = None
     net_income: Optional[Decimal] = None
     ebitda: Optional[Decimal] = None
-    ebit: Optional[Decimal] = None
-    
     currency: Optional[str] = "USD"
+
+    # NEW — fields present in Supabase
+    non_operating_income_expense: Optional[Decimal] = None          # NEW
+    pretax_income: Optional[Decimal] = None                         # NEW
+    equity_in_earnings: Optional[Decimal] = None                    # NEW
+    minority_interest: Optional[Decimal] = None                     # NEW
+    income_from_continuing_operations: Optional[Decimal] = None     # NEW
+    discontinued_operations: Optional[Decimal] = None               # NEW
+    net_income_to_common: Optional[Decimal] = None                  # NEW
+    preferred_dividends: Optional[Decimal] = None                   # NEW
+    ebit: Optional[Decimal] = None                                  # NEW
+    last_validated_at: Optional[datetime] = None                    # NEW
+
+    # Metadata
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     validation_notes: Optional[str] = None
@@ -43,11 +55,9 @@ class IncomeStatementRow(BaseModel):
 
 
 class IncomeStatementRows(BaseModel):
-    """Collection of income statement rows."""
     rows: list[IncomeStatementRow] = Field(default_factory=list)
-    
-    def __len__(self):
-        return len(self.rows)
+    def __len__(self): return len(self.rows)
+
 
 
 # ============================================================================
@@ -55,13 +65,12 @@ class IncomeStatementRows(BaseModel):
 # ============================================================================
 
 class BalanceSheetRow(BaseModel):
-    """Single row of balance sheet data."""
-    
     company_id: int
     fiscal_year: int = Field(..., ge=1900, le=2100)
     fiscal_quarter: Optional[int] = Field(None, ge=1, le=4)
     period_end_date: date
-    
+
+    # Core
     total_assets: Optional[Decimal] = None
     current_assets: Optional[Decimal] = None
     cash_and_cash_equivalents: Optional[Decimal] = None
@@ -70,19 +79,28 @@ class BalanceSheetRow(BaseModel):
     property_plant_equipment_net: Optional[Decimal] = None
     intangible_assets: Optional[Decimal] = None
     goodwill: Optional[Decimal] = None
-    
+
     total_liabilities: Optional[Decimal] = None
     current_liabilities: Optional[Decimal] = None
     accounts_payable: Optional[Decimal] = None
     short_term_debt: Optional[Decimal] = None
     long_term_debt: Optional[Decimal] = None
     total_debt: Optional[Decimal] = None
-    
+
     shareholders_equity: Optional[Decimal] = None
     retained_earnings: Optional[Decimal] = None
     common_stock: Optional[Decimal] = None
-    
     currency: Optional[str] = "USD"
+
+    # NEW — required by Supabase
+    long_term_investments: Optional[Decimal] = None             # NEW
+    other_non_current_assets: Optional[Decimal] = None          # NEW
+    other_current_liabilities: Optional[Decimal] = None         # NEW
+    minority_interest: Optional[Decimal] = None                 # NEW
+    total_liabilities_and_equity: Optional[Decimal] = None      # NEW
+    last_validated_at: Optional[datetime] = None                # NEW
+
+    # Metadata
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     validation_notes: Optional[str] = None
@@ -90,11 +108,9 @@ class BalanceSheetRow(BaseModel):
 
 
 class BalanceSheetRows(BaseModel):
-    """Collection of balance sheet rows."""
     rows: list[BalanceSheetRow] = Field(default_factory=list)
-    
-    def __len__(self):
-        return len(self.rows)
+    def __len__(self): return len(self.rows)
+
 
 
 # ============================================================================
@@ -102,13 +118,12 @@ class BalanceSheetRows(BaseModel):
 # ============================================================================
 
 class CashFlowRow(BaseModel):
-    """Single row of cash flow statement data."""
-    
     company_id: int
     fiscal_year: int = Field(..., ge=1900, le=2100)
     fiscal_quarter: Optional[int] = Field(None, ge=1, le=4)
     period_end_date: date
-    
+
+    # Core
     cash_from_operating_activities: Optional[Decimal] = None
     net_income: Optional[Decimal] = None
     depreciation_amortization: Optional[Decimal] = None
@@ -116,8 +131,22 @@ class CashFlowRow(BaseModel):
     cash_from_investing_activities: Optional[Decimal] = None
     cash_from_financing_activities: Optional[Decimal] = None
     dividends_paid: Optional[Decimal] = None
-    
     currency: Optional[str] = "USD"
+
+    # NEW — required by Supabase
+    change_in_working_capital: Optional[Decimal] = None        # NEW
+    deferred_taxes: Optional[Decimal] = None                   # NEW
+    stock_based_compensation: Optional[Decimal] = None         # NEW
+    acquisitions: Optional[Decimal] = None                     # NEW
+    asset_sales: Optional[Decimal] = None                      # NEW
+    investment_purchases: Optional[Decimal] = None             # NEW
+    debt_issued: Optional[Decimal] = None                      # NEW
+    debt_repayment: Optional[Decimal] = None                   # NEW
+    share_repurchases: Optional[Decimal] = None                # NEW
+    share_issuance: Optional[Decimal] = None                   # NEW
+    last_validated_at: Optional[datetime] = None               # NEW
+
+    # Metadata
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     validation_notes: Optional[str] = None
@@ -125,11 +154,9 @@ class CashFlowRow(BaseModel):
 
 
 class CashFlowRows(BaseModel):
-    """Collection of cash flow rows."""
     rows: list[CashFlowRow] = Field(default_factory=list)
-    
-    def __len__(self):
-        return len(self.rows)
+    def __len__(self): return len(self.rows)
+
 
 
 # ============================================================================
@@ -137,23 +164,30 @@ class CashFlowRows(BaseModel):
 # ============================================================================
 
 class EarningsRow(BaseModel):
-    """Single row of earnings data with surprise metrics."""
-    
     company_id: int
     fiscal_year: int = Field(..., ge=1900, le=2100)
     fiscal_quarter: Optional[int] = Field(None, ge=1, le=4)
     period_end_date: date
     announcement_date: Optional[date] = None
-    
+
+    # Core EPS
     eps_reported_basic: Optional[Decimal] = None
     eps_reported_diluted: Optional[Decimal] = None
     eps_estimate: Optional[Decimal] = None
     eps_surprise_amount: Optional[Decimal] = None
     eps_surprise_percent: Optional[Decimal] = None
-    
+
+    # Revenue
     revenue_reported: Optional[Decimal] = None
     revenue_estimate: Optional[Decimal] = None
-    
+
+    # NEW — required by Supabase
+    revenue_surprise_amount: Optional[Decimal] = None        # NEW
+    revenue_surprise_percent: Optional[Decimal] = None       # NEW
+    shares_outstanding_basic: Optional[int] = None           # NEW
+    shares_outstanding_diluted: Optional[int] = None         # NEW
+    last_validated_at: Optional[datetime] = None             # NEW
+
     currency: Optional[str] = "USD"
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -162,11 +196,9 @@ class EarningsRow(BaseModel):
 
 
 class EarningsRows(BaseModel):
-    """Collection of earnings rows."""
     rows: list[EarningsRow] = Field(default_factory=list)
-    
-    def __len__(self):
-        return len(self.rows)
+    def __len__(self): return len(self.rows)
+
 
 
 # ============================================================================
@@ -174,15 +206,18 @@ class EarningsRows(BaseModel):
 # ============================================================================
 
 class DividendRow(BaseModel):
-    """Single dividend payment record."""
-    
     company_id: int
     ex_dividend_date: date
     payment_date: Optional[date] = None
     dividend_amount: Optional[Decimal] = None
     dividend_type: str = "regular"
     currency: Optional[str] = "USD"
-    
+
+    # NEW — required by Supabase
+    record_date: Optional[date] = None            # NEW
+    frequency: Optional[str] = None               # NEW
+    last_validated_at: Optional[datetime] = None  # NEW
+
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     validation_notes: Optional[str] = None
@@ -190,79 +225,70 @@ class DividendRow(BaseModel):
 
 
 class DividendRows(BaseModel):
-    """Collection of dividend records."""
     rows: list[DividendRow] = Field(default_factory=list)
-    
-    def __len__(self):
-        return len(self.rows)
+    def __len__(self): return len(self.rows)
+
 
 
 # ============================================================================
-# COMPLETE FINANCIALS RESPONSE MODEL
+# COMPLETE FINANCIALS RESPONSE
 # ============================================================================
 
 class CompleteFundamentals(BaseModel):
-    """Complete set of all financial data from defeat-beta for a company."""
-    
     company_id: int
     symbol: str
-    
+
     income_statements: IncomeStatementRows
     balance_sheets: BalanceSheetRows
     cash_flows: CashFlowRows
     earnings: EarningsRows
     dividends: DividendRows
-    
+
     next_earnings_date: Optional[date] = None
-    
-    # Metadata
+
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
-    data_source: str = "defeat_beta"
-    
+    data_source: str = "defeat_beta"  # Overall batch source
+
     @property
     def total_rows_fetched(self) -> int:
-        """Calculate total rows across all financial statements."""
-        return sum([
-            len(self.income_statements),
-            len(self.balance_sheets),
-            len(self.cash_flows),
-            len(self.earnings),
-            len(self.dividends),
-        ])
+        return (
+            len(self.income_statements)
+            + len(self.balance_sheets)
+            + len(self.cash_flows)
+            + len(self.earnings)
+            + len(self.dividends)
+        )
+
 
 
 # ============================================================================
-# COMPANY REFRESH METADATA MODEL
+# COMPANY REFRESH METADATA
 # ============================================================================
 
 class CompanyRefreshInfo(BaseModel):
-    """Metadata about when a company's financials were last refreshed."""
-    
     company_id: int
     ticker_symbol: str
-    
+
     first_financial_data_loaded_at: Optional[datetime] = None
     last_financial_refresh_at: Optional[datetime] = None
     last_refreshed_fiscal_year: Optional[int] = None
     last_refreshed_fiscal_quarter: Optional[int] = None
-    data_completeness_status: str = "INITIAL"  # INITIAL, PARTIAL, COMPLETE, CURRENT
+    data_completeness_status: str = "INITIAL"
     next_earnings_date: Optional[date] = None
 
 
+
 # ============================================================================
-# FILTER RESULT MODEL
+# FILTERING RESULT
 # ============================================================================
 
 class FilteringResult(BaseModel):
-    """Result of filtering old vs new data."""
-    
     total_rows_fetched: int
     total_rows_to_store: int
     rows_deduplicated: int = 0
-    
+
     @property
     def deduplication_percentage(self) -> float:
-        """Calculate percentage of rows deduplicated."""
         if self.total_rows_fetched == 0:
             return 0.0
         return (self.rows_deduplicated / self.total_rows_fetched) * 100

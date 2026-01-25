@@ -11,6 +11,7 @@ pkgs.mkShell {
     python311Packages.virtualenv
     python311Packages.setuptools
     python311Packages.wheel
+    python311Packages.lxml
     
     # ============================================
     # Build Tools

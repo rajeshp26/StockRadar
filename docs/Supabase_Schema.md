@@ -4,7 +4,6 @@
 This document contains the `CREATE TABLE` statements for the primary tables in the StockerPro Supabase project.
 
 ## `public.users`
-
 ```sql
 create table public.users (
   user_id serial not null,
@@ -14,13 +13,25 @@ create table public.users (
   last_signed_in timestamp with time zone null default CURRENT_TIMESTAMP,
   preferred_currency character varying(3) not null,
   auth_id text null,
+  timezone character varying(50) not null default 'America/New_York'::character varying,
   constraint users_pkey primary key (user_id),
   constraint users_email_key unique (email),
   constraint users_firebase_uid_key unique (auth_id),
-  constraint fk_users_currency foreign KEY (preferred_currency) references currencies (code)
+  constraint fk_users_currency foreign KEY (preferred_currency) references currencies (code),
+  constraint check_timezone_format check (
+    (
+      (timezone)::text ~ '^[A-Za-z_]+(/[A-Za-z_]+)?(/[A-Za-z_]+)?$'::text
+    )
+  ),
+  constraint check_valid_timezone check (
+    (
+      (timezone)::text ~ '^[A-Za-z_]+(/[A-Za-z_]+)?(/[A-Za-z_]+)?$'::text
+    )
+  )
 ) TABLESPACE pg_default;
-```
 
+create index IF not exists idx_users_timezone on public.users using btree (timezone) TABLESPACE pg_default;
+```
 ## `public.watchlists`
 
 ```sql
@@ -58,7 +69,7 @@ create table public.watchlist_items (
   target_buy numeric(10, 2) null,
   target_sell numeric(10, 2) null,
   notes text null,
-  "position" integer not null default 0,
+  position integer not null default 0,
   added_at timestamp with time zone not null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone not null default CURRENT_TIMESTAMP,
   constraint watchlist_items_pkey primary key (watchlist_item_id),
@@ -95,10 +106,46 @@ create table public.companies (
   created_at timestamp with time zone not null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone not null default CURRENT_TIMESTAMP,
   next_earnings_date date null,
+  first_financial_data_loaded_at timestamp with time zone null,
+  last_financial_refresh_at timestamp with time zone null,
+  last_refreshed_fiscal_year integer null,
+  last_refreshed_fiscal_quarter smallint null,
+  data_completeness_status character varying(50) not null default 'INITIAL'::character varying,
   constraint companies_new_pkey primary key (company_id),
   constraint companies_ticker_exchange_unique unique (ticker_symbol, exchange),
-  constraint companies_currency_fkey foreign KEY (currency) references currencies (code)
+  constraint companies_currency_fkey foreign KEY (currency) references currencies (code),
+  constraint check_completeness_status check (
+    (
+      (data_completeness_status)::text = any (
+        (
+          array[
+            'INITIAL'::character varying,
+            'PARTIAL'::character varying,
+            'COMPLETE'::character varying,
+            'CURRENT'::character varying
+          ]
+        )::text[]
+      )
+    )
+  ),
+  constraint check_fiscal_quarter check (
+    (
+      (last_refreshed_fiscal_quarter is null)
+      or (
+        (last_refreshed_fiscal_quarter >= 1)
+        and (last_refreshed_fiscal_quarter <= 4)
+      )
+    )
+  )
 ) TABLESPACE pg_default;
+
+create index IF not exists idx_companies_next_earnings_date on public.companies using btree (next_earnings_date) TABLESPACE pg_default;
+
+create index IF not exists idx_companies_data_completeness_status on public.companies using btree (data_completeness_status) TABLESPACE pg_default;
+
+create index IF not exists idx_companies_next_earnings_with_status on public.companies using btree (next_earnings_date, data_completeness_status) TABLESPACE pg_default
+where
+  (next_earnings_date is not null);
 
 create index IF not exists idx_companies_exchange on public.companies using btree (exchange) TABLESPACE pg_default;
 
@@ -161,7 +208,31 @@ create table public.balance_sheets (
   other_current_liabilities numeric(15, 2) null,
   minority_interest numeric(15, 2) null,
   total_liabilities_and_equity numeric(15, 2) null,
+  confidence_score double precision not null default 1.0,
+  last_validated_at timestamp with time zone null,
+  validation_notes text null,
   constraint balance_sheets_pkey primary key (bs_id),
+  constraint uq_balance_sheets_company_fiscal unique (company_id, fiscal_year, fiscal_quarter),
+  constraint check_balance_confidence check (
+    (
+      (confidence_score >= (0.0)::double precision)
+      and (confidence_score <= (1.0)::double precision)
+    )
+  ),
+  constraint check_balance_data_source check (
+    (
+      (data_source)::text = any (
+        (
+          array[
+            'defeat_beta'::character varying,
+            'yfinance'::character varying,
+            'manual'::character varying,
+            'external_api'::character varying
+          ]
+        )::text[]
+      )
+    )
+  ),
   constraint check_fiscal_quarter_bs check (
     (
       (fiscal_quarter is null)
@@ -173,13 +244,15 @@ create table public.balance_sheets (
   )
 ) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_annual_balance_idx on public.balance_sheets using btree (company_id, fiscal_year) TABLESPACE pg_default
-where
-  (fiscal_quarter is null);
+create index IF not exists idx_balance_sheets_company_id on public.balance_sheets using btree (company_id) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_quarterly_balance_idx on public.balance_sheets using btree (company_id, fiscal_year, fiscal_quarter) TABLESPACE pg_default
+create index IF not exists idx_balance_sheets_fiscal_year on public.balance_sheets using btree (fiscal_year) TABLESPACE pg_default;
+
+create index IF not exists idx_balance_sheets_data_source on public.balance_sheets using btree (data_source) TABLESPACE pg_default;
+
+create index IF not exists idx_balance_sheets_low_confidence on public.balance_sheets using btree (confidence_score) TABLESPACE pg_default
 where
-  (fiscal_quarter is not null);
+  (confidence_score < (0.8)::double precision);
 
 create trigger update_balance_sheets_updated_at BEFORE
 update on balance_sheets for EACH row
@@ -216,7 +289,31 @@ create table public.cash_flow_statements (
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
   cash_from_investing_activities numeric(15, 2) null,
   cash_from_financing_activities numeric(15, 2) null,
+  confidence_score double precision not null default 1.0,
+  last_validated_at timestamp with time zone null,
+  validation_notes text null,
   constraint cash_flow_statements_pkey primary key (cf_id),
+  constraint uq_cash_flows_company_fiscal unique (company_id, fiscal_year, fiscal_quarter),
+  constraint check_cashflow_confidence check (
+    (
+      (confidence_score >= (0.0)::double precision)
+      and (confidence_score <= (1.0)::double precision)
+    )
+  ),
+  constraint check_cashflow_data_source check (
+    (
+      (data_source)::text = any (
+        (
+          array[
+            'defeat_beta'::character varying,
+            'yfinance'::character varying,
+            'manual'::character varying,
+            'external_api'::character varying
+          ]
+        )::text[]
+      )
+    )
+  ),
   constraint check_fiscal_quarter_cf check (
     (
       (fiscal_quarter is null)
@@ -228,13 +325,11 @@ create table public.cash_flow_statements (
   )
 ) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_annual_cashflow_idx on public.cash_flow_statements using btree (company_id, fiscal_year) TABLESPACE pg_default
-where
-  (fiscal_quarter is null);
+create index IF not exists idx_cash_flows_company_id on public.cash_flow_statements using btree (company_id) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_quarterly_cashflow_idx on public.cash_flow_statements using btree (company_id, fiscal_year, fiscal_quarter) TABLESPACE pg_default
-where
-  (fiscal_quarter is not null);
+create index IF not exists idx_cash_flows_fiscal_year on public.cash_flow_statements using btree (fiscal_year) TABLESPACE pg_default;
+
+create index IF not exists idx_cash_flow_statements_data_source on public.cash_flow_statements using btree (data_source) TABLESPACE pg_default;
 
 create trigger update_cash_flow_updated_at BEFORE
 update on cash_flow_statements for EACH row
@@ -274,7 +369,11 @@ create table public.income_statements (
   net_income_to_common numeric(15, 2) null,
   preferred_dividends numeric(15, 2) null,
   ebit numeric(15, 2) null,
+  confidence_score double precision not null default 1.0,
+  last_validated_at timestamp with time zone null,
+  validation_notes text null,
   constraint income_statements_pkey primary key (is_id),
+  constraint uq_income_statements_company_fiscal unique (company_id, fiscal_year, fiscal_quarter),
   constraint check_fiscal_quarter check (
     (
       (fiscal_quarter is null)
@@ -283,16 +382,38 @@ create table public.income_statements (
         and (fiscal_quarter <= 4)
       )
     )
+  ),
+  constraint check_income_confidence check (
+    (
+      (confidence_score >= (0.0)::double precision)
+      and (confidence_score <= (1.0)::double precision)
+    )
+  ),
+  constraint check_income_data_source check (
+    (
+      (data_source)::text = any (
+        (
+          array[
+            'defeat_beta'::character varying,
+            'yfinance'::character varying,
+            'manual'::character varying,
+            'external_api'::character varying
+          ]
+        )::text[]
+      )
+    )
   )
 ) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_annual_income_idx on public.income_statements using btree (company_id, fiscal_year) TABLESPACE pg_default
-where
-  (fiscal_quarter is null);
+create index IF not exists idx_income_statements_company_id on public.income_statements using btree (company_id) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_quarterly_income_idx on public.income_statements using btree (company_id, fiscal_year, fiscal_quarter) TABLESPACE pg_default
+create index IF not exists idx_income_statements_fiscal_year on public.income_statements using btree (fiscal_year) TABLESPACE pg_default;
+
+create index IF not exists idx_income_statements_data_source on public.income_statements using btree (data_source) TABLESPACE pg_default;
+
+create index IF not exists idx_income_statements_low_confidence on public.income_statements using btree (confidence_score) TABLESPACE pg_default
 where
-  (fiscal_quarter is not null);
+  (confidence_score < (0.8)::double precision);
 
 create trigger update_income_statements_updated_at BEFORE
 update on income_statements for EACH row
@@ -352,7 +473,30 @@ create table public.statistics (
   calculated_at timestamp with time zone null default CURRENT_TIMESTAMP,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  confidence_score double precision not null default 1.0,
+  last_validated_at timestamp with time zone null,
+  validation_notes text null,
   constraint statistics_pkey primary key (stat_id),
+  constraint check_statistics_confidence check (
+    (
+      (confidence_score >= (0.0)::double precision)
+      and (confidence_score <= (1.0)::double precision)
+    )
+  ),
+  constraint check_statistics_data_source check (
+    (
+      (data_source)::text = any (
+        (
+          array[
+            'defeat_beta'::character varying,
+            'yfinance'::character varying,
+            'manual'::character varying,
+            'external_api'::character varying
+          ]
+        )::text[]
+      )
+    )
+  ),
   constraint statistics_fiscal_quarter_check check (
     (
       (
@@ -375,6 +519,8 @@ create table public.statistics (
     )
   )
 ) TABLESPACE pg_default;
+
+create index IF not exists idx_statistics_data_source on public.statistics using btree (data_source) TABLESPACE pg_default;
 
 create unique INDEX IF not exists unique_quarterly_stats on public.statistics using btree (company_id, fiscal_year, fiscal_quarter) TABLESPACE pg_default
 where
@@ -427,8 +573,33 @@ create table public.dividend_history (
   data_source character varying(50) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
-  constraint dividend_history_pkey primary key (dividend_id)
+  confidence_score double precision not null default 1.0,
+  last_validated_at timestamp with time zone null,
+  validation_notes text null,
+  constraint dividend_history_pkey primary key (dividend_id),
+  constraint check_dividend_confidence check (
+    (
+      (confidence_score >= (0.0)::double precision)
+      and (confidence_score <= (1.0)::double precision)
+    )
+  ),
+  constraint check_dividend_data_source check (
+    (
+      (data_source)::text = any (
+        (
+          array[
+            'defeat_beta'::character varying,
+            'yfinance'::character varying,
+            'manual'::character varying,
+            'external_api'::character varying
+          ]
+        )::text[]
+      )
+    )
+  )
 ) TABLESPACE pg_default;
+
+create index IF not exists idx_dividend_history_data_source on public.dividend_history using btree (data_source) TABLESPACE pg_default;
 
 create unique INDEX IF not exists unique_dividend_per_company_exdate on public.dividend_history using btree (company_id, ex_dividend_date) TABLESPACE pg_default;
 
@@ -491,7 +662,31 @@ create table public.earnings (
   data_source character varying(50) null,
   created_at timestamp with time zone null default CURRENT_TIMESTAMP,
   updated_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  confidence_score double precision not null default 1.0,
+  last_validated_at timestamp with time zone null,
+  validation_notes text null,
   constraint earnings_pkey primary key (earnings_id),
+  constraint uq_earnings_company_fiscal unique (company_id, fiscal_year, fiscal_quarter),
+  constraint check_earnings_confidence check (
+    (
+      (confidence_score >= (0.0)::double precision)
+      and (confidence_score <= (1.0)::double precision)
+    )
+  ),
+  constraint check_earnings_data_source check (
+    (
+      (data_source)::text = any (
+        (
+          array[
+            'defeat_beta'::character varying,
+            'yfinance'::character varying,
+            'manual'::character varying,
+            'external_api'::character varying
+          ]
+        )::text[]
+      )
+    )
+  ),
   constraint earnings_fiscal_quarter_check check (
     (
       (
@@ -503,13 +698,7 @@ create table public.earnings (
   )
 ) TABLESPACE pg_default;
 
-create unique INDEX IF not exists unique_annual_earnings_idx on public.earnings using btree (company_id, fiscal_year) TABLESPACE pg_default
-where
-  (fiscal_quarter is null);
-
-create unique INDEX IF not exists unique_quarterly_earnings_idx on public.earnings using btree (company_id, fiscal_year, fiscal_quarter) TABLESPACE pg_default
-where
-  (fiscal_quarter is not null);
+create index IF not exists idx_earnings_data_source on public.earnings using btree (data_source) TABLESPACE pg_default;
 
 create index IF not exists idx_earnings_company_year_quarter on public.earnings using btree (company_id, fiscal_year desc, fiscal_quarter desc) TABLESPACE pg_default;
 
@@ -518,6 +707,8 @@ create index IF not exists idx_earnings_announcement_date on public.earnings usi
 create index IF not exists idx_earnings_eps_surprise on public.earnings using btree (eps_surprise_percent) TABLESPACE pg_default
 where
   (eps_surprise_percent is not null);
+
+create index IF not exists idx_earnings_company_id on public.earnings using btree (company_id) TABLESPACE pg_default;
 
 create trigger update_earnings_updated_at BEFORE
 update on earnings for EACH row
@@ -540,4 +731,84 @@ create table public.current_market_data (
   constraint current_market_data_pkey primary key (company_id),
   constraint current_market_data_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
 ) TABLESPACE pg_default;
+```
+## `public.data_conflicts`
+
+```sql
+create table public.data_conflicts (
+  conflict_id bigserial not null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  fiscal_quarter smallint null,
+  field_name character varying(100) not null,
+  existing_value numeric null,
+  existing_source character varying(50) not null,
+  new_value numeric null,
+  new_source character varying(50) not null,
+  percent_diff double precision not null,
+  resolved boolean null default false,
+  resolution_notes text null,
+  resolution_choice character varying(50) null,
+  detected_at timestamp with time zone not null,
+  resolved_at timestamp with time zone null,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint data_conflicts_pkey primary key (conflict_id),
+  constraint fk_data_conflicts_company foreign KEY (company_id) references companies (company_id) on delete CASCADE,
+  constraint check_conflict_values check (
+    (
+      (
+        (existing_value is not null)
+        or (new_value is not null)
+      )
+      and (percent_diff >= (0)::double precision)
+    )
+  ),
+  constraint check_resolution_choice check (
+    (
+      (resolution_choice is null)
+      or (
+        (resolution_choice)::text = any (
+          (
+            array[
+              'keep_existing'::character varying,
+              'use_new'::character varying,
+              'manual_review'::character varying
+            ]
+          )::text[]
+        )
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+create index IF not exists idx_data_conflicts_unresolved on public.data_conflicts using btree (resolved, detected_at desc) TABLESPACE pg_default
+where
+  (resolved = false);
+
+create index IF not exists idx_data_conflicts_company on public.data_conflicts using btree (company_id, detected_at desc) TABLESPACE pg_default;
+
+create index IF not exists idx_data_conflicts_percent_diff on public.data_conflicts using btree (percent_diff desc) TABLESPACE pg_default;
+
+create index IF not exists idx_data_conflicts_resolved_at on public.data_conflicts using btree (resolved_at) TABLESPACE pg_default
+where
+  (resolved = true);
+```
+## `public.scheduler_locks`
+
+```sql
+create table public.scheduler_locks (
+  lock_id character varying(100) not null,
+  company_id integer not null,
+  acquired_at timestamp with time zone not null,
+  expires_at timestamp with time zone not null,
+  lock_type character varying(50) null default 'financial_refresh'::character varying,
+  constraint scheduler_locks_pkey primary key (lock_id),
+  constraint scheduler_locks_company_id_key unique (company_id),
+  constraint fk_scheduler_locks_company foreign KEY (company_id) references companies (company_id) on delete CASCADE,
+  constraint check_lock_expiry check ((expires_at > acquired_at))
+) TABLESPACE pg_default;
+
+create index IF not exists idx_scheduler_locks_company_id on public.scheduler_locks using btree (company_id) TABLESPACE pg_default;
+
+create index IF not exists idx_scheduler_locks_expires_at on public.scheduler_locks using btree (expires_at) TABLESPACE pg_default;
 ```
