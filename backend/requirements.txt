@@ -9,6 +9,7 @@ slowapi
 python-dotenv
 httpx
 pytest
-numpy==1.26.4
-pandas==1.5.3
+numpy>=2.4.1
+pandas>=2.3.3
 requests
+defeatbeta-api>=0.0.6

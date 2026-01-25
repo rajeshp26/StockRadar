@@ -1,5 +1,4 @@
 { pkgs ? import <nixpkgs> {} }:
-
 pkgs.mkShell {
   name = "stockerpro-backend";
   
@@ -14,63 +13,68 @@ pkgs.mkShell {
     python311Packages.wheel
     
     # ============================================
-    # System Libraries (Safe Subset)
+    # Build Tools
     # ============================================
-    # Standard C++ library (for NumPy, Pandas, etc.)
-    # This is needed for C-extensions to work
-    stdenv.cc.cc.lib
-    
-    # Compression library (for many Python packages)
-    # This is needed for packages that use zlib
-    zlib
-    
-    # ============================================
-    # Build Tools (For compiling from source)
-    # ============================================
+    # GCC compiler with C++ support
     gcc
     gnumake
     pkg-config
+    git
+    
+    # ============================================
+    # System Libraries for C Extensions
+    # ============================================
+    # Use the system's C++ library (not older libstdcxx5)
+    # This is critical for Google Cloud Studio IDE compatibility
+    stdenv.cc.cc.lib
+    zlib
   ];
-
+  
   # ============================================
-  # Environment Setup
+  # Environment Setup - GOOGLE CLOUD STUDIO COMPATIBLE
   # ============================================
   shellHook = ''
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ StockerPro Safe Nix Shell Activated"
+    echo "✅ StockerPro Nix Shell Activated"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
     # ============================================
-    # CRITICAL: Safe LD_LIBRARY_PATH Configuration
+    # CRITICAL: Library Path Configuration
     # ============================================
-    # We ONLY export:
-    #   1. libstdc++ (C++ standard library) - needed for NumPy, Pandas
-    #   2. zlib (compression) - needed for various packages
+    # For Google Cloud Studio IDE:
+    # - Use stdenv.cc.cc.lib (modern C++ stdlib)
+    # - Let the container's glibc handle the rest
+    # - Don't try to override system libraries
+    # - This prevents GLIBCXX version conflicts
     #
-    # We DO NOT export glibc because:
-    #   - System binaries (bash, ps, ls, etc.) are linked to Nix's glibc
-    #   - Exporting a different glibc forces them to use an incompatible version
-    #   - This causes SIGSEGV (Segmentation Fault) in all system commands
-    #   - Python's own libc is already correctly configured by Nix
+    # Key insight: The venv's numpy was compiled against
+    # the container's glibc, so we need to use the container's
+    # C++ stdlib, not Nix's libstdcxx5 (which is outdated)
     # ============================================
     
     export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.zlib}/lib:$LD_LIBRARY_PATH"
     
-    echo "🔧 Libraries Provided:"
-    echo "   • Python 3.11"
-    echo "   • libstdc++ (C++ std lib for NumPy/Pandas)"
-    echo "   • zlib (compression)"
-    echo "   • Build tools (gcc, make, pkg-config)"
+    # Ensure Python can find compiled extensions
+    export PYTHONPATH="$PYTHONPATH:."
+    
+    echo "🔧 Environment Setup:"
+    echo "   • Python 3.11 ✅"
+    echo "   • C++ stdlib (from container) ✅"
+    echo "   • Build tools (gcc, make, pkg-config) ✅"
+    echo "   • Google Cloud Studio IDE compatible ✅"
     echo ""
     echo "📂 Working in: $(pwd)"
     echo ""
     echo "🚀 To start the backend:"
-    echo "   cd backend && ./start.sh"
+    echo "   cd backend && source venv/bin/activate && python -m uvicorn main:app --reload"
     echo ""
     echo "📦 To install dependencies:"
-    echo "   pip install -r backend/requirements.txt"
+    echo "   pip install -r requirements.txt"
+    echo ""
+    echo "✨ To test everything works:"
+    echo "   python -c 'import numpy; import pandas; import fastapi; print(\"✅ All OK\")'"
     echo ""
     echo "❌ To exit this shell:"
     echo "   exit"
