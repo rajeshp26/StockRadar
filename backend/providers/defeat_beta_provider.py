@@ -56,7 +56,7 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
 
     # Income Statement aliases
-    DB_INCOME_ALIASES = {
+    DB_INCOME_ALIASES: Dict[str, List[str]] = {
         # Core P&L
         'revenue': ['Total Revenue', 'Operating Revenue'],
         'cost_of_goods_sold': ['Cost of Revenue', 'Reconciled Cost of Revenue'],
@@ -104,7 +104,7 @@ class DefeatBetaProvider(StockDataProvider):
     }
 
     # Balance Sheet aliases
-    DB_BALANCE_ALIASES = {
+    DB_BALANCE_ALIASES: Dict[str, List[str]] = {
         # Assets
         'total_assets': ['Total Assets'],
         'current_assets': ['Total Current Assets'],
@@ -134,6 +134,12 @@ class DefeatBetaProvider(StockDataProvider):
         'other_current_liabilities': ['Other Current Liabilities'],
         'minority_interest': ['Minority Interest'],
         'total_liabilities_and_equity': ['Total Liabilities & Stockholders Equity', 'Total Assets'],  # sanity equality
+        # Sometimes DBeta provides a roll-up variant for financing cash flow
+        "cash_from_financing_activities": [
+            "Cash Flow from Continuing Financing Activities",
+            "Financing Cash Flow",
+            "Cash from Financing Activities",
+        ],
     }
 
     # Cash Flow aliases
@@ -255,11 +261,11 @@ class DefeatBetaProvider(StockDataProvider):
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            income_rows = self._extract_result(results[0], IncomeStatementRows(rows=[]))
-            balance_rows = self._extract_result(results[1], BalanceSheetRows(rows=[]))
-            cash_rows = self._extract_result(results[2], CashFlowRows(rows=[]))
-            earnings_rows = self._extract_result(results[3], EarningsRows(rows=[]))
-            dividend_rows = self._extract_result(results[4], DividendRows(rows=[]))
+            income_rows: IncomeStatementRows = self._extract_result(results[0], IncomeStatementRows(rows=[]))
+            balance_rows: BalanceSheetRows = self._extract_result(results[1], BalanceSheetRows(rows=[]))
+            cash_rows: CashFlowRows = self._extract_result(results[2], CashFlowRows(rows=[]))
+            earnings_rows: EarningsRows = self._extract_result(results[3], EarningsRows(rows=[]))
+            dividend_rows: DividendRows = self._extract_result(results[4], DividendRows(rows=[]))
 
             if not any([income_rows.rows, balance_rows.rows, cash_rows.rows]):
                 raise NoDataError(symbol, ['income_statements', 'balance_sheets', 'cash_flows'])
@@ -590,7 +596,7 @@ class DefeatBetaProvider(StockDataProvider):
     def _clean_breakdown_label(self, s: str) -> str:
         if s is None:
             return ""
-        s = html.unescape(str(s)).replace("&amp;", "&").strip()
+        s = html.unescape(str(s)).strip()  # unescape "&amp;" -> "&"
         s = re.sub(r'^[+\s]+', '', s)
         s = re.sub(r'\s+', ' ', s)
         return s
@@ -643,10 +649,10 @@ class DefeatBetaProvider(StockDataProvider):
         return df
 
     def _iter_defeatbeta_periods(self, df: pd.DataFrame, is_quarterly: bool):
-        if not hasattr(df, '_defeatbeta_col_dates'):
+        col_to_dt = df.attrs.get('_defeatbeta_col_dates', {})
+        if not col_to_dt:
+            # Fallback if attrs missing (shouldn't happen if normalized)
             col_to_dt = {c: pd.to_datetime(str(c), errors='coerce') for c in df.columns}
-        else:
-            col_to_dt = df._defeatbeta_col_dates  # type: ignore[attr-defined]
 
         for c, ts in col_to_dt.items():
             if pd.isna(ts):
@@ -679,21 +685,21 @@ class DefeatBetaProvider(StockDataProvider):
                 fiscal_quarter=fq,
                 period_end_date=period_end,
 
-                revenue=self._safe_decimal(self._db_val(df, a['revenue'], col)),
-                cost_of_goods_sold=self._safe_decimal(self._db_val(df, a['cost_of_goods_sold'], col)),
-                gross_profit=self._safe_decimal(self._db_val(df, a['gross_profit'], col)),
-                operating_expenses=self._safe_decimal(self._db_val(df, a['operating_expenses'], col)),
-                rd_expenses=self._safe_decimal(self._db_val(df, a['rd_expenses'], col)),
-                sga_expenses=self._safe_decimal(self._db_val(df, a['sga_expenses'], col)),
-                operating_income=self._safe_decimal(self._db_val(df, a['operating_income'], col)),
-                interest_expense=self._safe_decimal(self._db_val(df, a['interest_expense'], col)),
-                tax_expense=self._safe_decimal(self._db_val(df, a['tax_expense'], col)),
-                net_income=self._safe_decimal(self._db_val(df, a['net_income'], col)),
-                ebitda=self._safe_decimal(self._db_val(df, a['ebitda'], col)),
+                revenue=self._safe_decimal(self._db_val(df, a.get('revenue', []), col)),
+                cost_of_goods_sold=self._safe_decimal(self._db_val(df, a.get('cost_of_goods_sold', []), col)),
+                gross_profit=self._safe_decimal(self._db_val(df, a.get('gross_profit', []), col)),
+                operating_expenses=self._safe_decimal(self._db_val(df, a.get('operating_expenses', []), col)),
+                rd_expenses=self._safe_decimal(self._db_val(df, a.get('rd_expenses', []), col)),
+                sga_expenses=self._safe_decimal(self._db_val(df, a.get('sga_expenses', []), col)),
+                operating_income=self._safe_decimal(self._db_val(df, a.get('operating_income', []), col)),
+                interest_expense=self._safe_decimal(self._db_val(df, a.get('interest_expense', []), col)),
+                tax_expense=self._safe_decimal(self._db_val(df, a.get('tax_expense', []), col)),
+                net_income=self._safe_decimal(self._db_val(df, a.get('net_income', []), col)),
+                ebitda=self._safe_decimal(self._db_val(df, a.get('ebitda', []), col)),
                 currency="USD",
 
-                non_operating_income_expense=self._safe_decimal(self._db_val(df, a['non_operating_income_expense'], col)),
-                pretax_income=self._safe_decimal(self._db_val(df, a['pretax_income'], col)),
+                non_operating_income_expense=self._safe_decimal(self._db_val(df, a.get('non_operating_income_expense', []), col)),
+                pretax_income=self._safe_decimal(self._db_val(df, a.get('pretax_income', []), col)),
                 equity_in_earnings=self._safe_decimal(self._db_val(df, a.get('equity_in_earnings', []), col)),
                 minority_interest=self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col)),
                 income_from_continuing_operations=self._safe_decimal(self._db_val(df, a.get('income_from_continuing_operations', []), col)),
@@ -723,24 +729,24 @@ class DefeatBetaProvider(StockDataProvider):
                 fiscal_quarter=fq,
                 period_end_date=period_end,
 
-                total_assets=self._safe_decimal(self._db_val(df, a['total_assets'], col)),
-                current_assets=self._safe_decimal(self._db_val(df, a['current_assets'], col)),
-                cash_and_cash_equivalents=self._safe_decimal(self._db_val(df, a['cash_and_cash_equivalents'], col)),
-                accounts_receivable=self._safe_decimal(self._db_val(df, a['accounts_receivable'], col)),
-                inventory=self._safe_decimal(self._db_val(df, a['inventory'], col)),
-                property_plant_equipment_net=self._safe_decimal(self._db_val(df, a['property_plant_equipment_net'], col)),
-                intangible_assets=self._safe_decimal(self._db_val(df, a['intangible_assets'], col)),
-                goodwill=self._safe_decimal(self._db_val(df, a['goodwill'], col)),
+                total_assets=self._safe_decimal(self._db_val(df, a.get('total_assets', []), col)),
+                current_assets=self._safe_decimal(self._db_val(df, a.get('current_assets', []), col)),
+                cash_and_cash_equivalents=self._safe_decimal(self._db_val(df, a.get('cash_and_cash_equivalents', []), col)),
+                accounts_receivable=self._safe_decimal(self._db_val(df, a.get('accounts_receivable', []), col)),
+                inventory=self._safe_decimal(self._db_val(df, a.get('inventory', []), col)),
+                property_plant_equipment_net=self._safe_decimal(self._db_val(df, a.get('property_plant_equipment_net', []), col)),
+                intangible_assets=self._safe_decimal(self._db_val(df, a.get('intangible_assets', []), col)),
+                goodwill=self._safe_decimal(self._db_val(df, a.get('goodwill', []), col)),
 
-                total_liabilities=self._safe_decimal(self._db_val(df, a['total_liabilities'], col)),
-                current_liabilities=self._safe_decimal(self._db_val(df, a['current_liabilities'], col)),
-                accounts_payable=self._safe_decimal(self._db_val(df, a['accounts_payable'], col)),
-                short_term_debt=self._safe_decimal(self._db_val(df, a['short_term_debt'], col)),
-                long_term_debt=self._safe_decimal(self._db_val(df, a['long_term_debt'], col)),
-                total_debt=self._safe_decimal(self._db_val(df, a['total_debt'], col)),
+                total_liabilities=self._safe_decimal(self._db_val(df, a.get('total_liabilities', []), col)),
+                current_liabilities=self._safe_decimal(self._db_val(df, a.get('current_liabilities', []), col)),
+                accounts_payable=self._safe_decimal(self._db_val(df, a.get('accounts_payable', []), col)),
+                short_term_debt=self._safe_decimal(self._db_val(df, a.get('short_term_debt', []), col)),
+                long_term_debt=self._safe_decimal(self._db_val(df, a.get('long_term_debt', []), col)),
+                total_debt=self._safe_decimal(self._db_val(df, a.get('total_debt', []), col)),
 
-                shareholders_equity=self._safe_decimal(self._db_val(df, a['shareholders_equity'], col)),
-                retained_earnings=self._safe_decimal(self._db_val(df, a['retained_earnings'], col)),
+                shareholders_equity=self._safe_decimal(self._db_val(df, a.get('shareholders_equity', []), col)),
+                retained_earnings=self._safe_decimal(self._db_val(df, a.get('retained_earnings', []), col)),
                 common_stock=None,  # DBeta often doesn't provide; keep None unless found elsewhere
                 currency="USD",
 
@@ -771,13 +777,13 @@ class DefeatBetaProvider(StockDataProvider):
                 fiscal_quarter=fq,
                 period_end_date=period_end,
 
-                cash_from_operating_activities=self._safe_decimal(self._db_val(df, a['cash_from_operating_activities'], col)),
-                net_income=self._safe_decimal(self._db_val(df, a['net_income'], col)),
-                depreciation_amortization=self._safe_decimal(self._db_val(df, a['depreciation_amortization'], col)),
-                capital_expenditures=self._safe_decimal(self._db_val(df, a['capital_expenditures'], col)),
-                cash_from_investing_activities=self._safe_decimal(self._db_val(df, a['cash_from_investing_activities'], col)),
-                cash_from_financing_activities=self._safe_decimal(self._db_val(df, a['cash_from_financing_activities'], col)),
-                dividends_paid=self._safe_decimal(self._db_val(df, a['dividends_paid'], col)),
+                cash_from_operating_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_operating_activities', []), col)),
+                net_income=self._safe_decimal(self._db_val(df, a.get('net_income', []), col)),
+                depreciation_amortization=self._safe_decimal(self._db_val(df, a.get('depreciation_amortization', []), col)),
+                capital_expenditures=self._safe_decimal(self._db_val(df, a.get('capital_expenditures', []), col)),
+                cash_from_investing_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_investing_activities', []), col)),
+                cash_from_financing_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_financing_activities', []), col)),
+                dividends_paid=self._safe_decimal(self._db_val(df, a.get('dividends_paid', []), col)),
                 currency="USD",
 
                 change_in_working_capital=self._safe_decimal(self._db_val(df, a.get('change_in_working_capital', []), col)),
@@ -800,6 +806,8 @@ class DefeatBetaProvider(StockDataProvider):
     # ---- Dividends parser (DBeta & YF) ----
     def _parse_dividends(self, df: pd.DataFrame, company_id: int, symbol: str, provider: str) -> List[DividendRow]:
         rows: List[DividendRow] = []
+        if df is None or df.empty:
+            return rows
         # Map possible column names
         cols = {c.lower(): c for c in df.columns}
         exd_col = cols.get('ex_dividend_date') or cols.get('report_date') or cols.get('date')  # DBeta uses report_date; YF uses index/Date
@@ -1056,7 +1064,7 @@ class DefeatBetaProvider(StockDataProvider):
                 if rev_rep is not None and rev_est is not None:
                     try:
                         rev_surprise_amt = Decimal(str(rev_rep)) - Decimal(str(rev_est))
-                        if rev_est != 0:
+                        if Decimal(str(rev_est)) != 0:
                             rev_surprise_pct = (rev_surprise_amt / Decimal(str(rev_est))) * Decimal('100')
                     except InvalidOperation:
                         rev_surprise_amt = None
@@ -1173,10 +1181,4 @@ class DefeatBetaProvider(StockDataProvider):
         logger.debug(msg)
 
     
-    def _clean_breakdown_label(self, s: str) -> str:
-        if s is None:
-            return ""
-        s = html.unescape(str(s)).strip()  # unescape once; it handles &amp; → &
-        s = re.sub(r'^[+\s]+', '', s)
-        s = re.sub(r'\s+', ' ', s)
-        return s
+  
