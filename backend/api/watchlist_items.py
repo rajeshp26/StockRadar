@@ -52,7 +52,7 @@ class WatchlistItemData(BaseModel):
 
 
 class StockData(BaseModel):
-    """Real-time stock price data."""
+    """Real-time stock price data for UI display (sourced from YF only)."""
     id: int 
     symbol: str
     name: str
@@ -115,31 +115,17 @@ async def add_item_to_watchlist(
     """
     Add a stock to watchlist.
     
-    **NEW:** Supports background financial data loading!
-    
-    **Two-phase operation:**
-    
-    Phase 1 (Fast, < 2 seconds):
-    - Fetch stock details from yfinance
-    - Create/upsert company
-    - Store market data
-    - Add to watchlist
-    - Return to client
-    
-    Phase 2 (Background, 30-40 seconds for new stocks):
-    - Load full financial history (14+ years) from defeat-beta
-    - Store to all financial tables
-    - Update company metadata
-    
-    **Response fields:**
-    - `financials_loading`: True if background task loading financial data
-    - `is_new_stock`: True if this is first time seeing this company
-    
-    **Error cases:**
-    - 403: User doesn't own this watchlist
-    - 404: Stock symbol not found
-    - 409: Stock already in this watchlist
-    - 500: Database error
+    **Design:**
+    - Phase 1 (Fast): Delegated to WatchlistService.add_stock_to_watchlist()
+        * Upsert company
+        * Fetch **YF** current price -> upsert into public.current_market_data
+        * Insert watchlist item
+        * Schedule background fundamentals load via DefeatBetaProvider (full for new, incremental otherwise)
+    - Phase 2 (Background): DefeatBeta -> fallback YF for all fundamentals (IS/BS/CF/Earnings/Dividends)
+
+    **Guarantees:**
+    - YF is used only for current market data (and optionally to enrich the returned response).
+    - All fundamentals enter via DefeatBetaProvider.get_all_financials_optimized().
     """
     try:
         auth_id = user_token["uid"]
@@ -150,106 +136,57 @@ async def add_item_to_watchlist(
         if not watchlist_res.data or watchlist_res.data['user_id'] != db_user_id:
             raise HTTPException(status_code=403, detail="Permission denied.")
         
-        # Fetch stock details
-        stock_details = stock_provider.get_stock_details(item.symbol)
-        if not stock_details:
-            raise HTTPException(status_code=404, detail=f"Stock symbol '{item.symbol}' not found.")
-        
-        # Upsert currency if needed
-        if stock_details.currency:
-            supabase.table('currencies').upsert(
-                {'code': stock_details.currency, 'name': stock_details.currency},
-                on_conflict='code'
-            ).execute()
-        
-        # Prepare company data
-        company_data = {
-            'ticker_symbol': stock_details.ticker_symbol,
-            'company_name': stock_details.long_name,
-            'exchange': stock_details.exchange or 'UNKNOWN',
-            'sector': stock_details.sector,
-            'industry': stock_details.industry,
-            'currency': stock_details.currency or 'USD',
-            'description': stock_details.description,
-            'website': stock_details.website,
-            'next_earnings_date': stock_details.next_earnings_date.isoformat() if stock_details.next_earnings_date else None
-        }
-        
-        # Upsert company
-        company_res = supabase.table('companies').upsert(
-            company_data, on_conflict='ticker_symbol,exchange'
-        ).execute()
-        
-        if not company_res.data:
-            raise HTTPException(status_code=500, detail="Database Error: Failed to upsert company.")
-        
-        company_id = company_res.data[0]['company_id']
-        is_new_company = not company_res.data[0].get('created_at')  # Check if just created
-        
+        symbol = item.symbol.upper()
+
+        # Delegate full add flow to the service (single orchestration point)
+        svc_result = await service.add_stock_to_watchlist(
+            user_id=db_user_id,
+            symbol=symbol,
+            watchlist_id=item.watchlist_id,            
+            target_buy=item.target_buy,
+            target_sell=item.target_sell,
+        )
+        # Expected keys from service:
+        # - watchlist_item_id, company_id, symbol, current_price, financials_loading, is_new_stock, message
+
+        # Optionally enrich response display with fresh YF details (no DB writes here)
+        # This keeps UI fields like 'name', 'change', and 'changePercent' without re-implementing logic.
+        try:
+            sd = stock_provider.get_stock_details(symbol)
+        except Exception:
+            sd = None
+
         # Update market data
         now_iso = datetime.now().isoformat()
-        market_data = {
-            'company_id': company_id,
-            'current_price': stock_details.price,
-            'open_price': stock_details.open_price,
-            'high_price': stock_details.high_price,
-            'low_price': stock_details.low_price,
-            'close_price': stock_details.close_price,
-            'volume': stock_details.volume,
-            'market_state': stock_details.market_state,
-            'last_updated': now_iso
-        }
-        supabase.table('current_market_data').upsert(market_data, on_conflict='company_id').execute()
-        
-        # Add to watchlist
-        item_res = supabase.table('watchlist_items').insert({
-            'watchlist_id': item.watchlist_id,
-            'company_id': company_id,
-            'target_buy': item.target_buy,
-            'target_sell': item.target_sell
-        }).execute()
-        
-        if not item_res.data:
-            check_dup = supabase.table('watchlist_items').select('*').eq('watchlist_id', item.watchlist_id).eq('company_id', company_id).execute()
-            if check_dup.data:
-                raise HTTPException(status_code=409, detail="This stock is already in your watchlist.")
-            raise HTTPException(status_code=500, detail="Database Error: Failed to insert watchlist item.")
-        
-        new_item_db = item_res.data[0]
-        
-        # Start background tasks
-        # EXISTING: Sync service (keeps existing functionality)
-        background_tasks.add_task(sync_service.sync_full_company_data, company_id, stock_details.ticker_symbol)
-        
-        # NEW: Load financial data if new company
-        financials_loading = False
-        if is_new_company:
-            background_tasks.add_task(
-                service._fetch_and_store_financials_optimized,
-                symbol=stock_details.ticker_symbol,
-                company_id=company_id,
-                is_new_company=True,
-            )
-            financials_loading = True
-            logger.info(f"Started background financial load for {stock_details.ticker_symbol}")
-        
-        # Build response
-        stock_data_out = StockData(
-            id=new_item_db['watchlist_item_id'],
-            symbol=stock_details.ticker_symbol,
-            name=stock_details.long_name,
-            price=stock_details.price,
-            change=stock_details.change,
-            changePercent=stock_details.change_percent,
-            lastUpdated=now_iso
+        stock_name = getattr(sd, "long_name", None) or symbol
+        price = svc_result.get("current_price") or (getattr(sd, "price", None) or 0.0)
+        prev_close = getattr(sd, "close_price", None) or getattr(sd, "previous_close", None)
+        change = float(price - prev_close) if (price is not None and prev_close) else 0.0
+        change_pct = float((change / prev_close) * 100) if (prev_close and prev_close != 0) else 0.0
+
+        # Compose response models
+        watchlist_item_out = WatchlistItemData(
+            watchlist_item_id=svc_result["watchlist_item_id"],
+            watchlist_id=item.watchlist_id,
+            company_id=svc_result["company_id"],
+            target_buy=item.target_buy,
+            target_sell=item.target_sell,
         )
-        watchlist_item_out = WatchlistItemData.model_validate(new_item_db)
-        
+        stock_data_out = StockData(
+            id=svc_result["watchlist_item_id"],
+            symbol=svc_result["symbol"],
+            name=stock_name,
+            price=float(price or 0.0),
+            change=float(change),
+            changePercent=float(change_pct),
+            lastUpdated=now_iso,
+        )
+
         return AddStockResponse(
             watchlist_item=watchlist_item_out,
             stock_data=stock_data_out,
-            financials_loading=financials_loading,  # NEW
-            is_new_stock=is_new_company,  # NEW
+            financials_loading=bool(svc_result.get("financials_loading", False)),
+            is_new_stock=bool(svc_result.get("is_new_stock", False)),
         )
     
     except HTTPException as e:

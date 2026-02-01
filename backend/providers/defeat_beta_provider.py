@@ -11,6 +11,54 @@ import pandas as pd
 import html
 import re
 
+# --- RAW DEFEATBETA DUMPER (file-based) ---------------------------------------
+import json
+from pathlib import Path
+
+def _logs_dir_for_provider() -> Path:
+    """
+    Resolve backend/logs relative to this file:
+    <repo_root>/backend/providers/defeat_beta_provider.py -> <repo_root>/backend/logs
+    """
+    here = Path(__file__).resolve()
+    backend_dir = here.parent.parent   # .../backend
+    logs_dir = backend_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir
+
+def dump_defeatbeta_raw(symbol: str, statement: str, obj: Any) -> None:
+    """
+    Writes DefeatBeta raw object, raw json (if available), and raw df to files in backend/logs.
+    File names like: TSLA_quarterly_balance_sheet_raw_df.csv
+    """
+    try:
+        logs_dir = _logs_dir_for_provider()
+        base = f"{symbol}_{statement}"
+
+        # 1) repr
+        (logs_dir / f"{base}_raw_repr.txt").write_text(repr(obj))
+
+        # 2) json() if available
+        if hasattr(obj, "json"):
+            (logs_dir / f"{base}_raw.json").write_text(json.dumps(obj.json(), indent=2))
+
+        # 3) df if available (+ unique labels)
+        if hasattr(obj, "df"):
+            df = obj.df()
+            df.to_csv(logs_dir / f"{base}_raw_df.csv", index=False)
+            df.to_json(logs_dir / f"{base}_raw_df.json", orient="records", indent=2)
+
+            if "Breakdown" in df.columns:
+                with (logs_dir / f"{base}_raw_unique_labels.txt").open("w", encoding="utf-8") as f:
+                    for lab in df["Breakdown"].astype(str).unique():
+                        f.write(lab + "\n")
+
+        logger.debug("[DBETA][%s] raw dumps written for %s", symbol, statement)
+    except Exception as e:
+        # Never let diagnostics break the fetch
+        logger.warning("dump_defeatbeta_raw failure for %s/%s: %s", symbol, statement, e)
+# -------------------------------------------------------------------------------
+
 # Defeat Beta SDK
 from defeatbeta_api.data.ticker import Ticker
 
@@ -297,16 +345,19 @@ class DefeatBetaProvider(StockDataProvider):
             )
 
     async def _fetch_income_statements(self, ticker: Ticker, symbol: str, company_id: int) -> IncomeStatementRows:
+        logger.debug("[DBETA][%s] enter _fetch_income_statements", symbol)
         try:
             rows: List[IncomeStatementRow] = []
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_income_statement(), f"quarterly_income_statement for {symbol}")
             if q_obj is not None:
+                #dump_defeatbeta_raw(symbol, "quarterly_income_statement", q_obj) # <-- ADD DEBUG LOGS
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_income_statement(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_income_statement(), f"annual_income_statement for {symbol}")
             if a_obj is not None:
+                #dump_defeatbeta_raw(symbol, "annual_income_statement", a_obj) # <-- ADD DEBUG LOGS
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_income_statement(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -316,16 +367,20 @@ class DefeatBetaProvider(StockDataProvider):
             return IncomeStatementRows(rows=[])
 
     async def _fetch_balance_sheets(self, ticker: Ticker, symbol: str, company_id: int) -> BalanceSheetRows:
+        logger.debug("[DBETA][%s] enter _fetch_balance_sheets", symbol)
         try:
             rows: List[BalanceSheetRow] = []
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_balance_sheet(), f"quarterly_balance_sheet for {symbol}")
             if q_obj is not None:
+                #dump_defeatbeta_raw(symbol, "quarterly_balance_sheet", q_obj)  # <-- ADD DEBUG LOGS
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_balance_sheet(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_balance_sheet(), f"annual_balance_sheet for {symbol}")
+            logger.debug("[DBETA][%s] annual BS raw columns: %s", symbol, list((a_obj.df() if hasattr(a_obj, 'df') else a_obj).columns))
             if a_obj is not None:
+                #dump_defeatbeta_raw(symbol, "annual_balance_sheet", a_obj)  # <-- ADD DEBUG LOGS
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_balance_sheet(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -335,16 +390,19 @@ class DefeatBetaProvider(StockDataProvider):
             return BalanceSheetRows(rows=[])
 
     async def _fetch_cash_flows(self, ticker: Ticker, symbol: str, company_id: int) -> CashFlowRows:
+        logger.debug("[DBETA][%s] enter _fetch_cash_flows", symbol)
         try:
             rows: List[CashFlowRow] = []
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_cash_flow(), f"quarterly_cash_flow for {symbol}")
             if q_obj is not None:
+                #dump_defeatbeta_raw(symbol, "quarterly_cash_flow", q_obj)# <-- ADD DEBUG LOGS
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_cash_flow(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_cash_flow(), f"annual_cash_flow for {symbol}")
             if a_obj is not None:
+                #dump_defeatbeta_raw(symbol, "annual_cash_flow", a_obj)# <-- ADD DEBUG LOGS
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_cash_flow(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -360,6 +418,7 @@ class DefeatBetaProvider(StockDataProvider):
         Maps to EarningsRow with eps_reported_diluted, eps_estimate, eps_surprise_amount, eps_surprise_percent.
         Revenue fields are not present here → left None. Announcement date not provided here → None.
         """
+        logger.debug("[DBETA][%s] enter _fetch_earnings", symbol)
         try:
             earn_obj = await self._timeout_fetch(lambda: ticker.earnings(), f"earnings for {symbol}")
             # Normalize to DataFrame
@@ -546,7 +605,8 @@ class DefeatBetaProvider(StockDataProvider):
         need_cf = not fin.cash_flows.rows
         need_earn = not fin.earnings.rows
         need_div = not fin.dividends.rows
-
+        logger.debug("[DBETA][%s] need_bs=%s (rows=%d)", symbol, (not fin.balance_sheets.rows), len(fin.balance_sheets.rows))
+        
         if need_is:
             yf_q_is = await asyncio.to_thread(self.yfinance_provider.get_quarterly_income_statement_df, symbol)
             yf_a_is = await asyncio.to_thread(self.yfinance_provider.get_annual_income_statement_df, symbol)
@@ -593,13 +653,22 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
     # Normalization + Parsers (Defeat Beta)
     # ---------------------------------------------------------------------
+    
     def _clean_breakdown_label(self, s: str) -> str:
         if s is None:
             return ""
-        s = html.unescape(str(s)).strip()  # unescape "&amp;" -> "&"
-        s = re.sub(r'^[+\s]+', '', s)
-        s = re.sub(r'\s+', ' ', s)
+        s = html.unescape(str(s)).strip()   # '&amp;' -> '&'
+        s = s.replace('’', "'")             # curly -> straight apostrophe
+        s = re.sub(r'^[+\s]+', '', s)       # drop leading '+' hierarchy markers
+        s = re.sub(r'\s+', ' ', s)          # collapse whitespace
+        # Unify "and" and "&" to a real ampersand (avoid reintroducing '&amp;')
+        s = s.replace(' and ', ' & ')
         return s
+
+    def _normalize_alias_key(self, s: str) -> str:
+        # Keep alias and label pipelines identical
+        return self._clean_breakdown_label(s)
+    
 
     def _normalize_defeatbeta_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -642,14 +711,20 @@ class DefeatBetaProvider(StockDataProvider):
             return pd.DataFrame()
 
         df = df[kept_cols]
+        # CHANGE: remove thousands separators before numeric coercion, preserving NaNs
         for c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
+            ser = df[c]
+            df[c] = pd.to_numeric(
+                ser.where(ser.isna(), ser.astype(str).str.replace(',', '', regex=False)),
+                errors='coerce'
+            )
 
-        df._defeatbeta_col_dates = col_to_dt  # attach mapping
+        # CHANGE: write to attrs and read from attrs later
+        df.attrs['defeatbeta_col_dates'] = col_to_dt
         return df
 
     def _iter_defeatbeta_periods(self, df: pd.DataFrame, is_quarterly: bool):
-        col_to_dt = df.attrs.get('_defeatbeta_col_dates', {})
+        col_to_dt = df.attrs.get('defeatbeta_col_dates', {})
         if not col_to_dt:
             # Fallback if attrs missing (shouldn't happen if normalized)
             col_to_dt = {c: pd.to_datetime(str(c), errors='coerce') for c in df.columns}
@@ -662,9 +737,11 @@ class DefeatBetaProvider(StockDataProvider):
             yield c, ts.date(), fy, fq
 
     def _db_val(self, df: pd.DataFrame, aliases: List[str], col: str):
-        for key in aliases:
-            if key in df.index:
-                v = df.at[key, col]
+        # CHANGE: normalize alias keys before exact match lookup
+        for key in (aliases or []):
+            k = self._normalize_alias_key(key)
+            if k in df.index:
+                v = df.at[k, col]
                 if pd.isna(v):
                     continue
                 return v
@@ -718,43 +795,90 @@ class DefeatBetaProvider(StockDataProvider):
     def _parse_balance_sheet(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> List[BalanceSheetRow]:
         rows: List[BalanceSheetRow] = []
         df = self._normalize_defeatbeta_df(raw_df)
+        logger.debug("[DBETA][%s] BS kept date columns: %s", symbol, list(df.columns))
+        logger.debug("[DBETA][%s] BS normalized labels (first 20): %s", symbol, list(df.index[:20]))
         if df.empty:
             return rows
 
         a = self.DB_BALANCE_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
+            
+            # After df normalization and inside: for col, period_end, fy, fq in ...
+            if not df.empty:
+                last_col = sorted(df.columns)[-1]
+                cov = self._debug_alias_coverage(df, self.DB_BALANCE_ALIASES, last_col)
+                missing = [k for k, v in cov.items() if not v['matched']]
+                logger.debug("[DBETA][%s] BS coverage for %s — missing canonicals: %s",
+                            symbol, last_col, missing)
+
+            # ---- Extract leaves
+            total_assets   = self._safe_decimal(self._db_val(df, a.get('total_assets', []), col))
+            current_assets = self._safe_decimal(self._db_val(df, a.get('current_assets', []), col))
+            cash_eq        = self._safe_decimal(self._db_val(df, a.get('cash_and_cash_equivalents', []), col))
+            accounts_recv  = self._safe_decimal(self._db_val(df, a.get('accounts_receivable', []), col))
+            inventory      = self._safe_decimal(self._db_val(df, a.get('inventory', []), col))
+            ppe_net        = self._safe_decimal(self._db_val(df, a.get('property_plant_equipment_net', []), col))
+            intangible     = self._safe_decimal(self._db_val(df, a.get('intangible_assets', []), col))
+            goodwill       = self._safe_decimal(self._db_val(df, a.get('goodwill', []), col))
+
+            total_liab     = self._safe_decimal(self._db_val(df, a.get('total_liabilities', []), col))
+            current_liab   = self._safe_decimal(self._db_val(df, a.get('current_liabilities', []), col))
+            accounts_pay   = self._safe_decimal(self._db_val(df, a.get('accounts_payable', []), col))
+            short_debt     = self._safe_decimal(self._db_val(df, a.get('short_term_debt', []), col))
+            long_debt      = self._safe_decimal(self._db_val(df, a.get('long_term_debt', []), col))
+            total_debt     = self._safe_decimal(self._db_val(df, a.get('total_debt', []), col))
+
+            # CHANGE: derive total_debt if components exist
+            if total_debt is None and short_debt is not None and long_debt is not None:
+                total_debt = short_debt + long_debt
+
+            sh_equity      = self._safe_decimal(self._db_val(df, a.get('shareholders_equity', []), col))
+            retained       = self._safe_decimal(self._db_val(df, a.get('retained_earnings', []), col))
+            # CHANGE: populate common_stock (stop forcing None)
+            common_stock   = self._safe_decimal(self._db_val(df, a.get('common_stock', []), col))
+
+            long_inv       = self._safe_decimal(self._db_val(df, a.get('long_term_investments', []), col))
+            other_nca      = self._safe_decimal(self._db_val(df, a.get('other_non_current_assets', []), col))
+            other_cl       = self._safe_decimal(self._db_val(df, a.get('other_current_liabilities', []), col))
+            minority       = self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col))
+            total_leq      = self._safe_decimal(self._db_val(df, a.get('total_liabilities_and_equity', []), col))
+
+            # CHANGE: derive total_liabilities_and_equity if components exist
+            if total_leq is None and total_liab is not None and sh_equity is not None:
+                total_leq = total_liab + sh_equity + (minority or Decimal('0'))
+
             rows.append(BalanceSheetRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
                 period_end_date=period_end,
 
-                total_assets=self._safe_decimal(self._db_val(df, a.get('total_assets', []), col)),
-                current_assets=self._safe_decimal(self._db_val(df, a.get('current_assets', []), col)),
-                cash_and_cash_equivalents=self._safe_decimal(self._db_val(df, a.get('cash_and_cash_equivalents', []), col)),
-                accounts_receivable=self._safe_decimal(self._db_val(df, a.get('accounts_receivable', []), col)),
-                inventory=self._safe_decimal(self._db_val(df, a.get('inventory', []), col)),
-                property_plant_equipment_net=self._safe_decimal(self._db_val(df, a.get('property_plant_equipment_net', []), col)),
-                intangible_assets=self._safe_decimal(self._db_val(df, a.get('intangible_assets', []), col)),
-                goodwill=self._safe_decimal(self._db_val(df, a.get('goodwill', []), col)),
+                total_assets=total_assets,
+                current_assets=current_assets,
+                cash_and_cash_equivalents=cash_eq,
+                accounts_receivable=accounts_recv,
+                inventory=inventory,
+                property_plant_equipment_net=ppe_net,
+                intangible_assets=intangible,
+                goodwill=goodwill,
 
-                total_liabilities=self._safe_decimal(self._db_val(df, a.get('total_liabilities', []), col)),
-                current_liabilities=self._safe_decimal(self._db_val(df, a.get('current_liabilities', []), col)),
-                accounts_payable=self._safe_decimal(self._db_val(df, a.get('accounts_payable', []), col)),
-                short_term_debt=self._safe_decimal(self._db_val(df, a.get('short_term_debt', []), col)),
-                long_term_debt=self._safe_decimal(self._db_val(df, a.get('long_term_debt', []), col)),
-                total_debt=self._safe_decimal(self._db_val(df, a.get('total_debt', []), col)),
+                total_liabilities=total_liab,
+                current_liabilities=current_liab,
+                accounts_payable=accounts_pay,
+                short_term_debt=short_debt,
+                long_term_debt=long_debt,
+                total_debt=total_debt,
 
-                shareholders_equity=self._safe_decimal(self._db_val(df, a.get('shareholders_equity', []), col)),
-                retained_earnings=self._safe_decimal(self._db_val(df, a.get('retained_earnings', []), col)),
-                common_stock=None,  # DBeta often doesn't provide; keep None unless found elsewhere
+                shareholders_equity=sh_equity,
+                retained_earnings=retained,
+                common_stock=common_stock,
                 currency="USD",
 
-                long_term_investments=self._safe_decimal(self._db_val(df, a.get('long_term_investments', []), col)),
-                other_non_current_assets=self._safe_decimal(self._db_val(df, a.get('other_non_current_assets', []), col)),
-                other_current_liabilities=self._safe_decimal(self._db_val(df, a.get('other_current_liabilities', []), col)),
-                minority_interest=self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col)),
-                total_liabilities_and_equity=self._safe_decimal(self._db_val(df, a.get('total_liabilities_and_equity', []), col)),
+                long_term_investments=long_inv,
+                other_non_current_assets=other_nca,
+                other_current_liabilities=other_cl,
+                minority_interest=minority,
+                total_liabilities_and_equity=total_leq,
                 last_validated_at=None,
 
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
@@ -1179,6 +1303,26 @@ class DefeatBetaProvider(StockDataProvider):
     def _log_debug_once(self, msg: str):
         # Simple hook to avoid noisy logs; customize or deduplicate if you like.
         logger.debug(msg)
+
+    
+    def _debug_alias_coverage(self, df: pd.DataFrame, alias_map: Dict[str, List[str]], col: str):
+        out = {}
+        idx = set(df.index)
+        for canonical, aliases in alias_map.items():
+            matched, alias_used, value = False, None, None
+            for a in aliases or []:
+                k = self._normalize_alias_key(a)
+                if k in idx:
+                    v = df.at[k, col]
+                    if pd.isna(v):
+                        continue
+                    matched, alias_used, value = True, a, v
+                    break
+            out[canonical] = {'matched': matched, 'alias_used': alias_used, 'value': value}
+        return out
+
+    
+    
 
     
   

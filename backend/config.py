@@ -263,7 +263,6 @@ class Settings(BaseSettings):
         extra="forbid",
     )
 
-
 def validate_config():
     """Validates settings and prints a summary on startup."""
     try:
