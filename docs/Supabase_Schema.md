@@ -811,4 +811,312 @@ create table public.scheduler_locks (
 create index IF not exists idx_scheduler_locks_company_id on public.scheduler_locks using btree (company_id) TABLESPACE pg_default;
 
 create index IF not exists idx_scheduler_locks_expires_at on public.scheduler_locks using btree (expires_at) TABLESPACE pg_default;
-```
+
+
+## `public.intrinsic_value_analysis`
+
+create table public.intrinsic_value_analysis (
+  analysis_id serial not null,
+  company_id integer null,
+  growth_rate numeric(10, 4) null,
+  current_eps numeric(15, 4) null,
+  future_pe numeric(10, 2) null,
+  future_price numeric(15, 2) null,
+  sticker_price numeric(15, 2) null,
+  mos_price numeric(15, 2) null,
+  last_updated timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint intrinsic_value_analysis_pkey primary key (analysis_id),
+  constraint intrinsic_value_analysis_company_id_key unique (company_id),
+  constraint intrinsic_value_analysis_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+## `public.industry_multiples`
+create table public.industry_multiples (
+  industry_multiple_id serial not null,
+  sector character varying(100) null,
+  industry character varying(100) null,
+  calculation_date date null,
+  avg_pe numeric(10, 2) null,
+  avg_pb numeric(10, 2) null,
+  avg_ps numeric(10, 2) null,
+  avg_pcf numeric(10, 2) null,
+  avg_peg numeric(10, 2) null,
+  avg_ev_ebitda numeric(10, 2) null,
+  avg_ev_revenue numeric(10, 2) null,
+  avg_ev_fcf numeric(10, 2) null,
+  median_pe numeric(10, 2) null,
+  median_pb numeric(10, 2) null,
+  median_ps numeric(10, 2) null,
+  median_ev_ebitda numeric(10, 2) null,
+  median_ev_revenue numeric(10, 2) null,
+  avg_eps_growth numeric(5, 2) null,
+  median_eps_growth numeric(5, 2) null,
+  avg_revenue_growth numeric(5, 2) null,
+  sample_size integer null,
+  data_source character varying(50) null,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint industry_multiples_pkey primary key (industry_multiple_id)
+) TABLESPACE pg_default;
+
+create index IF not exists idx_sector_industry_date on public.industry_multiples using btree (sector, industry, calculation_date) TABLESPACE pg_default;
+
+## `public.ddm_valuations`
+create table public.ddm_valuations (
+  ddm_id serial not null,
+  company_id integer null,
+  analysis_date date null,
+  current_dps numeric(10, 4) null,
+  next_year_dps numeric(10, 4) null,
+  dividend_growth_rate numeric(5, 2) null,
+  required_return numeric(5, 3) null,
+  intrinsic_value_gordon numeric(10, 2) null,
+  high_growth_years integer null,
+  high_growth_rate numeric(5, 2) null,
+  stable_growth_rate numeric(5, 2) null,
+  intrinsic_value_multistage numeric(10, 2) null,
+  current_stock_price numeric(10, 2) null,
+  upside_downside_pct numeric(6, 2) null,
+  analyst_name character varying(100) null,
+  notes text null,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint ddm_valuations_pkey primary key (ddm_id)
+) TABLESPACE pg_default;
+
+## `public.dcf_valuations`
+create table public.dcf_valuations (
+  dcf_id serial not null,
+  company_id integer null,
+  analysis_date date null,
+  forecast_years integer null,
+  revenue_growth_rate numeric(5, 2) null,
+  terminal_growth_rate numeric(5, 2) null,
+  wacc_used numeric(5, 3) null,
+  fcf_margin_assumption numeric(5, 2) null,
+  total_pv_fcf numeric(15, 2) null,
+  terminal_value numeric(15, 2) null,
+  pv_terminal_value numeric(15, 2) null,
+  enterprise_value_dcf numeric(15, 2) null,
+  less_net_debt numeric(15, 2) null,
+  equity_value numeric(15, 2) null,
+  shares_outstanding bigint null,
+  intrinsic_value_per_share numeric(10, 2) null,
+  current_stock_price numeric(10, 2) null,
+  upside_downside_pct numeric(6, 2) null,
+  analyst_name character varying(100) null,
+  sensitivity_scenarios jsonb null,
+  notes text null,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint dcf_valuations_pkey primary key (dcf_id)
+) TABLESPACE pg_default;
+
+## `public.price_history`
+create table public.price_history (
+  company_id integer not null,
+  price_date date not null,
+  open_price numeric(12, 4) null,
+  close_price numeric(12, 4) not null,
+  high_price numeric(12, 4) null,
+  low_price numeric(12, 4) null,
+  volume bigint null,
+  data_source character varying(50) not null default 'defeatbeta'::character varying,
+  created_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  constraint price_history_pk primary key (company_id, price_date),
+  constraint price_history_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_price_history_company_date_desc on public.price_history using btree (company_id, price_date desc) TABLESPACE pg_default;
+
+## `public.analyst_eps_estimates`
+create table public.analyst_eps_estimates (
+  estimate_id bigserial not null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  estimate_date date not null,
+  eps_estimate numeric(12, 4) not null,
+  number_of_analysts integer null,
+  period_type character varying(20) null default 'annual'::character varying,
+  provider character varying(50) not null default 'defeatbeta'::character varying,
+  created_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  constraint analyst_eps_estimates_pkey primary key (estimate_id),
+  constraint analyst_eps_estimates_uq unique (company_id, fiscal_year, provider, estimate_date),
+  constraint analyst_eps_estimates_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_analyst_eps_company_year on public.analyst_eps_estimates using btree (company_id, fiscal_year) TABLESPACE pg_default;
+
+## `public.valuation_method_defaults`
+create table public.valuation_method_defaults (
+  method character varying(40) not null,
+  params jsonb not null,
+  updated_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  constraint valuation_method_defaults_pkey primary key (method),
+  constraint valuation_method_defaults_method_check check (
+    (
+      (method)::text = any (
+        (
+          array[
+            'rule1'::character varying,
+            'ddm_gordon'::character varying,
+            'ddm_two_stage'::character varying,
+            'dcf'::character varying,
+            'owner_earnings'::character varying,
+            'relative'::character varying
+          ]
+        )::text[]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+## `public.company_valuation_overrides`
+create table public.company_valuation_overrides (
+  company_id integer not null,
+  method character varying(40) not null,
+  params jsonb not null,
+  updated_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  constraint company_valuation_overrides_pk primary key (company_id, method),
+  constraint company_valuation_overrides_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE,
+  constraint company_valuation_overrides_method_check check (
+    (
+      (method)::text = any (
+        (
+          array[
+            'rule1'::character varying,
+            'ddm_gordon'::character varying,
+            'ddm_two_stage'::character varying,
+            'dcf'::character varying,
+            'owner_earnings'::character varying,
+            'relative'::character varying
+          ]
+        )::text[]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+## `public.valuation_runs`
+create table public.valuation_runs (
+  valuation_run_id bigserial not null,
+  company_id integer not null,
+  method character varying(40) not null,
+  run_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  run_by_user_id integer null,
+  input_snapshot jsonb not null,
+  assumption_snapshot jsonb not null,
+  output_snapshot jsonb not null,
+  data_version_tag character varying(100) null,
+  notes text null,
+  constraint valuation_runs_pkey primary key (valuation_run_id),
+  constraint valuation_runs_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE,
+  constraint valuation_runs_run_by_user_id_fkey foreign KEY (run_by_user_id) references users (user_id),
+  constraint valuation_runs_method_check check (
+    (
+      (method)::text = any (
+        (
+          array[
+            'rule1'::character varying,
+            'ddm_gordon'::character varying,
+            'ddm_two_stage'::character varying,
+            'dcf'::character varying,
+            'owner_earnings'::character varying,
+            'relative'::character varying
+          ]
+        )::text[]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+create index IF not exists idx_valuation_runs_company_method_date on public.valuation_runs using btree (company_id, method, run_at desc) TABLESPACE pg_default;
+
+## `public.splits`
+create table public.splits (
+  split_id bigint generated always as identity not null,
+  company_id integer not null,
+  report_date date not null,
+  split_factor character varying(20) not null,
+  reverse_split boolean null default false,
+  data_source character varying(50) null default 'defeatbeta'::character varying,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint splits_pkey primary key (split_id),
+  constraint splits_company_date_unique unique (company_id, report_date),
+  constraint splits_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_splits_company_date on public.splits using btree (company_id, report_date desc) TABLESPACE pg_default;
+
+## `public.revenue_forecast`
+create table public.revenue_forecast (
+  forecast_id bigint generated always as identity not null,
+  company_id integer not null,
+  report_date date not null,
+  period_type character varying(20) not null,
+  estimate_revenue_growth numeric(8, 4) null,
+  number_of_analysts integer null,
+  estimate_avg_revenue numeric(20, 2) null,
+  estimate_high_revenue numeric(20, 2) null,
+  estimate_low_revenue numeric(20, 2) null,
+  year_ago_estimate_avg_revenue numeric(20, 2) null,
+  currency character varying(5) null default 'USD'::character varying,
+  provider character varying(50) null default 'defeatbeta'::character varying,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint revenue_forecast_pkey primary key (forecast_id),
+  constraint revenue_forecast_unique unique (company_id, report_date, period_type, provider),
+  constraint revenue_forecast_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_revenue_forecast_company_date on public.revenue_forecast using btree (company_id, report_date desc) TABLESPACE pg_default;
+
+## `public.earnings_forecast`
+create table public.earnings_forecast (
+  earnings_forecast_id bigint generated always as identity not null,
+  company_id integer not null,
+  report_date date not null,
+  period_type character varying(20) not null,
+  currency character varying(5) null default 'USD'::character varying,
+  estimate_eps_growth numeric(8, 4) null,
+  estimate_avg_eps numeric(10, 4) null,
+  estimate_high_eps numeric(10, 4) null,
+  estimate_low_eps numeric(10, 4) null,
+  number_of_analysts integer null,
+  thirty_days_ago_estimate_avg_eps numeric(10, 4) null,
+  sixty_days_ago_estimate_avg_eps numeric(10, 4) null,
+  ninety_days_ago_estimate_avg_eps numeric(10, 4) null,
+  year_ago_estimate_avg_eps numeric(10, 4) null,
+  provider character varying(50) null default 'defeatbeta'::character varying,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint earnings_forecast_pkey primary key (earnings_forecast_id),
+  constraint earnings_forecast_unique unique (company_id, report_date, period_type, provider),
+  constraint earnings_forecast_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_earnings_forecast_company_date on public.earnings_forecast using btree (company_id, report_date desc) TABLESPACE pg_default;
+
+## `public.company_summary`
+create table public.company_summary (
+  summary_id bigint generated always as identity not null,
+  company_id integer not null,
+  snapshot_date date not null default CURRENT_DATE,
+  market_cap numeric(20, 2) null,
+  enterprise_value numeric(20, 2) null,
+  shares_outstanding numeric(20, 2) null,
+  implied_shares_outstanding numeric(20, 2) null,
+  beta numeric(8, 4) null,
+  trailing_pe numeric(10, 4) null,
+  forward_pe numeric(10, 4) null,
+  trailing_eps numeric(10, 4) null,
+  forward_eps numeric(10, 4) null,
+  enterprise_to_ebitda numeric(10, 4) null,
+  enterprise_to_revenue numeric(10, 4) null,
+  peg_ratio numeric(10, 4) null,
+  currency character varying(5) null default 'USD'::character varying,
+  provider character varying(50) null default 'defeatbeta'::character varying,
+  created_at timestamp with time zone null default CURRENT_TIMESTAMP,
+  constraint company_summary_pkey primary key (summary_id),
+  constraint company_summary_unique unique (company_id, snapshot_date, provider),
+  constraint company_summary_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_company_summary_company_date on public.company_summary using btree (company_id, snapshot_date desc) TABLESPACE pg_default;
+
+## `public.revenue_forecast`

@@ -1,13 +1,26 @@
+# -*- coding: utf-8 -*-
 """
 Financial Data Repository - Refactored
 Handles all database operations with improved error handling and type safety.
+
+Additions in this version:
+  - Per-company scheduler locks for multi-replica safety (scheduler_locks)
+  - Conflict detection logging to data_conflicts (config-gated)
+  - Upserts for market-data tables (price_history, splits, revenue_forecast, earnings_forecast, company_summary)
+  - Optional price history pruning helper (disabled by default at scheduler level)
+  - Restored helper: company_exists(company_id) -> bool
 """
+
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import List, Dict, Any, Optional
 from decimal import Decimal
+
 from supabase import Client
 from database import supabase
+from itertools import islice
+
+from config import settings
 from domain.models import (
     IncomeStatementRow,
     BalanceSheetRow,
@@ -26,15 +39,15 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 class DatabaseSerializer:
     """Handles conversion of Python types to database-compatible formats."""
-    
+
     @staticmethod
     def serialize(data: dict) -> dict:
         """
         Convert non-JSON-serializable types to database-compatible formats.
-        
+
         Handles:
         - date → ISO format string
-        - datetime → ISO format string  
+        - datetime → ISO format string
         - Decimal → float
         - None → None (preserved)
         """
@@ -61,230 +74,711 @@ class SupabaseFinancialRepository:
     Repository for all financial data operations with Supabase.
     Uses unconditional unique constraints for reliable UPSERT operations.
     """
-    
+
     def __init__(self, client: Client = supabase):
         self.client = client
-    
+
+    # ========================================================================
+    # INTERNAL HELPER: CHUNKED UPSERT
+    # ========================================================================
+    async def _chunked_upsert(
+        self,
+        table: str,
+        rows: List[Dict[str, Any]],
+        on_conflict: str,
+        chunk_size: int = 1000,
+    ) -> int:
+        """
+        Break large payloads into chunks to avoid exceeding Supabase limits.
+        """
+        if not rows:
+            return 0
+
+        def _chunks(iterable, size):
+            it = iter(iterable)
+            while True:
+                chunk = list(islice(it, size))
+                if not chunk:
+                    break
+                yield chunk
+
+        total = 0
+        for chunk in _chunks(rows, chunk_size):
+            serialized = [DatabaseSerializer.serialize(r) for r in chunk]
+            self.client.table(table).upsert(
+                serialized,
+                on_conflict=on_conflict
+            ).execute()
+            total += len(chunk)
+
+        return total
+
+    # ========================================================================
+    # SCHEDULER LOCKS (Multi-Replica Safety) - Per-company locking
+    # ========================================================================
+    async def acquire_company_lock(
+        self,
+        company_id: int,
+        owner_id: str,
+        ttl_seconds: int = 1800,
+        lock_type: str = "financial_refresh",
+    ) -> bool:
+        """
+        Acquire a distributed lock for a given company_id.
+        - If a lock exists and is not expired -> return False
+        - If expired, take it over
+        - Else insert a new lock row
+
+        Schema assumptions (from your DDL):
+          scheduler_locks (
+            lock_id varchar PK,
+            company_id int UNIQUE,
+            acquired_at timestamptz,
+            expires_at timestamptz,
+            lock_type varchar
+          )
+        """
+        now = datetime.utcnow()
+        expires = now + timedelta(seconds=ttl_seconds)
+
+        try:
+            # 1) Try to take over an expired lock
+            update_resp = (
+                self.client.table("scheduler_locks")
+                .update(
+                    {
+                        "lock_id": owner_id,
+                        "acquired_at": now.isoformat(),
+                        "expires_at": expires.isoformat(),
+                        "lock_type": lock_type,
+                    }
+                )
+                .eq("company_id", company_id)
+                .lte("expires_at", now.isoformat())
+                .execute()
+            )
+            if update_resp.data and len(update_resp.data) > 0:
+                return True  # acquired
+
+            # 2) Try to insert a new lock (succeeds if none exists)
+            insert_payload = {
+                "lock_id": owner_id,
+                "company_id": company_id,
+                "acquired_at": now.isoformat(),
+                "expires_at": expires.isoformat(),
+                "lock_type": lock_type,
+            }
+            self.client.table("scheduler_locks").insert(insert_payload).execute()
+            return True
+
+        except Exception as e:
+            # Insert likely failed due to uniqueness (another owner holds it)
+            logger.debug(f"[LOCK] Acquire failed for company_id={company_id}: {e}")
+            return False
+
+    async def refresh_company_lock(self, company_id: int, owner_id: str, ttl_seconds: int = 1800) -> bool:
+        """Extend lock expiration (owner-only)."""
+        now = datetime.utcnow()
+        expires = now + timedelta(seconds=ttl_seconds)
+        try:
+            resp = (
+                self.client.table("scheduler_locks")
+                .update({"expires_at": expires.isoformat()})
+                .eq("company_id", company_id)
+                .eq("lock_id", owner_id)
+                .execute()
+            )
+            return bool(resp.data)
+        except Exception as e:
+            logger.error(f"[LOCK] Failed to refresh lock for company_id={company_id}: {e}")
+            return False
+
+    async def release_company_lock(self, company_id: int, owner_id: str) -> None:
+        """Release lock so another replica can process this company."""
+        try:
+            (
+                self.client.table("scheduler_locks")
+                .delete()
+                .eq("company_id", company_id)
+                .eq("lock_id", owner_id)
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"[LOCK] Failed to release lock for company_id={company_id}: {e}")
+
+    # ========================================================================
+    # DATA CONFLICT LOGGING
+    # ========================================================================
+    async def log_conflict(
+        self,
+        company_id: int,
+        fiscal_year: Optional[int],
+        fiscal_quarter: Optional[int],
+        field: str,
+        existing_value: Optional[float],
+        existing_source: str,
+        new_value: Optional[float],
+        new_source: str,
+        pct_diff: float,
+    ) -> None:
+        """
+        Insert a conflict record into data_conflicts table.
+        Designed for numeric fields; but can be used for categorical by passing pct_diff=100.0 when values differ.
+        """
+        if not getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
+            return
+        try:
+            now = datetime.utcnow().isoformat()
+            payload = {
+                "company_id": company_id,
+                "fiscal_year": fiscal_year if fiscal_year is not None else 0,
+                "fiscal_quarter": fiscal_quarter,
+                "field_name": field,
+                "existing_value": existing_value,
+                "existing_source": existing_source or "unknown",
+                "new_value": new_value,
+                "new_source": new_source or "unknown",
+                "percent_diff": float(pct_diff),
+                "detected_at": now,
+                "resolved": False,
+            }
+            self.client.table("data_conflicts").insert(payload).execute()
+        except Exception as e:
+            logger.error(f"[CONFLICT] Failed to log conflict: {e}")
+
+    @staticmethod
+    def _pct_diff(a: Optional[float], b: Optional[float]) -> Optional[float]:
+        """Return absolute percent difference between two numbers (or None)."""
+        if a is None or b is None:
+            return None
+        try:
+            a_f, b_f = float(a), float(b)
+            if a_f == b_f == 0:
+                return 0.0
+            denom = max(abs(a_f), 1e-9)
+            return abs(a_f - b_f) / denom * 100.0
+        except Exception:
+            return None
+
+    # ========================================================================
+    # OPTIONAL RETENTION: PRICE HISTORY PRUNING (disabled by default)
+    # ========================================================================
+    async def prune_price_history(self, retention_years: int = 10) -> int:
+        """
+        Delete price_history rows older than CURRENT_DATE - retention_years.
+        NOTE: Not called automatically; enable from the scheduler when desired.
+        Returns number of rows affected if the driver returns it, else 0.
+        """
+        cutoff_year = date.today().year - int(retention_years)
+        # Handle Feb 29 etc. by using March 1 - 1 day trick for safety
+        try:
+            cutoff = date(cutoff_year, date.today().month, date.today().day)
+        except ValueError:
+            cutoff = (date(cutoff_year, 3, 1) - timedelta(days=1))
+
+        try:
+            resp = (
+                self.client.table("price_history")
+                .delete()
+                .lt("price_date", cutoff.isoformat())
+                .execute()
+            )
+            # supabase-py may not return affected row count reliably; return 0 if absent
+            count = getattr(resp, "count", None)
+            if count is not None:
+                logger.info(f"🧹 Pruned {count} price_history rows older than {cutoff}")
+                return count
+            logger.info(f"🧹 Pruned price_history older than {cutoff}")
+            return 0
+        except Exception as e:
+            logger.error(f"Failed to prune price_history: {e}")
+            return 0
+
     # ========================================================================
     # UPSERT METHODS - Financial Statements
     # ========================================================================
     async def upsert_income_statements(
         self, rows: List[IncomeStatementRow]
     ) -> Dict[str, Any]:
-        """
-        Upsert income statement rows.
-        
-        Uses constraint: UNIQUE (company_id, fiscal_year, fiscal_quarter)
-        - Annual records: (company_id, fiscal_year, NULL)
-        - Quarterly records: (company_id, fiscal_year, fiscal_quarter)
-        
-        Deduplicates by unique key to prevent batch update conflicts.
-        """
         if not rows:
             logger.debug("No income statements to upsert")
             return {"count": 0}
-        
         try:
-            # Deduplicate by (company_id, fiscal_year, fiscal_quarter)
+            # Deduplicate by key
             seen = {}
             for row in rows:
                 key = (row.company_id, row.fiscal_year, row.fiscal_quarter)
                 seen[key] = row
-            
-            deduplicated_rows = list(seen.values())
-            
-            if len(deduplicated_rows) < len(rows):
-                logger.warning(
-                    f"Deduplicated income statements: {len(rows)} → {len(deduplicated_rows)} "
-                    f"(removed {len(rows) - len(deduplicated_rows)} duplicates)"
-                )
-            
-            data = [DatabaseSerializer.serialize(row.model_dump()) for row in deduplicated_rows]
-            
+            dedup = list(seen.values())
+
+            data = [DatabaseSerializer.serialize(r.model_dump()) for r in dedup]
             response = self.client.table('income_statements').upsert(
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
-            
-            logger.info(f"✅ Upserted {len(deduplicated_rows)} income statement rows")
-            return response.data or {"count": len(deduplicated_rows)}
-        
+            logger.info(f"✅ Upserted {len(dedup)} income statement rows")
+            return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert income statements: {str(e)}")
             raise
-    
+
     async def upsert_balance_sheets(
         self, rows: List[BalanceSheetRow]
     ) -> Dict[str, Any]:
-        """
-        Upsert balance sheet rows.
-        
-        Uses constraint: UNIQUE (company_id, fiscal_year, fiscal_quarter)
-        Deduplicates by unique key to prevent batch update conflicts.
-        """
         if not rows:
             logger.debug("No balance sheets to upsert")
             return {"count": 0}
-        
         try:
-            # Deduplicate by (company_id, fiscal_year, fiscal_quarter)
             seen = {}
             for row in rows:
                 key = (row.company_id, row.fiscal_year, row.fiscal_quarter)
                 seen[key] = row
-            
-            deduplicated_rows = list(seen.values())
-            
-            if len(deduplicated_rows) < len(rows):
-                logger.warning(
-                    f"Deduplicated balance sheets: {len(rows)} → {len(deduplicated_rows)} "
-                    f"(removed {len(rows) - len(deduplicated_rows)} duplicates)"
-                )
-            
-            data = [DatabaseSerializer.serialize(row.model_dump()) for row in deduplicated_rows]
-            
+            dedup = list(seen.values())
+
+            data = [DatabaseSerializer.serialize(r.model_dump()) for r in dedup]
             response = self.client.table('balance_sheets').upsert(
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
-            
-            logger.info(f"✅ Upserted {len(deduplicated_rows)} balance sheet rows")
-            return response.data or {"count": len(deduplicated_rows)}
-        
+            logger.info(f"✅ Upserted {len(dedup)} balance sheet rows")
+            return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert balance sheets: {str(e)}")
             raise
-    
+
     async def upsert_cash_flows(
         self, rows: List[CashFlowRow]
     ) -> Dict[str, Any]:
-        """
-        Upsert cash flow statement rows.
-        
-        Uses constraint: UNIQUE (company_id, fiscal_year, fiscal_quarter)
-        Deduplicates by unique key to prevent batch update conflicts.
-        """
         if not rows:
             logger.debug("No cash flows to upsert")
             return {"count": 0}
-        
         try:
-            # Deduplicate by (company_id, fiscal_year, fiscal_quarter)
             seen = {}
             for row in rows:
                 key = (row.company_id, row.fiscal_year, row.fiscal_quarter)
                 seen[key] = row
-            
-            deduplicated_rows = list(seen.values())
-            
-            if len(deduplicated_rows) < len(rows):
-                logger.warning(
-                    f"Deduplicated cash flows: {len(rows)} → {len(deduplicated_rows)} "
-                    f"(removed {len(rows) - len(deduplicated_rows)} duplicates)"
-                )
-            
-            data = [DatabaseSerializer.serialize(row.model_dump()) for row in deduplicated_rows]
-            
+            dedup = list(seen.values())
+
+            data = [DatabaseSerializer.serialize(r.model_dump()) for r in dedup]
             response = self.client.table('cash_flow_statements').upsert(
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
-            
-            logger.info(f"✅ Upserted {len(deduplicated_rows)} cash flow rows")
-            return response.data or {"count": len(deduplicated_rows)}
-        
+            logger.info(f"✅ Upserted {len(dedup)} cash flow rows")
+            return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert cash flows: {str(e)}")
             raise
-    
+
     async def upsert_earnings(
         self, rows: List[EarningsRow]
     ) -> Dict[str, Any]:
-        """
-        Upsert earnings rows.
-        
-        Uses constraint: UNIQUE (company_id, fiscal_year, fiscal_quarter)
-        Deduplicates by unique key to prevent batch update conflicts.
-        """
         if not rows:
             logger.debug("No earnings to upsert")
             return {"count": 0}
-        
         try:
-            # Deduplicate by (company_id, fiscal_year, fiscal_quarter)
             seen = {}
             for row in rows:
                 key = (row.company_id, row.fiscal_year, row.fiscal_quarter)
                 seen[key] = row
-            
-            deduplicated_rows = list(seen.values())
-            
-            if len(deduplicated_rows) < len(rows):
-                logger.warning(
-                    f"Deduplicated earnings: {len(rows)} → {len(deduplicated_rows)} "
-                    f"(removed {len(rows) - len(deduplicated_rows)} duplicates)"
-                )
-            
-            data = [DatabaseSerializer.serialize(row.model_dump()) for row in deduplicated_rows]
-            
+            dedup = list(seen.values())
+
+            data = [DatabaseSerializer.serialize(r.model_dump()) for r in dedup]
             response = self.client.table('earnings').upsert(
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
-            
-            logger.info(f"✅ Upserted {len(deduplicated_rows)} earnings rows")
-            return response.data or {"count": len(deduplicated_rows)}
-        
+            logger.info(f"✅ Upserted {len(dedup)} earnings rows")
+            return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert earnings: {str(e)}")
             raise
-    
+
     async def upsert_dividends(
         self, rows: List[DividendRow]
     ) -> Dict[str, Any]:
-        """
-        Upsert dividend history rows.
-        
-        Deduplicates rows by (company_id, ex_dividend_date) to prevent
-        'ON CONFLICT DO UPDATE command cannot affect row a second time' error.
-        """
         if not rows:
             logger.debug("No dividends to upsert")
             return {"count": 0}
-        
         try:
-            # Deduplicate by (company_id, ex_dividend_date) - keep last occurrence
-            # This prevents PostgreSQL error when same dividend appears multiple times
+            # Deduplicate by (company_id, ex_dividend_date)
             seen = {}
             for row in rows:
                 key = (row.company_id, row.ex_dividend_date)
                 seen[key] = row
-            
-            deduplicated_rows = list(seen.values())
-            
-            if len(deduplicated_rows) < len(rows):
-                logger.warning(
-                    f"Deduplicated dividends: {len(rows)} → {len(deduplicated_rows)} "
-                    f"(removed {len(rows) - len(deduplicated_rows)} duplicates)"
-                )
-            
-            data = [DatabaseSerializer.serialize(row.model_dump()) for row in deduplicated_rows]
-            
+            dedup = list(seen.values())
+
+            data = [DatabaseSerializer.serialize(r.model_dump()) for r in dedup]
             response = self.client.table('dividend_history').upsert(
                 data,
                 on_conflict='company_id,ex_dividend_date'
             ).execute()
-            
-            logger.info(f"✅ Upserted {len(deduplicated_rows)} dividend rows")
-            return response.data or {"count": len(deduplicated_rows)}
-        
+            logger.info(f"✅ Upserted {len(dedup)} dividend rows")
+            return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert dividends: {str(e)}")
             raise
-    
+
     # ========================================================================
-    # COMPANY METADATA UPDATES
+    # UPSERT METHODS (Market Data Scheduler) + Conflict Detection
     # ========================================================================
+    async def upsert_price_history(
+        self, rows: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Upsert monthly OHLCV rows (unique by company_id, price_date)."""
+        if not rows:
+            return {"count": 0}
+        try:
+            # Optional conflict detection (row-by-row check)
+            if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
+                threshold = float(getattr(settings, "CONFLICT_DETECTION_THRESHOLD_PCT", 1.0))
+                for r in rows:
+                    cid, pdate = r.get("company_id"), r.get("price_date")
+                    existing = None
+                    try:
+                        existing = (
+                            self.client.table("price_history")
+                            .select("open_price, close_price, high_price, low_price, volume, data_source")
+                            .eq("company_id", cid)
+                            .eq("price_date", pdate)
+                            .single()
+                            .execute()
+                        ).data
+                    except Exception:
+                        existing = None
+
+                    if existing:
+                        for field in ["open_price", "close_price", "high_price", "low_price"]:
+                            pct = self._pct_diff(existing.get(field), r.get(field))
+                            if pct is not None and pct >= threshold:
+                                await self.log_conflict(
+                                    company_id=cid,
+                                    fiscal_year=None,
+                                    fiscal_quarter=None,
+                                    field=field,
+                                    existing_value=existing.get(field),
+                                    existing_source=existing.get("data_source") or "unknown",
+                                    new_value=r.get(field),
+                                    new_source=r.get("data_source") or "unknown",
+                                    pct_diff=pct,
+                                )
+                        if existing.get("volume") and r.get("volume"):
+                            pct_vol = self._pct_diff(existing.get("volume"), r.get("volume"))
+                            if pct_vol is not None and pct_vol >= threshold:
+                                await self.log_conflict(
+                                    company_id=cid,
+                                    fiscal_year=None,
+                                    fiscal_quarter=None,
+                                    field="volume",
+                                    existing_value=existing.get("volume"),
+                                    existing_source=existing.get("data_source") or "unknown",
+                                    new_value=r.get("volume"),
+                                    new_source=r.get("data_source") or "unknown",
+                                    pct_diff=pct_vol,
+                                )
+
+            # Upsert (dedupe client-side by key)
+            seen = {}
+            for r in rows:
+                key = (r.get("company_id"), r.get("price_date"))
+                seen[key] = r
+            dedup = list(seen.values())
+
+            count = await self._chunked_upsert(
+                table="price_history",
+                rows=dedup,
+                on_conflict="company_id,price_date",
+            )
+            return {"count": count}
+
+        except Exception as e:
+            logger.error(f"Failed to upsert price_history: {e}")
+            raise
+
+    async def upsert_splits(
+        self, rows: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Upsert split events (unique by company_id, report_date)."""
+        if not rows:
+            return {"count": 0}
+        try:
+            if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
+                for r in rows:
+                    cid, rdate = r.get("company_id"), r.get("report_date")
+                    existing = None
+                    try:
+                        existing = (
+                            self.client.table("splits")
+                            .select("split_factor, reverse_split, data_source")
+                            .eq("company_id", cid)
+                            .eq("report_date", rdate)
+                            .single()
+                            .execute()
+                        ).data
+                    except Exception:
+                        existing = None
+                    if existing:
+                        if (existing.get("split_factor") or "") != (r.get("split_factor") or ""):
+                            await self.log_conflict(
+                                company_id=cid,
+                                fiscal_year=None,
+                                fiscal_quarter=None,
+                                field="split_factor",
+                                existing_value=None,
+                                existing_source=existing.get("data_source") or "unknown",
+                                new_value=None,
+                                new_source=r.get("data_source") or "unknown",
+                                pct_diff=100.0,
+                            )
+                        if bool(existing.get("reverse_split")) != bool(r.get("reverse_split")):
+                            await self.log_conflict(
+                                company_id=cid,
+                                fiscal_year=None,
+                                fiscal_quarter=None,
+                                field="reverse_split",
+                                existing_value=None,
+                                existing_source=existing.get("data_source") or "unknown",
+                                new_value=None,
+                                new_source=r.get("data_source") or "unknown",
+                                pct_diff=100.0,
+                            )
+
+            seen = {}
+            for r in rows:
+                key = (r.get("company_id"), r.get("report_date"))
+                seen[key] = r
+            dedup = list(seen.values())
+
+            count = await self._chunked_upsert(
+                table="splits",
+                rows=dedup,
+                on_conflict="company_id,report_date",
+            )
+            return {"count": count}
+
+        except Exception as e:
+            logger.error(f"Failed to upsert splits: {e}")
+            raise
+
+    async def upsert_revenue_forecast(
+        self, rows: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Upsert revenue forecasts (unique by company_id, report_date, period_type, provider)."""
+        if not rows:
+            return {"count": 0}
+        try:
+            if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
+                threshold = float(getattr(settings, "CONFLICT_DETECTION_THRESHOLD_PCT", 1.0))
+                for r in rows:
+                    cid, rdate = r.get("company_id"), r.get("report_date")
+                    ptype, provider = r.get("period_type"), r.get("provider") or "defeatbeta"
+                    existing = None
+                    try:
+                        existing = (
+                            self.client.table("revenue_forecast")
+                            .select(
+                                "estimate_revenue_growth, number_of_analysts, estimate_avg_revenue, "
+                                "estimate_high_revenue, estimate_low_revenue, year_ago_estimate_avg_revenue, "
+                                "data_source, provider, period_type"
+                            )
+                            .eq("company_id", cid)
+                            .eq("report_date", rdate)
+                            .eq("period_type", ptype)
+                            .eq("provider", provider)
+                            .single()
+                            .execute()
+                        ).data
+                    except Exception:
+                        existing = None
+
+                    if existing:
+                        for field in [
+                            "estimate_revenue_growth",
+                            "estimate_avg_revenue",
+                            "estimate_high_revenue",
+                            "estimate_low_revenue",
+                            "year_ago_estimate_avg_revenue",
+                        ]:
+                            pct = self._pct_diff(existing.get(field), r.get(field))
+                            if pct is not None and pct >= threshold:
+                                await self.log_conflict(
+                                    company_id=cid,
+                                    fiscal_year=None,
+                                    fiscal_quarter=None,
+                                    field=field,
+                                    existing_value=existing.get(field),
+                                    existing_source=existing.get("data_source") or existing.get("provider") or "unknown",
+                                    new_value=r.get(field),
+                                    new_source=r.get("provider") or "unknown",
+                                    pct_diff=pct,
+                                )
+
+            seen = {}
+            for r in rows:
+                key = (r.get("company_id"), r.get("report_date"), r.get("period_type"), r.get("provider") or "defeatbeta")
+                seen[key] = r
+            dedup = list(seen.values())
+
+            count = await self._chunked_upsert(
+                table="revenue_forecast",
+                rows=dedup,
+                on_conflict="company_id,report_date,period_type,provider",
+            )
+            return {"count": count}
+
+        except Exception as e:
+            logger.error(f"Failed to upsert revenue_forecast: {e}")
+            raise
+
+    async def upsert_earnings_forecast(
+        self, rows: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Upsert earnings forecasts (unique by company_id, report_date, period_type, provider)."""
+        if not rows:
+            return {"count": 0}
+        try:
+            if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
+                threshold = float(getattr(settings, "CONFLICT_DETECTION_THRESHOLD_PCT", 1.0))
+                for r in rows:
+                    cid, rdate = r.get("company_id"), r.get("report_date")
+                    ptype, provider = r.get("period_type"), r.get("provider") or "defeatbeta"
+                    existing = None
+                    try:
+                        existing = (
+                            self.client.table("earnings_forecast")
+                            .select(
+                                "estimate_eps_growth, estimate_avg_eps, estimate_high_eps, estimate_low_eps, "
+                                "number_of_analysts, data_source, provider, period_type"
+                            )
+                            .eq("company_id", cid)
+                            .eq("report_date", rdate)
+                            .eq("period_type", ptype)
+                            .eq("provider", provider)
+                            .single()
+                            .execute()
+                        ).data
+                    except Exception:
+                        existing = None
+
+                    if existing:
+                        for field in [
+                            "estimate_eps_growth",
+                            "estimate_avg_eps",
+                            "estimate_high_eps",
+                            "estimate_low_eps",
+                        ]:
+                            pct = self._pct_diff(existing.get(field), r.get(field))
+                            if pct is not None and pct >= threshold:
+                                await self.log_conflict(
+                                    company_id=cid,
+                                    fiscal_year=None,
+                                    fiscal_quarter=None,
+                                    field=field,
+                                    existing_value=existing.get(field),
+                                    existing_source=existing.get("data_source") or existing.get("provider") or "unknown",
+                                    new_value=r.get(field),
+                                    new_source=r.get("provider") or "unknown",
+                                    pct_diff=pct,
+                                )
+
+            seen = {}
+            for r in rows:
+                key = (r.get("company_id"), r.get("report_date"), r.get("period_type"), r.get("provider") or "defeatbeta")
+                seen[key] = r
+            dedup = list(seen.values())
+
+            count = await self._chunked_upsert(
+                table="earnings_forecast",
+                rows=dedup,
+                on_conflict="company_id,report_date,period_type,provider",
+            )
+            return {"count": count}
+
+        except Exception as e:
+            logger.error(f"Failed to upsert earnings_forecast: {e}")
+            raise
+
+    async def upsert_company_summary(
+        self, snapshot: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Daily company summary snapshot (unique by company_id, snapshot_date, provider)."""
+        if not snapshot:
+            return {"count": 0}
+        try:
+            if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
+                threshold = float(getattr(settings, "CONFLICT_DETECTION_THRESHOLD_PCT", 1.0))
+                cid = snapshot.get("company_id")
+                snap_date = snapshot.get("snapshot_date")
+                provider = snapshot.get("provider") or "defeatbeta"
+                existing = None
+                try:
+                    existing = (
+                        self.client.table("company_summary")
+                        .select(
+                            "market_cap, enterprise_value, shares_outstanding, implied_shares_outstanding, "
+                            "beta, trailing_pe, forward_pe, trailing_eps, forward_eps, "
+                            "enterprise_to_ebitda, enterprise_to_revenue, peg_ratio, currency, provider"
+                        )
+                        .eq("company_id", cid)
+                        .eq("snapshot_date", snap_date)
+                        .eq("provider", provider)
+                        .single()
+                        .execute()
+                    ).data
+                except Exception:
+                    existing = None
+
+                if existing:
+                    for field in [
+                        "market_cap", "enterprise_value", "shares_outstanding", "implied_shares_outstanding",
+                        "beta", "trailing_pe", "forward_pe", "trailing_eps", "forward_eps",
+                        "enterprise_to_ebitda", "enterprise_to_revenue", "peg_ratio",
+                    ]:
+                        pct = self._pct_diff(existing.get(field), snapshot.get(field))
+                        if pct is not None and pct >= threshold:
+                            await self.log_conflict(
+                                company_id=cid,
+                                fiscal_year=None,
+                                fiscal_quarter=None,
+                                field=field,
+                                existing_value=existing.get(field),
+                                existing_source=existing.get("provider") or "unknown",
+                                new_value=snapshot.get(field),
+                                new_source=provider,
+                                pct_diff=pct,
+                            )
+
+            payload = [DatabaseSerializer.serialize(snapshot)]
+            self.client.table("company_summary").upsert(
+                payload,
+                on_conflict="company_id,snapshot_date,provider",
+            ).execute()
+            return {"count": 1}
+
+        except Exception as e:
+            logger.error(f"Failed to upsert company_summary: {e}")
+            raise
+
+    # ========================================================================
+    # COMPANY METADATA UPDATES / QUERIES
+    # ========================================================================
+    async def get_companies_for_market_data(
+        self,
+        statuses: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        statuses = statuses or ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"]
+        try:
+            resp = (
+                self.client.table("companies")
+                .select("company_id, ticker_symbol, data_completeness_status")
+                .in_("data_completeness_status", statuses)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            logger.error(f"Failed to fetch companies for market data: {e}")
+            raise
+
     async def update_company_refresh_metadata(
         self,
         company_id: int,
@@ -293,61 +787,38 @@ class SupabaseFinancialRepository:
         is_first_load: bool = False,
         next_earnings_date: Optional[date] = None,
     ) -> Dict[str, Any]:
-        """
-        Update company's refresh tracking metadata.
-        
-        Args:
-            company_id: Company to update
-            last_fiscal_year: Latest fiscal year in our data
-            last_fiscal_quarter: Latest fiscal quarter (None for annual)
-            is_first_load: If True, set first_financial_data_loaded_at
-            next_earnings_date: Next earnings announcement date
-        
-        Returns:
-            Updated company record
-        """
         try:
             now = datetime.utcnow()
-            
-            # Determine completeness status
             status = "COMPLETE" if is_first_load else "CURRENT"
-            
             update_data = {
                 'last_financial_refresh_at': now.isoformat(),
                 'last_refreshed_fiscal_year': last_fiscal_year,
                 'last_refreshed_fiscal_quarter': last_fiscal_quarter,
                 'data_completeness_status': status,
             }
-            
             if is_first_load:
                 update_data['first_financial_data_loaded_at'] = now.isoformat()
-            
             if next_earnings_date:
                 update_data['next_earnings_date'] = next_earnings_date.isoformat()
-            
+
             response = self.client.table('companies').update(update_data).eq(
                 'company_id', company_id
             ).execute()
-            
             logger.info(
                 f"✅ Updated metadata for company {company_id}: "
                 f"FY{last_fiscal_year}Q{last_fiscal_quarter or 'Annual'} | Status: {status}"
             )
             return response.data[0] if response.data else {}
-        
+
         except Exception as e:
             logger.error(f"Failed to update metadata for company {company_id}: {str(e)}")
             raise
-    
-    # ========================================================================
-    # COMPANY QUERY METHODS
-    # ========================================================================
+
     async def get_companies_with_upcoming_earnings(
         self,
         start_date: date,
         end_date: date,
     ) -> List[Dict[str, Any]]:
-        """Query companies with earnings in date range."""
         try:
             response = self.client.table('companies').select(
                 'company_id, ticker_symbol, next_earnings_date, '
@@ -361,17 +832,17 @@ class SupabaseFinancialRepository:
                 'data_completeness_status',
                 ['INITIAL', 'PARTIAL', 'COMPLETE', 'CURRENT']
             ).execute()
-            
+
             count = len(response.data or [])
             logger.info(
                 f"Found {count} companies with earnings between {start_date} and {end_date}"
             )
             return response.data or []
-        
+
         except Exception as e:
             logger.error(f"Failed to query companies with upcoming earnings: {str(e)}")
             raise
-    
+
     async def get_company_refresh_info(
         self, company_id: int
     ) -> Optional[CompanyRefreshInfo]:
@@ -383,11 +854,11 @@ class SupabaseFinancialRepository:
                 'last_refreshed_fiscal_year, last_refreshed_fiscal_quarter, '
                 'data_completeness_status, next_earnings_date'
             ).eq('company_id', company_id).single().execute()
-            
+
             if not response.data:
                 logger.warning(f"Company {company_id} not found")
                 return None
-            
+
             data = response.data
             return CompanyRefreshInfo(
                 company_id=data['company_id'],
@@ -411,23 +882,22 @@ class SupabaseFinancialRepository:
                     else None
                 ),
             )
-        
+
         except Exception as e:
             logger.error(f"Failed to get refresh info for company {company_id}: {str(e)}")
             raise
-    
+
     # ========================================================================
     # BATCH OPERATIONS
     # ========================================================================
     async def upsert_all_financials(
         self, financials: CompleteFundamentals
     ) -> Dict[str, int]:
-        """Upsert all financial data from a CompleteFundamentals object."""
         logger.info(
             f"Upserting all financials for {financials.symbol}: "
             f"{financials.total_rows_fetched} total rows"
         )
-        
+
         results = {
             'income_statements': 0,
             'balance_sheets': 0,
@@ -435,81 +905,94 @@ class SupabaseFinancialRepository:
             'earnings': 0,
             'dividends': 0,
         }
-        
+
         try:
             if financials.income_statements.rows:
                 await self.upsert_income_statements(
                     financials.income_statements.rows
                 )
                 results['income_statements'] = len(financials.income_statements.rows)
-            
+
             if financials.balance_sheets.rows:
                 await self.upsert_balance_sheets(
                     financials.balance_sheets.rows
                 )
                 results['balance_sheets'] = len(financials.balance_sheets.rows)
-            
+
             if financials.cash_flows.rows:
                 await self.upsert_cash_flows(
                     financials.cash_flows.rows
                 )
                 results['cash_flows'] = len(financials.cash_flows.rows)
-            
+
             if financials.earnings.rows:
                 await self.upsert_earnings(
                     financials.earnings.rows
                 )
                 results['earnings'] = len(financials.earnings.rows)
-            
+
             if financials.dividends.rows:
                 await self.upsert_dividends(
                     financials.dividends.rows
                 )
                 results['dividends'] = len(financials.dividends.rows)
-            
+
             total = sum(results.values())
             logger.info(
                 f"✅ Upserted all financials for {financials.symbol}: "
                 f"{total} rows across all tables"
             )
-            
+
             return results
-        
+
         except Exception as e:
             logger.error(f"Failed to upsert all financials: {str(e)}")
             raise
-    
+
     # ========================================================================
-    # HELPER METHODS
+    # BASIC HELPERS
     # ========================================================================
     async def company_exists(self, company_id: int) -> bool:
         """Check if company exists in database."""
         try:
-            response = self.client.table('companies').select('company_id').eq(
-                'company_id', company_id
-            ).single().execute()
+            response = (
+                self.client.table('companies')
+                .select('company_id')
+                .eq('company_id', company_id)
+                .single()
+                .execute()
+            )
             return response.data is not None
         except Exception:
             return False
-    
+
     async def get_company_by_id(self, company_id: int) -> Optional[Dict[str, Any]]:
         """Get full company record."""
         try:
-            response = self.client.table('companies').select('*').eq(
-                'company_id', company_id
-            ).single().execute()
+            response = (
+                self.client.table('companies')
+                .select('*')
+                .eq('company_id', company_id)
+                .single()
+                .execute()
+            )
             return response.data
         except Exception:
             return None
-    
+
     async def get_company_by_symbol(
         self, symbol: str, exchange: str = 'NASDAQ'
     ) -> Optional[Dict[str, Any]]:
         """Get company by ticker symbol."""
         try:
-            response = self.client.table('companies').select('*').eq(
-                'ticker_symbol', symbol
-            ).eq('exchange', exchange).single().execute()
+            response = (
+                self.client.table('companies')
+                .select('*')
+                .eq('ticker_symbol', symbol)
+                .eq('exchange', exchange)
+                .single()
+                .execute()
+            )
             return response.data
         except Exception:
             return None

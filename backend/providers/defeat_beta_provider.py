@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -10,11 +9,39 @@ from typing import Optional, Tuple, List, Dict, Any
 import pandas as pd
 import html
 import re
-
-# --- RAW DEFEATBETA DUMPER (file-based) ---------------------------------------
 import json
 from pathlib import Path
 
+# Defeat Beta SDK
+from defeatbeta_api.data.ticker import Ticker
+
+# Domain exceptions and models
+from domain.exceptions import (
+    DefeatBetaException,
+    FinancialsFetchTimeoutError,
+    NoDataError,
+    MaxRetriesExceededError,
+)
+from domain.models import (
+    CompleteFundamentals,
+    IncomeStatementRow,
+    IncomeStatementRows,
+    BalanceSheetRow,
+    BalanceSheetRows,
+    CashFlowRow,
+    CashFlowRows,
+    EarningsRow,
+    EarningsRows,
+    DividendRow,
+    DividendRows,
+)
+
+from providers.base import StockDataProvider
+
+logger = logging.getLogger(__name__)
+
+
+# --- RAW DEFEATBETA DUMPER (file-based) ---------------------------------------
 def _logs_dir_for_provider() -> Path:
     """
     Resolve backend/logs relative to this file:
@@ -25,6 +52,7 @@ def _logs_dir_for_provider() -> Path:
     logs_dir = backend_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     return logs_dir
+
 
 def dump_defeatbeta_raw(symbol: str, statement: str, obj: Any) -> None:
     """
@@ -59,34 +87,6 @@ def dump_defeatbeta_raw(symbol: str, statement: str, obj: Any) -> None:
         logger.warning("dump_defeatbeta_raw failure for %s/%s: %s", symbol, statement, e)
 # -------------------------------------------------------------------------------
 
-# Defeat Beta SDK
-from defeatbeta_api.data.ticker import Ticker
-
-# Domain exceptions and models
-from domain.exceptions import (
-    DefeatBetaException,
-    FinancialsFetchTimeoutError,
-    NoDataError,
-    MaxRetriesExceededError,
-)
-from domain.models import (
-    CompleteFundamentals,
-    IncomeStatementRow,
-    IncomeStatementRows,
-    BalanceSheetRow,
-    BalanceSheetRows,
-    CashFlowRow,
-    CashFlowRows,
-    EarningsRow,
-    EarningsRows,
-    DividendRow,
-    DividendRows,
-)
-
-from providers.base import StockDataProvider
-
-logger = logging.getLogger(__name__)
-
 
 class DefeatBetaProvider(StockDataProvider):
     """
@@ -97,6 +97,8 @@ class DefeatBetaProvider(StockDataProvider):
       - Timeout wrapper invoking callables INSIDE the timeout
       - yfinance fallback + gap-fill (IS/BS/CF/Earnings/Dividends, next_earnings_date)
       - Coverage-aware filtering for fallback ("only_after" (year, quarter))
+      - NEW: price_history (+ optional start/end filtering), splits (+ optional start filtering),
+             revenue_forecast, earnings_forecast, company_summary
     """
 
     # ---------------------------------------------------------------------
@@ -213,8 +215,6 @@ class DefeatBetaProvider(StockDataProvider):
         'dividends_paid': ['Cash Dividends Paid', 'Dividends Paid'],
         'share_repurchases': ['Sale Purchase Of Stock', 'Repurchase Of Capital Stock'],
         'share_issuance': ['Issuance of Capital Stock', 'Common Stock Issuance'],
-
-        # Supplemental/rollups exist, not persisted here (we only map schema fields)
     }
 
     def __init__(self, yfinance_provider: Optional["YFinanceProvider"] = None):
@@ -238,7 +238,7 @@ class DefeatBetaProvider(StockDataProvider):
             except Exception as e:
                 logger.warning(f"YFinance get_stock_details failed for {ticker_symbol}: {str(e)}")
         return None
-        
+
     # ---------------------------------------------------------------------
     # Public entry: retry + fallback + gap-fill + coverage-aware filter
     # ---------------------------------------------------------------------
@@ -292,8 +292,95 @@ class DefeatBetaProvider(StockDataProvider):
             last_error=last_error,
         )
 
+    # -----------------------------------------------------------
+    # NEW (enhanced): Market/Forecast/Summary fetchers
+    #   - support start_date/end_date filters where applicable
+    # -----------------------------------------------------------
+    async def get_price_history_optimized(
+        self,
+        symbol: str,
+        company_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Primary DBeta -> fallback YF (with optional date filters).
+        Dates are applied client-side after provider retrieval to ensure compatibility.
+        """
+        rows = await self.fetch_price_history(symbol, company_id, start_date=start_date, end_date=end_date)
+        if rows:
+            return rows
+
+        # yfinance fallback
+        if self.yfinance_provider:
+            df = await asyncio.to_thread(self.yfinance_provider.get_price_history_df, symbol)
+            if df is not None and not df.empty:
+                # apply date filters on df if provided
+                df = df.copy()
+                if start_date is not None:
+                    df = df[df["price_date"] >= pd.Timestamp(start_date)]
+                if end_date is not None:
+                    df = df[df["price_date"] <= pd.Timestamp(end_date)]
+                out: List[Dict[str, Any]] = []
+                for _, r in df.iterrows():
+                    dt = pd.to_datetime(str(r.get("price_date")), errors='coerce')
+                    if pd.isna(dt):
+                        continue
+                    out.append({
+                        "company_id": company_id,
+                        "price_date": dt.date(),
+                        "open_price": self._safe_decimal(r.get("open_price")),
+                        "close_price": self._safe_decimal(r.get("close_price")),
+                        "high_price": self._safe_decimal(r.get("high_price")),
+                        "low_price": self._safe_decimal(r.get("low_price")),
+                        "volume": int(r.get("volume")) if pd.notna(r.get("volume")) else None,
+                        "data_source": "yfinance",
+                    })
+                return out
+        return []
+
+    async def get_splits_optimized(
+        self,
+        symbol: str,
+        company_id: int,
+        start_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        rows = await self.fetch_splits(symbol, company_id, start_date=start_date)
+        if rows:
+            return rows
+        if self.yfinance_provider:
+            df = await asyncio.to_thread(self.yfinance_provider.get_splits_df, symbol)
+            if df is not None and not df.empty:
+                if start_date is not None:
+                    df = df[df["report_date"] >= pd.Timestamp(start_date)]
+                out = []
+                for _, r in df.iterrows():
+                    dt = pd.to_datetime(str(r.get("report_date")), errors='coerce')
+                    if pd.isna(dt):
+                        continue
+                    out.append({
+                        "company_id": company_id,
+                        "report_date": dt.date(),
+                        "split_factor": str(r.get("split_factor")) if pd.notna(r.get("split_factor")) else None,
+                        "reverse_split": False,  # YF doesn't indicate reverse natively; compute later if needed
+                        "data_source": "yfinance",
+                    })
+                return out
+        return []
+
+    async def get_company_summary_optimized(self, symbol: str, company_id: int) -> Optional[Dict[str, Any]]:
+        snap = await self.fetch_company_summary(symbol, company_id)
+        if snap:
+            return snap
+        if self.yfinance_provider:
+            s = await asyncio.to_thread(self.yfinance_provider.get_summary_snapshot, symbol)
+            if s:
+                s["company_id"] = company_id
+                return s
+        return None
+
     # ---------------------------------------------------------------------
-    # Primary fetch (Defeat Beta)
+    # Primary DBeta fetch (statements & market)
     # ---------------------------------------------------------------------
     async def _fetch_all_financials_internal(self, symbol: str, company_id: int) -> CompleteFundamentals:
         try:
@@ -351,13 +438,13 @@ class DefeatBetaProvider(StockDataProvider):
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_income_statement(), f"quarterly_income_statement for {symbol}")
             if q_obj is not None:
-                #dump_defeatbeta_raw(symbol, "quarterly_income_statement", q_obj) # <-- ADD DEBUG LOGS
+                # dump_defeatbeta_raw(symbol, "quarterly_income_statement", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_income_statement(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_income_statement(), f"annual_income_statement for {symbol}")
             if a_obj is not None:
-                #dump_defeatbeta_raw(symbol, "annual_income_statement", a_obj) # <-- ADD DEBUG LOGS
+                # dump_defeatbeta_raw(symbol, "annual_income_statement", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_income_statement(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -373,14 +460,19 @@ class DefeatBetaProvider(StockDataProvider):
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_balance_sheet(), f"quarterly_balance_sheet for {symbol}")
             if q_obj is not None:
-                #dump_defeatbeta_raw(symbol, "quarterly_balance_sheet", q_obj)  # <-- ADD DEBUG LOGS
+                # dump_defeatbeta_raw(symbol, "quarterly_balance_sheet", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_balance_sheet(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_balance_sheet(), f"annual_balance_sheet for {symbol}")
-            logger.debug("[DBETA][%s] annual BS raw columns: %s", symbol, list((a_obj.df() if hasattr(a_obj, 'df') else a_obj).columns))
             if a_obj is not None:
-                #dump_defeatbeta_raw(symbol, "annual_balance_sheet", a_obj)  # <-- ADD DEBUG LOGS
+                # FIX: log only after null-check to avoid deref None
+                try:
+                    raw_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
+                    logger.debug("[DBETA][%s] annual BS raw columns: %s", symbol, list(raw_df.columns))
+                except Exception:
+                    pass
+                # dump_defeatbeta_raw(symbol, "annual_balance_sheet", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_balance_sheet(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -396,13 +488,13 @@ class DefeatBetaProvider(StockDataProvider):
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_cash_flow(), f"quarterly_cash_flow for {symbol}")
             if q_obj is not None:
-                #dump_defeatbeta_raw(symbol, "quarterly_cash_flow", q_obj)# <-- ADD DEBUG LOGS
+                # dump_defeatbeta_raw(symbol, "quarterly_cash_flow", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_cash_flow(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_cash_flow(), f"annual_cash_flow for {symbol}")
             if a_obj is not None:
-                #dump_defeatbeta_raw(symbol, "annual_cash_flow", a_obj)# <-- ADD DEBUG LOGS
+                # dump_defeatbeta_raw(symbol, "annual_cash_flow", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_cash_flow(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -413,7 +505,7 @@ class DefeatBetaProvider(StockDataProvider):
 
     async def _fetch_earnings(self, ticker: Ticker, symbol: str, company_id: int) -> EarningsRows:
         """
-        Uses Ticker.earnings() per the docs you shared:
+        Uses Ticker.earnings() per the docs:
         columns: symbol, eps_actual, eps_estimate, surprise_percent, quarter_name, quarter_date
         Maps to EarningsRow with eps_reported_diluted, eps_estimate, eps_surprise_amount, eps_surprise_percent.
         Revenue fields are not present here → left None. Announcement date not provided here → None.
@@ -459,13 +551,13 @@ class DefeatBetaProvider(StockDataProvider):
                     fiscal_year=fy,
                     fiscal_quarter=fq,
                     period_end_date=period_end,
-                    announcement_date=None,                 # not exposed by earnings()
-                    eps_reported_basic=None,                # doc exposes single EPS; map to diluted
+                    announcement_date=None,
+                    eps_reported_basic=None,
                     eps_reported_diluted=eps_actual,
                     eps_estimate=eps_estimate,
                     eps_surprise_amount=eps_surprise_amt,
                     eps_surprise_percent=eps_surprise_pct,
-                    revenue_reported=None,                  # not in Ticker.earnings()
+                    revenue_reported=None,
                     revenue_estimate=None,
                     revenue_surprise_amount=None,
                     revenue_surprise_percent=None,
@@ -478,11 +570,8 @@ class DefeatBetaProvider(StockDataProvider):
                 ))
             return EarningsRows(rows=rows)
         except Exception as e:
-            # Per your design, failures here should not break the full fetch.
-            # Earnings are supplemental; we return empty and allow fallback/gap-fill elsewhere.
             self._log_debug_once(f"Earnings fetch failed for {symbol}: {e}")
             return EarningsRows(rows=[])
-
 
     async def _fetch_dividends(self, ticker: Ticker, symbol: str, company_id: int) -> DividendRows:
         """
@@ -498,7 +587,7 @@ class DefeatBetaProvider(StockDataProvider):
         except Exception as e:
             logger.warning(f"Dividends fetch failed for {symbol}: {str(e)}")
             return DividendRows(rows=[])
-    
+
     async def _fetch_next_earnings_date(self, ticker: Ticker, symbol: str) -> Optional[date]:
         """
         Uses Ticker.calendar() per docs; extracts 'report_date' as next earnings date (if present).
@@ -506,16 +595,19 @@ class DefeatBetaProvider(StockDataProvider):
         try:
             cal_obj = await self._timeout_fetch(lambda: ticker.calendar(), f"calendar for {symbol}")
             df = cal_obj.df() if hasattr(cal_obj, 'df') else cal_obj
-            if df is not None and not df.empty:
-                rd = df.iloc[0].get('report_date')
-                if rd is not None:
-                    ts = pd.to_datetime(str(rd), errors='coerce')
-                    if not pd.isna(ts):
-                        return ts.date()
+            if df is not None and not df.empty and 'report_date' in df.columns:
+                df = df.copy()
+                df['report_date'] = pd.to_datetime(df['report_date'], errors='coerce')
+                future = df[df['report_date'] >= pd.Timestamp(date.today())].sort_values('report_date')
+                if not future.empty:
+                    return future.iloc[0]['report_date'].date()
+                # else: fallback to earliest available
+                df = df.sort_values('report_date')
+                if not df.empty and not pd.isna(df.iloc[0]['report_date']):
+                    return df.iloc[0]['report_date'].date()
         except Exception as e:
             self._log_debug_once(f"Failed to fetch earnings date for {symbol}: {e}")
         return None
-
 
     # ---------------------------------------------------------------------
     # Fallbacks (YFinance): full fallback and gap-fill
@@ -606,7 +698,7 @@ class DefeatBetaProvider(StockDataProvider):
         need_earn = not fin.earnings.rows
         need_div = not fin.dividends.rows
         logger.debug("[DBETA][%s] need_bs=%s (rows=%d)", symbol, (not fin.balance_sheets.rows), len(fin.balance_sheets.rows))
-        
+
         if need_is:
             yf_q_is = await asyncio.to_thread(self.yfinance_provider.get_quarterly_income_statement_df, symbol)
             yf_a_is = await asyncio.to_thread(self.yfinance_provider.get_annual_income_statement_df, symbol)
@@ -650,25 +742,240 @@ class DefeatBetaProvider(StockDataProvider):
 
         return fin
 
+    # -----------------------------------------------------------
+    # NEW: DefeatBeta fetchers for new tables (+ date filters)
+    # -----------------------------------------------------------
+    async def fetch_price_history(
+        self,
+        symbol: str,
+        company_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns rows for public.price_history (daily OHLCV).
+        Applies client-side date filtering if start_date/end_date provided.
+        """
+        try:
+            t = Ticker(symbol)
+            obj = await self._timeout_fetch(lambda: t.price(), f"price history for {symbol}")
+            df = obj.df() if hasattr(obj, 'df') else obj
+            if df is None or df.empty:
+                return []
+            rows = []
+            # expected columns: symbol, report_date, open, close, high, low, volume
+            df = df.copy()
+            # Normalize date column
+            if 'report_date' in df.columns:
+                df['report_date'] = pd.to_datetime(df['report_date'], errors='coerce')
+            else:
+                # best-effort: try common date-like headers
+                date_col = next((c for c in df.columns if str(c).lower() in ('date', 'pricedate', 'price_date')), None)
+                if date_col:
+                    df['report_date'] = pd.to_datetime(df[date_col], errors='coerce')
+                else:
+                    return []
+
+            # Apply optional filters
+            if start_date is not None:
+                df = df[df['report_date'] >= pd.Timestamp(start_date)]
+            if end_date is not None:
+                df = df[df['report_date'] <= pd.Timestamp(end_date)]
+
+            for _, r in df.iterrows():
+                dt = r.get('report_date')
+                if pd.isna(dt):
+                    continue
+                rows.append({
+                    "company_id": company_id,
+                    "price_date": dt.date(),
+                    "open_price": self._safe_decimal(r.get('open')),
+                    "close_price": self._safe_decimal(r.get('close')),
+                    "high_price": self._safe_decimal(r.get('high')),
+                    "low_price": self._safe_decimal(r.get('low')),
+                    "volume": int(r.get('volume')) if pd.notna(r.get('volume')) else None,
+                    "data_source": "defeatbeta",
+                })
+            return rows
+        except Exception as e:
+            self._log_debug_once(f"Price history fetch failed for {symbol}: {e}")
+            return []
+
+    async def fetch_splits(
+        self,
+        symbol: str,
+        company_id: int,
+        start_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns rows for public.splits
+        """
+        try:
+            t = Ticker(symbol)
+            obj = await self._timeout_fetch(lambda: t.splits(), f"splits for {symbol}")
+            df = obj.df() if hasattr(obj, 'df') else obj
+            if df is None or df.empty:
+                return []
+            rows = []
+            df = df.copy()
+            # Normalize date
+            if 'report_date' in df.columns:
+                df['report_date'] = pd.to_datetime(df['report_date'], errors='coerce')
+            else:
+                date_col = next((c for c in df.columns if str(c).lower() in ('date', 'reportdate', 'split_date')), None)
+                if date_col:
+                    df['report_date'] = pd.to_datetime(df[date_col], errors='coerce')
+                else:
+                    return []
+
+            # Date filter if provided
+            if start_date is not None:
+                df = df[df['report_date'] >= pd.Timestamp(start_date)]
+
+            for _, r in df.iterrows():
+                dt = r.get('report_date')
+                if pd.isna(dt):
+                    continue
+                factor = str(r.get('split_factor') or "").strip()
+                reverse = False
+                if ":" in factor:
+                    try:
+                        a, b = factor.split(":")
+                        reverse = (Decimal(a) < Decimal(b))
+                    except Exception:
+                        pass
+                rows.append({
+                    "company_id": company_id,
+                    "report_date": dt.date(),
+                    "split_factor": factor or None,
+                    "reverse_split": reverse,
+                    "data_source": "defeatbeta",
+                })
+            return rows
+        except Exception as e:
+            self._log_debug_once(f"Splits fetch failed for {symbol}: {e}")
+            return []
+
+    async def fetch_revenue_forecast(self, symbol: str, company_id: int) -> List[Dict[str, Any]]:
+        """
+        Maps defeatbeta.ticker.revenue_forecast() into public.revenue_forecast rows
+        """
+        try:
+            t = Ticker(symbol)
+            obj = await self._timeout_fetch(lambda: t.revenue_forecast(), f"revenue_forecast for {symbol}")
+            df = obj.df() if hasattr(obj, 'df') else obj
+            if df is None or df.empty:
+                return []
+            rows = []
+            for _, r in df.iterrows():
+                dt = pd.to_datetime(str(r.get('report_date')), errors='coerce')
+                if pd.isna(dt):
+                    continue
+                rows.append({
+                    "company_id": company_id,
+                    "report_date": dt.date(),
+                    "period_type": str(r.get('period_type') or 'annual'),
+                    "estimate_revenue_growth": self._safe_decimal(r.get('estimate_revenue_growth')),
+                    "number_of_analysts": int(r.get('number_of_analysts')) if pd.notna(r.get('number_of_analysts')) else None,
+                    "estimate_avg_revenue": self._safe_decimal(r.get('estimate_avg_revenue')),
+                    "estimate_high_revenue": self._safe_decimal(r.get('estimate_high_revenue')),
+                    "estimate_low_revenue": self._safe_decimal(r.get('estimate_low_revenue')),
+                    "year_ago_estimate_avg_revenue": self._safe_decimal(r.get('year_ago_estimate_avg_revenue')),
+                    "currency": (r.get('currency') or 'USD'),
+                    "provider": "defeatbeta",
+                })
+            return rows
+        except Exception as e:
+            self._log_debug_once(f"Revenue forecast fetch failed for {symbol}: {e}")
+            return []
+
+    async def fetch_earnings_forecast(self, symbol: str, company_id: int) -> List[Dict[str, Any]]:
+        """
+        Maps defeatbeta.ticker.earnings_forecast() into public.earnings_forecast rows
+        """
+        try:
+            t = Ticker(symbol)
+            obj = await self._timeout_fetch(lambda: t.earnings_forecast(), f"earnings_forecast for {symbol}")
+            df = obj.df() if hasattr(obj, 'df') else obj
+            if df is None or df.empty:
+                return []
+            rows = []
+            for _, r in df.iterrows():
+                dt = pd.to_datetime(str(r.get('report_date')), errors='coerce')
+                if pd.isna(dt):
+                    continue
+                rows.append({
+                    "company_id": company_id,
+                    "report_date": dt.date(),
+                    "period_type": str(r.get('period_type') or 'annual'),
+                    "currency": (r.get('currency') or 'USD'),
+                    "estimate_eps_growth": self._safe_decimal(r.get('estimate_eps_growth')),
+                    "estimate_avg_eps": self._safe_decimal(r.get('estimate_avg_eps')),
+                    "estimate_high_eps": self._safe_decimal(r.get('estimate_high_eps')),
+                    "estimate_low_eps": self._safe_decimal(r.get('estimate_low_eps')),
+                    "number_of_analysts": int(r.get('number_of_analysts')) if pd.notna(r.get('number_of_analysts')) else None,
+                    "thirty_days_ago_estimate_avg_eps": self._safe_decimal(r.get('thirty_days_ago_estimate_avg_eps')),
+                    "sixty_days_ago_estimate_avg_eps": self._safe_decimal(r.get('sixty_days_ago_estimate_avg_eps')),
+                    "ninety_days_ago_estimate_avg_eps": self._safe_decimal(r.get('ninety_days_ago_estimate_avg_eps')),
+                    "year_ago_estimate_avg_eps": self._safe_decimal(r.get('year_ago_estimate_avg_eps')),
+                    "provider": "defeatbeta",
+                })
+            return rows
+        except Exception as e:
+            self._log_debug_once(f"Earnings forecast fetch failed for {symbol}: {e}")
+            return []
+
+    async def fetch_company_summary(self, symbol: str, company_id: int) -> Optional[Dict[str, Any]]:
+        """
+        One row for public.company_summary; snapshot_date defaults to today
+        """
+        try:
+            t = Ticker(symbol)
+            obj = await self._timeout_fetch(lambda: t.summary(), f"summary for {symbol}")
+            df = obj.df() if hasattr(obj, 'df') else obj
+            if df is None or df.empty:
+                return None
+            r = df.iloc[0] if hasattr(df, 'iloc') else pd.Series(df)
+            return {
+                "company_id": company_id,
+                "snapshot_date": date.today(),
+                "market_cap": self._safe_decimal(r.get('market_cap')),
+                "enterprise_value": self._safe_decimal(r.get('enterprise_value')),
+                "shares_outstanding": self._safe_decimal(r.get('shares_outstanding')),
+                "implied_shares_outstanding": self._safe_decimal(r.get('implied_shares_outstanding')),
+                "beta": self._safe_decimal(r.get('beta')),
+                "trailing_pe": self._safe_decimal(r.get('trailing_pe')),
+                "forward_pe": self._safe_decimal(r.get('forward_pe')),
+                # FIX: prefer 'trailing_eps'; keep old key as fallback just in case
+                "trailing_eps": self._safe_decimal(
+                    r.get('trailing_eps') if r.get('trailing_eps') is not None else r.get('tailing_eps')
+                ),
+                "forward_eps": self._safe_decimal(r.get('forward_eps')),
+                "enterprise_to_ebitda": self._safe_decimal(r.get('enterprise_to_ebitda')),
+                "enterprise_to_revenue": self._safe_decimal(r.get('enterprise_to_revenue')),
+                "peg_ratio": self._safe_decimal(r.get('peg_ratio')),
+                "currency": (r.get('currency') or 'USD'),
+                "provider": "defeatbeta",
+            }
+        except Exception as e:
+            self._log_debug_once(f"Company summary fetch failed for {symbol}: {e}")
+            return None
+
     # ---------------------------------------------------------------------
     # Normalization + Parsers (Defeat Beta)
     # ---------------------------------------------------------------------
-    
     def _clean_breakdown_label(self, s: str) -> str:
         if s is None:
             return ""
-        s = html.unescape(str(s)).strip()   # '&amp;' -> '&'
-        s = s.replace('’', "'")             # curly -> straight apostrophe
-        s = re.sub(r'^[+\s]+', '', s)       # drop leading '+' hierarchy markers
-        s = re.sub(r'\s+', ' ', s)          # collapse whitespace
-        # Unify "and" and "&" to a real ampersand (avoid reintroducing '&amp;')
+        s = html.unescape(str(s)).strip()
+        s = s.replace('’', "'")
+        s = re.sub(r'^[+\s]+', '', s)
+        s = re.sub(r'\s+', ' ', s)
         s = s.replace(' and ', ' & ')
         return s
 
     def _normalize_alias_key(self, s: str) -> str:
-        # Keep alias and label pipelines identical
         return self._clean_breakdown_label(s)
-    
 
     def _normalize_defeatbeta_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -711,7 +1018,7 @@ class DefeatBetaProvider(StockDataProvider):
             return pd.DataFrame()
 
         df = df[kept_cols]
-        # CHANGE: remove thousands separators before numeric coercion, preserving NaNs
+        # Remove thousands separators before numeric coercion, preserving NaNs
         for c in df.columns:
             ser = df[c]
             df[c] = pd.to_numeric(
@@ -719,14 +1026,12 @@ class DefeatBetaProvider(StockDataProvider):
                 errors='coerce'
             )
 
-        # CHANGE: write to attrs and read from attrs later
         df.attrs['defeatbeta_col_dates'] = col_to_dt
         return df
 
     def _iter_defeatbeta_periods(self, df: pd.DataFrame, is_quarterly: bool):
         col_to_dt = df.attrs.get('defeatbeta_col_dates', {})
         if not col_to_dt:
-            # Fallback if attrs missing (shouldn't happen if normalized)
             col_to_dt = {c: pd.to_datetime(str(c), errors='coerce') for c in df.columns}
 
         for c, ts in col_to_dt.items():
@@ -737,7 +1042,6 @@ class DefeatBetaProvider(StockDataProvider):
             yield c, ts.date(), fy, fq
 
     def _db_val(self, df: pd.DataFrame, aliases: List[str], col: str):
-        # CHANGE: normalize alias keys before exact match lookup
         for key in (aliases or []):
             k = self._normalize_alias_key(key)
             if k in df.index:
@@ -802,8 +1106,8 @@ class DefeatBetaProvider(StockDataProvider):
 
         a = self.DB_BALANCE_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
-            
-            # After df normalization and inside: for col, period_end, fy, fq in ...
+
+            # Coverage diagnostics for last column
             if not df.empty:
                 last_col = sorted(df.columns)[-1]
                 cov = self._debug_alias_coverage(df, self.DB_BALANCE_ALIASES, last_col)
@@ -811,7 +1115,7 @@ class DefeatBetaProvider(StockDataProvider):
                 logger.debug("[DBETA][%s] BS coverage for %s — missing canonicals: %s",
                             symbol, last_col, missing)
 
-            # ---- Extract leaves
+            # Extract leaves
             total_assets   = self._safe_decimal(self._db_val(df, a.get('total_assets', []), col))
             current_assets = self._safe_decimal(self._db_val(df, a.get('current_assets', []), col))
             cash_eq        = self._safe_decimal(self._db_val(df, a.get('cash_and_cash_equivalents', []), col))
@@ -828,13 +1132,14 @@ class DefeatBetaProvider(StockDataProvider):
             long_debt      = self._safe_decimal(self._db_val(df, a.get('long_term_debt', []), col))
             total_debt     = self._safe_decimal(self._db_val(df, a.get('total_debt', []), col))
 
-            # CHANGE: derive total_debt if components exist
             if total_debt is None and short_debt is not None and long_debt is not None:
-                total_debt = short_debt + long_debt
+                try:
+                    total_debt = Decimal(str(short_debt)) + Decimal(str(long_debt))
+                except InvalidOperation:
+                    pass
 
             sh_equity      = self._safe_decimal(self._db_val(df, a.get('shareholders_equity', []), col))
             retained       = self._safe_decimal(self._db_val(df, a.get('retained_earnings', []), col))
-            # CHANGE: populate common_stock (stop forcing None)
             common_stock   = self._safe_decimal(self._db_val(df, a.get('common_stock', []), col))
 
             long_inv       = self._safe_decimal(self._db_val(df, a.get('long_term_investments', []), col))
@@ -843,9 +1148,11 @@ class DefeatBetaProvider(StockDataProvider):
             minority       = self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col))
             total_leq      = self._safe_decimal(self._db_val(df, a.get('total_liabilities_and_equity', []), col))
 
-            # CHANGE: derive total_liabilities_and_equity if components exist
             if total_leq is None and total_liab is not None and sh_equity is not None:
-                total_leq = total_liab + sh_equity + (minority or Decimal('0'))
+                try:
+                    total_leq = Decimal(str(total_liab)) + Decimal(str(sh_equity)) + (Decimal(str(minority)) if minority is not None else Decimal('0'))
+                except InvalidOperation:
+                    pass
 
             rows.append(BalanceSheetRow(
                 company_id=company_id,
@@ -934,7 +1241,7 @@ class DefeatBetaProvider(StockDataProvider):
             return rows
         # Map possible column names
         cols = {c.lower(): c for c in df.columns}
-        exd_col = cols.get('ex_dividend_date') or cols.get('report_date') or cols.get('date')  # DBeta uses report_date; YF uses index/Date
+        exd_col = cols.get('ex_dividend_date') or cols.get('report_date') or cols.get('date')
         amt_col = cols.get('dividend') or cols.get('amount')
 
         # Optional fields if present
@@ -943,7 +1250,6 @@ class DefeatBetaProvider(StockDataProvider):
         freq_col = cols.get('frequency')
 
         if not exd_col or not amt_col:
-            # Attempt YF Series-to-DF fallback is handled before calling this
             return rows
 
         for _, r in df.iterrows():
@@ -980,7 +1286,7 @@ class DefeatBetaProvider(StockDataProvider):
                 payment_date=pay_date,
                 record_date=rec_date,
                 dividend_amount=self._safe_decimal(r.get(amt_col)),
-                dividend_type='regular',   # schema default; adjust if source provides types
+                dividend_type='regular',
                 currency='USD',
                 frequency=freq,
                 last_validated_at=None,
@@ -990,7 +1296,7 @@ class DefeatBetaProvider(StockDataProvider):
         return rows
 
     # ---------------------------------------------------------------------
-    # YF parsers (best-effort to schema)
+    # YF parsers (best-effort to schema)  [unchanged]
     # ---------------------------------------------------------------------
     def _parse_yf_income_statement(
         self, df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str,
@@ -1026,7 +1332,7 @@ class DefeatBetaProvider(StockDataProvider):
                 revenue=self._safe_decimal(pd.to_numeric(gv(['Total Revenue', 'TotalRevenue', 'Revenue']), errors='coerce')),
                 cost_of_goods_sold=self._safe_decimal(pd.to_numeric(gv(['Cost Of Revenue', 'Cost of Revenue', 'CostOfRevenue']), errors='coerce')),
                 gross_profit=self._safe_decimal(pd.to_numeric(gv(['Gross Profit', 'GrossProfit']), errors='coerce')),
-                operating_expenses=None,  # YF roll-ups vary; leave None unless mapped explicitly
+                operating_expenses=None,
                 rd_expenses=None,
                 sga_expenses=None,
                 operating_income=self._safe_decimal(pd.to_numeric(gv(['Operating Income', 'OperatingIncome']), errors='coerce')),
@@ -1264,7 +1570,7 @@ class DefeatBetaProvider(StockDataProvider):
         fin.balance_sheets.rows = [r for r in fin.balance_sheets.rows if keep(r.fiscal_year, r.fiscal_quarter)]
         fin.cash_flows.rows = [r for r in fin.cash_flows.rows if keep(r.fiscal_year, r.fiscal_quarter)]
         fin.earnings.rows = [r for r in fin.earnings.rows if keep(r.fiscal_year, r.fiscal_quarter)]
-        # dividends filtered by date if you wish; currently keep all
+        # dividends: keep all; optional date filtering can be added if needed
         return fin
 
     def _is_new_fiscal_period(
@@ -1284,7 +1590,7 @@ class DefeatBetaProvider(StockDataProvider):
             return False
         # same year
         if fq is None:
-            return False  # annual vs annual -> not "newer" by itself
+            return False
         if last_quarter is None:
             return True
         return fq > last_quarter
@@ -1301,10 +1607,8 @@ class DefeatBetaProvider(StockDataProvider):
             return None
 
     def _log_debug_once(self, msg: str):
-        # Simple hook to avoid noisy logs; customize or deduplicate if you like.
         logger.debug(msg)
 
-    
     def _debug_alias_coverage(self, df: pd.DataFrame, alias_map: Dict[str, List[str]], col: str):
         out = {}
         idx = set(df.index)
@@ -1320,9 +1624,3 @@ class DefeatBetaProvider(StockDataProvider):
                     break
             out[canonical] = {'matched': matched, 'alias_used': alias_used, 'value': value}
         return out
-
-    
-    
-
-    
-  

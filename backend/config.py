@@ -202,6 +202,14 @@ class Settings(BaseSettings):
         default=True,
         description="Use optimized filtering to prevent duplicate DB writes"
     )
+    ENABLE_MARKET_DATA_SCHEDULER: bool = Field(
+        default=True,
+        description="Enable the market data refresh scheduler"
+    )
+    PRICE_HISTORY_RETENTION_YEARS: int = Field(
+    default=10,
+    description="Number of years of price history to retain"
+    )
     
     # Debugging & Development
     DEBUG_FILTERING_LOGIC: bool = Field(
@@ -278,6 +286,9 @@ def validate_config():
         print(f"Firebase PID : {s.FIREBASE_PROJECT_ID}")
         print(f"AI Provider  : {'Gemini Enabled ✨' if s.GEMINI_API_KEY else 'AI Disabled'}")
         print(f"Defeat Beta  : {'Enabled ✨' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}")
+        print(f"Market Data  : {'Enabled ✨' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}")
+        if s.ENABLE_MARKET_DATA_SCHEDULER:
+            print(f"  - Scheduler Interval: {getattr(s, 'MARKET_DATA_REFRESH_INTERVAL_HOURS', 24)}h")
         print(f"  - Scheduler Interval: {s.EARNINGS_REFRESH_CHECK_INTERVAL_HOURS}h")
         print(f"  - Earnings Buffer: ±{s.EARNINGS_REFRESH_BUFFER_DAYS} days")
         print(f"  - Retry Attempts: {s.RETRY_MAX_ATTEMPTS} with backoff {s.RETRY_BACKOFF_SECONDS}")

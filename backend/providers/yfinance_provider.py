@@ -2,7 +2,7 @@
 from .base import StockDataProvider, TickerInfo, StockDetails
 from domain.interfaces.stock_provider import StockProvider
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 import logging
 import yfinance as yf
 import pandas as pd
@@ -10,6 +10,13 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 class YFinanceProvider(StockDataProvider, StockProvider):
+    """
+    yfinance fallback provider with helpers for:
+      - annual/quarterly statements
+      - dividends
+      - best-effort earnings data (calendar + inferred periods)
+      - NEW: price history (daily OHLCV), splits, summary snapshot
+    """
     def __init__(self):
         self._cache: Dict[str, StockDetails] = {}
 
@@ -119,11 +126,108 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             return pd.DataFrame()
         if isinstance(ser, pd.Series):
             df = ser.to_frame(name='Dividend').reset_index()
-            df.rename(columns={'Date': 'ex_dividend_date'}, inplace=True)
+            df.rename(columns={'Date': 'ex_dividend_date', 'Dividend': 'dividend'}, inplace=True)
             return df
         if isinstance(ser, pd.DataFrame):
             return ser
         return pd.DataFrame()
+
+    # ---------------------------
+    # NEW: Price History (DataFrame)
+    # ---------------------------
+    def get_price_history_df(self, symbol: str) -> pd.DataFrame:
+        """
+        Returns DataFrame with columns: price_date, open_price, high_price, low_price, close_price, volume
+        """
+        tkr = yf.Ticker(symbol.upper())
+        try:
+            hist = tkr.history(period="max", auto_adjust=False)  # columns: Open, High, Low, Close, Volume
+            if hist is None or hist.empty:
+                return pd.DataFrame()
+            df = hist.reset_index().rename(columns={
+                "Date": "price_date",
+                "Open": "open_price",
+                "High": "high_price",
+                "Low": "low_price",
+                "Close": "close_price",
+                "Volume": "volume",
+            })
+            # yfinance uses pandas Timestamp index; ensure python date for consistency upstream
+            df["price_date"] = pd.to_datetime(df["price_date"], errors='coerce')
+            return df
+        except Exception:
+            return pd.DataFrame()
+
+    # ---------------------------
+    # NEW: Splits (DataFrame)
+    # ---------------------------
+    def get_splits_df(self, symbol: str) -> pd.DataFrame:
+        """
+        Returns DataFrame with columns: report_date, split_factor (string like '3:1')
+        """
+        tkr = yf.Ticker(symbol.upper())
+        try:
+            s = tkr.splits  # Series where value is numeric split ratio, e.g., 3.0 for 3-for-1
+            if s is None or s.empty:
+                return pd.DataFrame()
+            df = s.reset_index()
+            # Normalize columns (yfinance's column name varies across versions)
+            # Ensure df has ['Date', value_name]; rename to ['report_date','ratio']
+            if 'Date' not in df.columns:
+                # sometimes the index level name is None; ensure first column is datetime index
+                df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
+            value_col = [c for c in df.columns if c != 'Date'][0]
+            df.rename(columns={'Date': 'report_date', value_col: 'ratio'}, inplace=True)
+
+            def to_factor(x) -> Optional[str]:
+                try:
+                    if x and float(x) > 0:
+                        # 3.0 => "3:1"; 0.5 => "1:2"
+                        f = float(x)
+                        if f >= 1:
+                            return f"{int(round(f))}:1"
+                        else:
+                            denom = int(round(1 / f))
+                            return f"1:{denom}"
+                except Exception:
+                    return None
+                return None
+
+            df["split_factor"] = df["ratio"].apply(to_factor)
+            df["report_date"] = pd.to_datetime(df["report_date"], errors='coerce')
+            return df[["report_date", "split_factor"]]
+        except Exception:
+            return pd.DataFrame()
+
+    # ---------------------------
+    # NEW: Company Summary (dict)
+    # ---------------------------
+    def get_summary_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Returns dict with summary metrics mapped to your company_summary schema.
+        """
+        try:
+            tkr = yf.Ticker(symbol.upper())
+            info = tkr.info or {}
+            return {
+                "snapshot_date": date.today(),
+                "market_cap": info.get("marketCap"),
+                "enterprise_value": info.get("enterpriseValue"),
+                "shares_outstanding": info.get("sharesOutstanding"),
+                "implied_shares_outstanding": info.get("impliedSharesOutstanding"),
+                "beta": info.get("beta"),
+                "trailing_pe": info.get("trailingPE"),
+                "forward_pe": info.get("forwardPE"),
+                "trailing_eps": info.get("trailingEps"),
+                "forward_eps": info.get("forwardEps"),
+                "enterprise_to_ebitda": info.get("enterpriseToEbitda"),
+                "enterprise_to_revenue": info.get("enterpriseToRevenue"),
+                "peg_ratio": info.get("pegRatio"),
+                "currency": info.get("currency") or "USD",
+                "provider": "yfinance",
+            }
+        except Exception:
+            return None
 
     # ---------------------------
     # Earnings data (best-effort)
