@@ -1,8 +1,24 @@
 'use client';
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { onIdTokenChanged, User as FirebaseUser, createUserWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
+
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  ReactNode,
+} from 'react';
+import {
+  onIdTokenChanged,
+  User as FirebaseUser,
+  createUserWithEmailAndPassword,
+  signOut as firebaseSignOut,
+} from 'firebase/auth';
+
 import { initializeFirebase } from '@/firebase';
-import { setAuthToken } from '@/features/auth/services/token-manager';
+import {
+  setAuthToken,
+  registerUnauthorizedHandler,
+} from '@/features/auth/services/token-manager';
 import { exchangeTokenForUser } from '@/features/auth/services/auth.service';
 import { User } from '@/features/auth/types/auth.types';
 import { perf } from '@/lib/performance';
@@ -11,7 +27,7 @@ const { auth } = initializeFirebase();
 
 type AuthStatus = 'initializing' | 'authenticated' | 'unauthenticated' | 'error';
 
-interface AuthState {
+interface AuthStateShape {
   status: AuthStatus;
   user: User | null;
   firebaseUser: FirebaseUser | null;
@@ -21,18 +37,23 @@ interface AuthState {
   signOut: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthState | undefined>(undefined);
+const AuthContext = createContext<AuthStateShape | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [authState, setAuthState] = useState<AuthState>({
+  // Internal state without methods (methods are stable functions we attach in Provider value)
+  const [authState, setAuthState] = useState<{
+    status: AuthStatus;
+    user: User | null;
+    firebaseUser: FirebaseUser | null;
+    error: string | null;
+  }>({
     status: 'initializing',
     user: null,
     firebaseUser: null,
     error: null,
-    signUpWithEmail: async () => {},
-    syncWithBackend: async () => {},
-    signOut: async () => {},
   });
+
+  // --- Actions ---
 
   // Sign up with email and password
   const signUpWithEmail = async (email: string, password: string, fullName: string) => {
@@ -40,38 +61,36 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const firebaseUser = userCredential.user;
 
-      // Get the ID token
       const token = await firebaseUser.getIdToken();
       setAuthToken(token);
 
-      // Exchange token for app user
       const appUser = await exchangeTokenForUser(firebaseUser);
 
-      setAuthState(prevState => ({
-        ...prevState,
+      setAuthState((prev) => ({
+        ...prev,
         status: 'authenticated',
         user: appUser,
-        firebaseUser: firebaseUser,
+        firebaseUser,
         error: null,
       }));
     } catch (error: any) {
       console.error('[AuthProvider] Sign-up error:', error);
-      setAuthState(prevState => ({
-        ...prevState,
+      setAuthState((prev) => ({
+        ...prev,
         status: 'error',
-        error: error.message || 'Failed to sign up',
+        error: error?.message || 'Failed to sign up',
       }));
       throw error;
     }
   };
 
-  // Sign out
+  // Sign out (clears Firebase state and Authorization header)
   const signOut = async () => {
     try {
       await firebaseSignOut(auth);
       setAuthToken(null);
-      setAuthState(prevState => ({
-        ...prevState,
+      setAuthState((prev) => ({
+        ...prev,
         status: 'unauthenticated',
         user: null,
         firebaseUser: null,
@@ -79,66 +98,77 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }));
     } catch (error: any) {
       console.error('[AuthProvider] Sign-out error:', error);
-      setAuthState(prevState => ({
-        ...prevState,
+      setAuthState((prev) => ({
+        ...prev,
         status: 'error',
-        error: error.message || 'Failed to sign out',
+        error: error?.message || 'Failed to sign out',
       }));
       throw error;
     }
   };
 
-  // Sync with backend (refresh user data)
+  // Refresh user data from backend (does not de-auth on transient errors)
   const syncWithBackend = async () => {
     try {
       if (authState.firebaseUser) {
         const appUser = await exchangeTokenForUser(authState.firebaseUser);
-        setAuthState(prevState => ({
-          ...prevState,
-          user: appUser,
-        }));
+        setAuthState((prev) => ({ ...prev, user: appUser }));
       }
     } catch (error: any) {
       console.error('[AuthProvider] Sync error:', error);
-      setAuthState(prevState => ({
-        ...prevState,
-        status: 'error',
+      // Keep user authenticated; surface error but do not flip global status
+      setAuthState((prev) => ({
+        ...prev,
         error: 'Failed to sync with backend',
       }));
       throw error;
     }
   };
 
+  // --- Lifecycles & global wiring ---
+
+  // Subscribe once to Firebase auth token changes
   useEffect(() => {
     const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        perf.mark('auth-token-received');
         try {
+          // Mark perf point if you use it elsewhere
+          try { perf.mark?.('auth-token-received'); } catch {}
+
           const token = await firebaseUser.getIdToken();
           setAuthToken(token);
+
+          // Set firebase user and mark authenticated first
+          setAuthState((prev) => ({
+            ...prev,
+            status: 'authenticated',
+            firebaseUser,
+            error: null,
+          }));
+
+          // Fetch app user if we don't have one yet
           if (!authState.user) {
             const appUser = await exchangeTokenForUser(firebaseUser);
-            perf.mark('auth-end');
-            perf.measure('User Authentication', 'login-start', 'auth-end');
 
-            setAuthState(prevState => ({
-              ...prevState,
+            try {
+              perf.mark?.('auth-end');
+              // Only measure if 'login-start' was previously marked
+              perf.measure?.('User Authentication', 'login-start', 'auth-end');
+            } catch {}
+
+            setAuthState((prev) => ({
+              ...prev,
               status: 'authenticated',
               user: appUser,
-              firebaseUser: firebaseUser,
+              firebaseUser,
               error: null,
-            }));
-          } else {
-            setAuthState(prevState => ({
-              ...prevState,
-              status: 'authenticated',
-              firebaseUser: firebaseUser,
             }));
           }
         } catch (error) {
           console.error('[AuthProvider] Error during token exchange:', error);
-          setAuthState(prevState => ({
-            ...prevState,
+          setAuthToken(null);
+          setAuthState((prev) => ({
+            ...prev,
             status: 'error',
             user: null,
             firebaseUser: null,
@@ -146,9 +176,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           }));
         }
       } else {
+        // Signed out or token expired
         setAuthToken(null);
-        setAuthState(prevState => ({
-          ...prevState,
+        setAuthState((prev) => ({
+          ...prev,
           status: 'unauthenticated',
           user: null,
           firebaseUser: null,
@@ -158,12 +189,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
 
     return () => {
+      try { perf.clear?.(); } catch {}
       unsubscribe();
-      perf.clear();
     };
-  }, [authState.user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // subscribe once
 
-  return <AuthContext.Provider value={authState}>{children}</AuthContext.Provider>;
+  // Register a global unauthorized handler so 401/403 from API → real logout
+  useEffect(() => {
+    registerUnauthorizedHandler(() => {
+      // Fire and forget; layout will handle redirect based on status
+      signOut().catch(() => { /* swallow */ });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <AuthContext.Provider
+      value={{
+        ...authState,
+        signUpWithEmail,
+        syncWithBackend,
+        signOut,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 };
 
 export const useAuth = () => {

@@ -22,12 +22,10 @@ export default function AuthenticatedLayout({
   const router = useRouter();
 
   useEffect(() => {
-    if (status === "unauthenticated") {
-      router.push("/login");
-    }
+    if (status === 'unauthenticated' || status === 'error') router.push('/login');
   }, [status, router]);
-
-  if (status === "initializing") {
+  
+  if (status === 'initializing' || status === 'unauthenticated' || status === 'error') {
     return <FullPageSpinner />;
   }
 

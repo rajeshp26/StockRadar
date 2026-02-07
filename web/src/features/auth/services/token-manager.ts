@@ -1,19 +1,30 @@
 import { api } from '@/lib/api';
 
+let unauthorizedHandler: (() => void) | null = null;
+
+/** Allow auth provider to register a sign-out handler for 401/403 */
+export const registerUnauthorizedHandler = (fn: () => void) => {
+  unauthorizedHandler = fn;
+};
+
+export const getUnauthorizedHandler = () => unauthorizedHandler;
+
 /**
  * Manages the authentication token for API requests.
- * This function decouples the authentication logic from the API client configuration.
- *
  * @param token The Firebase authentication token, or null to clear it.
  */
 export const setAuthToken = (token: string | null) => {
   if (token) {
-    // Set the default Authorization header for all subsequent requests.
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    console.log('[token-manager] Auth token has been set.');
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.debug('[token-manager] Auth token has been set.');
+    }
   } else {
-    // Clear the Authorization header.
     delete api.defaults.headers.common['Authorization'];
-    console.log('[token-manager] Auth token has been cleared.');
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.debug('[token-manager] Auth token has been cleared.');
+    }
   }
 };
