@@ -9,7 +9,7 @@ import logging
 import yfinance as yf
 from typing import Optional, Dict, Any
 
-from api import watchlists, watchlist_items, users
+from api import watchlists, watchlist_items, users, valuations
 from config import settings
 from database import supabase
 from auth import get_current_user, initialize_firebase_app
@@ -338,3 +338,4 @@ async def trigger_scheduler_now_legacy():
 app.include_router(users.router)
 app.include_router(watchlists.router)
 app.include_router(watchlist_items.router)
+app.include_router(valuations.router) 

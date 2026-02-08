@@ -22,7 +22,7 @@ from domain.exceptions import (
     NoDataError,
     MaxRetriesExceededError,
 )
-from domain.models import (
+from domain.model_types import (
     CompleteFundamentals,
     IncomeStatementRow,
     IncomeStatementRows,

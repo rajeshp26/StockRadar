@@ -3,6 +3,7 @@ Updated Watchlist Service with Financial Data Integration
 - YFinance is used exclusively for public.current_market_data (fast path).
 - All fundamentals (IS/BS/CF/Earnings/Dividends) enter via DefeatBetaProvider, with YF fallback.
 - Unifies orchestration so routes stay thin and consistent (no YF-only deep sync paths).
+- NEW: Auto-compute Rule #1 intrinsic value after fundamentals ingestion and on-demand refresh.
 """
 
 import asyncio
@@ -15,8 +16,14 @@ from domain.interfaces.repository import WatchlistRepository, UserRepository
 from domain.entities.watchlist import WatchlistWithStocks, StockPriceInfo
 from shared.exceptions.base import NotFoundError, ExternalServiceError
 from database import supabase
+
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 from providers.defeat_beta_provider import DefeatBetaProvider
+
+# NEW: Valuation imports
+from infrastructure.repositories.valuation_repository import ValuationRepository
+from application.services.recompute_guard import RecomputeGuard
+from application.services.valuation_service import ValuationService
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +32,7 @@ class WatchlistService:
     """
     Manages watchlist operations, including add flow with fast path (YF market price)
     and background fundamentals loading (DefeatBeta -> fallback YF).
+    Also triggers Rule #1 intrinsic value computation after fundamentals ingestion.
     """
 
     def __init__(
@@ -182,6 +190,7 @@ class WatchlistService:
             * Fallback to YF if DBeta returns empty/timeouts
           - Upsert all fundamentals tables
           - Update companies refresh metadata
+          - (NEW) Auto-compute Rule #1 intrinsic value
 
         Args:
             user_id: User adding stock
@@ -215,8 +224,9 @@ class WatchlistService:
                 await self._update_market_data(company_id, symbol, current_price)
 
             # 4) Insert into watchlist_items
-            watchlist_item = await self._add_watchlist_item(watchlist_id, company_id, target_buy,
-                target_sell)
+            watchlist_item = await self._add_watchlist_item(
+                watchlist_id, company_id, target_buy, target_sell
+            )
 
             # 5) Check refresh info to determine "new company" (first-time fundamentals)
             refresh_info = await self.financial_repo.get_company_refresh_info(company_id)
@@ -260,10 +270,6 @@ class WatchlistService:
         Called by: POST /stocks/{symbol}/refresh-financials
         Used for: When user wants fresh data immediately
 
-        Args:
-            symbol: Stock ticker
-            company_id: Company ID
-
         Returns:
             Summary of refresh operation
         """
@@ -273,13 +279,13 @@ class WatchlistService:
             # Get refresh info to determine filtering
             refresh_info = await self.financial_repo.get_company_refresh_info(company_id)
 
-            # Fetch with smart filtering
+            # Fetch with smart filtering (always incremental for on-demand)
             financials = await self.defeat_beta_provider.get_all_financials_optimized(
                 symbol=symbol,
                 company_id=company_id,
                 last_refreshed_fiscal_year=refresh_info.last_refreshed_fiscal_year,
                 last_refreshed_fiscal_quarter=refresh_info.last_refreshed_fiscal_quarter,
-                force_full_history=False,  # Always incremental for on-demand
+                force_full_history=False,
             )
 
             # Store everything
@@ -303,6 +309,22 @@ class WatchlistService:
 
             total_rows = sum(upsert_results.values())
             logger.info("✅ On-demand refresh complete for %s: %s rows", symbol, total_rows)
+
+            # NEW: Auto-compute Rule #1 after on-demand refresh (definitely changed inputs)
+            try:
+                val_repo = ValuationRepository()
+                guard = RecomputeGuard(val_repo)
+                valuation_service = ValuationService(val_repo, guard)
+
+                await valuation_service.compute_rule1_if_stale(
+                    symbol=symbol,
+                    user_id=None,
+                    overrides=None,
+                    force=True  # on-demand refresh changed fundamentals
+                )
+                logger.info("[VALUATION] Rule #1 computed after on-demand refresh for %s", symbol)
+            except Exception as ve:
+                logger.error("[VALUATION] Rule #1 auto-compute (on-demand) failed for %s: %s", symbol, ve)
 
             return {
                 "symbol": symbol,
@@ -406,8 +428,13 @@ class WatchlistService:
         """
         try:
             res = supabase.table("watchlist_items").insert(
-                {"watchlist_id": watchlist_id, "company_id": company_id, "position": 0, "target_buy": target_buy,
-                    "target_sell": target_sell}
+                {
+                    "watchlist_id": watchlist_id,
+                    "company_id": company_id,
+                    "position": 0,
+                    "target_buy": target_buy,
+                    "target_sell": target_sell
+                }
             ).execute()
             if not res.data:
                 # Second-chance: detect duplicate gracefully for better error messaging
@@ -438,6 +465,7 @@ class WatchlistService:
         Background task: Fetch & store fundamentals via unified provider.
         - Full history if new company
         - Incremental otherwise
+        - NEW: Auto-compute Rule #1 intrinsic value after successful ingestion
         """
         try:
             logger.info("Starting background financial load for %s (new_company=%s)", symbol, is_new_company)
@@ -481,5 +509,22 @@ class WatchlistService:
             total_rows = sum(upsert_results.values())
             logger.info("✅ Background load complete for %s: %s total rows upserted", symbol, total_rows)
 
+            # NEW: Auto-compute Rule #1 after fundamentals ingestion (Trigger A)
+            try:
+                val_repo = ValuationRepository()
+                guard = RecomputeGuard(val_repo)
+                valuation_service = ValuationService(val_repo, guard)
+
+                await valuation_service.compute_rule1_if_stale(
+                    symbol=symbol,
+                    user_id=None,
+                    overrides=None,
+                    force=True  # fundamentals changed -> recompute unconditionally
+                )
+                logger.info("[VALUATION] Rule #1 computed after fundamentals ingestion for %s", symbol)
+            except Exception as ve:
+                logger.error("[VALUATION] Rule #1 auto-compute (ingestion) failed for %s: %s", symbol, ve)
+
         except Exception as e:
             logger.error("Background financial load failed for %s: %s", symbol, str(e))
+            # Swallow to avoid impacting user-facing flows

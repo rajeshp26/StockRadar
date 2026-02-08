@@ -1119,4 +1119,33 @@ create table public.company_summary (
 
 create index IF not exists idx_company_summary_company_date on public.company_summary using btree (company_id, snapshot_date desc) TABLESPACE pg_default;
 
-## `public.revenue_forecast`
+## `public.valuation_diagnostics`
+create table public.valuation_diagnostics (
+  diag_id bigserial not null,
+  company_id integer not null,
+  method character varying(40) not null,
+  code character varying(40) not null,
+  severity character varying(10) not null,
+  message text not null,
+  context jsonb null,
+  created_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  constraint valuation_diagnostics_pkey primary key (diag_id),
+  constraint valuation_diagnostics_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE,
+  constraint valuation_diagnostics_severity_check check (
+    (
+      (severity)::text = any (
+        (
+          array[
+            'critical'::character varying,
+            'high'::character varying,
+            'medium'::character varying,
+            'low'::character varying,
+            'info'::character varying
+          ]
+        )::text[]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+create index IF not exists idx_valuation_diagnostics_company_method on public.valuation_diagnostics using btree (company_id, method, created_at desc) TABLESPACE pg_default;

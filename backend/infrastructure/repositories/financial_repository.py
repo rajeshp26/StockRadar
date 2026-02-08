@@ -21,7 +21,7 @@ from database import supabase
 from itertools import islice
 
 from config import settings
-from domain.models import (
+from backend.domain.model_types import (
     IncomeStatementRow,
     BalanceSheetRow,
     CashFlowRow,

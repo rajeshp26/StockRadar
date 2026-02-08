@@ -25,7 +25,10 @@ Resilience & Ops
 - Concurrency-limited workers
 - Rolling 10-year retention window for price history fetch (configurable)
 - Optional pruning hook present but disabled by default (commented out)
-- Manual trigger, status fields for diagnostics
+
+NEW
+---
+- After company processing, evaluate Rule #1 ONLY if dependencies changed (freshness gate).
 """
 
 import asyncio
@@ -41,6 +44,11 @@ from infrastructure.repositories.financial_repository import SupabaseFinancialRe
 from providers.defeat_beta_provider import DefeatBetaProvider
 from providers.yfinance_provider import YFinanceProvider  # YF fallback injection
 from database import supabase  # used for lightweight existence checks
+
+# NEW: Valuation imports
+from infrastructure.repositories.valuation_repository import ValuationRepository
+from application.services.recompute_guard import RecomputeGuard
+from application.services.valuation_service import ValuationService
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +253,7 @@ class MarketDataRefreshScheduler:
           3) Revenue forecast
           4) Earnings forecast
           5) Company summary snapshot
+          6) NEW: Rule #1 evaluation (freshness gate)
         """
         # 1) PRICE HISTORY (monthly EOM)
         price_rows_written = await self._upsert_monthly_price_history(symbol, company_id)
@@ -268,6 +277,25 @@ class MarketDataRefreshScheduler:
         summary = await self.defeat_beta_provider.get_company_summary_optimized(symbol, company_id)
         if summary:
             await self.financial_repo.upsert_company_summary(summary)
+
+        # 6) NEW: Rule #1 evaluation with freshness gate (Trigger B)
+        # Only recompute if any dependency inputs are newer than the last valuation.
+        try:
+            val_repo = ValuationRepository()
+            guard = RecomputeGuard(val_repo)
+            valuation_service = ValuationService(val_repo, guard)
+
+            await valuation_service.compute_rule1_if_stale(
+                symbol=symbol,
+                user_id=None,
+                overrides=None,
+                force=False,  # recompute only when dependencies changed
+            )
+            logger.info("[VALUATION][R1] evaluated after market-data refresh for %s", symbol)
+
+        except Exception as ve:
+            # Do not let valuation errors affect the scheduler pipeline
+            logger.error("[VALUATION] Rule #1 auto-evaluation (market data) failed for %s: %s", symbol, ve, exc_info=True)
 
         return {
             "price_history_monthly": price_rows_written,
@@ -404,7 +432,7 @@ class MarketDataRefreshScheduler:
             return f if f == f else None
         except (ValueError, TypeError):
             return None
-            
+
     @staticmethod
     def _years_ago(from_date: date, years: int) -> date:
         """
@@ -416,9 +444,6 @@ class MarketDataRefreshScheduler:
         except ValueError:
             # Handle Feb 29 -> Feb 28 (or similar end-of-month anomalies)
             # Move to the last valid day of February in the target year
-            # Simplest approach: subtract (365*years + safety) days then normalize forward if needed
-            # But for predictability, fallback to March 1 - 1 day in target year path:
             target_year = from_date.year - years
-            # Use March 1 of target year, subtract one day -> last day of Feb target year
             march_first = date(target_year, 3, 1)
             return march_first - timedelta(days=1)
