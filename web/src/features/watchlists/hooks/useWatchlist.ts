@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useServices } from '@/shared/contexts/ServiceContext';
-import { StockPriceInfo, WatchlistWithStocks } from '../types/watchlist.types';
-import { useAuth } from '@/providers/auth-provider';
-import { useToast } from '@/hooks/use-toast';
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useServices } from "@/shared/contexts/ServiceContext";
+import { StockPriceInfo, WatchlistWithStocks } from "../types/watchlist.types";
+import { useAuth } from "@/providers/auth-provider";
+import { useToast } from "@/hooks/use-toast";
 
 interface UseWatchlistOptions {
   /**
@@ -18,43 +18,50 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   const [isLoading, setIsLoading] = useState(!options?.initialWatchlist);
   const [watchlistId, setWatchlistId] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
+
   const { watchlistService } = useServices();
   const { firebaseUser: user } = useAuth();
   const { toast } = useToast();
 
-  // Track if we've initialized to prevent double-fetch
+  // Track if we've initialized to prevent double-fetch (but do not burn init before auth is ready)
   const hasInitializedRef = useRef(false);
+
+  // SSE
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * Fetch watchlist data from the backend.
-   * Called on mount (unless initial data provided) and after mutations.
+   * Called after auth is confirmed and after mutations.
    */
   const fetchWatchlist = useCallback(async () => {
     if (!user) {
-      console.log('[useWatchlist] No user, skipping fetch');
+      console.log("[useWatchlist] No user, skipping fetch");
       return;
     }
 
     try {
       setIsLoading(true);
       setError(null);
-      console.log('[useWatchlist] Fetching watchlist from service');
+
+      console.log("[useWatchlist] Fetching watchlist from service");
       const data = await watchlistService.getDefaultWatchlist();
+
       setStocks(data.stocks);
       setWatchlistId(data.watchlist_id);
-      console.log('[useWatchlist] Watchlist fetched successfully:', {
+
+      console.log("[useWatchlist] Watchlist fetched successfully:", {
         watchlistId: data.watchlist_id,
         stockCount: data.stocks.length,
       });
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      console.error('[useWatchlist] Failed to fetch watchlist:', error.message);
-      setError(error);
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error("[useWatchlist] Failed to fetch watchlist:", e.message);
+      setError(e);
       toast({
-        title: 'Error',
-        description: 'Failed to load watchlist.',
-        variant: 'destructive',
+        title: "Error",
+        description: "Failed to load watchlist.",
+        variant: "destructive",
       });
     } finally {
       setIsLoading(false);
@@ -62,31 +69,33 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   }, [user, watchlistService, toast]);
 
   /**
-   * Initialize watchlist with data from parent (if provided)
-   * or fetch from backend (if not provided).
+   * Initialize watchlist:
+   * - If initialWatchlist provided, use it.
+   * - Otherwise, wait for `user` to exist, then fetch.
    *
-   * This solves the race condition:
-   * - Parent fetches after auth is confirmed
-   * - Parent passes data to this hook
-   * - This hook uses provided data, skipping its own fetch
+   * ✅ Fix: do NOT set hasInitializedRef until we actually initialize.
+   * This prevents the permanent "watchlistId stays null" bug when mounted before auth is ready.
    */
   useEffect(() => {
     if (hasInitializedRef.current) return;
 
     if (options?.initialWatchlist) {
-      // Use provided initial data
-      console.log('[useWatchlist] Using initial watchlist data from parent');
+      console.log("[useWatchlist] Using initial watchlist data from parent");
       setWatchlistId(options.initialWatchlist.watchlist_id);
-      // The initialWatchlist now includes stocks directly
       setStocks(options.initialWatchlist.stocks || []);
       setIsLoading(false);
-    } else if (user) {
-      // No initial data, fetch from backend
-      console.log('[useWatchlist] No initial data, fetching from service');
-      fetchWatchlist();
+      hasInitializedRef.current = true;
+      return;
     }
 
-    hasInitializedRef.current = true;
+    // ✅ Wait for auth to be available
+    if (!user) return;
+
+    console.log("[useWatchlist] No initial data, fetching from service");
+    void (async () => {
+      await fetchWatchlist();
+      hasInitializedRef.current = true;
+    })();
   }, [options?.initialWatchlist, user, fetchWatchlist]);
 
   /**
@@ -98,28 +107,29 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     targetSell: number | null
   ) => {
     if (!watchlistId) {
-      console.warn('[useWatchlist] No watchlistId, cannot add stock');
+      console.warn("[useWatchlist] No watchlistId, cannot add stock");
       return;
     }
 
     try {
-      console.log('[useWatchlist] Adding stock:', { symbol, targetBuy, targetSell });
+      console.log("[useWatchlist] Adding stock:", { symbol, targetBuy, targetSell });
       await watchlistService.addStock({
         watchlist_id: watchlistId,
         symbol,
         target_buy: targetBuy,
         target_sell: targetSell,
       });
+
       // Refresh watchlist to get updated data
       await fetchWatchlist();
-      toast({ title: 'Stock Added' });
+      toast({ title: "Stock Added" });
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      console.error('[useWatchlist] Failed to add stock:', error.message);
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error("[useWatchlist] Failed to add stock:", e.message);
       toast({
-        title: 'Error',
-        description: 'Could not add stock.',
-        variant: 'destructive',
+        title: "Error",
+        description: "Could not add stock.",
+        variant: "destructive",
       });
     }
   };
@@ -133,22 +143,23 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     targetSell: number | null
   ) => {
     try {
-      console.log('[useWatchlist] Updating targets:', { itemId, targetBuy, targetSell });
+      console.log("[useWatchlist] Updating targets:", { itemId, targetBuy, targetSell });
       await watchlistService.updateStockTargets({
         item_id: itemId,
         target_buy: targetBuy,
         target_sell: targetSell,
       });
+
       // Refresh watchlist to get updated data
       await fetchWatchlist();
-      toast({ title: 'Targets Updated' });
+      toast({ title: "Targets Updated" });
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      console.error('[useWatchlist] Failed to update targets:', error.message);
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error("[useWatchlist] Failed to update targets:", e.message);
       toast({
-        title: 'Error',
-        description: 'Could not update targets.',
-        variant: 'destructive',
+        title: "Error",
+        description: "Could not update targets.",
+        variant: "destructive",
       });
     }
   };
@@ -159,87 +170,140 @@ export function useWatchlist(options?: UseWatchlistOptions) {
    */
   const removeStock = async (itemId: number) => {
     try {
-      console.log('[useWatchlist] Removing stock:', { itemId });
-      // Optimistic update: remove immediately from UI
+      console.log("[useWatchlist] Removing stock:", { itemId });
+      // Optimistic update
       setStocks((prev) => prev.filter((s) => s.id !== itemId));
       await watchlistService.removeStock(itemId);
-      toast({ title: 'Stock Removed' });
+      toast({ title: "Stock Removed" });
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      console.error('[useWatchlist] Failed to remove stock:', error.message);
-      // On error, refresh to restore the removed stock
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error("[useWatchlist] Failed to remove stock:", e.message);
+      // On error, refresh to restore
       await fetchWatchlist();
       toast({
-        title: 'Error',
-        description: 'Could not remove stock.',
-        variant: 'destructive',
+        title: "Error",
+        description: "Could not remove stock.",
+        variant: "destructive",
       });
     }
   };
 
   /**
+   * Build a symbol->price map and a stable getPrice() accessor
+   * ✅ Fix: useAnalysis expects either `prices[symbol]` or `getPrice(symbol)`
+   */
+  const prices = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const s of stocks) {
+      const sym = (s.symbol || "").toUpperCase();
+      if (sym && typeof (s as any).price === "number" && Number.isFinite((s as any).price)) {
+        map[sym] = (s as any).price;
+      }
+    }
+    return map;
+  }, [stocks]);
+
+  const getPrice = useCallback(
+    (symbol: string) => {
+      const sym = (symbol || "").toUpperCase();
+      return sym ? prices[sym] ?? null : null;
+    },
+    [prices]
+  );
+
+  /**
    * Set up Server-Sent Events (SSE) for real-time stock price updates.
-   * This is triggered after watchlistId is established.
+   * Triggered after watchlistId is established.
    */
   useEffect(() => {
+    // Clear any scheduled reconnect when dependencies change
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
     if (!user || !watchlistId) {
-      console.log('[useWatchlist] Skipping SSE setup. User:', !!user, 'WatchlistId:', watchlistId);
+      console.log("[useWatchlist] Skipping SSE setup. User:", !!user, "WatchlistId:", watchlistId);
       return;
     }
 
-    console.log('[useWatchlist] Setting up SSE stream for watchlist:', watchlistId);
+    console.log("[useWatchlist] Setting up SSE stream for watchlist:", watchlistId);
+
+    let cancelled = false;
 
     const setupStream = async () => {
-      try {
-        // Get a fresh token for the SSE URL
-        const idToken = await user.getIdToken();
-        const streamUrl = await watchlistService.getWatchlistStreamUrl(idToken);
-        console.log('[useWatchlist] Connecting to SSE stream:', streamUrl);
+      if (cancelled) return;
 
-        eventSourceRef.current = new EventSource(streamUrl);
+      try {
+        const streamUrl = await watchlistService.getWatchlistStreamUrl();
+        console.log("[useWatchlist] Connecting to SSE stream:", streamUrl);
+
+        // Close any prior stream
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+
+        eventSourceRef.current = new EventSource(streamUrl, { withCredentials: true });
 
         eventSourceRef.current.onmessage = (event) => {
           try {
             const update = JSON.parse(event.data);
-            console.log('[useWatchlist] Received SSE update:', update);
+            console.log("[useWatchlist] Received SSE update:", update);
+
             setStocks((prevStocks) =>
               prevStocks.map((stock) =>
                 stock.symbol === update.symbol
                   ? {
                       ...stock,
-                      price: update.price || stock.price,
-                      ...update,
+                      price: update.price ?? (stock as any).price,
+                      change: update.change ?? (stock as any).change,
+                      changePercent: update.changePercent ?? (stock as any).changePercent,
+                      lastUpdated: update.lastUpdated ?? (stock as any).lastUpdated,
                     }
                   : stock
               )
             );
           } catch (err) {
-            console.error('[useWatchlist] Error parsing SSE update:', err);
+            console.error("[useWatchlist] Error parsing SSE update:", err);
           }
         };
 
         eventSourceRef.current.onerror = (err) => {
-          console.error('[useWatchlist] SSE Error:', err);
+          console.error("[useWatchlist] SSE Error:", err);
+
+          // Close and retry with backoff
           eventSourceRef.current?.close();
           eventSourceRef.current = null;
+
+          if (cancelled) return;
+
           // Attempt to reconnect after delay
-          setTimeout(() => {
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (cancelled) return;
             if (user && watchlistId) {
-              console.log('[useWatchlist] Attempting SSE reconnection');
-              setupStream();
+              console.log("[useWatchlist] Attempting SSE reconnection");
+              void setupStream();
             }
           }, 5000);
         };
       } catch (err) {
-        console.error('[useWatchlist] Failed to setup SSE:', err);
+        console.error("[useWatchlist] Failed to setup SSE:", err);
       }
     };
 
-    setupStream();
+    void setupStream();
 
     return () => {
+      cancelled = true;
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
       if (eventSourceRef.current) {
-        console.log('[useWatchlist] Closing SSE connection');
+        console.log("[useWatchlist] Closing SSE connection");
         eventSourceRef.current.close();
         eventSourceRef.current = null;
       }
@@ -249,11 +313,15 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   return {
     stocks,
     isLoading,
+    loading: isLoading, // ✅ Alias for callers that expect `.loading`
     error,
     watchlistId,
+    prices,             // ✅ Used by useAnalysis (wl.prices?.[symbol])
+    getPrice,           // ✅ Used by useAnalysis (wl.getPrice(symbol))
     refresh: fetchWatchlist,
     addStock,
     updateTargets,
     removeStock,
   };
 }
+``

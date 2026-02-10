@@ -107,10 +107,10 @@ export interface Rule1Response {
  * We’ll keep it optional for now since there’s no history endpoint yet.
  */
 export interface Rule1HistoryEntry {
-  runAt: string; // ISO datetime
-  sticker?: number;
-  mos?: number;
-  growth?: number;
+  runAt: string;
+  stickerPrice?: number;
+  mosPrice?: number;
+  growth?: number;       // or growthRate if you standardize
   futurePE?: number;
   score?: number;
   category?: SuitabilityCategory;

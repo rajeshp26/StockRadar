@@ -1,4 +1,3 @@
-// src/app/(authenticated)/analysis/[symbol]/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -10,6 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 import { IntrinsicPanel } from "@/features/analysis/components/intrinsic-panel";
+import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
 
 /* ----------------------------------------------------------
    Placeholder panel for all non-Rule1 sections
@@ -54,7 +54,23 @@ export default function AnalysisPage() {
   const { symbol } = useParams<{ symbol: string }>();
   const upperSymbol = symbol?.toString().toUpperCase() ?? "";
 
+  // Real-time price from watchlist (via SSE)
+  const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
+
   const [tab, setTab] = useState("intrinsic");
+
+  // Render nicely formatted price text
+  const priceDisplay = price != null ? `$${price.toFixed(2)}` : "Price unavailable";
+  const changeDisplay =
+    change != null
+      ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
+      : null;
+  const pctDisplay =
+    changePercent != null
+      ? `(${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%)`
+      : null;
+
+  const updatedDisplay = lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : null;
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-6">
@@ -62,15 +78,33 @@ export default function AnalysisPage() {
       {/* STICKY HEADER                                          */}
       {/* ------------------------------------------------------ */}
       <div className="sticky top-0 bg-white z-20 pb-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col md:flex-row md:items-center md:gap-3 gap-1">
           <Button variant="ghost" onClick={() => router.back()}>
             ← Back
           </Button>
 
           <h1 className="text-2xl font-bold tracking-tight">{upperSymbol}</h1>
 
-          {/* You can fill Current Price here later when data provider is in place */}
-          <span className="text-slate-400 text-sm">(Price unavailable)</span>
+          {/* Real-time price */}
+          <div className="text-sm text-slate-600 flex items-center gap-2">
+            <span>{priceDisplay}</span>
+
+            {changeDisplay && pctDisplay && (
+              <span
+                className={
+                  change >= 0 ? "text-green-600" : "text-red-600"
+                }
+              >
+                {changeDisplay} {pctDisplay}
+              </span>
+            )}
+
+            {updatedDisplay && (
+              <span className="text-slate-400 text-xs">
+                • updated {updatedDisplay}
+              </span>
+            )}
+          </div>
         </div>
 
         <Separator className="mt-3" />

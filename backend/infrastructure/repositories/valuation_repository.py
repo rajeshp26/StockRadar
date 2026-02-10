@@ -575,3 +575,69 @@ class ValuationRepository:
         except Exception as e:
             logger.error("get_cached_intrinsic_value failed: %s", e)
             return None
+
+    # ---------------------------
+    # History (for API)
+    # ---------------------------
+    async def get_rule1_history(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Returns recent valuation_runs for a symbol (method='rule1'), newest first.
+        Shape of each item is frontend-friendly and avoids leaking entire snapshots:
+          {
+            "runAt": "2026-02-08T17:11:53.540409+00:00",
+            "runByUserId": 123,                 # nullable
+            "dataVersionTag": "v2026.02.08",    # nullable
+            "notes": "...",                     # nullable
+            "stickerPrice": 123.45,             # from output_snapshot
+            "mosPrice": 98.76,                  # from output_snapshot
+            "futurePrice": 150.00,              # from output_snapshot
+            "growthRate": 0.12,                 # from output_snapshot
+            "futurePE": 18.0                    # from output_snapshot
+          }
+        """
+        try:
+            ctx = await self.get_company_context(symbol)
+            if not ctx:
+                return []
+
+            company_id = ctx["company_id"]
+
+            resp = (
+                supabase.table("valuation_runs")
+                .select(
+                    "run_at, run_by_user_id, data_version_tag, notes, "
+                    "output_snapshot"
+                )
+                .eq("company_id", company_id)
+                .eq("method", "rule1")
+                .order("run_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            rows = resp.data or []
+
+            items: List[Dict[str, Any]] = []
+            for r in rows:
+                run_at_dt = _normalize_datetime(r.get("run_at"))
+                out = r.get("output_snapshot") or {}
+
+                items.append(
+                    {
+                        "runAt": run_at_dt.isoformat() if run_at_dt else None,
+                        "runByUserId": r.get("run_by_user_id"),
+                        "dataVersionTag": r.get("data_version_tag"),
+                        "notes": r.get("notes"),
+                        # commonly useful outputs for quick history cards
+                        "stickerPrice": out.get("sticker_price"),
+                        "mosPrice": out.get("mos_price"),
+                        "futurePrice": out.get("future_price"),
+                        "growthRate": out.get("growth_rate"),
+                        "futurePE": out.get("future_pe"),
+                    }
+                )
+
+            return items
+
+        except Exception as e:
+            logger.error("get_rule1_history failed for %s: %s", symbol, e)
+            return []

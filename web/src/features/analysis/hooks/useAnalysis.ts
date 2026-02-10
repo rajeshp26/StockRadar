@@ -1,91 +1,54 @@
-// src/features/analysis/hooks/useAnalysis.ts
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
 import type {
   AnalysisState,
-  Rule1Response,
-  Rule1History,
+  Rule1Valuation as CamelValuation,
+  DataQuality as UiDataQuality,
+  Applicability as UiApplicability,
   FreshnessInfo,
 } from "../types/analysis.types";
-import {
-  fetchRule1,
-  fetchRule1History,
-  recomputeRule1,
-  type RequestOpts,
-  type Rule1Overrides,
-} from "../services/analysis.service";
 
-/** Optional analytics hook-in for your events pipeline */
-export interface AnalysisAnalytics {
-  onPageViewed?: (symbol: string) => void;
-  onTabSelected?: (tab: string, symbol: string) => void;
-  onRecomputed?: (symbol: string, durationMs: number, ok: boolean) => void;
-  onHistoryViewed?: (symbol: string) => void;
-  onError?: (symbol: string, message: string) => void;
-}
+import { fetchRule1Outcome } from "@/features/analysis/services/analysis.service";
 
-export interface UseAnalysisOptions {
-  timeoutMs?: number;
-  analytics?: AnalysisAnalytics;
-  initialOverrides?: Rule1Overrides;
-}
+/**
+ * Notes:
+ * - We now align strictly to backend Rule1Response contract:
+ *   {
+ *     valuation: { ...camelCase },
+ *     applicability: { score, category, flags },
+ *     dataQuality: { freshnessDays, fallbacksUsed, inputDecisions }
+ *   }
+ * - No more multi-shape parsing or fundamentals fallback.
+ */
 
-/* ---------------------------------------------------------- */
-/* Freshness helpers                                           */
-/* ---------------------------------------------------------- */
-
-function toFreshnessInfo(lastComputedAt?: unknown): FreshnessInfo | undefined {
+function toFreshnessInfoFromDataQuality(dq?: UiDataQuality): FreshnessInfo | undefined {
+  const lastComputedAt = (dq?.freshnessDays as any)?.lastComputedAt;
   if (!lastComputedAt || typeof lastComputedAt !== "string") return undefined;
+
   const d = new Date(lastComputedAt);
   if (Number.isNaN(d.getTime())) return undefined;
+
   return {
     lastEvaluatedIso: lastComputedAt,
     lastEvaluatedDisplay: d.toLocaleString(),
   };
 }
 
-function inferFreshness(resp?: Rule1Response): FreshnessInfo | undefined {
-  const last = resp?.dataQuality?.freshnessDays?.["lastComputedAt"];
-  return toFreshnessInfo(last);
-}
-
-/* ---------------------------------------------------------- */
-/* State mapper                                                */
-/* ---------------------------------------------------------- */
-
-function toState(
-  response?: Rule1Response,
-  history?: Rule1History
-): Pick<
-  AnalysisState,
-  "valuation" | "applicability" | "dataQuality" | "history" | "freshness"
-> {
-  return {
-    valuation: response?.valuation,
-    applicability: response?.applicability,
-    dataQuality: response?.dataQuality,
-    history,
-    freshness: inferFreshness(response),
-  };
-}
-
-/* ---------------------------------------------------------- */
-/* Hook                                                        */
-/* ---------------------------------------------------------- */
-
 export function useAnalysis(
   symbol: string,
-  opts: UseAnalysisOptions = {}
+  opts: { analytics?: any } = {}
 ): AnalysisState & {
   reload: () => Promise<void>;
-  recompute: (overrides?: Rule1Overrides) => Promise<void>;
+  recompute: () => Promise<void>;
 } {
-  const { timeoutMs, analytics, initialOverrides } = opts;
+  const { analytics } = opts;
+  const currentSymbol = (symbol ?? "").toUpperCase();
 
   const [state, setState] = useState<AnalysisState>({
-    loading: true,
-    loadingHistory: true,
+    loading: false,
+    loadingHistory: false,
     error: undefined,
     valuation: undefined,
     applicability: undefined,
@@ -94,149 +57,75 @@ export function useAnalysis(
     freshness: undefined,
   });
 
-  const ctrlRef = useRef<AbortController | null>(null);
-  const currentSymbol = symbol?.toUpperCase() ?? "";
+  // Run at most once per symbol on mount/navigation
+  const ranForSymbol = useRef<Record<string, boolean>>({});
 
-  /* ------------------------------------------------------ */
-  /* LOAD (valuation + history in parallel)                 */
-  /* ------------------------------------------------------ */
-  const load = useCallback(
-    async (overrides?: Rule1Overrides) => {
-      if (!currentSymbol) {
-        setState((s) => ({
-          ...s,
-          loading: false,
-          loadingHistory: false,
-          error: "No symbol provided",
-        }));
-        analytics?.onError?.(currentSymbol, "No symbol provided");
-        return;
-      }
+  const doCompute = useCallback(async () => {
+    if (!currentSymbol) {
+      setState((s) => ({ ...s, loading: false, error: "No symbol provided" }));
+      return;
+    }
 
-      ctrlRef.current?.abort();
-      const ctrl = new AbortController();
-      ctrlRef.current = ctrl;
+    setState((s) => ({
+      ...s,
+      loading: true,
+      error: undefined,
+    }));
 
-      setState((s) => ({
-        ...s,
-        loading: true,
-        loadingHistory: true,
+    const outcome = await fetchRule1Outcome(currentSymbol);
+
+    if (outcome.status === "ok") {
+      const payload = outcome.payload;
+
+      // Backend contract already returns these shapes:
+      // - valuation is camelCase Rule1Valuation
+      // - applicability and dataQuality match our UI types
+      const valuation = payload.valuation as unknown as CamelValuation;
+      const applicability = payload.applicability as unknown as UiApplicability;
+      const dataQuality = payload.dataQuality as unknown as UiDataQuality;
+
+      setState({
+        loading: false,
+        loadingHistory: false,
         error: undefined,
-      }));
+        valuation,
+        applicability,
+        dataQuality,
+        history: undefined,
+        freshness: toFreshnessInfoFromDataQuality(dataQuality),
+      });
 
-      try {
-        const req: RequestOpts = {
-          timeoutMs,
-          signal: ctrl.signal,
-          overrides: overrides ?? initialOverrides,
-        };
+      return;
+    }
 
-        // MINIMAL CHANGE FOR FILE 9 — catch history safely
-        const [response, history] = await Promise.all([
-          fetchRule1(currentSymbol, req),
-          fetchRule1History(currentSymbol, req).catch(() => ({
-            symbol: currentSymbol,
-            items: [],
-          })),
-        ]);
+    // Error path (includes backend 422, 404, etc.)
+    const msg = outcome.message || "Failed to compute valuation.";
+    setState((s) => ({
+      ...s,
+      loading: false,
+      error: msg,
+    }));
+    analytics?.onError?.(currentSymbol, msg);
+  }, [currentSymbol, analytics]);
 
-        setState({
-          loading: false,
-          loadingHistory: false,
-          error: undefined,
-          ...toState(response, history),
-        });
-      } catch (err: unknown) {
-        if ((err as any)?.name === "AbortError") return;
-
-        const msg = (err as Error)?.message ?? "Failed to load analysis";
-        setState((s) => ({
-          ...s,
-          loading: false,
-          loadingHistory: false,
-          error: msg,
-        }));
-        analytics?.onError?.(currentSymbol, msg);
-      }
-    },
-    [currentSymbol, timeoutMs, analytics, initialOverrides]
-  );
-
-  /* ------------------------------------------------------ */
-  /* INITIAL + SYMBOL CHANGE                                */
-  /* ------------------------------------------------------ */
   useEffect(() => {
-    analytics?.onPageViewed?.(currentSymbol);
-    load();
-    return () => ctrlRef.current?.abort();
-  }, [currentSymbol]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!currentSymbol) return;
 
-  const reload = useCallback(async () => {
-    await load();
-  }, [load]);
+    if (!ranForSymbol.current[currentSymbol]) {
+      ranForSymbol.current[currentSymbol] = true;
+      void doCompute();
+    }
+  }, [currentSymbol, doCompute]);
 
-  /* ------------------------------------------------------ */
-  /* RECOMPUTE                                              */
-  /* ------------------------------------------------------ */
-  const recompute = useCallback(
-    async (overrides?: Rule1Overrides) => {
-      if (!currentSymbol) return;
+  const recompute = useCallback(async () => {
+    if (!currentSymbol) return;
+    await doCompute();
+  }, [currentSymbol, doCompute]);
 
-      const t0 = performance.now();
-      setState((s) => ({ ...s, loading: true, error: undefined }));
-
-      try {
-        const response = await recomputeRule1(currentSymbol, {
-          timeoutMs,
-          overrides,
-        });
-
-        // MINIMAL CHANGE FOR FILE 9 — catch history safely
-        const history = await fetchRule1History(currentSymbol, {
-          timeoutMs,
-        }).catch(() => ({
-          symbol: currentSymbol,
-          items: [],
-        }));
-
-        setState({
-          loading: false,
-          loadingHistory: false,
-          error: undefined,
-          ...toState(response, history),
-        });
-
-        analytics?.onRecomputed?.(currentSymbol, performance.now() - t0, true);
-      } catch (err: unknown) {
-        const msg = (err as Error)?.message ?? "Recompute failed";
-        setState((s) => ({ ...s, loading: false, error: msg }));
-        analytics?.onRecomputed?.(currentSymbol, performance.now() - t0, false);
-        analytics?.onError?.(currentSymbol, msg);
-      }
-    },
-    [currentSymbol, timeoutMs, analytics]
-  );
-
-  /* ------------------------------------------------------ */
-  /* FRESHNESS (stable memo)                                */
-  /* ------------------------------------------------------ */
-  const freshness = useMemo<FreshnessInfo | undefined>(() => {
-    return (
-      inferFreshness(
-        state.valuation && state.applicability && state.dataQuality
-          ? ({
-              valuation: state.valuation,
-              applicability: state.applicability,
-              dataQuality: state.dataQuality,
-            } as Rule1Response)
-          : undefined
-      ) ?? state.freshness
-    );
-  }, [state.valuation, state.applicability, state.dataQuality, state.freshness]);
+  const reload = recompute;
 
   return {
     ...state,
-    freshness,
     reload,
     recompute,
   };

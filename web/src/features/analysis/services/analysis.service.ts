@@ -1,216 +1,170 @@
-// src/features/analysis/services/analysis.service.ts
+// web/src/features/analysis/services/analysis.service.ts
+/**
+ * Analysis service:
+ * - Uses same-origin fetch with `credentials: "include"` so the proxy sees the __session cookie.
+ * - Aligns strictly to backend contract:
+ *     POST /valuations/{symbol}/rule1 returns Rule1Response:
+ *       { valuation: {...camelCase}, applicability: {...}, dataQuality: {...} }
+ */
 
-import type {
-    Rule1Response,
-    Rule1History,
-    ApiError,
-  } from "../types/analysis.types";
-  
-  /**
-   * Optional overrides that map 1:1 to backend Rule1RequestOverrides.
-   * All values are optional; when omitted, defaults/DB-resolved inputs are used.
-   */
-  export interface Rule1Overrides {
-    discountRate?: number;   // 0..1
-    horizonYears?: number;   // 1..50
-    marginOfSafety?: number; // 0..1
-    forceGrowth?: number;    // decimal (e.g., 0.12 for 12%)
-    forceFuturePE?: number;  // >= 0
-  }
-  
-  /**
-   * Optional request options for fetches (timeout, abort, overrides).
-   */
-  export interface RequestOpts {
-    signal?: AbortSignal;
-    timeoutMs?: number;        // default applied if set (uses AbortController)
-    overrides?: Rule1Overrides;
-  }
-  
-  /* ---------------------------------- */
-  /* Internal helpers                    */
-  /* ---------------------------------- */
-  
-  const JSON_HEADERS: HeadersInit = {
-    "Content-Type": "application/json",
-  };
-  
-  /**
-   * Build a fully qualified proxy path. We never call the backend directly.
-   * This keeps tokens/keys hidden and centralizes logging/retries in the proxy.
-   */
-  function api(path: string) {
-    return `/api/proxy${path}`;
-  }
-  
-  /**
-   * Parses a Response as JSON (when possible) and throws a typed error for non-2xx.
-   */
-  async function handleJson<T>(res: Response): Promise<T> {
-    if (res.ok) {
-      // 204 No Content will throw on json(); guard it.
-      if (res.status === 204) return {} as T;
-      return (await res.json()) as T;
-    }
-    let body: unknown = undefined;
-    try {
-      body = await res.json();
-    } catch {
-      // fall through
-    }
-  
-    const detail =
-      (body as ApiError)?.detail ??
-      (typeof body === "string" ? body : res.statusText) ??
-      "Request failed";
-  
-    // Surface rate-limit info if present
-    const retryAfter = res.headers.get("retry-after");
-    const more = retryAfter != null ? ` (retry after ${retryAfter}s)` : "";
-  
-    throw new Error(`${detail}${more}`);
-  }
-  
-  /**
-   * Wraps fetch with:
-   *  - credentials: "include" (so proxy can attach Firebase token)
-   *  - optional timeout via AbortController
-   */
-  async function doFetch(input: RequestInfo, init: RequestInit = {}, timeoutMs?: number) {
-    if (!timeoutMs) {
-      return fetch(input, { credentials: "include", ...init });
-    }
-  
-    const ctrl = new AbortController();
-    const id = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      return await fetch(input, {
-        credentials: "include",
-        signal: ctrl.signal,
-        ...init,
-      });
-    } finally {
-      clearTimeout(id);
-    }
-  }
-  
-  /* ---------------------------------- */
-  /* Public API                          */
-  /* ---------------------------------- */
-  
-  /**
-   * Loads (or returns cached) Rule #1 valuation for a symbol by calling:
-   *   POST /valuations/:symbol/rule1
-   * with no `force` query (the backend decides cached vs recompute).
-   *
-   * Notes:
-   *  - We use POST here because your backend route is POST-only.
-   *  - If you later add a read-only GET, we can switch transparently.
-   */
-  export async function fetchRule1(
-    symbol: string,
-    opts: RequestOpts = {}
-  ): Promise<Rule1Response> {
-    if (!symbol) throw new Error("symbol is required");
-    const { overrides, signal, timeoutMs } = opts;
-  
-    const url = api(`/valuations/${encodeURIComponent(symbol)}/rule1`);
-    const res = await doFetch(
-      url,
-      {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify(overrides ?? {}),
-        signal,
+type Json = Record<string, any>;
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+/* -------------------------------------------------------------------------- */
+/* Backend-aligned types                                                      */
+/* -------------------------------------------------------------------------- */
+
+export type Severity = "critical" | "high" | "medium" | "low" | "info";
+
+export type DiagnosticFlag = {
+  code: string;
+  severity: Severity;
+  message: string;
+  evidence?: Record<string, any> | null;
+  recommendation?: string | null;
+};
+
+export type Applicability = {
+  score: number; // 0..100
+  category: "Good" | "Caution" | "Poor";
+  flags: DiagnosticFlag[];
+};
+
+export type DataQuality = {
+  freshnessDays: Record<string, any>;
+  fallbacksUsed: boolean;
+  inputDecisions: Record<string, any>;
+};
+
+export type Rule1Valuation = {
+  symbol: string;
+  companyId: number;
+  currency: string;
+
+  eps0: number;
+  growth: number;
+  futurePE: number;
+
+  futureEPS: number;
+  futurePrice: number;
+
+  discountRate: number;
+  horizonYears: number;
+  mos: number;
+
+  stickerPrice: number;
+  mosPrice: number;
+};
+
+export type Rule1Response = {
+  valuation: Rule1Valuation;
+  applicability: Applicability;
+  dataQuality: DataQuality;
+};
+
+export type Rule1Outcome =
+  | { status: "ok"; payload: Rule1Response }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/* -------------------------------------------------------------------------- */
+/* Endpoint helpers                                                           */
+/* -------------------------------------------------------------------------- */
+
+function apiPath(path: string) {
+  return `/api/proxy${path}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Low-level fetch with timeout & credentials                                 */
+/* -------------------------------------------------------------------------- */
+
+async function doFetch(
+  input: RequestInfo,
+  init: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal,
+      ...init,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...(init.headers || {}),
       },
-      timeoutMs
-    );
-  
-    return handleJson<Rule1Response>(res);
+    });
+  } finally {
+    clearTimeout(id);
   }
-  
-  /**
-   * Forces a recompute of Rule #1 valuation:
-   *   POST /valuations/:symbol/rule1?force=true
-   */
-  export async function recomputeRule1(
-    symbol: string,
-    opts: RequestOpts = {}
-  ): Promise<Rule1Response> {
-    if (!symbol) throw new Error("symbol is required");
-    const { overrides, signal, timeoutMs } = opts;
-  
-    const url = api(`/valuations/${encodeURIComponent(symbol)}/rule1`) + `?force=true`;
-  
-    const res = await doFetch(
-      url,
-      {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify(overrides ?? {}),
-        signal,
-      },
-      timeoutMs
-    );
-  
-    return handleJson<Rule1Response>(res);
+}
+
+async function readJsonSafe<T = Json>(res: Response): Promise<T | null> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return null;
   }
-  
-  /**
-   * History:
-   * Thin integration for valuation_runs history. If the endpoint is not available
-   * in your environment yet, you can handle errors in the caller and show an empty state.
-   *
-   * Expected backend path:
-   *   GET /valuations/:symbol/rule1/history
-   */
-  export async function fetchRule1History(
-    symbol: string,
-    opts: RequestOpts = {}
-  ): Promise<Rule1History> {
-    if (!symbol) throw new Error("symbol is required");
-    const { signal, timeoutMs } = opts;
-  
-    const url = api(`/valuations/${encodeURIComponent(symbol)}/rule1/history`);
-    const res = await doFetch(
-      url,
-      {
-        method: "GET",
-        headers: { "Accept": "application/json" },
-        signal,
-      },
-      timeoutMs
-    );
-  
-    // If the endpoint is not present or returns non-2xx, this will throw.
-    // The hook will catch and degrade gracefully to an empty history.
-    const data = await handleJson<Rule1History>(res);
-  
-    // Ensure a consistent shape back to the UI
+}
+
+/* -------------------------------------------------------------------------- */
+/* Public API                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Compute Rule #1 valuation for the given ticker.
+ * Backend contract:
+ * 200 → Rule1Response { valuation, applicability, dataQuality }
+ * Non-200 → { detail: "..."} (FastAPI) or { message: "..." }
+ */
+export async function fetchRule1Outcome(ticker: string): Promise<Rule1Outcome> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/rule1`);
+
+  let res: Response;
+  try {
+    // Body is optional for this endpoint; keep {} for consistency
+    res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
+  } catch (err: any) {
     return {
-      symbol: data?.symbol?.toUpperCase?.() ?? symbol.toUpperCase(),
-      items: Array.isArray(data?.items) ? data.items : [],
+      status: "error",
+      message: err?.message || "Network error while computing valuation.",
     };
   }
-  
-  /**
-   * Convenience wrapper for a single call site that wants the pair:
-   * { valuation + meta, history }
-   */
-  export async function loadAnalysisBundle(
-    symbol: string,
-    opts: RequestOpts = {}
-  ): Promise<{
-    response: Rule1Response;
-    history: Rule1History;
-  }> {
-    const [response, history] = await Promise.all([
-      fetchRule1(symbol, opts),
-      // If history fails, allow the caller to decide empty vs error
-      fetchRule1History(symbol, opts).catch<Rule1History>(() => ({
-        symbol: symbol.toUpperCase(),
-        items: [],
-      })),
-    ]);
-    return { response, history };
+
+  if (res.ok) {
+    const body = await readJsonSafe<Rule1Response>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return {
+        status: "error",
+        message: "Invalid response from server (missing valuation payload).",
+        httpStatus: 502,
+      };
+    }
+    return { status: "ok", payload: body };
   }
+
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  const message =
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`;
+
+  return { status: "error", message, httpStatus: res.status };
+}
+
+/**
+ * Convenience wrapper: returns Rule1Response or throws.
+ */
+export async function fetchRule1(ticker: string): Promise<Rule1Response> {
+  const out = await fetchRule1Outcome(ticker);
+  if (out.status === "ok") return out.payload;
+
+  const err: any = new Error(out.message || "Failed to compute valuation.");
+  err.status = out.httpStatus;
+  throw err;
+}
