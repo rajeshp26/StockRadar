@@ -3,6 +3,7 @@
 import { useMemo, useState, useCallback } from "react";
 import { useAnalysis } from "../hooks/useAnalysis";
 import { useLivePrice } from "../hooks/useLivePrice";
+import { useRule1History } from "../hooks/useRule1History";
 import type { DiagnosticFlag, Rule1Valuation } from "../types/analysis.types";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,6 +47,13 @@ function fmtPct(n?: number, digits = 1) {
 function fmtInt(n?: number) {
   if (n == null || Number.isNaN(n)) return "—";
   return `${Math.round(n)}`;
+}
+
+function fmtDateTime(iso?: string) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
 }
 
 /* ---------------------------------------------------------- */
@@ -163,9 +171,11 @@ export function IntrinsicPanel({
     applicability,
     dataQuality,
     freshness,
-    history,
     recompute,
   } = useAnalysis(symbol, { analytics });
+
+  const { loading: loadingHistory, error: historyError, history, reload: reloadHistory } =
+    useRule1History(symbol);
 
   const [recomputing, setRecomputing] = useState(false);
 
@@ -173,24 +183,19 @@ export function IntrinsicPanel({
     setRecomputing(true);
     try {
       await recompute();
+      // After recompute, refresh history so the new run appears
+      await reloadHistory();
     } finally {
       setRecomputing(false);
     }
-  }, [recompute]);
+  }, [recompute, reloadHistory]);
 
   const { price, currency: priceCcy, loading: loadingPrice } = useLivePrice(symbol);
-
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
-  // NOTE: Backend flags are like R1-NEGEPS, R1-NOEPS, etc.
-  // Keeping this logic harmless; it will usually be null unless you add a specific flag code.
   const uncomputableReason = useMemo(() => {
     return applicability?.flags?.find((f) => f.code === "UNCOMPUTABLE_RULE1")?.message;
   }, [applicability?.flags]);
-
-  /* ------------------------------------------------------ */
-  /* Intrinsic Summary                                      */
-  /* ------------------------------------------------------ */
 
   const summary = useMemo(() => {
     const curr = valuation?.currency ?? "USD";
@@ -215,14 +220,8 @@ export function IntrinsicPanel({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Metric
-                label="Sticker Price"
-                value={fmtCurrency(valuation?.stickerPrice, curr)}
-              />
-              <Metric
-                label="MOS Price"
-                value={fmtCurrency(valuation?.mosPrice, curr)}
-              />
+              <Metric label="Sticker Price" value={fmtCurrency(valuation?.stickerPrice, curr)} />
+              <Metric label="MOS Price" value={fmtCurrency(valuation?.mosPrice, curr)} />
               <Metric
                 label="Current Price"
                 value={
@@ -265,10 +264,6 @@ export function IntrinsicPanel({
     handleRecompute,
   ]);
 
-  /* ------------------------------------------------------ */
-  /* How We Arrived Here                                    */
-  /* ------------------------------------------------------ */
-
   const breakdown = useMemo(() => {
     const v: Rule1Valuation | undefined = valuation;
     const curr = v?.currency ?? "USD";
@@ -308,7 +303,7 @@ export function IntrinsicPanel({
         ? decisions.assumptions.mos
         : undefined);
 
-    // ✅ FIX: cached path sets v.futureEPS = 0.0, which blocks derivation if we use ??
+    // ✅ Fix: cached path often sets futureEPS=0.0; derive if needed
     const futureEPSDerived =
       typeof eps0 === "number" &&
       typeof growth === "number" &&
@@ -317,9 +312,7 @@ export function IntrinsicPanel({
         : undefined;
 
     const futureEPS =
-      typeof v?.futureEPS === "number" && v.futureEPS > 0
-        ? v.futureEPS
-        : futureEPSDerived;
+      typeof v?.futureEPS === "number" && v.futureEPS > 0 ? v.futureEPS : futureEPSDerived;
 
     return (
       <Card>
@@ -349,10 +342,6 @@ export function IntrinsicPanel({
     );
   }, [loading, valuation, dataQuality?.inputDecisions]);
 
-  /* ------------------------------------------------------ */
-  /* Suitability                                            */
-  /* ------------------------------------------------------ */
-
   const suitability = useMemo(() => {
     return (
       <Card>
@@ -363,16 +352,11 @@ export function IntrinsicPanel({
           {loading ? (
             <Skeleton className="h-6 w-64" />
           ) : (
-            <ScoreBar
-              score={applicability?.score}
-              category={applicability?.category}
-            />
+            <ScoreBar score={applicability?.score} category={applicability?.category} />
           )}
 
           {!loading && uncomputableReason ? (
-            <div className="rounded border bg-slate-50 p-3 text-sm">
-              {uncomputableReason}
-            </div>
+            <div className="rounded border bg-slate-50 p-3 text-sm">{uncomputableReason}</div>
           ) : null}
 
           {!loading && applicability?.flags?.length ? (
@@ -390,10 +374,7 @@ export function IntrinsicPanel({
             </div>
           ) : null}
 
-          <button
-            className="text-sm underline"
-            onClick={() => setShowDiagnostics((v) => !v)}
-          >
+          <button className="text-sm underline" onClick={() => setShowDiagnostics((v) => !v)}>
             {showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
           </button>
 
@@ -402,6 +383,64 @@ export function IntrinsicPanel({
       </Card>
     );
   }, [loading, applicability, showDiagnostics, uncomputableReason]);
+
+  const historyCard = useMemo(() => {
+    const items = history?.items ?? [];
+    const curr = valuation?.currency ?? "USD";
+
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>History</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loadingHistory ? (
+            <div className="space-y-2">
+              <Skeleton className="h-6" />
+              <Skeleton className="h-6" />
+              <Skeleton className="h-6" />
+            </div>
+          ) : historyError ? (
+            <div className="text-sm text-slate-600">
+              Could not load history.{" "}
+              <button className="underline" onClick={() => void reloadHistory()}>
+                Retry
+              </button>
+            </div>
+          ) : items.length === 0 ? (
+            <p className="text-sm text-slate-500">No history yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[220px]">Date</TableHead>
+                  <TableHead>Sticker</TableHead>
+                  <TableHead>MOS</TableHead>
+                  <TableHead>Growth</TableHead>
+                  <TableHead>Future P/E</TableHead>
+                  <TableHead>Score</TableHead>
+                  <TableHead>Category</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((r, idx) => (
+                  <TableRow key={`${r.runAt}-${idx}`}>
+                    <TableCell>{fmtDateTime(r.runAt)}</TableCell>
+                    <TableCell>{fmtCurrency(r.stickerPrice, curr)}</TableCell>
+                    <TableCell>{fmtCurrency(r.mosPrice, curr)}</TableCell>
+                    <TableCell>{fmtPct(r.growth)}</TableCell>
+                    <TableCell>{fmtInt(r.futurePE)}</TableCell>
+                    <TableCell>{fmtInt(r.score)}</TableCell>
+                    <TableCell>{r.category ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }, [loadingHistory, historyError, history, reloadHistory, valuation?.currency]);
 
   return (
     <div className="space-y-6">
@@ -417,15 +456,7 @@ export function IntrinsicPanel({
 
       <Separator />
 
-      {/* History placeholder (unchanged) */}
-      <Card>
-        <CardHeader>
-          <CardTitle>History</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-slate-500">No history yet.</p>
-        </CardContent>
-      </Card>
+      {historyCard}
     </div>
   );
 }

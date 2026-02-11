@@ -68,6 +68,26 @@ export type Rule1Outcome =
   | { status: "error"; message: string; httpStatus?: number };
 
 /* -------------------------------------------------------------------------- */
+/* History types (backend endpoint contract)                                   */
+/* -------------------------------------------------------------------------- */
+
+export type Rule1HistoryEntry = {
+  runAt: string;
+  stickerPrice?: number;
+  mosPrice?: number;
+  futurePrice?: number;
+  growth?: number;
+  futurePE?: number;
+  score?: number;
+  category?: "Good" | "Caution" | "Poor";
+};
+
+export type Rule1History = {
+  symbol: string;
+  items: Rule1HistoryEntry[];
+};
+
+/* -------------------------------------------------------------------------- */
 /* Endpoint helpers                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -158,13 +178,29 @@ export async function fetchRule1Outcome(ticker: string): Promise<Rule1Outcome> {
 }
 
 /**
- * Convenience wrapper: returns Rule1Response or throws.
+ * ✅ Fetch Rule #1 valuation history
+ * GET /valuations/:symbol/rule1/history
  */
-export async function fetchRule1(ticker: string): Promise<Rule1Response> {
-  const out = await fetchRule1Outcome(ticker);
-  if (out.status === "ok") return out.payload;
+export async function fetchRule1History(ticker: string): Promise<Rule1History> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/rule1/history`);
 
-  const err: any = new Error(out.message || "Failed to compute valuation.");
-  err.status = out.httpStatus;
-  throw err;
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    // Fail-safe: history should not break UI
+    return { symbol: ticker.toUpperCase(), items: [] };
+  }
+
+  if (res.ok) {
+    const body = await readJsonSafe<Rule1History>(res);
+    if (body && typeof body === "object" && Array.isArray(body.items)) {
+      return body;
+    }
+    // If response shape is wrong, fail-safe empty
+    return { symbol: ticker.toUpperCase(), items: [] };
+  }
+
+  // Non-200: fail-safe empty
+  return { symbol: ticker.toUpperCase(), items: [] };
 }

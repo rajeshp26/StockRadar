@@ -576,24 +576,27 @@ class ValuationRepository:
             logger.error("get_cached_intrinsic_value failed: %s", e)
             return None
 
-    # ---------------------------
-    # History (for API)
-    # ---------------------------
-    async def get_rule1_history(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
+    # =====================================================================
+    # ✅ RULE #1 HISTORY (FIXED)
+    # =====================================================================
+
+    async def get_rule1_history(
+        self, symbol: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
         """
-        Returns recent valuation_runs for a symbol (method='rule1'), newest first.
-        Shape of each item is frontend-friendly and avoids leaking entire snapshots:
-          {
-            "runAt": "2026-02-08T17:11:53.540409+00:00",
-            "runByUserId": 123,                 # nullable
-            "dataVersionTag": "v2026.02.08",    # nullable
-            "notes": "...",                     # nullable
-            "stickerPrice": 123.45,             # from output_snapshot
-            "mosPrice": 98.76,                  # from output_snapshot
-            "futurePrice": 150.00,              # from output_snapshot
-            "growthRate": 0.12,                 # from output_snapshot
-            "futurePE": 18.0                    # from output_snapshot
-          }
+        Returns recent Rule #1 valuation runs (newest first).
+
+        Shape (FE-ready):
+        {
+          runAt,
+          stickerPrice,
+          mosPrice,
+          futurePrice,
+          growth,
+          futurePE,
+          score,
+          category
+        }
         """
         try:
             ctx = await self.get_company_context(symbol)
@@ -605,8 +608,7 @@ class ValuationRepository:
             resp = (
                 supabase.table("valuation_runs")
                 .select(
-                    "run_at, run_by_user_id, data_version_tag, notes, "
-                    "output_snapshot"
+                    "run_at, run_by_user_id, data_version_tag, notes, output_snapshot"
                 )
                 .eq("company_id", company_id)
                 .eq("method", "rule1")
@@ -614,25 +616,27 @@ class ValuationRepository:
                 .limit(limit)
                 .execute()
             )
-            rows = resp.data or []
 
+            rows = resp.data or []
             items: List[Dict[str, Any]] = []
+
             for r in rows:
-                run_at_dt = _normalize_datetime(r.get("run_at"))
-                out = r.get("output_snapshot") or {}
+                run_at = _normalize_datetime(r.get("run_at"))
+                snap = r.get("output_snapshot") or {}
+
+                valuation = snap.get("valuation") or {}
+                applicability = snap.get("applicability") or {}
 
                 items.append(
                     {
-                        "runAt": run_at_dt.isoformat() if run_at_dt else None,
-                        "runByUserId": r.get("run_by_user_id"),
-                        "dataVersionTag": r.get("data_version_tag"),
-                        "notes": r.get("notes"),
-                        # commonly useful outputs for quick history cards
-                        "stickerPrice": out.get("sticker_price"),
-                        "mosPrice": out.get("mos_price"),
-                        "futurePrice": out.get("future_price"),
-                        "growthRate": out.get("growth_rate"),
-                        "futurePE": out.get("future_pe"),
+                        "runAt": run_at.isoformat() if run_at else None,
+                        "stickerPrice": valuation.get("stickerPrice"),
+                        "mosPrice": valuation.get("mosPrice"),
+                        "futurePrice": valuation.get("futurePrice"),
+                        "growth": valuation.get("growth"),
+                        "futurePE": valuation.get("futurePE"),
+                        "score": applicability.get("score"),
+                        "category": applicability.get("category"),
                     }
                 )
 

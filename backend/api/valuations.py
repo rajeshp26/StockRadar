@@ -142,7 +142,7 @@ async def compute_rule1_valuation(
 # =====================================================================
 @router.get(
     "/{symbol}/rule1/history",
-    summary="Recent valuation runs for this symbol. Returns [] when no history.",
+    summary="Recent Rule #1 valuation runs. Returns empty list when no history exists.",
 )
 @limiter.limit("30/minute")
 async def get_rule1_history(
@@ -151,33 +151,42 @@ async def get_rule1_history(
     user=Depends(get_current_user_dep),
 ):
     """
-    Returns prior valuation runs from `valuation_runs`.
+    Returns prior Rule #1 valuation runs in FE-ready shape.
 
-    The Analysis page expects:
+    Response shape:
     {
       "symbol": "AAPL",
-      "items": [...]
+      "items": [
+        {
+          "runAt": "...",
+          "stickerPrice": 123.45,
+          "mosPrice": 98.76,
+          "futurePrice": 150.00,
+          "growth": 0.12,
+          "futurePE": 18,
+          "score": 72,
+          "category": "Good"
+        }
+      ]
     }
-
-    If no history exists or the repository method is not implemented yet,
-    return an empty array (normalized shape) instead of throwing.
     """
     try:
         repo = ValuationRepository()
-        history = await repo.get_rule1_history(symbol.upper())  # implement in repository if missing
+        items = await repo.get_rule1_history(symbol.upper())
 
-        # If the repository already provides the final shape, just return it.
-        if isinstance(history, dict) and "items" in history:
-            return history
-
-        # Otherwise, normalize to the shape that the FE expects.
         return {
             "symbol": symbol.upper(),
-            "items": history or [],
+            "items": items or [],
         }
 
-    except Exception:
-        # Fail safe: always return empty history to avoid UI errors.
+    except Exception as e:
+        logger.error(
+            "Failed to fetch Rule #1 history for %s: %s",
+            symbol,
+            e,
+            exc_info=True,
+        )
+        # Fail-safe: history must never break the Analysis page
         return {
             "symbol": symbol.upper(),
             "items": [],

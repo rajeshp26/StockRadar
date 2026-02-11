@@ -103,15 +103,21 @@ export interface Rule1Response {
 }
 
 /**
- * Minimal shape used to render rows in the (future) History table.
- * We’ll keep it optional for now since there’s no history endpoint yet.
+ * ✅ History entries returned by:
+ * GET /valuations/:symbol/rule1/history
+ *
+ * Backend returns camelCase fields derived from valuation_runs.output_snapshot.
  */
 export interface Rule1HistoryEntry {
-  runAt: string;
+  runAt: string; // ISO datetime
+
   stickerPrice?: number;
   mosPrice?: number;
-  growth?: number;       // or growthRate if you standardize
+  futurePrice?: number;
+
+  growth?: number;
   futurePE?: number;
+
   score?: number;
   category?: SuitabilityCategory;
 }
