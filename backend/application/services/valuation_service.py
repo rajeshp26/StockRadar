@@ -17,17 +17,15 @@ from infrastructure.repositories.valuation_repository import ValuationRepository
 from application.services.recompute_guard import RecomputeGuard
 from application.services.rule1_suitability import evaluate_rule1_suitability
 
+from application.services.ddm_service import DdmService
+from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
+
 logger = logging.getLogger(__name__)
 
-# Non-scoring informational heuristics (do NOT affect metric score)
 SECTOR_CYCL = {"Energy", "Materials"}
 
 
 def _as_date(d: Any) -> Optional[date]:
-    """
-    Normalize Supabase DATE payloads (which may be ISO strings) into datetime.date.
-    Returns None on failure.
-    """
     if d is None:
         return None
     if isinstance(d, date) and not isinstance(d, datetime):
@@ -42,22 +40,20 @@ def _as_date(d: Any) -> Optional[date]:
 
 class ValuationService:
     """
-    Computes intrinsic value models (Rule #1 for now) and emits diagnostics.
-    Provides a cached-vs-recompute entry point using RecomputeGuard.
+    Computes intrinsic value models and emits diagnostics.
 
     DESIGN/SECURITY RULES:
     - Service MUST NOT query Supabase directly. Repository owns DB access.
-    - Applicability.score/category MUST come from metric scorecard evaluator
-      (evaluate_rule1_suitability). No dual scoring systems.
-    - Cached path must not default to 100/Good without an audited run.
+    - Cached path must not fabricate suitability score/category.
     """
 
     def __init__(self, repo: ValuationRepository, guard: RecomputeGuard):
         self.repo = repo
         self.guard = guard
+        self.ddm = DdmService(repo=repo, guard=guard)
 
     # ---------------------------------------------------------------------
-    # Public API
+    # Rule #1 (existing)
     # ---------------------------------------------------------------------
     async def compute_rule1_if_stale(
         self,
@@ -66,17 +62,6 @@ class ValuationService:
         overrides: Optional[Rule1RequestOverrides] = None,
         force: bool = False,
     ) -> Rule1Response:
-        """
-        Cached-vs-recompute entry point.
-
-        Behavior:
-        - If force=True -> recompute
-        - Else -> RecomputeGuard decides based on dependency timestamps
-        - If cached -> return intrinsic_value_analysis + hydrate diagnostics from last valuation_runs snapshot (best-effort)
-
-        IMPORTANT:
-        - Cached path intentionally sets futureEPS = 0.0 (FE derives if needed)
-        """
         overrides = overrides or Rule1RequestOverrides()
 
         ctx = await self.repo.get_company_context(symbol)
@@ -86,7 +71,7 @@ class ValuationService:
         company_id = int(ctx["company_id"])
         currency = ctx.get("currency") or "USD"
 
-        decision = await self.guard.cached_or_recompute(company_id=company_id, force=force)
+        decision = await self.guard.cached_or_recompute(company_id=company_id, method="rule1", force=force)
 
         if decision.should_recompute:
             logger.info(
@@ -109,12 +94,10 @@ class ValuationService:
 
         cached = await self.repo.get_cached_intrinsic_value(company_id)
         if not cached:
-            # No IVA persisted yet—fallback to compute now
             logger.info("[VALUATION][R1] cached path missing IVA; recomputing for %s", symbol)
             return await self.compute_rule1_with_diagnostics(symbol, user_id, overrides)
 
-        # Hydrate applicability/dataQuality/assumptions from last audited run (repo-owned)
-        diagnostics_resp = await self.repo.get_last_rule1_diagnostics(company_id)
+        diagnostics_resp = await self.repo.get_last_method_diagnostics(company_id, method="rule1")
 
         valuation = Rule1Valuation(
             symbol=symbol.upper(),
@@ -123,7 +106,7 @@ class ValuationService:
             eps0=float(cached.get("current_eps") or 0.0),
             growth=float(cached.get("growth_rate") or 0.0),
             futurePE=float(cached.get("future_pe") or 0.0),
-            futureEPS=0.0,  # cached path intentionally leaves this to FE derivation
+            futureEPS=0.0,
             futurePrice=float(cached.get("future_price") or 0.0),
             discountRate=float(diagnostics_resp.get("assumptions", {}).get("discountRate", 0.15)),
             horizonYears=int(diagnostics_resp.get("assumptions", {}).get("horizonYears", 10)),
@@ -134,7 +117,6 @@ class ValuationService:
 
         last_computed = cached.get("last_updated")
 
-        # If no audited run exists, do not default to 100/Good (misleading)
         if not diagnostics_resp.get("applicability"):
             applicability_payload: Dict[str, Any] = {
                 "score": 0,
@@ -143,9 +125,7 @@ class ValuationService:
                     {
                         "code": "R1-NO-AUDIT",
                         "severity": "info",
-                        "message": (
-                            "No prior valuation run found; suitability scorecard not available on cached path."
-                        ),
+                        "message": "No prior valuation run found; suitability scorecard not available on cached path.",
                         "recommendation": "Run Recompute once to generate an audited scorecard.",
                     }
                 ],
@@ -156,18 +136,9 @@ class ValuationService:
                 "inputDecisions": {},
             }
         else:
-            applicability_payload = diagnostics_resp.get("applicability") or {
-                "score": 0,
-                "category": "Caution",
-                "flags": [],
-            }
-            data_quality_payload = diagnostics_resp.get("dataQuality") or {
-                "freshnessDays": {},
-                "fallbacksUsed": False,
-                "inputDecisions": {},
-            }
+            applicability_payload = diagnostics_resp.get("applicability") or {"score": 0, "category": "Caution", "flags": []}
+            data_quality_payload = diagnostics_resp.get("dataQuality") or {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
 
-        # Attach IVA last_updated into freshnessDays.lastComputedAt for FE display consistency
         if isinstance(data_quality_payload.get("freshnessDays"), dict) and last_computed:
             data_quality_payload["freshnessDays"]["lastComputedAt"] = last_computed
 
@@ -183,19 +154,8 @@ class ValuationService:
         user_id: Optional[int],
         overrides: Optional[Rule1RequestOverrides] = None,
     ) -> Rule1Response:
-        """
-        Compute Phil Town's Rule #1 (sticker + MOS) with diagnostics,
-        persist intrinsic_value_analysis + valuation_runs, return FE-ready response.
-
-        IMPORTANT:
-        - Applicability.score/category MUST come from metric scorecard evaluator.
-        - Other diagnostics may be appended as flags but DO NOT change score/category.
-        """
         overrides = overrides or Rule1RequestOverrides()
 
-        # ------------------------------------------------------------------
-        # Context & Parameters
-        # ------------------------------------------------------------------
         ctx = await self.repo.get_company_context(symbol)
         if not ctx:
             raise ValueError(f"Symbol '{symbol}' not found in companies.")
@@ -205,29 +165,17 @@ class ValuationService:
         sector = ctx.get("sector")
         industry = ctx.get("industry")
 
-        params = await self.repo.get_method_params(company_id)
+        params = await self.repo.get_method_params(company_id, method="rule1")
 
-        discount_rate = float(
-            overrides.discountRate if overrides.discountRate is not None else params.get("discount_rate", 0.15)
-        )
-        horizon_years = int(
-            overrides.horizonYears if overrides.horizonYears is not None else params.get("horizon_years", 10)
-        )
-        mos = float(
-            overrides.marginOfSafety if overrides.marginOfSafety is not None else params.get("margin_of_safety", 0.50)
-        )
+        discount_rate = float(overrides.discountRate if overrides.discountRate is not None else params.get("discount_rate", 0.15))
+        horizon_years = int(overrides.horizonYears if overrides.horizonYears is not None else params.get("horizon_years", 10))
+        mos = float(overrides.marginOfSafety if overrides.marginOfSafety is not None else params.get("margin_of_safety", 0.50))
 
-        # ------------------------------------------------------------------
-        # DataQuality bundles
-        # ------------------------------------------------------------------
-        extra_flags: List[DiagnosticFlag] = []  # non-scoring flags
+        extra_flags: List[DiagnosticFlag] = []
         dq_freshness: Dict[str, Any] = {}
         input_decisions: Dict[str, Any] = {}
         fallbacks_used = False
 
-        # ------------------------------------------------------------------
-        # Resolve EPS0 (prefer trailing EPS; fallback to computed EPS)
-        # ------------------------------------------------------------------
         trailing = await self.repo.get_trailing_eps(company_id)
         eps0: Optional[float] = None
         eps_snapshot_date: Optional[date] = None
@@ -236,31 +184,16 @@ class ValuationService:
         if trailing and trailing.get("trailing_eps") is not None and prefer_trailing:
             eps0 = float(trailing["trailing_eps"])
             eps_snapshot_date = _as_date(trailing.get("snapshot_date"))
-            if eps_snapshot_date:
-                dq_freshness["trailingEPS"] = (date.today() - eps_snapshot_date).days
-            else:
-                dq_freshness["trailingEPS"] = None
+            dq_freshness["trailingEPS"] = (date.today() - eps_snapshot_date).days if eps_snapshot_date else None
         else:
             eps0 = await self.repo.compute_ttm_eps_fallback(company_id)
             fallbacks_used = True
             dq_freshness["trailingEPS"] = None
 
         if eps0 is None:
-            extra_flags.append(
-                DiagnosticFlag(
-                    code="R1-NOEPS",
-                    severity="high",
-                    message="EPS not available; valuation relies on fallbacks or may be low confidence.",
-                )
-            )
+            extra_flags.append(DiagnosticFlag(code="R1-NOEPS", severity="high", message="EPS not available; valuation may be low confidence."))
         elif eps0 <= 0.05:
-            extra_flags.append(
-                DiagnosticFlag(
-                    code="R1-NEGEPS",
-                    severity="critical",
-                    message="Negative or near-zero EPS—Rule #1 valuation is not meaningful for this company.",
-                )
-            )
+            extra_flags.append(DiagnosticFlag(code="R1-NEGEPS", severity="critical", message="Negative or near-zero EPS—Rule #1 valuation is not meaningful."))
 
         input_decisions["eps0"] = {
             "value": eps0,
@@ -268,9 +201,6 @@ class ValuationService:
             "snapshotDate": eps_snapshot_date.isoformat() if eps_snapshot_date else None,
         }
 
-        # ------------------------------------------------------------------
-        # Resolve Growth (g) with fallbacks & clamping
-        # ------------------------------------------------------------------
         growth: Optional[float] = None
         growth_source = ""
         prefer_forecast = bool(params.get("prefer_forecast_growth", True))
@@ -279,7 +209,6 @@ class ValuationService:
             growth = float(overrides.forceGrowth)
             growth_source = "override"
         else:
-            # Forecast growth
             if prefer_forecast:
                 growth_row = await self.repo.get_eps_forecast_growth(company_id)
                 if growth_row and growth_row.get("estimate_eps_growth") is not None:
@@ -288,7 +217,6 @@ class ValuationService:
                     rep_date = _as_date(growth_row.get("report_date"))
                     dq_freshness["epsForecast"] = (date.today() - rep_date).days if rep_date else None
 
-            # EPS CAGR fallback
             if growth is None:
                 eps_hist = await self.repo.get_eps_history(company_id)
                 g_eps = self._cagr_from_series(eps_hist, key="eps")
@@ -296,7 +224,6 @@ class ValuationService:
                     growth = g_eps
                     growth_source = "eps_cagr_approx"
 
-            # Revenue CAGR fallback
             if growth is None:
                 rev_hist = await self.repo.get_revenue_history(company_id)
                 g_rev = self._cagr_from_series(rev_hist, key="revenue")
@@ -305,7 +232,6 @@ class ValuationService:
                     growth_source = "revenue_cagr_approx"
                     fallbacks_used = True
 
-            # Industry median growth fallback
             if growth is None and sector and industry:
                 im = await self.repo.get_industry_multiples(sector, industry)
                 if im and im.get("median_eps_growth") is not None:
@@ -313,56 +239,32 @@ class ValuationService:
                     growth_source = "industry.median_eps_growth"
                     fallbacks_used = True
 
-            # Conservative default
             if growth is None:
                 growth = 0.10
                 growth_source = "conservative_default"
                 fallbacks_used = True
 
-        # Clamp growth
         g_min = float(params.get("growth_clamp_min", 0.02))
         g_max = float(params.get("growth_clamp_max", 0.25))
         growth_raw = growth
         growth = self._clamp(float(growth or 0.0), g_min, g_max)
 
         if growth_raw is not None and growth_raw > growth:
-            extra_flags.append(
-                DiagnosticFlag(
-                    code="R1-GCLAMP-HIGH",
-                    severity="low",
-                    message=f"Growth input {growth_raw:.2%} clamped to {g_max:.2%} for conservatism.",
-                )
-            )
+            extra_flags.append(DiagnosticFlag(code="R1-GCLAMP-HIGH", severity="low", message=f"Growth input {growth_raw:.2%} clamped to {g_max:.2%} for conservatism."))
         if growth_raw is not None and growth_raw < growth:
-            extra_flags.append(
-                DiagnosticFlag(
-                    code="R1-GCLAMP-LOW",
-                    severity="low",
-                    message=f"Growth input {growth_raw:.2%} raised to {g_min:.2%} minimum.",
-                )
-            )
+            extra_flags.append(DiagnosticFlag(code="R1-GCLAMP-LOW", severity="low", message=f"Growth input {growth_raw:.2%} raised to {g_min:.2%} minimum."))
 
-        input_decisions["growth"] = {
-            "valueRaw": growth_raw,
-            "valueClamped": growth,
-            "source": growth_source,
-        }
+        input_decisions["growth"] = {"valueRaw": growth_raw, "valueClamped": growth, "source": growth_source}
 
-        # ------------------------------------------------------------------
-        # Future PE (guardrails)
-        # ------------------------------------------------------------------
         if overrides.forceFuturePE is not None:
             future_pe = float(overrides.forceFuturePE)
             pe_source = "override"
         else:
             pe_floor = float(params.get("pe_floor", 8))
             pe_cap = float(params.get("pe_cap", 50))
-
-            # 2x growth rule (growth in % units)
             two_x_growth_rule = min(2 * (growth * 100.0), pe_cap)
             rule_pe = max(pe_floor, two_x_growth_rule)
             pe_source = "2xGrowthRule"
-
             if sector and industry and bool(params.get("use_industry_pe_if_lower", True)):
                 im = await self.repo.get_industry_multiples(sector, industry)
                 if im and im.get("median_pe") is not None:
@@ -370,14 +272,12 @@ class ValuationService:
                     if industry_pe < rule_pe:
                         future_pe = industry_pe
                         pe_source = "industry_median_pe"
-                        extra_flags.append(
-                            DiagnosticFlag(
-                                code="R1-PERULE",
-                                severity="info",
-                                message="Used industry median PE for conservatism.",
-                                evidence={"industryMedianPE": industry_pe, "twoXGrowthRulePE": rule_pe},
-                            )
-                        )
+                        extra_flags.append(DiagnosticFlag(
+                            code="R1-PERULE",
+                            severity="info",
+                            message="Used industry median PE for conservatism.",
+                            evidence={"industryMedianPE": industry_pe, "twoXGrowthRulePE": rule_pe},
+                        ))
                     else:
                         future_pe = rule_pe
                 else:
@@ -387,9 +287,6 @@ class ValuationService:
 
         input_decisions["futurePE"] = {"selected": future_pe, "rule": pe_source}
 
-        # ------------------------------------------------------------------
-        # Compute Rule #1 values
-        # ------------------------------------------------------------------
         eps0_safe = float(eps0 or 0.0)
         future_eps = eps0_safe * ((1.0 + growth) ** horizon_years) if eps0_safe > 0 else 0.0
         future_price = future_eps * float(future_pe)
@@ -397,72 +294,24 @@ class ValuationService:
         sticker_price = future_price / denominator if denominator > 0 else 0.0
         mos_price = sticker_price * (1.0 - mos)
 
-        # ------------------------------------------------------------------
-        # Non-scoring diagnostics (info only)
-        # ------------------------------------------------------------------
         if sector in SECTOR_CYCL:
-            extra_flags.append(
-                DiagnosticFlag(
-                    code="R1-SECTOR-CYCL",
-                    severity="medium",
-                    message="Cyclical sector—earnings can swing materially across cycles.",
-                    recommendation="Use conservative growth and a wider MOS; review drawdown metric carefully.",
-                )
-            )
+            extra_flags.append(DiagnosticFlag(
+                code="R1-SECTOR-CYCL",
+                severity="medium",
+                message="Cyclical sector—earnings can swing materially across cycles.",
+                recommendation="Use conservative growth and a wider MOS; review drawdown metric carefully.",
+            ))
 
-        # Splits after EPS snapshot (info)
         if eps_snapshot_date:
             split_cnt = await self.repo.get_recent_split_count_after(company_id, eps_snapshot_date)
             if split_cnt > 0:
-                extra_flags.append(
-                    DiagnosticFlag(
-                        code="R1-SPLIT",
-                        severity="medium",
-                        message="Recent split after EPS snapshot—EPS may be unadjusted.",
-                        evidence={"splitCount": split_cnt, "epsSnapshotDate": eps_snapshot_date.isoformat()},
-                    )
-                )
-
-        # Freshness warnings (info)
-        stale_eps_days = int(params.get("stale_days_eps", 30))
-        stale_fc_days = int(params.get("stale_days_forecast", 90))
-        if isinstance(dq_freshness.get("trailingEPS"), int) and dq_freshness["trailingEPS"] > stale_eps_days:
-            extra_flags.append(
-                DiagnosticFlag(
-                    code="R1-STALE",
+                extra_flags.append(DiagnosticFlag(
+                    code="R1-SPLIT",
                     severity="medium",
-                    message=f"EPS snapshot is {dq_freshness['trailingEPS']} days old.",
-                )
-            )
-        if isinstance(dq_freshness.get("epsForecast"), int) and dq_freshness["epsForecast"] > stale_fc_days:
-            extra_flags.append(
-                DiagnosticFlag(
-                    code="R1-STALE",
-                    severity="low",
-                    message=f"EPS forecast is {dq_freshness['epsForecast']} days old.",
-                )
-            )
+                    message="Recent split after EPS snapshot—EPS may be unadjusted.",
+                    evidence={"splitCount": split_cnt, "epsSnapshotDate": eps_snapshot_date.isoformat()},
+                ))
 
-        # Earnings proximity (info)
-        next_earn = await self.repo.get_next_earnings_date(company_id)
-        warn_days = int(params.get("warn_earnings_within_days", 14))
-        if next_earn:
-            next_earn_d = _as_date(next_earn)
-            if next_earn_d:
-                delta = (next_earn_d - date.today()).days
-                if 0 <= delta <= warn_days:
-                    extra_flags.append(
-                        DiagnosticFlag(
-                            code="R1-EVENT",
-                            severity="info",
-                            message=f"Earnings in {delta} days; valuation may change materially.",
-                            evidence={"nextEarningsDate": next_earn_d.isoformat()},
-                        )
-                    )
-
-        # ------------------------------------------------------------------
-        # ✅ Metric suitability (authoritative score/category)
-        # ------------------------------------------------------------------
         metric_score, metric_category, metric_flags, suitability_evidence = await evaluate_rule1_suitability(
             repo=self.repo,
             company_id=company_id,
@@ -471,9 +320,6 @@ class ValuationService:
 
         all_flags: List[DiagnosticFlag] = list(metric_flags) + list(extra_flags)
 
-        # ------------------------------------------------------------------
-        # Persist IVA + valuation_runs (audit)
-        # ------------------------------------------------------------------
         await self.repo.upsert_intrinsic_value_analysis(
             company_id,
             {
@@ -515,21 +361,17 @@ class ValuationService:
                 "fallbacksUsed": bool(fallbacks_used),
                 "inputDecisions": {
                     **input_decisions,
-                    "assumptions": {
-                        "discountRate": float(discount_rate),
-                        "horizonYears": int(horizon_years),
-                        "mos": float(mos),
-                    },
+                    "assumptions": {"discountRate": float(discount_rate), "horizonYears": int(horizon_years), "mos": float(mos)},
                 },
             },
-            # Audit-only (not part of FE contract)
             "suitabilityEvidence": suitability_evidence,
             "lastComputedAt": now_iso,
         }
 
         await self.repo.insert_valuation_run(
-            company_id,
-            {
+            company_id=company_id,
+            method="rule1",
+            run={
                 "run_by_user_id": user_id,
                 "input_snapshot": {"overrides": overrides.dict()},
                 "assumption_snapshot": params,
@@ -546,17 +388,25 @@ class ValuationService:
         )
 
     # ---------------------------------------------------------------------
-    # Internals
+    # DDM public API (new)
     # ---------------------------------------------------------------------
+    async def compute_ddm_if_stale(
+        self,
+        symbol: str,
+        user_id: Optional[int],
+        variant: str,  # "gordon" | "two_stage"
+        overrides: Optional[DdmRequestOverrides] = None,
+        force: bool = False,
+    ) -> DdmResponse:
+        return await self.ddm.compute_ddm_if_stale(symbol=symbol, user_id=user_id, variant=variant, overrides=overrides, force=force)
+
+    # Internals (existing)
     @staticmethod
     def _clamp(val: float, lo: float, hi: float) -> float:
         return max(lo, min(hi, val))
 
     @staticmethod
     def _cagr(v0: float, vN: float, years: int) -> Optional[float]:
-        """
-        CAGR helper. Returns None if invalid inputs.
-        """
         if years <= 0 or v0 <= 0 or vN <= 0:
             return None
         try:
@@ -565,11 +415,6 @@ class ValuationService:
             return None
 
     def _cagr_from_series(self, rows: List[Dict[str, Any]], key: str) -> Optional[float]:
-        """
-        rows: list of dicts with keys ['fiscal_year', key]
-        Computes CAGR using first and last usable points.
-        Returns None if insufficient history.
-        """
         vals: List[float] = []
         years: List[int] = []
         for r in rows:
@@ -589,7 +434,6 @@ class ValuationService:
         v0, vN = vals[0], vals[-1]
         n_years = years[-1] - years[0]
         if n_years < 3:
-            # Require at least ~3 years span for stability
             return None
 
         return self._cagr(v0, vN, n_years)

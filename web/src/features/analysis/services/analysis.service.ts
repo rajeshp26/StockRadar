@@ -2,102 +2,24 @@
 /**
  * Analysis service:
  * - Uses same-origin fetch with `credentials: "include"` so the proxy sees the __session cookie.
- * - Aligns strictly to backend contract:
- *     POST /valuations/{symbol}/rule1 returns Rule1Response:
- *       { valuation: {...camelCase}, applicability: {...}, dataQuality: {...} }
+ * - Aligns strictly to backend contract.
  */
+
+import type {
+  Rule1Response,
+  Rule1History,
+  DdmResponse,
+  DdmHistory,
+  DdmVariant,
+} from "../types/analysis.types";
 
 type Json = Record<string, any>;
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-/* -------------------------------------------------------------------------- */
-/* Backend-aligned types                                                      */
-/* -------------------------------------------------------------------------- */
-
-export type Severity = "critical" | "high" | "medium" | "low" | "info";
-
-export type DiagnosticFlag = {
-  code: string;
-  severity: Severity;
-  message: string;
-  evidence?: Record<string, any> | null;
-  recommendation?: string | null;
-};
-
-export type Applicability = {
-  score: number; // 0..100
-  category: "Good" | "Caution" | "Poor";
-  flags: DiagnosticFlag[];
-};
-
-export type DataQuality = {
-  freshnessDays: Record<string, any>;
-  fallbacksUsed: boolean;
-  inputDecisions: Record<string, any>;
-};
-
-export type Rule1Valuation = {
-  symbol: string;
-  companyId: number;
-  currency: string;
-
-  eps0: number;
-  growth: number;
-  futurePE: number;
-
-  futureEPS: number;
-  futurePrice: number;
-
-  discountRate: number;
-  horizonYears: number;
-  mos: number;
-
-  stickerPrice: number;
-  mosPrice: number;
-};
-
-export type Rule1Response = {
-  valuation: Rule1Valuation;
-  applicability: Applicability;
-  dataQuality: DataQuality;
-};
-
-export type Rule1Outcome =
-  | { status: "ok"; payload: Rule1Response }
-  | { status: "error"; message: string; httpStatus?: number };
-
-/* -------------------------------------------------------------------------- */
-/* History types (backend endpoint contract)                                   */
-/* -------------------------------------------------------------------------- */
-
-export type Rule1HistoryEntry = {
-  runAt: string;
-  stickerPrice?: number;
-  mosPrice?: number;
-  futurePrice?: number;
-  growth?: number;
-  futurePE?: number;
-  score?: number;
-  category?: "Good" | "Caution" | "Poor";
-};
-
-export type Rule1History = {
-  symbol: string;
-  items: Rule1HistoryEntry[];
-};
-
-/* -------------------------------------------------------------------------- */
-/* Endpoint helpers                                                           */
-/* -------------------------------------------------------------------------- */
-
 function apiPath(path: string) {
   return `/api/proxy${path}`;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Low-level fetch with timeout & credentials                                 */
-/* -------------------------------------------------------------------------- */
 
 async function doFetch(
   input: RequestInfo,
@@ -133,21 +55,18 @@ async function readJsonSafe<T = Json>(res: Response): Promise<T | null> {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Public API                                                                 */
+/* RULE #1                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Compute Rule #1 valuation for the given ticker.
- * Backend contract:
- * 200 → Rule1Response { valuation, applicability, dataQuality }
- * Non-200 → { detail: "..."} (FastAPI) or { message: "..." }
- */
+export type Rule1Outcome =
+  | { status: "ok"; payload: Rule1Response }
+  | { status: "error"; message: string; httpStatus?: number };
+
 export async function fetchRule1Outcome(ticker: string): Promise<Rule1Outcome> {
   const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/rule1`);
 
   let res: Response;
   try {
-    // Body is optional for this endpoint; keep {} for consistency
     res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
   } catch (err: any) {
     return {
@@ -177,18 +96,13 @@ export async function fetchRule1Outcome(ticker: string): Promise<Rule1Outcome> {
   return { status: "error", message, httpStatus: res.status };
 }
 
-/**
- * ✅ Fetch Rule #1 valuation history
- * GET /valuations/:symbol/rule1/history
- */
 export async function fetchRule1History(ticker: string): Promise<Rule1History> {
   const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/rule1/history`);
 
   let res: Response;
   try {
     res = await doFetch(url, { method: "GET" });
-  } catch (err: any) {
-    // Fail-safe: history should not break UI
+  } catch {
     return { symbol: ticker.toUpperCase(), items: [] };
   }
 
@@ -197,10 +111,91 @@ export async function fetchRule1History(ticker: string): Promise<Rule1History> {
     if (body && typeof body === "object" && Array.isArray(body.items)) {
       return body;
     }
-    // If response shape is wrong, fail-safe empty
+  }
+  return { symbol: ticker.toUpperCase(), items: [] };
+}
+
+/* -------------------------------------------------------------------------- */
+/* DDM                                                                          */
+/* -------------------------------------------------------------------------- */
+
+export type DdmOutcome =
+  | { status: "ok"; payload: DdmResponse }
+  | { status: "error"; message: string; httpStatus?: number };
+
+export async function fetchDdmOutcome(
+  ticker: string,
+  variant: DdmVariant = "gordon"
+): Promise<DdmOutcome> {
+  const url = apiPath(
+    `/valuations/${encodeURIComponent(ticker)}/ddm?variant=${encodeURIComponent(
+      variant
+    )}`
+  );
+
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
+  } catch (err: any) {
+    return {
+      status: "error",
+      message: err?.message || "Network error while computing DDM.",
+    };
+  }
+
+  if (res.ok) {
+    const body = await readJsonSafe<DdmResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return {
+        status: "error",
+        message: "Invalid response from server (missing DDM payload).",
+        httpStatus: 502,
+      };
+    }
+    return { status: "ok", payload: body };
+  }
+
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  const message =
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`;
+
+  return { status: "error", message, httpStatus: res.status };
+}
+
+/**
+ * DDM History pattern:
+ * - Must NEVER break the Analysis page.
+ * - If endpoint is missing or returns non-200, return empty list.
+ *
+ * Expected backend endpoint (recommended):
+ *   GET /valuations/:symbol/ddm/history?variant=gordon|two_stage
+ */
+export async function fetchDdmHistory(
+  ticker: string,
+  variant: DdmVariant = "gordon"
+): Promise<DdmHistory> {
+  const url = apiPath(
+    `/valuations/${encodeURIComponent(ticker)}/ddm/history?variant=${encodeURIComponent(
+      variant
+    )}`
+  );
+
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch {
     return { symbol: ticker.toUpperCase(), items: [] };
   }
 
-  // Non-200: fail-safe empty
+  if (res.ok) {
+    const body = await readJsonSafe<DdmHistory>(res);
+    if (body && typeof body === "object" && Array.isArray(body.items)) {
+      return body;
+    }
+    return { symbol: ticker.toUpperCase(), items: [] };
+  }
+
   return { symbol: ticker.toUpperCase(), items: [] };
 }

@@ -22,17 +22,17 @@ export const VALUATION_METHODS: ValuationMethodConfig[] = [
     enabled: true,
   },
   {
-    id: "dcf",
-    label: "Discounted Cash Flow",
-    shortLabel: "DCF",
-    description: "Cash‑flow based intrinsic value",
-    enabled: false, // enable later
-  },
-  {
     id: "ddm",
     label: "Dividend Discount Model",
     shortLabel: "DDM",
     description: "Dividend yield & growth based valuation",
+    enabled: true, // ✅ now enabled
+  },
+  {
+    id: "dcf",
+    label: "Discounted Cash Flow",
+    shortLabel: "DCF",
+    description: "Cash‑flow based intrinsic value",
     enabled: false,
   },
   {

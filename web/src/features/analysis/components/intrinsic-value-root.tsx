@@ -1,33 +1,27 @@
 "use client";
 
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import dynamic from "next/dynamic";
+import { useState } from "react";
+
+import { IntrinsicPanel } from "./intrinsic-panel";
+import { MethodSelector, type IntrinsicMethod } from "./method-selector";
 import { ValuationOverview } from "./valuation-overview";
-import { Rule1Panel } from "./rule1-panel";
-import { VALUATION_METHODS } from "../valuation/methods";
+
+const DdmPanel = dynamic(() => import("./ddm-panel").then((m) => m.DdmPanel), {
+  loading: () => <p className="text-sm text-slate-500">Loading DDM…</p>,
+  ssr: false,
+});
 
 export function IntrinsicValueRoot({ symbol }: { symbol: string }) {
+  const [method, setMethod] = useState<IntrinsicMethod>("rule1");
+
   return (
-    <Tabs defaultValue="overview">
-      <TabsList>
-        <TabsTrigger value="overview">Overview</TabsTrigger>
+    <div className="space-y-6">
+      <ValuationOverview />
 
-        {VALUATION_METHODS.filter(m => m.enabled).map(m => (
-          <TabsTrigger key={m.id} value={m.id}>
-            {m.shortLabel}
-          </TabsTrigger>
-        ))}
-      </TabsList>
+      <MethodSelector method={method} onChange={setMethod} />
 
-      <TabsContent value="overview">
-        <ValuationOverview />
-      </TabsContent>
-
-      <TabsContent value="rule1">
-        <Rule1Panel symbol={symbol} />
-      </TabsContent>
-
-      {/* Future methods drop in here */}
-      {/* <TabsContent value="dcf"><DcfPanel /></TabsContent> */}
-    </Tabs>
+      {method === "rule1" ? <IntrinsicPanel symbol={symbol} /> : <DdmPanel symbol={symbol} />}
+    </div>
   );
 }

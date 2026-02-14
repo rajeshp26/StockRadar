@@ -14,6 +14,7 @@ from dependencies import (
     limiter,
 )
 from domain.models.valuation_rule1 import Rule1RequestOverrides, Rule1Response
+from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
 from infrastructure.repositories.supabase_repository import SupabaseUserRepository
 from application.services.valuation_service import ValuationService
 
@@ -21,40 +22,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/valuations", tags=["Valuations"])
 
-# Conservative ticker validation (uppercased)
 _SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
 
-# ---------------------------------------------------------------------------
-# Identity helpers (provider‑agnostic)
-# ---------------------------------------------------------------------------
-
 def _extract_auth_id(user_payload: dict) -> Optional[str]:
-    """
-    Extract provider identity from decoded auth payload.
-    Supports Firebase (`uid`) and generic OIDC (`sub`).
-    """
     if not isinstance(user_payload, dict):
         return None
-    return (
-        user_payload.get("uid")
-        or user_payload.get("user_id")
-        or user_payload.get("sub")
-    )
+    return user_payload.get("uid") or user_payload.get("user_id") or user_payload.get("sub")
 
 
-def _resolve_internal_user_id(
-    user_payload: dict,
-    user_repo: SupabaseUserRepository,
-) -> Optional[int]:
-    """
-    Map provider auth_id -> internal users.user_id (INTEGER).
-    Returns None if mapping does not exist (audit row stays nullable).
-    """
+def _resolve_internal_user_id(user_payload: dict, user_repo: SupabaseUserRepository) -> Optional[int]:
     auth_id = _extract_auth_id(user_payload)
     if not auth_id:
         return None
-
     row = user_repo.find_by_firebase_uid(auth_id)
     try:
         return int(row["user_id"]) if row and row.get("user_id") is not None else None
@@ -65,16 +45,10 @@ def _resolve_internal_user_id(
 def _normalize_symbol(symbol: str) -> str:
     s = (symbol or "").strip().upper()
     if not _SYMBOL_RE.match(s):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid symbol format.",
-        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid symbol format.")
     return s
 
 
-# =====================================================================
-# POST /valuations/{symbol}/rule1
-# =====================================================================
 @router.post(
     "/{symbol}/rule1",
     response_model=Rule1Response,
@@ -82,59 +56,23 @@ def _normalize_symbol(symbol: str) -> str:
 )
 @limiter.limit("10/minute")
 async def compute_rule1_valuation(
-    request: Request,  # required by slowapi limiter
+    request: Request,
     symbol: str,
     overrides: Rule1RequestOverrides = Body(default_factory=Rule1RequestOverrides),
-    force: bool = Query(
-        default=False,
-        description=(
-            "If true, recompute even when cached result is fresh. "
-            "Recommended for analysts or when overrides are intentionally used."
-        ),
-    ),
+    force: bool = Query(default=False, description="If true, recompute even when cached result is fresh."),
     user=Depends(get_current_user_dep),
     user_repo: SupabaseUserRepository = Depends(get_user_repository),
     valuation_service: ValuationService = Depends(get_valuation_service),
 ) -> Rule1Response:
-    """
-    API boundary for Rule #1 valuation.
-
-    Responsibilities (by design):
-    - Enforce auth + rate limits
-    - Resolve provider identity -> internal users.user_id
-    - Delegate computation to ValuationService
-    - Return FE‑ready Rule1Response
-
-    This endpoint does NOT:
-    - Read the database directly
-    - Compute valuation logic
-    - Shape raw DB rows
-    """
     try:
         sym = _normalize_symbol(symbol)
-
         internal_user_id = _resolve_internal_user_id(user, user_repo)
-
-        return await valuation_service.compute_rule1_if_stale(
-            symbol=sym,
-            user_id=internal_user_id,
-            overrides=overrides,
-            force=force,
-        )
-
+        return await valuation_service.compute_rule1_if_stale(sym, internal_user_id, overrides, force=force)
     except HTTPException:
-        # Pass through validation / explicit HTTP errors
         raise
-
     except ValueError as ve:
-        # Typical: symbol not found in companies table
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(ve),
-        ) from ve
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve)) from ve
     except Exception as e:
-        # Stable FE contract: always return { detail: ... }
         logger.error("Rule #1 valuation failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -142,52 +80,62 @@ async def compute_rule1_valuation(
         ) from e
 
 
-# =====================================================================
-# GET /valuations/{symbol}/rule1/history
-# =====================================================================
+@router.post(
+    "/{symbol}/ddm",
+    response_model=DdmResponse,
+    summary="Compute or return cached Dividend Discount Model (DDM) valuation (Gordon or Two-Stage)",
+)
+@limiter.limit("10/minute")
+async def compute_ddm_valuation(
+    request: Request,
+    symbol: str,
+    variant: str = Query(default="gordon", description="DDM variant: gordon | two_stage"),
+    overrides: DdmRequestOverrides = Body(default_factory=DdmRequestOverrides),
+    force: bool = Query(default=False, description="If true, recompute even when cached result is fresh."),
+    user=Depends(get_current_user_dep),
+    user_repo: SupabaseUserRepository = Depends(get_user_repository),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+) -> DdmResponse:
+    try:
+        sym = _normalize_symbol(symbol)
+        v = (variant or "gordon").strip().lower()
+        if v not in {"gordon", "two_stage"}:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid variant. Use gordon|two_stage.")
+        internal_user_id = _resolve_internal_user_id(user, user_repo)
+        return await valuation_service.compute_ddm_if_stale(sym, internal_user_id, variant=v, overrides=overrides, force=force)
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve)) from ve
+    except Exception as e:
+        logger.error("DDM valuation failed for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="DDM valuation unavailable due to missing dividend or financial data.",
+        ) from e
+
 @router.get(
-    "/{symbol}/rule1/history",
-    summary="Recent Rule #1 valuation runs. Returns empty list when no history exists.",
+    "/{symbol}/ddm/history",
+    summary="Recent DDM valuation runs (method-specific). Returns empty list when none exist.",
 )
 @limiter.limit("30/minute")
-async def get_rule1_history(
-    request: Request,  # required by slowapi limiter
+async def get_ddm_history(
+    request: Request,
     symbol: str,
+    variant: str = Query(default="gordon", description="gordon | two_stage"),
     user=Depends(get_current_user_dep),
     valuation_service: ValuationService = Depends(get_valuation_service),
 ):
-    """
-    Returns prior Rule #1 valuation runs in FE‑ready shape:
-    {
-      "symbol": "AAPL",
-      "items": [ ... ]
-    }
-
-    History must NEVER break the Analysis page.
-    """
     try:
         sym = _normalize_symbol(symbol)
+        v = (variant or "gordon").strip().lower()
+        if v not in {"gordon", "two_stage"}:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid variant. Use gordon|two_stage.")
 
-        # History is intentionally read-only and repo-backed
-        items = await valuation_service.repo.get_rule1_history(sym)
+        method = "ddm_gordon" if v == "gordon" else "ddm_two_stage"
+        items = await valuation_service.repo.get_ddm_history(sym, method=method)
 
-        return {
-            "symbol": sym,
-            "items": items or [],
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        logger.error(
-            "Failed to fetch Rule #1 history for %s: %s",
-            symbol,
-            e,
-            exc_info=True,
-        )
-        # Fail-safe: history endpoint must never error the UI
-        return {
-            "symbol": (symbol or "").strip().upper(),
-            "items": [],
-        }
+        return {"symbol": sym, "items": items or []}
+    except Exception:
+        # fail-safe: never break UI
+        return {"symbol": (symbol or "").strip().upper(), "items": []}

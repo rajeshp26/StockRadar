@@ -12,17 +12,6 @@ import type {
 
 import { fetchRule1Outcome } from "@/features/analysis/services/analysis.service";
 
-/**
- * Notes:
- * - We now align strictly to backend Rule1Response contract:
- *   {
- *     valuation: { ...camelCase },
- *     applicability: { score, category, flags },
- *     dataQuality: { freshnessDays, fallbacksUsed, inputDecisions }
- *   }
- * - No more multi-shape parsing or fundamentals fallback.
- */
-
 function toFreshnessInfoFromDataQuality(dq?: UiDataQuality): FreshnessInfo | undefined {
   const lastComputedAt = (dq?.freshnessDays as any)?.lastComputedAt;
   if (!lastComputedAt || typeof lastComputedAt !== "string") return undefined;
@@ -57,7 +46,6 @@ export function useAnalysis(
     freshness: undefined,
   });
 
-  // Run at most once per symbol on mount/navigation
   const ranForSymbol = useRef<Record<string, boolean>>({});
 
   const doCompute = useCallback(async () => {
@@ -66,20 +54,13 @@ export function useAnalysis(
       return;
     }
 
-    setState((s) => ({
-      ...s,
-      loading: true,
-      error: undefined,
-    }));
+    setState((s) => ({ ...s, loading: true, error: undefined }));
 
     const outcome = await fetchRule1Outcome(currentSymbol);
 
     if (outcome.status === "ok") {
       const payload = outcome.payload;
 
-      // Backend contract already returns these shapes:
-      // - valuation is camelCase Rule1Valuation
-      // - applicability and dataQuality match our UI types
       const valuation = payload.valuation as unknown as CamelValuation;
       const applicability = payload.applicability as unknown as UiApplicability;
       const dataQuality = payload.dataQuality as unknown as UiDataQuality;
@@ -98,19 +79,13 @@ export function useAnalysis(
       return;
     }
 
-    // Error path (includes backend 422, 404, etc.)
     const msg = outcome.message || "Failed to compute valuation.";
-    setState((s) => ({
-      ...s,
-      loading: false,
-      error: msg,
-    }));
+    setState((s) => ({ ...s, loading: false, error: msg }));
     analytics?.onError?.(currentSymbol, msg);
   }, [currentSymbol, analytics]);
 
   useEffect(() => {
     if (!currentSymbol) return;
-
     if (!ranForSymbol.current[currentSymbol]) {
       ranForSymbol.current[currentSymbol] = true;
       void doCompute();
@@ -124,9 +99,5 @@ export function useAnalysis(
 
   const reload = recompute;
 
-  return {
-    ...state,
-    reload,
-    recompute,
-  };
+  return { ...state, reload, recompute };
 }

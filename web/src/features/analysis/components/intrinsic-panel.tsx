@@ -4,7 +4,7 @@ import { useMemo, useState, useCallback } from "react";
 import { useAnalysis } from "../hooks/useAnalysis";
 import { useLivePrice } from "../hooks/useLivePrice";
 import { useRule1History } from "../hooks/useRule1History";
-import type { DiagnosticFlag, Rule1Valuation } from "../types/analysis.types";
+import type { Rule1Valuation } from "../types/analysis.types";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,141 +21,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-/* ---------------------------------------------------------- */
-/* Formatting helpers                                          */
-/* ---------------------------------------------------------- */
-
-function fmtCurrency(n?: number, currency = "USD") {
-  if (n == null || Number.isNaN(n)) return "—";
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency,
-      maximumFractionDigits: 2,
-      minimumFractionDigits: 2,
-    }).format(n);
-  } catch {
-    return `$${n.toFixed(2)}`;
-  }
-}
-
-function fmtPct(n?: number, digits = 1) {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${(n * 100).toFixed(digits)}%`;
-}
-
-function fmtInt(n?: number) {
-  if (n == null || Number.isNaN(n)) return "—";
-  return `${Math.round(n)}`;
-}
-
-function fmtDateTime(iso?: string) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
-
-/* ---------------------------------------------------------- */
-/* Visual subcomponents                                        */
-/* ---------------------------------------------------------- */
-
-function Metric({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string | number | JSX.Element;
-  hint?: string;
-}) {
-  return (
-    <div className="rounded border p-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="text-lg font-medium">{value}</div>
-      {hint ? <div className="text-xs text-slate-400 mt-1">{hint}</div> : null}
-    </div>
-  );
-}
-
-function ScoreBar({
-  score,
-  category,
-}: {
-  score?: number;
-  category?: string;
-}) {
-  const normalized = Math.max(0, Math.min(100, score ?? 0));
-  const color =
-    category === "Good"
-      ? "bg-emerald-600"
-      : category === "Caution"
-      ? "bg-amber-600"
-      : category === "Poor"
-      ? "bg-rose-600"
-      : "bg-slate-600";
-
-  return (
-    <div className="flex items-center gap-3">
-      <div className="h-2 w-44 rounded bg-slate-200">
-        <div
-          className={`h-2 rounded ${color}`}
-          style={{ width: `${normalized}%` }}
-        />
-      </div>
-      <span className="text-sm text-slate-600">{fmtInt(score)} / 100</span>
-      {category ? <Badge variant="secondary">{category}</Badge> : null}
-    </div>
-  );
-}
-
-function DiagnosticsList({ items }: { items?: DiagnosticFlag[] }) {
-  if (!items || items.length === 0) {
-    return <p className="text-sm text-slate-500">No diagnostics.</p>;
-  }
-
-  return (
-    <div className="space-y-2">
-      {items.map((d, i) => {
-        const tone =
-          d.severity === "critical" || d.severity === "high"
-            ? "border-rose-200 bg-rose-50 text-rose-700"
-            : d.severity === "medium"
-            ? "border-amber-200 bg-amber-50 text-amber-700"
-            : d.severity === "low"
-            ? "border-sky-200 bg-sky-50 text-sky-700"
-            : "border-slate-200 bg-slate-50 text-slate-700";
-
-        return (
-          <div key={`${d.code}-${i}`} className={`rounded border p-3 ${tone}`}>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline">{d.code}</Badge>
-              <span className="text-xs uppercase tracking-wide">{d.severity}</span>
-            </div>
-            <p className="text-sm mt-1">{d.message}</p>
-
-            {d.evidence ? (
-              <pre className="mt-2 rounded bg-white/60 p-2 text-xs overflow-x-auto">
-                {JSON.stringify(d.evidence, null, 2)}
-              </pre>
-            ) : null}
-
-            {d.recommendation ? (
-              <p className="text-xs mt-1">
-                <span className="font-medium">Recommendation: </span>
-                {d.recommendation}
-              </p>
-            ) : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------- */
-/* Main Panel                                                  */
-/* ---------------------------------------------------------- */
+import {
+  Metric,
+  ScoreBar,
+  DiagnosticsList,
+  fmtCurrency,
+  fmtPct,
+  fmtInt,
+  fmtDateTime,
+} from "./shared-ui";
 
 export function IntrinsicPanel({
   symbol,
@@ -164,15 +38,8 @@ export function IntrinsicPanel({
   symbol: string;
   analytics?: AnalysisAnalytics;
 }) {
-  const {
-    loading,
-    error,
-    valuation,
-    applicability,
-    dataQuality,
-    freshness,
-    recompute,
-  } = useAnalysis(symbol, { analytics });
+  const { loading, error, valuation, applicability, dataQuality, freshness, recompute } =
+    useAnalysis(symbol, { analytics });
 
   const { loading: loadingHistory, error: historyError, history, reload: reloadHistory } =
     useRule1History(symbol);
@@ -183,7 +50,6 @@ export function IntrinsicPanel({
     setRecomputing(true);
     try {
       await recompute();
-      // After recompute, refresh history so the new run appears
       await reloadHistory();
     } finally {
       setRecomputing(false);
@@ -192,10 +58,6 @@ export function IntrinsicPanel({
 
   const { price, currency: priceCcy, loading: loadingPrice } = useLivePrice(symbol);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-
-  const uncomputableReason = useMemo(() => {
-    return applicability?.flags?.find((f) => f.code === "UNCOMPUTABLE_RULE1")?.message;
-  }, [applicability?.flags]);
 
   const summary = useMemo(() => {
     const curr = valuation?.currency ?? "USD";
@@ -206,12 +68,6 @@ export function IntrinsicPanel({
           <CardTitle>Intrinsic Value Summary</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {!loading && uncomputableReason ? (
-            <div className="rounded border bg-slate-50 p-3 text-sm">
-              {uncomputableReason}
-            </div>
-          ) : null}
-
           {loading ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Skeleton className="h-20" />
@@ -240,9 +96,7 @@ export function IntrinsicPanel({
           <div className="flex items-center justify-between">
             <div className="text-sm text-slate-600">
               Calculated using Rule #1 (Phil Town)
-              {freshness?.lastEvaluatedDisplay ? (
-                <> • Last evaluated: {freshness.lastEvaluatedDisplay}</>
-              ) : null}
+              {freshness?.lastEvaluatedDisplay ? <> • Last evaluated: {freshness.lastEvaluatedDisplay}</> : null}
             </div>
 
             <Button onClick={handleRecompute} disabled={recomputing}>
@@ -252,17 +106,7 @@ export function IntrinsicPanel({
         </CardContent>
       </Card>
     );
-  }, [
-    loading,
-    valuation,
-    freshness,
-    recomputing,
-    loadingPrice,
-    price,
-    priceCcy,
-    uncomputableReason,
-    handleRecompute,
-  ]);
+  }, [loading, valuation, freshness, recomputing, loadingPrice, price, priceCcy, handleRecompute]);
 
   const breakdown = useMemo(() => {
     const v: Rule1Valuation | undefined = valuation;
@@ -275,39 +119,26 @@ export function IntrinsicPanel({
 
     const growth =
       v?.growth ??
-      (typeof decisions?.growth?.valueClamped === "number"
-        ? decisions.growth.valueClamped
-        : undefined);
+      (typeof decisions?.growth?.valueClamped === "number" ? decisions.growth.valueClamped : undefined);
 
     const futurePE =
       v?.futurePE ??
-      (typeof decisions?.futurePE?.selected === "number"
-        ? decisions.futurePE.selected
-        : undefined);
+      (typeof decisions?.futurePE?.selected === "number" ? decisions.futurePE.selected : undefined);
 
     const discountRate =
       v?.discountRate ??
-      (typeof decisions?.assumptions?.discountRate === "number"
-        ? decisions.assumptions.discountRate
-        : undefined);
+      (typeof decisions?.assumptions?.discountRate === "number" ? decisions.assumptions.discountRate : undefined);
 
     const horizonYears =
       v?.horizonYears ??
-      (typeof decisions?.assumptions?.horizonYears === "number"
-        ? decisions.assumptions.horizonYears
-        : undefined);
+      (typeof decisions?.assumptions?.horizonYears === "number" ? decisions.assumptions.horizonYears : undefined);
 
     const mosPct =
       v?.mos ??
-      (typeof decisions?.assumptions?.mos === "number"
-        ? decisions.assumptions.mos
-        : undefined);
+      (typeof decisions?.assumptions?.mos === "number" ? decisions.assumptions.mos : undefined);
 
-    // ✅ Fix: cached path often sets futureEPS=0.0; derive if needed
     const futureEPSDerived =
-      typeof eps0 === "number" &&
-      typeof growth === "number" &&
-      typeof horizonYears === "number"
+      typeof eps0 === "number" && typeof growth === "number" && typeof horizonYears === "number"
         ? eps0 * Math.pow(1 + growth, horizonYears)
         : undefined;
 
@@ -355,10 +186,6 @@ export function IntrinsicPanel({
             <ScoreBar score={applicability?.score} category={applicability?.category} />
           )}
 
-          {!loading && uncomputableReason ? (
-            <div className="rounded border bg-slate-50 p-3 text-sm">{uncomputableReason}</div>
-          ) : null}
-
           {!loading && applicability?.flags?.length ? (
             <div className="flex flex-wrap gap-2">
               {applicability.flags.slice(0, 3).map((f, i) => (
@@ -367,9 +194,7 @@ export function IntrinsicPanel({
                 </Badge>
               ))}
               {applicability.flags.length > 3 ? (
-                <span className="text-xs text-slate-500">
-                  +{applicability.flags.length - 3} more
-                </span>
+                <span className="text-xs text-slate-500">+{applicability.flags.length - 3} more</span>
               ) : null}
             </div>
           ) : null}
@@ -382,7 +207,7 @@ export function IntrinsicPanel({
         </CardContent>
       </Card>
     );
-  }, [loading, applicability, showDiagnostics, uncomputableReason]);
+  }, [loading, applicability, showDiagnostics]);
 
   const historyCard = useMemo(() => {
     const items = history?.items ?? [];

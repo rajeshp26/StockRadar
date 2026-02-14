@@ -1,20 +1,8 @@
-// src/features/analysis/types/analysis.types.ts
+// web/src/features/analysis/types/analysis.types.ts
 
-/**
- * Severity levels as emitted by backend diagnostics.
- * Matches ValuationService / Rule1 models.
- */
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
-
-/**
- * Suitability categories rolled up from the backend score.
- */
 export type SuitabilityCategory = "Good" | "Caution" | "Poor";
 
-/**
- * One structured diagnostic about suitability, input quality, or assumptions.
- * FE renders: code badge, severity tone, message, optional evidence/recommendation.
- */
 export interface DiagnosticFlag {
   code: string;
   severity: Severity;
@@ -23,25 +11,12 @@ export interface DiagnosticFlag {
   recommendation?: string;
 }
 
-/**
- * Applicability summary: roll-up score, category, flags.
- */
 export interface Applicability {
-  score: number; // 0..100
+  score: number;
   category: SuitabilityCategory;
   flags: DiagnosticFlag[];
 }
 
-/**
- * DataQuality bundle:
- * - freshnessDays: arbitrary key->value map (numbers, strings)
- *     keys we commonly expect:
- *       trailingEPS?: number  // days since snapshot
- *       epsForecast?: number  // days since last forecast report
- *       lastComputedAt?: string // ISO timestamp (we put it here for FE consistency)
- * - fallbacksUsed: true if any fallback path was used
- * - inputDecisions: traces of how inputs were chosen (and assumptions block)
- */
 export interface DataQuality {
   freshnessDays: Record<string, unknown>;
   fallbacksUsed: boolean;
@@ -49,7 +24,7 @@ export interface DataQuality {
     eps0?: {
       value?: number | null;
       source?: string | null;
-      snapshotDate?: string | null; // ISO date
+      snapshotDate?: string | null;
     };
     growth?: {
       valueRaw?: number | null;
@@ -65,59 +40,42 @@ export interface DataQuality {
       horizonYears?: number;
       mos?: number;
     };
-    // Allow backend to add more without breaking FE
     [k: string]: unknown;
   };
 }
 
-/**
- * Rule #1 valuation payload. Field names intentionally camelCase to match backend.
- */
 export interface Rule1Valuation {
   symbol: string;
   companyId: number;
   currency: string;
 
-  // Inputs (final)
   eps0: number;
   growth: number;
   futurePE: number;
 
-  // Derived
   futureEPS: number;
   futurePrice: number;
-  discountRate: number; // 0..1
-  horizonYears: number; // usually 10
-  mos: number;          // 0..1
+  discountRate: number;
+  horizonYears: number;
+  mos: number;
+
   stickerPrice: number;
   mosPrice: number;
 }
 
-/**
- * Full response returned by POST /valuations/:symbol/rule1
- */
 export interface Rule1Response {
   valuation: Rule1Valuation;
   applicability: Applicability;
   dataQuality: DataQuality;
 }
 
-/**
- * ✅ History entries returned by:
- * GET /valuations/:symbol/rule1/history
- *
- * Backend returns camelCase fields derived from valuation_runs.output_snapshot.
- */
 export interface Rule1HistoryEntry {
-  runAt: string; // ISO datetime
-
+  runAt: string;
   stickerPrice?: number;
   mosPrice?: number;
   futurePrice?: number;
-
   growth?: number;
   futurePE?: number;
-
   score?: number;
   category?: SuitabilityCategory;
 }
@@ -127,29 +85,15 @@ export interface Rule1History {
   items: Rule1HistoryEntry[];
 }
 
-/**
- * API error envelope (standard FastAPI/your routes).
- */
 export interface ApiError {
   detail: string;
 }
 
-/** ---------- FE Helper Types ---------- */
-
-/**
- * Normalized freshness we show under “Last evaluated”.
- * We compute this client-side from DataQuality.freshnessDays.lastComputedAt or
- * the server’s IVA.last_updated (already attached by the cached path).
- */
 export interface FreshnessInfo {
-  lastEvaluatedDisplay?: string; // localized string for UI
-  lastEvaluatedIso?: string;     // raw ISO timestamp if available
+  lastEvaluatedDisplay?: string;
+  lastEvaluatedIso?: string;
 }
 
-/**
- * ViewModel returned by the useAnalysis hook.
- * Keeps UI unaware of transport details.
- */
 export interface AnalysisState {
   loading: boolean;
   loadingHistory: boolean;
@@ -159,8 +103,68 @@ export interface AnalysisState {
   applicability?: Applicability;
   dataQuality?: DataQuality;
 
-  // optional placeholder until backend history is available
   history?: Rule1History;
+  freshness?: FreshnessInfo;
+}
 
+/* ====================================================================== */
+/* DDM TYPES                                                               */
+/* ====================================================================== */
+
+export type DdmVariant = "gordon" | "two_stage";
+
+export interface DdmValuation {
+  symbol: string;
+  companyId: number;
+  currency: string;
+  method: "gordon" | "two_stage";
+
+  currentDps: number;
+  nextYearDps: number;
+  dividendGrowthRate: number; // g
+  requiredReturn: number;     // k
+  intrinsicValue: number;
+
+  highGrowthYears?: number | null;
+  highGrowthRate?: number | null;
+  stableGrowthRate?: number | null;
+  pvStage1?: number | null;
+  pvTerminal?: number | null;
+
+  currentPrice?: number | null;
+  upsideDownsidePct?: number | null;
+}
+
+export interface DdmResponse {
+  valuation: DdmValuation;
+  applicability: Applicability;
+  dataQuality: DataQuality;
+}
+
+export interface DdmHistoryEntry {
+  runAt: string;
+  method?: "gordon" | "two_stage";
+  intrinsicValue?: number;
+  dividendGrowthRate?: number;
+  requiredReturn?: number;
+  score?: number;
+  category?: SuitabilityCategory;
+}
+
+export interface DdmHistory {
+  symbol: string;
+  items: DdmHistoryEntry[];
+}
+
+export interface DdmState {
+  loading: boolean;
+  loadingHistory: boolean;
+  error?: string;
+
+  valuation?: DdmValuation;
+  applicability?: Applicability;
+  dataQuality?: DataQuality;
+
+  history?: DdmHistory;
   freshness?: FreshnessInfo;
 }
