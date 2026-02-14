@@ -8,11 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
-import { IntrinsicPanel } from "@/features/analysis/components/intrinsic-panel";
 import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
+import { IntrinsicValueRoot } from "@/features/analysis/components/intrinsic-value-root";
 
 /* ----------------------------------------------------------
-   Placeholder panel for all non-Rule1 sections
+   Placeholder panel for all non‑Intrinsic sections
    ---------------------------------------------------------- */
 function ComingSoonPanel({
   title,
@@ -54,23 +54,29 @@ export default function AnalysisPage() {
   const { symbol } = useParams<{ symbol: string }>();
   const upperSymbol = symbol?.toString().toUpperCase() ?? "";
 
-  // Real-time price from watchlist (via SSE)
-  const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
+  // Real‑time price (via SSE / watchlist)
+  const { price, change, changePercent, lastUpdated } =
+    useLivePrice(upperSymbol);
 
   const [tab, setTab] = useState("intrinsic");
 
-  // Render nicely formatted price text
-  const priceDisplay = price != null ? `$${price.toFixed(2)}` : "Price unavailable";
+  // Price formatting
+  const priceDisplay =
+    price != null ? `$${price.toFixed(2)}` : "Price unavailable";
+
   const changeDisplay =
     change != null
       ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
       : null;
+
   const pctDisplay =
     changePercent != null
       ? `(${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%)`
       : null;
 
-  const updatedDisplay = lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : null;
+  const updatedDisplay = lastUpdated
+    ? new Date(lastUpdated).toLocaleTimeString()
+    : null;
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-6">
@@ -83,9 +89,11 @@ export default function AnalysisPage() {
             ← Back
           </Button>
 
-          <h1 className="text-2xl font-bold tracking-tight">{upperSymbol}</h1>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {upperSymbol}
+          </h1>
 
-          {/* Real-time price */}
+          {/* Real‑time price */}
           <div className="text-sm text-slate-600 flex items-center gap-2">
             <span>{priceDisplay}</span>
 
@@ -111,7 +119,7 @@ export default function AnalysisPage() {
       </div>
 
       {/* ------------------------------------------------------ */}
-      {/* TABS                                                   */}
+      {/* TOP‑LEVEL TABS                                         */}
       {/* ------------------------------------------------------ */}
       <Tabs value={tab} onValueChange={setTab} className="w-full">
         <TabsList className="flex flex-wrap">
@@ -125,10 +133,10 @@ export default function AnalysisPage() {
         </TabsList>
 
         {/* ------------------------------------------------------ */}
-        {/* INTRINSIC VALUE TAB (Rule #1)                          */}
+        {/* INTRINSIC VALUE (Overview + Deep Dive)                */}
         {/* ------------------------------------------------------ */}
         <TabsContent value="intrinsic" className="pt-4">
-          <IntrinsicPanel symbol={upperSymbol} />
+          <IntrinsicValueRoot symbol={upperSymbol} />
         </TabsContent>
 
         {/* ------------------------------------------------------ */}
@@ -137,7 +145,7 @@ export default function AnalysisPage() {
         <TabsContent value="health" className="pt-4">
           <ComingSoonPanel
             title="Financial Health"
-            description="We will analyze balance sheet quality, leverage, cash flows, and risk indicators."
+            description="Balance sheet quality, leverage, cash flows, and risk indicators."
             items={[
               "Altman Z‑Score",
               "Piotroski F‑Score",
@@ -153,10 +161,10 @@ export default function AnalysisPage() {
         <TabsContent value="moat" className="pt-4">
           <ComingSoonPanel
             title="Moat Analysis"
-            description="Moat durability across ROIC, operating margins, and industry positioning."
+            description="Moat durability across ROIC, margins, and industry positioning."
             items={[
               "ROIC vs WACC",
-              "Gross margin durability",
+              "Margin durability",
               "Return stability",
               "Capital efficiency",
             ]}
@@ -172,9 +180,9 @@ export default function AnalysisPage() {
             description="Dividend payout stability, coverage ratios, and consistency."
             items={[
               "Payout ratio",
-              "Stability profile",
               "Dividend CAGR",
-              "Coverage vs Cash Flow",
+              "Cash flow coverage",
+              "Stability profile",
             ]}
           />
         </TabsContent>
@@ -185,12 +193,12 @@ export default function AnalysisPage() {
         <TabsContent value="technical" className="pt-4">
           <ComingSoonPanel
             title="Technical Analysis"
-            description="Momentum, RSI, trend lines, support/resistance patterns."
+            description="Momentum, trend, and market behavior indicators."
             items={[
               "RSI",
-              "Moving Averages",
+              "Moving averages",
               "MACD",
-              "Trend strength indicators",
+              "Trend strength",
             ]}
           />
         </TabsContent>
@@ -203,10 +211,10 @@ export default function AnalysisPage() {
             title="Super Investors"
             description="Insights from major value investors and 13F tracking."
             items={[
+              "Buffett / Munger positions",
               "Pabrai clone tracking",
-              "Buffett/Munger insights",
               "High‑conviction ideas",
-              "Portfolio overlap analysis",
+              "Portfolio overlap",
             ]}
           />
         </TabsContent>
@@ -217,12 +225,12 @@ export default function AnalysisPage() {
         <TabsContent value="others" className="pt-4">
           <ComingSoonPanel
             title="Other Models"
-            description="Additional valuation models and investment frameworks."
+            description="Additional valuation frameworks and investment models."
             items={[
+              "Residual Income",
               "Magic Formula",
               "CAN SLIM",
-              "Relative Valuation",
-              "Owner Earnings",
+              "Relative valuation",
             ]}
           />
         </TabsContent>

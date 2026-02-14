@@ -2,39 +2,44 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi import Body
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 
-from dependencies import get_current_user_dep, limiter, get_user_repository
+from dependencies import (
+    get_current_user_dep,
+    get_user_repository,
+    get_valuation_service,
+    limiter,
+)
 from domain.models.valuation_rule1 import Rule1RequestOverrides, Rule1Response
-from infrastructure.repositories.valuation_repository import ValuationRepository
 from infrastructure.repositories.supabase_repository import SupabaseUserRepository
-from application.services.recompute_guard import RecomputeGuard
 from application.services.valuation_service import ValuationService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/valuations", tags=["Valuations"])
 
+# Conservative ticker validation (uppercased)
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
+
 
 # ---------------------------------------------------------------------------
-# Identity helpers (provider-agnostic)
+# Identity helpers (provider‑agnostic)
 # ---------------------------------------------------------------------------
 
 def _extract_auth_id(user_payload: dict) -> Optional[str]:
     """
-    Extract the provider identity (auth_id) from the decoded auth payload without
-    binding to a specific provider. For Firebase, `uid` is canonical; some SDKs may
-    also alias it as `user_id`. OIDC-compatible tokens may use `sub`.
+    Extract provider identity from decoded auth payload.
+    Supports Firebase (`uid`) and generic OIDC (`sub`).
     """
     if not isinstance(user_payload, dict):
         return None
     return (
         user_payload.get("uid")
-        or user_payload.get("user_id")  # some SDKs alias uid as user_id
-        or user_payload.get("sub")      # OIDC fallback
+        or user_payload.get("user_id")
+        or user_payload.get("sub")
     )
 
 
@@ -43,26 +48,32 @@ def _resolve_internal_user_id(
     user_repo: SupabaseUserRepository,
 ) -> Optional[int]:
     """
-    Map provider identity (auth_id) -> internal numeric users.user_id using Supabase.
-    If the mapping is not found, return None (audit row will be nullable). This keeps
-    the endpoint provider-agnostic and mirrors the watchlist flow.
+    Map provider auth_id -> internal users.user_id (INTEGER).
+    Returns None if mapping does not exist (audit row stays nullable).
     """
     auth_id = _extract_auth_id(user_payload)
     if not auth_id:
-        # No provider identity available (should not happen when auth is enforced)
         return None
 
     row = user_repo.find_by_firebase_uid(auth_id)
-    # Row shape: {'user_id': <int>} or None
     try:
         return int(row["user_id"]) if row and row.get("user_id") is not None else None
     except Exception:
         return None
 
 
+def _normalize_symbol(symbol: str) -> str:
+    s = (symbol or "").strip().upper()
+    if not _SYMBOL_RE.match(s):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid symbol format.",
+        )
+    return s
+
+
 # =====================================================================
 # POST /valuations/{symbol}/rule1
-# Compute or return cached Rule #1 valuation
 # =====================================================================
 @router.post(
     "/{symbol}/rule1",
@@ -83,37 +94,37 @@ async def compute_rule1_valuation(
     ),
     user=Depends(get_current_user_dep),
     user_repo: SupabaseUserRepository = Depends(get_user_repository),
+    valuation_service: ValuationService = Depends(get_valuation_service),
 ) -> Rule1Response:
     """
-    Computes or returns cached **Rule #1 valuation** plus diagnostics.
+    API boundary for Rule #1 valuation.
 
-    Behavior:
-    - Uses freshness gate unless `force=true`.
-    - Includes diagnostics (flags, growth inputs, PE, MOS breakdown).
-    - Persists valuation_runs audit trail (with internal users.user_id when available).
-    - Upserts into intrinsic_value_analysis table.
+    Responsibilities (by design):
+    - Enforce auth + rate limits
+    - Resolve provider identity -> internal users.user_id
+    - Delegate computation to ValuationService
+    - Return FE‑ready Rule1Response
 
-    The endpoint remains auth-provider-agnostic:
-    - `get_current_user_dep` provides provider identity (e.g., Firebase UID).
-    - We resolve it to the internal numeric users.user_id *here* at the API boundary,
-      mirroring the watchlist flow and keeping service/repo layers decoupled from auth.
+    This endpoint does NOT:
+    - Read the database directly
+    - Compute valuation logic
+    - Shape raw DB rows
     """
     try:
-        # Resolve internal user_id (INTEGER) from provider auth_id (string)
+        sym = _normalize_symbol(symbol)
+
         internal_user_id = _resolve_internal_user_id(user, user_repo)
 
-        repo = ValuationRepository()
-        guard = RecomputeGuard(repo)
-        service = ValuationService(repo, guard)
-
-        # Cached vs recompute (service decides unless force=True)
-        result = await service.compute_rule1_if_stale(
-            symbol=symbol,
-            user_id=internal_user_id,  # <- INTERNAL numeric ID or None
+        return await valuation_service.compute_rule1_if_stale(
+            symbol=sym,
+            user_id=internal_user_id,
             overrides=overrides,
             force=force,
         )
-        return result
+
+    except HTTPException:
+        # Pass through validation / explicit HTTP errors
+        raise
 
     except ValueError as ve:
         # Typical: symbol not found in companies table
@@ -123,13 +134,8 @@ async def compute_rule1_valuation(
         ) from ve
 
     except Exception as e:
-        # Common causes:
-        # - Missing current market data
-        # - Missing financial statements
-        # - Provider/transient failure
+        # Stable FE contract: always return { detail: ... }
         logger.error("Rule #1 valuation failed for %s: %s", symbol, e, exc_info=True)
-
-        # Return 422 so the frontend can show a friendly message and keep the page stable.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Valuation unavailable due to missing market data or financials.",
@@ -138,7 +144,6 @@ async def compute_rule1_valuation(
 
 # =====================================================================
 # GET /valuations/{symbol}/rule1/history
-# Returns valuation run history (or empty list)
 # =====================================================================
 @router.get(
     "/{symbol}/rule1/history",
@@ -149,35 +154,30 @@ async def get_rule1_history(
     request: Request,  # required by slowapi limiter
     symbol: str,
     user=Depends(get_current_user_dep),
+    valuation_service: ValuationService = Depends(get_valuation_service),
 ):
     """
-    Returns prior Rule #1 valuation runs in FE-ready shape.
-
-    Response shape:
+    Returns prior Rule #1 valuation runs in FE‑ready shape:
     {
       "symbol": "AAPL",
-      "items": [
-        {
-          "runAt": "...",
-          "stickerPrice": 123.45,
-          "mosPrice": 98.76,
-          "futurePrice": 150.00,
-          "growth": 0.12,
-          "futurePE": 18,
-          "score": 72,
-          "category": "Good"
-        }
-      ]
+      "items": [ ... ]
     }
+
+    History must NEVER break the Analysis page.
     """
     try:
-        repo = ValuationRepository()
-        items = await repo.get_rule1_history(symbol.upper())
+        sym = _normalize_symbol(symbol)
+
+        # History is intentionally read-only and repo-backed
+        items = await valuation_service.repo.get_rule1_history(sym)
 
         return {
-            "symbol": symbol.upper(),
+            "symbol": sym,
             "items": items or [],
         }
+
+    except HTTPException:
+        raise
 
     except Exception as e:
         logger.error(
@@ -186,8 +186,8 @@ async def get_rule1_history(
             e,
             exc_info=True,
         )
-        # Fail-safe: history must never break the Analysis page
+        # Fail-safe: history endpoint must never error the UI
         return {
-            "symbol": symbol.upper(),
+            "symbol": (symbol or "").strip().upper(),
             "items": [],
         }

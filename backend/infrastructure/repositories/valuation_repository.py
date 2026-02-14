@@ -304,16 +304,19 @@ class ValuationRepository:
         try:
             inc = (
                 supabase.table("income_statements")
-                .select("net_income_to_common, fiscal_year")
+                .select("net_income_to_common, fiscal_year, fiscal_quarter")
                 .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
                 .order("fiscal_year", desc=True)
                 .limit(1)
                 .execute()
             )
             st = (
                 supabase.table("statistics")
-                .select("shares_outstanding_diluted, fiscal_year")
+                .select("shares_outstanding_diluted, fiscal_year, fiscal_quarter, period_type")
                 .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .eq("period_type", "fiscal")
                 .order("fiscal_year", desc=True)
                 .limit(1)
                 .execute()
@@ -349,8 +352,9 @@ class ValuationRepository:
         try:
             resp = (
                 supabase.table("earnings")
-                .select("fiscal_year, eps_reported_diluted")
+                .select("fiscal_year, fiscal_quarter, eps_reported_diluted")
                 .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)  # annual fiscal rows only
                 .order("fiscal_year", desc=False)
                 .execute()
             )
@@ -364,8 +368,9 @@ class ValuationRepository:
         try:
             resp = (
                 supabase.table("income_statements")
-                .select("fiscal_year, revenue")
+                .select("fiscal_year,  fiscal_quarter, revenue")
                 .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)  # annual fiscal rows only
                 .order("fiscal_year", desc=False)
                 .execute()
             )
@@ -394,11 +399,17 @@ class ValuationRepository:
             return None
 
     async def get_shares_history(self, company_id: int) -> List[Dict[str, Any]]:
+        """
+        Annual fiscal shares only (avoid TTM contamination).
+        Source: statistics.shares_outstanding_diluted
+        """
         try:
             resp = (
                 supabase.table("statistics")
-                .select("fiscal_year, shares_outstanding_diluted")
+                .select("fiscal_year, fiscal_quarter, period_type, shares_outstanding_diluted")
                 .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .eq("period_type", "fiscal")
                 .order("fiscal_year", desc=False)
                 .execute()
             )
@@ -442,6 +453,170 @@ class ValuationRepository:
         except Exception as e:
             logger.error("get_next_earnings_date failed: %s", e)
             return None
+
+    # ---------------------------
+    # NEW: Methods required by rule1_suitability.py
+    # ---------------------------
+
+    async def get_net_income_history(self, company_id: int) -> List[Dict[str, Any]]:
+        """
+        Annual fiscal net income history.
+        Source: income_statements.net_income
+        """
+        try:
+            resp = (
+                supabase.table("income_statements")
+                .select("fiscal_year, fiscal_quarter, net_income")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            rows = resp.data or []
+            return [{"fiscal_year": r["fiscal_year"], "net_income": r.get("net_income")} for r in rows]
+        except Exception as e:
+            logger.error("get_net_income_history failed: %s", e)
+            return []
+
+    async def get_eps_yearly_series(self, company_id: int) -> List[Dict[str, Any]]:
+        """
+        Wrapper for annual EPS series.
+        Source: earnings.eps_reported_diluted (annual fiscal rows)
+        """
+        return await self.get_eps_history(company_id)
+
+    async def get_revenue_yearly_series(self, company_id: int) -> List[Dict[str, Any]]:
+        """
+        Wrapper for annual revenue series.
+        Source: income_statements.revenue (annual fiscal rows)
+        """
+        return await self.get_revenue_history(company_id)
+
+    async def get_balance_sheet_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Latest annual fiscal balance sheet.
+        Source: balance_sheets (fiscal_quarter IS NULL)
+        """
+        try:
+            resp = (
+                supabase.table("balance_sheets")
+                .select("fiscal_year, fiscal_quarter, total_debt, shareholders_equity, updated_at, confidence_score")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return _first(resp.data)
+        except Exception as e:
+            logger.error("get_balance_sheet_latest failed: %s", e)
+            return None
+
+    async def get_income_statement_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Latest annual fiscal income statement.
+        Source: income_statements (fiscal_quarter IS NULL)
+        """
+        try:
+            resp = (
+                supabase.table("income_statements")
+                .select(
+                    "fiscal_year, fiscal_quarter, ebit, interest_expense, net_income_to_common, net_income, updated_at, confidence_score"
+                )
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return _first(resp.data)
+        except Exception as e:
+            logger.error("get_income_statement_latest failed: %s", e)
+            return None
+
+    async def get_cash_flow_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Latest annual fiscal cash flow statement.
+        Source: cash_flow_statements (fiscal_quarter IS NULL)
+        """
+        try:
+            resp = (
+                supabase.table("cash_flow_statements")
+                .select(
+                    "fiscal_year, fiscal_quarter, cash_from_operating_activities, capital_expenditures, updated_at, confidence_score"
+                )
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return _first(resp.data)
+        except Exception as e:
+            logger.error("get_cash_flow_latest failed: %s", e)
+            return None
+
+    async def get_roic_history(self, company_id: int) -> List[Dict[str, Any]]:
+        """
+        Annual fiscal ROIC history.
+        Source: statistics.return_on_invested_capital_pct (annual fiscal rows)
+        """
+        try:
+            resp = (
+                supabase.table("statistics")
+                .select("fiscal_year, fiscal_quarter, period_type, return_on_invested_capital_pct")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .eq("period_type", "fiscal")
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            rows = resp.data or []
+            # evaluator expects key 'roic'
+            return [{"fiscal_year": r["fiscal_year"], "roic": r.get("return_on_invested_capital_pct")} for r in rows]
+        except Exception as e:
+            logger.error("get_roic_history failed: %s", e)
+            return []
+
+    # ---------------------------
+    # NEW: Cached-path hydration (moved from service)
+    # ---------------------------
+    async def get_last_rule1_output_snapshot(self, company_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            resp = (
+                supabase.table("valuation_runs")
+                .select("output_snapshot")
+                .eq("company_id", company_id)
+                .eq("method", "rule1")
+                .order("run_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            row = _first(resp.data)
+            return (row.get("output_snapshot") if row else None) or None
+        except Exception:
+            return None
+
+    async def get_last_rule1_diagnostics(self, company_id: int) -> Dict[str, Any]:
+        """
+        Returns a minimal dict used by cached path:
+          { applicability, dataQuality, assumptions }
+        Returns {} if missing.
+        """
+        snap = await self.get_last_rule1_output_snapshot(company_id)
+        if not snap:
+            return {}
+
+        app = snap.get("applicability") or {}
+        dq = snap.get("dataQuality") or {}
+        assumptions = (dq.get("inputDecisions") or {}).get("assumptions", {}) if isinstance(dq, dict) else {}
+
+        return {
+            "applicability": app,
+            "dataQuality": dq,
+            "assumptions": assumptions,
+        }
+
 
     # ---------------------------
     # Parameters (defaults + overrides)

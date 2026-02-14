@@ -36,35 +36,73 @@ External Systems (Supabase, DefeatBeta, YFinance)
 ## 2. Folder Structure and File Descriptions
 
 Here’s a breakdown of the key files and their responsibilities within the `backend/` directory:
-
-```
+'''
 backend/
-├── api/
-│   ├── users.py
-│   ├── watchlist_items.py
-│   └── watchlists.py
-├── application/
-│   ├── services/
-│   │   └── watchlist_service.py
-│   └── schedulers/
-│       ├── earnings_scheduler.py
-│       └── market_data_scheduler.py   <-- NEW
-├── domain/
-│   ├── entities/
-│   ├── models/
-│   └── interfaces/
-├── infrastructure/
+│   ├── api/
+│   │   ├── users.py
+│   │   ├── valuations.py
+│   │   ├── watchlist_items.py
+│   │   └── watchlists.py
+│   ├── application/
+│   │   ├── __init__.py
+│   │   ├── schedulers/
+│   │   │   ├── __init__.py
+│   │   │   ├── earnings_scheduler.py
+│   │   │   └── market_data_scheduler.py
+│   │   └── services/
+│   │       ├── __init__.py
+│   │       ├── recompute_guard.py
+│   │       ├── rule1_suitability.py
+│   │       ├── valuation_service.py
+│   │       └── watchlist_service.py
+│   ├── auth.py
+│   ├── config.py
+│   ├── database.py
+│   ├── dependencies.py
+│   ├── domain/
+│   │   ├── __init__.py
+│   │   ├── entities/
+│   │   │   ├── __init__.py
+│   │   │   └── watchlist.py
+│   │   ├── exceptions.py
+│   │   ├── interfaces/
+│   │   │   ├── __init__.py
+│   │   │   ├── repository.py
+│   │   │   └── stock_provider.py
+│   │   ├── model_types.py
+│   │   └── models/
+│   │       ├── __init__.py
+│   │       └── valuation_rule1.py
+│   ├── google_credentials.json
+│   ├── infrastructure/
+│   │   ├── __init__.py
+│   │   └── repositories/
+│   │       ├── __init__.py
+│   │       ├── financial_repository.py
+│   │       ├── supabase_repository.py
+│   │       └── valuation_repository.py
+│   ├── main.py
 │   ├── providers/
+│   │   ├── __init__.py
+│   │   ├── base.py
 │   │   ├── defeat_beta_provider.py
 │   │   └── yfinance_provider.py
-│   └── repositories/
-│       ├── supabase_repository.py
-│       └── financial_repository.py   <-- UPDATED
-├── main.py                     <-- UPDATED
-├── auth.py
-├── config.py                  <-- UPDATED
-├── database.py
-└── dependencies.py
+│   ├── requirements.txt
+│   ├── schemas.py
+│   ├── service-account.json
+│   ├── services/
+│   │   └── sync_service.py
+│   ├── shared/
+│   │   ├── __init__.py
+│   │   ├── constants.py
+│   │   └── exceptions/
+│   │       ├── __init__.py
+│   │       └── base.py
+│   ├── start-prod.sh
+│   ├── start.sh
+│   ├── status.sh
+│   └── stop.sh
+
 
 ```
 
