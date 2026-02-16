@@ -177,6 +177,10 @@ class ValuationRepository:
         if method in {"ddm_gordon", "ddm_two_stage"}:
             return await self._latest_dependency_ddm(company_id, method=method)
 
+        # ✅ NEW: DCF dependencies
+        if method == "dcf":
+            return await self._latest_dependency_dcf(company_id)
+
         return None
 
     async def _latest_dependency_rule1(self, company_id: int) -> Optional[datetime]:
@@ -362,6 +366,95 @@ class ValuationRepository:
             logger.error("get_latest_dependency_ts(%s) failed company_id=%s: %s", method, company_id, e)
             return None
 
+    # ✅ NEW: DCF dependency set (for caching / recompute decisions)
+    async def _latest_dependency_dcf(self, company_id: int) -> Optional[datetime]:
+        """
+        DCF dependencies (method='dcf'):
+          - cash_flow_statements.updated_at (base FCF, capex)
+          - income_statements.updated_at (revenue, EBITDA/EBIT, interest)
+          - balance_sheets.updated_at (debt, cash)
+          - statistics.updated_at (shares outstanding, ratios)
+          - revenue_forecast.report_date (if used for forecasting inputs)
+          - method defaults updated_at
+          - company overrides updated_at
+
+        Price is intentionally excluded (read-time only).
+        """
+        try:
+            cf = (
+                supabase.table("cash_flow_statements")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            cf_dt = _normalize_datetime((_first(cf.data) or {}).get("updated_at"))
+
+            is_ = (
+                supabase.table("income_statements")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            is_dt = _normalize_datetime((_first(is_.data) or {}).get("updated_at"))
+
+            bs = (
+                supabase.table("balance_sheets")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            bs_dt = _normalize_datetime((_first(bs.data) or {}).get("updated_at"))
+
+            st = (
+                supabase.table("statistics")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            st_dt = _normalize_datetime((_first(st.data) or {}).get("updated_at"))
+
+            rf = (
+                supabase.table("revenue_forecast")
+                .select("report_date")
+                .eq("company_id", company_id)
+                .order("report_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rf_dt = _as_datetime_from_date((_first(rf.data) or {}).get("report_date"))
+
+            md = (
+                supabase.table("valuation_method_defaults")
+                .select("updated_at")
+                .eq("method", "dcf")
+                .limit(1)
+                .execute()
+            )
+            md_dt = _normalize_datetime((_first(md.data) or {}).get("updated_at"))
+
+            co = (
+                supabase.table("company_valuation_overrides")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .eq("method", "dcf")
+                .limit(1)
+                .execute()
+            )
+            co_dt = _normalize_datetime((_first(co.data) or {}).get("updated_at"))
+
+            return _max_dt(cf_dt, is_dt, bs_dt, st_dt, rf_dt, md_dt, co_dt)
+        except Exception as e:
+            logger.error("get_latest_dependency_ts(dcf) failed company_id=%s: %s", company_id, e)
+            return None
+
     # ---------------------------
     # Parameters (defaults + overrides) METHOD-AWARE + BACKWARD COMPATIBLE
     # ---------------------------
@@ -499,6 +592,19 @@ class ValuationRepository:
         except Exception as e:
             logger.error("upsert_intrinsic_value_analysis failed: %s", e)
             raise
+
+    # ✅ NEW: Optional analytical persistence for DCF (never used as authoritative cache)
+    async def insert_dcf_valuation(self, payload: Dict[str, Any]) -> None:
+        try:
+            supabase.table("dcf_valuations").insert(payload).execute()
+        except Exception as e:
+            logger.error("insert_dcf_valuation failed: %s", e)
+
+    async def insert_ddm_valuation(self, payload: Dict[str, Any]) -> None:
+        try:
+            supabase.table("ddm_valuations").insert(payload).execute()
+        except Exception as e:
+            logger.error("insert_ddm_valuation failed: %s", e)
 
     # ---------------------------
     # Cached value read (Rule #1)
@@ -786,6 +892,115 @@ class ValuationRepository:
             return []
 
     # ---------------------------
+    # ✅ NEW: DCF suitability helpers
+    # ---------------------------
+    async def get_fcf_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
+        """
+        Annual FCF history used by DCF suitability:
+          FCF = cash_from_operating_activities - capital_expenditures
+
+        Returns shape:
+          [{ "fiscal_year": 2025, "fcf": <float>, "ocf": <float|None>, "capex": <float|None> }]
+        """
+        try:
+            resp = (
+                supabase.table("cash_flow_statements")
+                .select("fiscal_year, fiscal_quarter, cash_from_operating_activities, capital_expenditures")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            rows = resp.data or []
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                y = r.get("fiscal_year")
+                if y is None:
+                    continue
+                ocf = r.get("cash_from_operating_activities")
+                capex = r.get("capital_expenditures")
+                try:
+                    ocf_f = float(ocf) if ocf is not None else None
+                except Exception:
+                    ocf_f = None
+                try:
+                    capex_f = float(capex) if capex is not None else None
+                except Exception:
+                    capex_f = None
+
+                fcf = None
+                if ocf_f is not None and capex_f is not None:
+                    fcf = ocf_f - capex_f
+
+                out.append({"fiscal_year": int(y), "fcf": fcf, "ocf": ocf_f, "capex": capex_f})
+
+            out = sorted(out, key=lambda x: x.get("fiscal_year", 0))
+            return out[-years:] if years and len(out) > years else out
+        except Exception as e:
+            logger.error("get_fcf_history failed: %s", e)
+            return []
+
+    async def get_capex_and_revenue_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
+        """
+        Used by DCF suitability Metric 7 (Capex / Revenue 5y avg).
+        Merges annual capex from cash_flow_statements with annual revenue from income_statements by fiscal_year.
+
+        Returns shape:
+          [{ "fiscal_year": 2025, "capex": <float|None>, "revenue": <float|None> }]
+        """
+        try:
+            cf = (
+                supabase.table("cash_flow_statements")
+                .select("fiscal_year, fiscal_quarter, capital_expenditures")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            is_ = (
+                supabase.table("income_statements")
+                .select("fiscal_year, fiscal_quarter, revenue")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+
+            capex_by_year: Dict[int, Optional[float]] = {}
+            for r in (cf.data or []):
+                y = r.get("fiscal_year")
+                if y is None:
+                    continue
+                v = r.get("capital_expenditures")
+                try:
+                    capex_by_year[int(y)] = float(v) if v is not None else None
+                except Exception:
+                    capex_by_year[int(y)] = None
+
+            rev_by_year: Dict[int, Optional[float]] = {}
+            for r in (is_.data or []):
+                y = r.get("fiscal_year")
+                if y is None:
+                    continue
+                v = r.get("revenue")
+                try:
+                    rev_by_year[int(y)] = float(v) if v is not None else None
+                except Exception:
+                    rev_by_year[int(y)] = None
+
+            years_all = sorted(set(capex_by_year.keys()) | set(rev_by_year.keys()))
+            merged: List[Dict[str, Any]] = []
+            for y in years_all:
+                merged.append(
+                    {"fiscal_year": y, "capex": capex_by_year.get(y), "revenue": rev_by_year.get(y)}
+                )
+
+            return merged[-years:] if years and len(merged) > years else merged
+        except Exception as e:
+            logger.error("get_capex_and_revenue_history failed: %s", e)
+            return []
+
+    # ---------------------------
     # DDM: price + dividend + beta + growth
     # ---------------------------
     async def get_current_market_price(self, company_id: int) -> Optional[float]:
@@ -941,12 +1156,6 @@ class ValuationRepository:
             logger.error("get_sustainable_dividend_growth failed: %s", e)
             return None
 
-    async def insert_ddm_valuation(self, payload: Dict[str, Any]) -> None:
-        try:
-            supabase.table("ddm_valuations").insert(payload).execute()
-        except Exception as e:
-            logger.error("insert_ddm_valuation failed: %s", e)
-
     # ---------------------------
     # RULE #1 HISTORY (existing fixed shape)
     # ---------------------------
@@ -1036,4 +1245,65 @@ class ValuationRepository:
             return items
         except Exception as e:
             logger.error("get_ddm_history failed for %s: %s", symbol, e)
+            return []
+
+    # ✅ NEW: DCF history (used by /valuations/{symbol}/dcf/history)
+    async def get_dcf_history(self, symbol: str, method: str = "dcf", limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Returns recent DCF valuation runs (newest first).
+        Shape (FE-safe, minimal):
+        {
+          runAt,
+          terminalMethod,
+          intrinsicValuePerShare,
+          waccUsed,
+          terminalValue,
+          enterpriseValue,
+          score,
+          category
+        }
+        """
+        if method not in ALLOWED_METHODS:
+            method = "dcf"
+
+        try:
+            ctx = await self.get_company_context(symbol)
+            if not ctx:
+                return []
+            company_id = ctx["company_id"]
+
+            resp = (
+                supabase.table("valuation_runs")
+                .select("run_at, output_snapshot")
+                .eq("company_id", company_id)
+                .eq("method", method)
+                .order("run_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            rows = resp.data or []
+            items: List[Dict[str, Any]] = []
+
+            for r in rows:
+                run_at = _normalize_datetime(r.get("run_at"))
+                snap = r.get("output_snapshot") or {}
+
+                valuation = snap.get("valuation") or {}
+                applicability = snap.get("applicability") or {}
+
+                items.append(
+                    {
+                        "runAt": run_at.isoformat() if run_at else None,
+                        "terminalMethod": valuation.get("terminalMethod"),
+                        "intrinsicValuePerShare": valuation.get("intrinsicValuePerShare"),
+                        "waccUsed": valuation.get("waccUsed"),
+                        "terminalValue": valuation.get("terminalValue"),
+                        "enterpriseValue": valuation.get("enterpriseValue"),
+                        "score": applicability.get("score"),
+                        "category": applicability.get("category"),
+                    }
+                )
+            return items
+        except Exception as e:
+            logger.error("get_dcf_history failed for %s: %s", symbol, e)
             return []

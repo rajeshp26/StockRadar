@@ -20,6 +20,9 @@ from application.services.rule1_suitability import evaluate_rule1_suitability
 from application.services.ddm_service import DdmService
 from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
 
+from application.services.dcf_service import DcfService  # ✅ NEW
+from domain.models.valuation_dcf import DcfRequestOverrides, DcfResponse  # ✅ NEW
+
 logger = logging.getLogger(__name__)
 
 SECTOR_CYCL = {"Energy", "Materials"}
@@ -51,6 +54,7 @@ class ValuationService:
         self.repo = repo
         self.guard = guard
         self.ddm = DdmService(repo=repo, guard=guard)
+        self.dcf = DcfService(repo=repo, guard=guard)  # ✅ NEW
 
     # ---------------------------------------------------------------------
     # Rule #1 (existing)
@@ -388,7 +392,7 @@ class ValuationService:
         )
 
     # ---------------------------------------------------------------------
-    # DDM public API (new)
+    # DDM public API (existing)
     # ---------------------------------------------------------------------
     async def compute_ddm_if_stale(
         self,
@@ -399,6 +403,18 @@ class ValuationService:
         force: bool = False,
     ) -> DdmResponse:
         return await self.ddm.compute_ddm_if_stale(symbol=symbol, user_id=user_id, variant=variant, overrides=overrides, force=force)
+
+    # ---------------------------------------------------------------------
+    # DCF public API (NEW)
+    # ---------------------------------------------------------------------
+    async def compute_dcf_if_stale(
+        self,
+        symbol: str,
+        user_id: Optional[int],
+        overrides: Optional[DcfRequestOverrides] = None,
+        force: bool = False,
+    ) -> DcfResponse:
+        return await self.dcf.compute_dcf_if_stale(symbol=symbol, user_id=user_id, overrides=overrides, force=force)
 
     # Internals (existing)
     @staticmethod

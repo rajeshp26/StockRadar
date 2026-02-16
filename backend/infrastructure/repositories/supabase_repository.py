@@ -12,9 +12,17 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         return res.data or []
 
     def find_default_by_user_id(self, user_id: int) -> Optional[Dict[str, Any]]:
-        res = self.client.table('watchlists').select('id, watchlist_name, is_default') \
-            .eq('user_id', user_id).eq('is_default', True).single().execute()
-        return res.data
+        # IMPORTANT: `.single()` throws when 0 rows are returned (new users or no default set),
+        # which bubbles up as a 500. Return None instead.
+        res = (
+            self.client.table('watchlists')
+            .select('id, watchlist_name, is_default')
+            .eq('user_id', user_id)
+            .eq('is_default', True)
+            .limit(1)
+            .execute()
+        )
+        return (res.data[0] if res.data else None)
 
     def create_default(self, user_id: int, name: str) -> Dict[str, Any]:
         res = self.client.table('watchlists').insert({
@@ -35,5 +43,13 @@ class SupabaseUserRepository:
         self.client = client
 
     def find_by_firebase_uid(self, firebase_uid: str) -> Optional[Dict[str, Any]]:
-        res = self.client.table('users').select('user_id').eq('auth_id', firebase_uid).single().execute()
-        return res.data
+        # IMPORTANT: `.single()` throws when 0 rows are returned (user exists in Firebase but not in DB),
+        # which bubbles up as a 500. Return None instead so service can raise a controlled AppException.
+        res = (
+            self.client.table('users')
+            .select('user_id')
+            .eq('auth_id', firebase_uid)
+            .limit(1)
+            .execute()
+        )
+        return (res.data[0] if res.data else None)

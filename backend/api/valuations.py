@@ -15,6 +15,7 @@ from dependencies import (
 )
 from domain.models.valuation_rule1 import Rule1RequestOverrides, Rule1Response
 from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
+from domain.models.valuation_dcf import DcfRequestOverrides, DcfResponse  # ✅ NEW
 from infrastructure.repositories.supabase_repository import SupabaseUserRepository
 from application.services.valuation_service import ValuationService
 
@@ -114,6 +115,38 @@ async def compute_ddm_valuation(
             detail="DDM valuation unavailable due to missing dividend or financial data.",
         ) from e
 
+
+@router.post(
+    "/{symbol}/dcf",
+    response_model=DcfResponse,
+    summary="Compute or return cached Discounted Cash Flow (DCF) valuation (Perpetuity Growth or Exit Multiple terminal value)",
+)
+@limiter.limit("10/minute")
+async def compute_dcf_valuation(
+    request: Request,
+    symbol: str,
+    overrides: DcfRequestOverrides = Body(default_factory=DcfRequestOverrides),
+    force: bool = Query(default=False, description="If true, recompute even when cached result is fresh."),
+    user=Depends(get_current_user_dep),
+    user_repo: SupabaseUserRepository = Depends(get_user_repository),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+) -> DcfResponse:
+    try:
+        sym = _normalize_symbol(symbol)
+        internal_user_id = _resolve_internal_user_id(user, user_repo)
+        return await valuation_service.compute_dcf_if_stale(sym, internal_user_id, overrides=overrides, force=force)
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve)) from ve
+    except Exception as e:
+        logger.error("DCF valuation failed for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="DCF valuation unavailable due to missing cash flow, financials, or assumptions.",
+        ) from e
+
+
 @router.get(
     "/{symbol}/ddm/history",
     summary="Recent DDM valuation runs (method-specific). Returns empty list when none exist.",
@@ -135,6 +168,26 @@ async def get_ddm_history(
         method = "ddm_gordon" if v == "gordon" else "ddm_two_stage"
         items = await valuation_service.repo.get_ddm_history(sym, method=method)
 
+        return {"symbol": sym, "items": items or []}
+    except Exception:
+        # fail-safe: never break UI
+        return {"symbol": (symbol or "").strip().upper(), "items": []}
+
+
+@router.get(
+    "/{symbol}/dcf/history",
+    summary="Recent DCF valuation runs. Returns empty list when none exist.",
+)
+@limiter.limit("30/minute")
+async def get_dcf_history(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+):
+    try:
+        sym = _normalize_symbol(symbol)
+        items = await valuation_service.repo.get_dcf_history(sym, method="dcf")
         return {"symbol": sym, "items": items or []}
     except Exception:
         # fail-safe: never break UI

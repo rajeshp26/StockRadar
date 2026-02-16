@@ -42,6 +42,15 @@ export class WatchlistService {
     return res.data;
   }
 
+  // Phase 2: structure-only fast path
+  async getDefaultWatchlistStructure(): Promise<WatchlistWithStocks> {
+    const res = await this.api.post<WatchlistWithStocks>(
+      "/watchlists/default-structure",
+      {}
+    );
+    return res.data;
+  }
+
   async addStock(input: AddStockInput) {
     const res = await this.api.post("/watchlist-items", input);
     return res.data;

@@ -78,15 +78,21 @@ class WatchlistService:
         # 1. Find or Create Default Watchlist
         watchlist = self.watchlist_repo.find_default_by_user_id(db_user_id)
 
+        if not watchlist:
+            # If no default is marked, do NOT create a duplicate watchlist for existing users.
+            # Use the first watchlist if any exist; only create if none exist.
+            existing = self.watchlist_repo.find_by_user_id(db_user_id) or []
+            watchlist = existing[0] if existing else None
+
         if watchlist:
             watchlist_id = watchlist['id']
             watchlist_name = watchlist['watchlist_name']
-            is_default = watchlist['is_default']
+            is_default = watchlist.get('is_default', False)
         else:
             new_watchlist = self.watchlist_repo.create_default(db_user_id, "My Watchlist")
             watchlist_id = new_watchlist['id']
             watchlist_name = new_watchlist['watchlist_name']
-            is_default = new_watchlist['is_default']
+            is_default = new_watchlist.get('is_default', True)
 
         # 2. Fetch Watchlist Items
         raw_watchlist_items = self.watchlist_repo.get_items_by_watchlist_id(watchlist_id)
@@ -161,6 +167,67 @@ class WatchlistService:
             is_default=is_default,
             stocks=stocks_list
         )
+
+    # ========================================================================
+    # Phase 2: Fast watchlist STRUCTURE (no price enrichment)
+    # ========================================================================
+    def get_default_watchlist_structure(self, firebase_uid: str) -> Dict[str, Any]:
+        """
+        Fast path for initial watchlist render:
+        - Returns watchlist + items WITHOUT price enrichment
+        - No YFinance calls
+        - No current_market_data merge
+        - Prices are expected to arrive via SSE
+        """
+        db_user_id = self.get_db_user_id(firebase_uid)
+
+        # 1) Find or Create Default Watchlist
+        watchlist = self.watchlist_repo.find_default_by_user_id(db_user_id)
+        if not watchlist:
+            existing = self.watchlist_repo.find_by_user_id(db_user_id) or []
+            watchlist = existing[0] if existing else None
+
+        if watchlist:
+            watchlist_id = watchlist["id"]
+            watchlist_name = watchlist["watchlist_name"]
+            is_default = watchlist.get("is_default", False)
+        else:
+            new_watchlist = self.watchlist_repo.create_default(db_user_id, "My Watchlist")
+            watchlist_id = new_watchlist["id"]
+            watchlist_name = new_watchlist["watchlist_name"]
+            is_default = new_watchlist.get("is_default", True)
+
+        # 2) Fetch Watchlist Items (structure only)
+        raw_items = self.watchlist_repo.get_items_by_watchlist_id(watchlist_id)
+        stocks: List[Dict[str, Any]] = []
+
+        for item in raw_items or []:
+            company = item.get("companies")
+            if not company:
+                continue
+
+            stocks.append(
+                {
+                    "id": item["watchlist_item_id"],
+                    "symbol": company["ticker_symbol"],
+                    "name": company["company_name"],
+                    "targetBuy": item.get("target_buy"),
+                    "targetSell": item.get("target_sell"),
+                    # Explicitly present but null; FE will hydrate via SSE
+                    "price": None,
+                    "change": None,
+                    "changePercent": None,
+                    "lastUpdated": None,
+                }
+            )
+
+        return {
+            "watchlist_id": watchlist_id,
+            "name": watchlist_name,
+            "is_default": is_default,
+            "stocks": stocks,
+        }
+
 
     # ========================================================================
     # NEW METHODS - Financial Data Integration

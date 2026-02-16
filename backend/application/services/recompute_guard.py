@@ -1,5 +1,5 @@
 """
-Recompute Guard for Valuations (Rule #1 + DDM)
+Recompute Guard for Valuations (Rule #1 + DDM + DCF)
 
 Single decision point to determine whether a valuation should be recomputed
 based on data freshness.

@@ -11,7 +11,24 @@ interface UseWatchlistReturn {
   refetch: () => Promise<void>;
 }
 
+/**
+ * @deprecated
+ * DO NOT USE.
+ *
+ * This legacy hook eagerly fetches the watchlist and opens SSE.
+ * It is intentionally deprecated in favor of:
+ *
+ *   features/watchlists/hooks/useWatchlist
+ *
+ * Importing this hook outside the Watchlist feature is forbidden.
+ */
 export function useWatchlist(): UseWatchlistReturn {
+  if (process.env.NODE_ENV !== 'production') {
+    throw new Error(
+      '[Deprecated] web/src/hooks/useWatchlist.ts is no longer allowed. ' +
+      'Use features/watchlists/hooks/useWatchlist instead.'
+    );
+  }
   const { status } = useAuth();
   const [watchlist, setWatchlist] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);

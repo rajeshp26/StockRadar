@@ -4,6 +4,7 @@
  * - Uses same-origin fetch with `credentials: "include"` so the proxy sees the __session cookie.
  * - Aligns strictly to backend contract.
  */
+import { api } from "@/lib/api";
 
 import type {
   Rule1Response,
@@ -11,6 +12,8 @@ import type {
   DdmResponse,
   DdmHistory,
   DdmVariant,
+  DcfResponse,
+  DcfHistory,
 } from "../types/analysis.types";
 
 type Json = Record<string, any>;
@@ -198,4 +201,28 @@ export async function fetchDdmHistory(
   }
 
   return { symbol: ticker.toUpperCase(), items: [] };
+}
+
+// ---------------------------
+// DCF (FIXED: return AxiosResponse.data, not AxiosResponse)
+// ---------------------------
+
+export async function fetchDcfValuation(
+  symbol: string,
+  options?: {
+    force?: boolean;
+    overrides?: Record<string, unknown>;
+  }
+): Promise<DcfResponse> {
+  const qs = options?.force ? "?force=true" : "";
+  const resp = await api.post(
+    `/valuations/${encodeURIComponent(symbol)}/dcf${qs}`,
+    options?.overrides ?? {}
+  );
+  return resp.data as DcfResponse;
+}
+
+export async function fetchDcfHistory(symbol: string) {
+  const resp = await api.get(`/valuations/${encodeURIComponent(symbol)}/dcf/history`);
+  return resp.data as DcfHistory;
 }

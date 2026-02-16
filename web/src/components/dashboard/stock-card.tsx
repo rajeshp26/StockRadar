@@ -16,20 +16,30 @@ interface StockCardProps {
 
 export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
   const router = useRouter();
-  const isPositiveChange = stock.change >= 0;
 
-  // Buy Target Variance Calculation
+  // Phase 2: price may be null during structure-first load
+  const hasPrice = typeof (stock as any).price === 'number' && Number.isFinite((stock as any).price);
+  const price = hasPrice ? (stock as any).price as number : null;
+
+  const hasChange =
+    typeof (stock as any).change === 'number' &&
+    Number.isFinite((stock as any).change) &&
+    typeof (stock as any).changePercent === 'number' &&
+    Number.isFinite((stock as any).changePercent);
+
+  const change = hasChange ? (stock as any).change as number : null;
+  const changePercent = hasChange ? (stock as any).changePercent as number : null;
+
+  const isPositiveChange = (change ?? 0) >= 0;
+
+  // Buy Target Variance Calculation (only if price exists)
   const getBuyVariance = () => {
-    if (!stock.targetBuy) return null;
-    const diff = stock.price - stock.targetBuy;
+    if (!stock.targetBuy || price == null) return null;
+    const diff = price - stock.targetBuy;
     const diffPercent = (diff / stock.targetBuy) * 100;
     const isTargetHit = diff <= 0;
-    
-    return {
-      diff,
-      diffPercent,
-      isTargetHit
-    };
+
+    return { diff, diffPercent, isTargetHit };
   };
 
   const buyVariance = getBuyVariance();
@@ -39,19 +49,17 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
     if (!isoString) return null;
     try {
       const date = new Date(isoString);
-      if (isToday(date)) {
-        return format(date, 'h:mm a');
-      } else if (isYesterday(date)) {
-        return `Yesterday, ${format(date, 'h:mm a')}`;
-      } else {
-        return format(date, 'MMM d, h:mm a');
-      }
-    } catch (e) {
+      if (isToday(date)) return format(date, 'h:mm a');
+      if (isYesterday(date)) return `Yesterday, ${format(date, 'h:mm a')}`;
+      return format(date, 'MMM d, h:mm a');
+    } catch {
       return null;
     }
   };
 
-  const lastUpdatedTime = formatLastUpdated(stock.lastUpdated);
+  const lastUpdatedTime = formatLastUpdated((stock as any).lastUpdated);
+
+  const sellHit = stock.targetSell != null && price != null && price >= stock.targetSell;
 
   return (
     <Card
@@ -82,30 +90,48 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
       <CardHeader className="pb-2">
         <CardTitle className="text-xl font-bold flex items-center gap-2">
           {stock.symbol}
+
           {buyVariance?.isTargetHit && (
-             <span className="bg-green-100 text-green-700 text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1 border border-green-200">
-               <TargetIcon className="h-2 w-2" /> BUY HIT
-             </span>
+            <span className="bg-green-100 text-green-700 text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1 border border-green-200">
+              <TargetIcon className="h-2 w-2" /> BUY HIT
+            </span>
           )}
-          {stock.targetSell && stock.price >= stock.targetSell && (
-             <span className="bg-red-100 text-red-700 text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1 border border-red-200">
-               <TargetIcon className="h-2 w-2" /> SELL HIT
-             </span>
+
+          {sellHit && (
+            <span className="bg-red-100 text-red-700 text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1 border border-red-200">
+              <TargetIcon className="h-2 w-2" /> SELL HIT
+            </span>
           )}
         </CardTitle>
-        <CardDescription className="truncate text-xs">{stock.name}</CardDescription>
+
+        <CardDescription className="truncate text-xs">{(stock as any).name}</CardDescription>
       </CardHeader>
 
       <CardContent className="grid gap-2">
         <div>
-          <div className="text-3xl font-bold tracking-tight">${stock.price.toFixed(2)}</div>
+          <div className="text-3xl font-bold tracking-tight">
+            {price == null ? (
+              <span className="text-slate-400">—</span>
+            ) : (
+              `$${price.toFixed(2)}`
+            )}
+          </div>
+
           <div className="flex items-center gap-2 flex-wrap">
-            <div className={cn('flex items-center gap-1 text-sm font-medium', isPositiveChange ? 'text-green-500' : 'text-red-500')}>
-              {isPositiveChange ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-              <span>
-                {stock.change.toFixed(2)} ({stock.changePercent.toFixed(2)}%)
-              </span>
-            </div>
+            {hasChange && change != null && changePercent != null ? (
+              <div className={cn(
+                'flex items-center gap-1 text-sm font-medium',
+                isPositiveChange ? 'text-green-500' : 'text-red-500'
+              )}>
+                {isPositiveChange ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+                <span>
+                  {change.toFixed(2)} ({changePercent.toFixed(2)}%)
+                </span>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400">Price updating…</div>
+            )}
+
             {lastUpdatedTime && (
               <span className="text-[10px] text-muted-foreground/60 flex items-center gap-0.5 ml-auto whitespace-nowrap">
                 <Clock className="h-2.5 w-2.5" /> As of {lastUpdatedTime}
@@ -119,37 +145,38 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
             <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 mb-1">
               Targets & Variance
             </div>
-            
+
             {stock.targetBuy && (
               <div className="flex justify-between items-center text-xs gap-2">
                 <span className="text-muted-foreground whitespace-nowrap">
                   Buy at: <b className="text-foreground">${stock.targetBuy.toFixed(2)}</b>
                 </span>
-                {buyVariance && (
-                  <span
-                    className={cn(
-                      "font-bold text-right",
-                      buyVariance.isTargetHit ? "text-green-600" : "text-amber-600"
-                    )}
-                  >
-                    {buyVariance.isTargetHit 
-                      ? 'HIT' 
-                      : `Gap: +$${buyVariance.diff.toFixed(2)} (+${buyVariance.diffPercent.toFixed(1)}%)`}
+
+                {buyVariance ? (
+                  <span className={cn("font-bold text-right", buyVariance.isTargetHit ? "text-green-600" : "text-amber-600")}>
+                    {buyVariance.isTargetHit ? 'HIT' : `Gap: +$${buyVariance.diff.toFixed(2)} (+${buyVariance.diffPercent.toFixed(1)}%)`}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground/60 font-medium text-right">
+                    —
                   </span>
                 )}
               </div>
             )}
-            
+
             {stock.targetSell && (
               <div className="flex justify-between items-center text-xs gap-2">
                 <span className="text-muted-foreground whitespace-nowrap">
                   Sell at: <b className="text-foreground">${stock.targetSell.toFixed(2)}</b>
                 </span>
-                {stock.price >= stock.targetSell ? (
+
+                {price == null ? (
+                  <span className="text-muted-foreground/60 font-medium text-right">—</span>
+                ) : sellHit ? (
                   <span className="text-red-600 font-bold text-xs text-right">HIT</span>
                 ) : (
                   <span className="text-muted-foreground/70 font-medium text-right">
-                    Gap: -${(stock.targetSell - stock.price).toFixed(2)} ({(((stock.targetSell - stock.price) / stock.price) * 100).toFixed(1)}%)
+                    Gap: -${(stock.targetSell - price).toFixed(2)} ({(((stock.targetSell - price) / price) * 100).toFixed(1)}%)
                   </span>
                 )}
               </div>
@@ -157,7 +184,6 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
           </div>
         )}
 
-        {/* Subtle intuitive hint */}
         <div className="text-right text-[11px] text-blue-600 font-medium mt-2 opacity-80">
           Analyze →
         </div>

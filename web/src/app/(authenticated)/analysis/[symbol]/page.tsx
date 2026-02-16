@@ -9,7 +9,14 @@ import { Separator } from "@/components/ui/separator";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
+
+// ✅ Existing Rule #1 root
 import { IntrinsicValueRoot } from "@/features/analysis/components/intrinsic-value-root";
+
+// ✅ NEW imports (this is the real wiring)
+import { MethodSelector, type IntrinsicMethod } from "@/features/analysis/components/method-selector";
+import { DcfPanel } from "@/features/analysis/components/dcf-panel";
+import { DdmPanel } from "@/features/analysis/components/ddm-panel";
 
 /* ----------------------------------------------------------
    Placeholder panel for all non‑Intrinsic sections
@@ -54,13 +61,16 @@ export default function AnalysisPage() {
   const { symbol } = useParams<{ symbol: string }>();
   const upperSymbol = symbol?.toString().toUpperCase() ?? "";
 
-  // Real‑time price (via SSE / watchlist)
+  // ✅ Intrinsic METHOD state (this did not exist before)
+  const [method, setMethod] = useState<IntrinsicMethod>("rule1");
+
+  // Top‑level tab state
+  const [tab, setTab] = useState("intrinsic");
+
+  // Real‑time price
   const { price, change, changePercent, lastUpdated } =
     useLivePrice(upperSymbol);
 
-  const [tab, setTab] = useState("intrinsic");
-
-  // Price formatting
   const priceDisplay =
     price != null ? `$${price.toFixed(2)}` : "Price unavailable";
 
@@ -93,16 +103,11 @@ export default function AnalysisPage() {
             {upperSymbol}
           </h1>
 
-          {/* Real‑time price */}
           <div className="text-sm text-slate-600 flex items-center gap-2">
             <span>{priceDisplay}</span>
 
             {changeDisplay && pctDisplay && (
-              <span
-                className={
-                  change >= 0 ? "text-green-600" : "text-red-600"
-                }
-              >
+              <span className={change >= 0 ? "text-green-600" : "text-red-600"}>
                 {changeDisplay} {pctDisplay}
               </span>
             )}
@@ -133,14 +138,30 @@ export default function AnalysisPage() {
         </TabsList>
 
         {/* ------------------------------------------------------ */}
-        {/* INTRINSIC VALUE (Overview + Deep Dive)                */}
+        {/* INTRINSIC VALUE (THIS IS THE KEY CHANGE)               */}
         {/* ------------------------------------------------------ */}
-        <TabsContent value="intrinsic" className="pt-4">
-          <IntrinsicValueRoot symbol={upperSymbol} />
+        <TabsContent value="intrinsic" className="pt-4 space-y-6">
+          {/* ✅ NEW: method selector */}
+          <MethodSelector method={method} onChange={setMethod} />
+
+          {/* ✅ Rule #1 (existing behavior) */}
+          {method === "rule1" && (
+            <IntrinsicValueRoot symbol={upperSymbol} />
+          )}
+
+          {/* ✅ DCF */}
+          {method === "dcf" && (
+            <DcfPanel symbol={upperSymbol} />
+          )}
+
+          {/* ✅ DDM */}
+          {method === "ddm" && (
+            <DdmPanel symbol={upperSymbol} />
+          )}
         </TabsContent>
 
         {/* ------------------------------------------------------ */}
-        {/* FINANCIAL HEALTH                                      */}
+        {/* OTHER TABS (unchanged)                                 */}
         {/* ------------------------------------------------------ */}
         <TabsContent value="health" className="pt-4">
           <ComingSoonPanel
@@ -155,9 +176,6 @@ export default function AnalysisPage() {
           />
         </TabsContent>
 
-        {/* ------------------------------------------------------ */}
-        {/* MOAT TAB                                              */}
-        {/* ------------------------------------------------------ */}
         <TabsContent value="moat" className="pt-4">
           <ComingSoonPanel
             title="Moat Analysis"
@@ -171,9 +189,6 @@ export default function AnalysisPage() {
           />
         </TabsContent>
 
-        {/* ------------------------------------------------------ */}
-        {/* DIVIDEND TAB                                          */}
-        {/* ------------------------------------------------------ */}
         <TabsContent value="dividend" className="pt-4">
           <ComingSoonPanel
             title="Dividend Safety"
@@ -187,9 +202,6 @@ export default function AnalysisPage() {
           />
         </TabsContent>
 
-        {/* ------------------------------------------------------ */}
-        {/* TECHNICAL TAB                                         */}
-        {/* ------------------------------------------------------ */}
         <TabsContent value="technical" className="pt-4">
           <ComingSoonPanel
             title="Technical Analysis"
@@ -203,9 +215,6 @@ export default function AnalysisPage() {
           />
         </TabsContent>
 
-        {/* ------------------------------------------------------ */}
-        {/* SUPER INVESTORS TAB                                   */}
-        {/* ------------------------------------------------------ */}
         <TabsContent value="investors" className="pt-4">
           <ComingSoonPanel
             title="Super Investors"
@@ -219,9 +228,6 @@ export default function AnalysisPage() {
           />
         </TabsContent>
 
-        {/* ------------------------------------------------------ */}
-        {/* OTHERS TAB                                            */}
-        {/* ------------------------------------------------------ */}
         <TabsContent value="others" className="pt-4">
           <ComingSoonPanel
             title="Other Models"

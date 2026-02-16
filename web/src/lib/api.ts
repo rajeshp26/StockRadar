@@ -85,6 +85,20 @@ function toErrorMessage(err: unknown): string {
 api.interceptors.request.use(
   (cfg) => {
     cfg.withCredentials = true; // enforce cookie inclusion
+
+    /**
+     * SAFETY NORMALIZATION (non-breaking):
+     * Prevent accidental double-proxy paths such as:
+     *   baseURL="/api/proxy" + url="/api/proxy/valuations/..."  => "/api/proxy/api/proxy/..."
+     *
+     * If caller mistakenly passes "/api/proxy/..." as url, strip it once.
+     */
+    if (typeof cfg.url === "string" && cfg.url.startsWith("/api/proxy/")) {
+      cfg.url = cfg.url.replace(/^\/api\/proxy/, "");
+    } else if (cfg.url === "/api/proxy") {
+      cfg.url = "/";
+    }
+
     return logRequest(cfg);
   },
   (error) => Promise.reject(error)

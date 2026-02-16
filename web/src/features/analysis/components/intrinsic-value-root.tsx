@@ -19,8 +19,7 @@ export function IntrinsicValueRoot({ symbol }: { symbol: string }) {
     <div className="space-y-6">
       <ValuationOverview />
 
-      <MethodSelector method={method} onChange={setMethod} />
-
+     
       {method === "rule1" ? <IntrinsicPanel symbol={symbol} /> : <DdmPanel symbol={symbol} />}
     </div>
   );

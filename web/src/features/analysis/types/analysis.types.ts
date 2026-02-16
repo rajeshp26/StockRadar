@@ -168,3 +168,111 @@ export interface DdmState {
   history?: DdmHistory;
   freshness?: FreshnessInfo;
 }
+
+// ---------------------------
+// DCF Types
+// ---------------------------
+
+export type DcfTerminalMethod = "perpetuity_growth" | "exit_multiple";
+
+export interface DcfSensitivityGrid {
+  /** Discount rates (r-axis), as fractions (e.g. 0.09 for 9%) */
+  discountRates: number[];
+
+  /** Terminal growth rates (g-axis), as fractions (e.g. 0.03 for 3%) */
+  terminalGrowthRates: number[];
+
+  /**
+   * Matrix of intrinsic value per share.
+   * Indexed as [rIndex][gIndex]
+   */
+  intrinsicValuePerShareMatrix: (number | null)[][];
+
+  /** Currency of intrinsic values (e.g. USD) */
+  currency?: string | null;
+}
+
+export interface DcfValuation {
+  symbol: string;
+  companyId: number;
+  currency: string;
+
+  terminalMethod: DcfTerminalMethod;
+
+  forecastYears: number;
+  forecastFcf: number[];
+  pvFcf: number[];
+  totalPvFcf: number;
+  // Transparency
+  discountFactors?: number[] | null;
+
+  waccUsed: number;
+
+  terminalValue?: number;
+  pvTerminalValue?: number;
+
+  // Transparency
+  terminalGrowthRateUsed?: number | null;
+  cashFlowNPlus1?: number | null;
+  baseFcf?: number | null;
+  baseFcfFiscalYear?: number | null;
+
+  enterpriseValue?: number;
+  netDebtUsed?: number;
+  equityValue?: number;
+
+  sharesOutstanding?: number;
+  intrinsicValuePerShare?: number;
+
+  currentPrice?: number;
+  upsideDownsidePct?: number;
+
+  /** Optional DCF sensitivity grid (r × g) */
+  sensitivityScenarios?: DcfSensitivityGrid | null;
+}
+
+// Optional: if you later type request overrides on FE, use this naming:
+export interface DcfRequestOverrides {
+  forecastYears?: number | null;
+  forecastFcf?: number[] | null;
+  fcfGrowthRate?: number | null; // accepts percent or fraction
+  // revenueGrowthRate intentionally not used on FE going forward
+  fcfMarginAssumption?: number | null;
+  wacc?: number | null;
+  terminalMethod?: DcfTerminalMethod | null;
+  terminalGrowthRate?: number | null;
+  exitMultiple?: number | null;
+  terminalMetric?: "ebitda" | null;
+  ebitdaMarginAssumption?: number | null;
+  terminalEbitda?: number | null;
+  sharesOutstanding?: number | null;
+  netDebt?: number | null;
+  analystName?: string | null;
+  notes?: string | null;
+}
+
+export interface DcfResponse {
+  valuation: DcfValuation;
+  applicability: Applicability;
+  dataQuality: DataQuality;
+}
+
+// ---------------------------
+// DCF History Types
+// ---------------------------
+
+export interface DcfHistoryEntry {
+  runAt: string;
+  terminalMethod?: DcfTerminalMethod;
+  intrinsicValuePerShare?: number;
+  waccUsed?: number;
+  terminalValue?: number;
+  enterpriseValue?: number;
+  score?: number;
+  category?: SuitabilityCategory;
+}
+
+export interface DcfHistory {
+  symbol: string;
+  items: DcfHistoryEntry[];
+}

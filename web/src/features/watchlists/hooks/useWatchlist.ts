@@ -18,6 +18,8 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   const [isLoading, setIsLoading] = useState(!options?.initialWatchlist);
   const [watchlistId, setWatchlistId] = useState<number | null>(null);
   const [error, setError] = useState<Error | null>(null);
+  // Phase 3: control SSE restart cleanly when the watchlist membership changes
+  const [streamEpoch, setStreamEpoch] = useState(0);
 
   const { watchlistService } = useServices();
   const { firebaseUser: user } = useAuth();
@@ -25,6 +27,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
 
   // Track if we've initialized to prevent double-fetch (but do not burn init before auth is ready)
   const hasInitializedRef = useRef(false);
+  const hasAutoEnrichedRef = useRef(false);
 
   // SSE
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -44,8 +47,8 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       setIsLoading(true);
       setError(null);
 
-      console.log("[useWatchlist] Fetching watchlist from service");
-      const data = await watchlistService.getDefaultWatchlist();
+      console.log("[useWatchlist] Fetching watchlist STRUCTURE from service");
+      const data = await watchlistService.getDefaultWatchlistStructure();
 
       setStocks(data.stocks);
       setWatchlistId(data.watchlist_id);
@@ -120,8 +123,11 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         target_sell: targetSell,
       });
 
-      // Refresh watchlist to get updated data
+      // Phase 3:
+      // - Refresh STRUCTURE only (fast) so the new item appears immediately
+      // - Restart SSE once so server re-resolves symbol list and starts streaming the new symbol
       await fetchWatchlist();
+      setStreamEpoch((x) => x + 1);
       toast({ title: "Stock Added" });
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -150,8 +156,19 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         target_sell: targetSell,
       });
 
-      // Refresh watchlist to get updated data
-      await fetchWatchlist();
+
+      // Phase 3: local patch (no refetch)
+      setStocks((prev) =>
+        prev.map((s) =>
+          s.id === itemId
+            ? {
+                ...s,
+                targetBuy: targetBuy,
+                targetSell: targetSell,
+              }
+            : s
+        )
+      );
       toast({ title: "Targets Updated" });
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -174,6 +191,8 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       // Optimistic update
       setStocks((prev) => prev.filter((s) => s.id !== itemId));
       await watchlistService.removeStock(itemId);
+      // Phase 3: restart SSE so server stops streaming removed symbols sooner
+      setStreamEpoch((x) => x + 1);
       toast({ title: "Stock Removed" });
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -190,7 +209,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
 
   /**
    * Build a symbol->price map and a stable getPrice() accessor
-   * ✅ Fix: useAnalysis expects either `prices[symbol]` or `getPrice(symbol)`
+   
    */
   const prices = useMemo(() => {
     const map: Record<string, number> = {};
@@ -249,6 +268,8 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         eventSourceRef.current.onmessage = (event) => {
           try {
             const update = JSON.parse(event.data);
+            // First real price update → mark auto-enrichment as satisfied
+            hasAutoEnrichedRef.current = true;
             console.log("[useWatchlist] Received SSE update:", update);
 
             setStocks((prevStocks) =>
@@ -284,6 +305,35 @@ export function useWatchlist(options?: UseWatchlistOptions) {
             if (user && watchlistId) {
               console.log("[useWatchlist] Attempting SSE reconnection");
               void setupStream();
+
+
+              //   ------------------------------------------------------------------
+              // Phase 2.5: Automatic one-time full enrichment
+              // ------------------------------------------------------------------
+              // Purpose:
+              // - Structure-first render
+              // - SSE starts
+              // - Then automatically fetch enriched prices ONCE
+
+              if (!hasAutoEnrichedRef.current) {
+              const enrichTimeout = setTimeout(async () => {
+                  if (hasAutoEnrichedRef.current) return;
+
+                  console.log("[useWatchlist] Auto-enrichment fallback triggered");
+                  try {
+                    const data = await watchlistService.getDefaultWatchlist();
+                    setStocks(data.stocks);
+                    setWatchlistId(data.watchlist_id);
+                    hasAutoEnrichedRef.current = true;
+                  } catch (e) {
+                    console.warn("[useWatchlist] Auto-enrichment failed (will rely on SSE)", e);
+                    }
+                  }, 1500); // short grace window for SSE to deliver first prices
+
+                  return () => {
+                    clearTimeout(enrichTimeout);
+                  };
+                }
             }
           }, 5000);
         };
@@ -308,7 +358,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         eventSourceRef.current = null;
       }
     };
-  }, [user, watchlistId, watchlistService]);
+  }, [user, watchlistId, watchlistService, streamEpoch]);
 
   return {
     stocks,
@@ -322,6 +372,8 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     addStock,
     updateTargets,
     removeStock,
+    // Expose only if you want to debug/observe SSE restarts (optional)
+    // streamEpoch,
   };
 }
 ``

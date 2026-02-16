@@ -1,12 +1,19 @@
 'use client';
 
-import { useWatchlist } from '@/hooks/useWatchlist';
 import { useAuth } from '@/providers/auth-provider';
-import { Watchlist } from "@/components/dashboard/watchlist";
+import { Watchlist } from '@/components/dashboard/watchlist';
 
+/**
+ * DashboardPage
+ *
+ * Phase 1:
+ * - Dashboard is the primary surface.
+ * - Dashboard renders Watchlist UI shell immediately.
+ * - Dashboard does NOT fetch watchlist data.
+ * - All watchlist logic is owned by the Watchlist component (Option B).
+ */
 export default function DashboardPage() {
   const { status } = useAuth();
-  const { watchlist, loading, error, refetch } = useWatchlist();
 
   if (status === 'initializing') {
     return <div className="p-8">Authenticating...</div>;
@@ -16,33 +23,17 @@ export default function DashboardPage() {
     return <div className="p-8">Please log in</div>;
   }
 
-  if (loading && !watchlist) {
-    return <div className="p-8">Loading watchlist...</div>;
-  }
-
-  if (error) {
-    return (
-      <div className="p-8">
-        <div className="bg-red-50 border border-red-200 rounded p-4">
-          <h3 className="font-semibold text-red-900">Error</h3>
-          <p className="text-sm text-red-700 mt-2">{error.message}</p>
-          <button
-            onClick={() => refetch()}
-            className="mt-4 px-4 py-2 bg-red-600 text-white rounded"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       className="flex flex-1 items-start justify-center rounded-lg"
       x-chunk="dashboard-02-chunk-1"
     >
-      {watchlist && <Watchlist watchlist={watchlist} />}
+      {/* 
+        Phase 1:
+        Render Watchlist immediately.
+        It will show skeletons first, then hydrate data.
+      */}
+      <Watchlist />
     </div>
   );
 }
