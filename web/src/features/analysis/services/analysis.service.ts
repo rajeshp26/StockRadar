@@ -215,14 +215,56 @@ export async function fetchDcfValuation(
   }
 ): Promise<DcfResponse> {
   const qs = options?.force ? "?force=true" : "";
-  const resp = await api.post(
-    `/valuations/${encodeURIComponent(symbol)}/dcf${qs}`,
-    options?.overrides ?? {}
-  );
-  return resp.data as DcfResponse;
+  const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/dcf${qs}`);
+
+  let res: Response;
+  try {
+    res = await doFetch(url, {
+      method: "POST",
+      body: JSON.stringify(options?.overrides ?? {}),
+    });
+  } catch (err: any) {
+    throw new Error(err?.message || "Network error while computing DCF.");
+  }
+
+  if (res.ok) {
+    const body = await readJsonSafe<DcfResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      throw new Error("Invalid response from server (missing DCF payload).");
+    }
+    return body;
+  }
+
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  const message =
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`;
+
+  throw new Error(message);
 }
 
-export async function fetchDcfHistory(symbol: string) {
-  const resp = await api.get(`/valuations/${encodeURIComponent(symbol)}/dcf/history`);
-  return resp.data as DcfHistory;
+/**
+ * DCF History pattern:
+ * - Must NEVER break the Analysis page.
+ * - If endpoint is missing or returns non-200, return empty list.
+ */
+export async function fetchDcfHistory(symbol: string): Promise<DcfHistory> {
+  const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/dcf/history`);
+
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch {
+    return { symbol: symbol.toUpperCase(), items: [] };
+  }
+
+  if (res.ok) {
+    const body = await readJsonSafe<DcfHistory>(res);
+    if (body && typeof body === "object" && Array.isArray(body.items)) {
+      return body;
+    }
+  }
+
+  return { symbol: symbol.toUpperCase(), items: [] };
 }

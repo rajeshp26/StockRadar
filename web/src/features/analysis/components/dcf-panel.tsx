@@ -1,30 +1,53 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
 import { fetchDcfValuation } from "../services/analysis.service";
 import type { DcfResponse } from "../types/analysis.types";
 import { useDcfHistory } from "../hooks/useDcfHistory";
 
+import {
+  Metric,
+  ScoreBar,
+  DiagnosticsList,
+  FlagPill,
+  fmtCurrency,
+  fmtPct,
+  fmtInt,
+  fmtDateTime,
+} from "./shared-ui";
+
 export function DcfPanel({ symbol }: { symbol: string }) {
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<DcfResponse | null>(null);
-  const { history, loadingHistory, reloadHistory } = useDcfHistory(symbol);
+  const [error, setError] = useState<string | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
+
+  const { loading: loadingHistory, error: historyError, history, reload: reloadHistory } =
+    useDcfHistory(symbol);
 
   const load = useCallback(
     async (force = false) => {
       setLoading(true);
       setError(null);
       try {
-        const resp = await fetchDcfValuation(symbol, { force });
-        setData(resp);
+        setData(await fetchDcfValuation(symbol, { force }));
       } catch (e: any) {
+        setError(e?.message ?? "Failed to load DCF");
         setData(null);
-        setError(e?.message ?? "Failed to load DCF valuation");
       } finally {
         setLoading(false);
       }
@@ -36,432 +59,189 @@ export function DcfPanel({ symbol }: { symbol: string }) {
     void load(false);
   }, [load]);
 
-  // Pull these up so hooks below can reference safely
-  const valuation = data?.valuation ?? null;
-  const applicability = data?.applicability ?? null;
-
-  // ============================
-  // Priority 6.2 — FE Guardrails
-  // ============================
-  // IMPORTANT: must be declared before any early returns to preserve hook order.
-  const invariantIssue = useMemo(() => {
-    const issues: string[] = [];
-
-    // If valuation doesn't exist yet (loading/error/not computed), do not enforce invariants.
-    if (!valuation) return issues;
-
-    const {
-      forecastYears,
-      forecastFcf,
-      pvFcf,
-      discountFactors,
-      sensitivityScenarios,
-    } = valuation;
-
-    if (!Number.isFinite(forecastYears) || forecastYears <= 0) {
-      issues.push(`forecastYears is invalid (${String(forecastYears)}).`);
-      return issues;
+  const handleRecompute = useCallback(async () => {
+    setRecomputing(true);
+    try {
+      await load(true);
+      await reloadHistory();
+    } finally {
+      setRecomputing(false);
     }
+  }, [load, reloadHistory]);
 
-    if (!Array.isArray(forecastFcf) || forecastFcf.length !== forecastYears) {
-      issues.push(
-        `forecastFcf length (${forecastFcf?.length ?? "n/a"}) does not match forecastYears (${forecastYears}).`
-      );
-    }
+  const v = data?.valuation;
+  const applicability = data?.applicability;
+  const curr = v?.currency ?? "USD";
 
-    if (!Array.isArray(pvFcf) || pvFcf.length !== forecastYears) {
-      issues.push(
-        `pvFcf length (${pvFcf?.length ?? "n/a"}) does not match forecastYears (${forecastYears}).`
-      );
-    }
+  const historyCard = useMemo(() => {
+    const items = history?.items ?? [];
 
-    if (discountFactors && Array.isArray(discountFactors) && discountFactors.length !== forecastYears) {
-      issues.push(
-        `discountFactors length (${discountFactors.length}) does not match forecastYears (${forecastYears}).`
-      );
-    }
-
-    if (sensitivityScenarios) {
-      const rLen = sensitivityScenarios.discountRates?.length ?? 0;
-      const gLen = sensitivityScenarios.terminalGrowthRates?.length ?? 0;
-      const m = sensitivityScenarios.intrinsicValuePerShareMatrix;
-
-      if (!Array.isArray(m) || m.length !== rLen) {
-        issues.push(
-          `sensitivity matrix rows (${m?.length ?? "n/a"}) does not match discountRates length (${rLen}).`
-        );
-      } else {
-        const badRow = m.find((row) => !Array.isArray(row) || row.length !== gLen);
-        if (badRow) {
-          issues.push(`sensitivity matrix columns do not match terminalGrowthRates length (${gLen}).`);
-        }
-      }
-    }
-
-    return issues;
-  }, [valuation]);
-
-  if (loading) {
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
-          <CardTitle>Discounted Cash Flow (DCF)</CardTitle>
+          <CardTitle>History</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-slate-500">Loading…</CardContent>
-      </Card>
-    );
-  }
 
-  if (error) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Discounted Cash Flow (DCF)</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="text-sm text-rose-600">{error}</div>
-          <Button onClick={() => void load(true)}>Retry / Recompute</Button>
-        </CardContent>
-      </Card>
-    );
-  }
-
-
-
-  if (!valuation) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Discounted Cash Flow (DCF)</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="text-sm text-slate-500">
-            DCF valuation is not available for this company yet.
-          </div>
-          <Button onClick={() => void load(true)}>Compute DCF</Button>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const {
-    forecastYears,
-    forecastFcf,
-    pvFcf,
-    discountFactors,
-    terminalValue,
-    pvTerminalValue,
-    enterpriseValue,
-    netDebtUsed,
-    equityValue,
-    sharesOutstanding,
-    intrinsicValuePerShare,
-    currentPrice,
-    upsideDownsidePct,
-    waccUsed,
-    terminalMethod,
-    terminalGrowthRateUsed,
-    cashFlowNPlus1,
-    baseFcf,
-    baseFcfFiscalYear,
-    sensitivityScenarios,
-  } = valuation;
-
-  
-
-  // If invariants are broken, show a visible banner and stop rendering the detailed tables.
-  // This prevents misleading output and avoids runtime table errors.
-  if (invariantIssue.length > 0) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Discounted Cash Flow (DCF)</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-rose-700">
-            <div className="font-medium">DCF output is inconsistent.</div>
-            <div className="mt-1 text-xs">
-              This usually indicates a partial/invalid computation snapshot. Please recompute to regenerate a consistent run.
+        <CardContent>
+          {loadingHistory ? (
+            <div className="space-y-2">
+              <Skeleton className="h-6" />
+              <Skeleton className="h-6" />
+              <Skeleton className="h-6" />
             </div>
-            <ul className="mt-2 list-disc pl-5 text-xs">
-              {invariantIssue.map((msg, i) => (
-                <li key={i}>{msg}</li>
-              ))}
-            </ul>
-          </div>
-          <Button onClick={() => void load(true)}>Recompute</Button>
+          ) : historyError ? (
+            <div className="text-sm text-slate-300">
+              Could not load history.{" "}
+              <button className="underline" onClick={() => void reloadHistory()}>
+                Retry
+              </button>
+            </div>
+          ) : items.length === 0 ? (
+            <p className="text-sm text-slate-300">No history yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[220px]">Date</TableHead>
+                  <TableHead>Terminal</TableHead>
+                  <TableHead>Intrinsic / Share</TableHead>
+                  <TableHead>WACC</TableHead>
+                  <TableHead>Enterprise</TableHead>
+                  <TableHead>Score</TableHead>
+                  <TableHead>Category</TableHead>
+                </TableRow>
+              </TableHeader>
+
+              <TableBody>
+                {items.map((r, idx) => (
+                  <TableRow key={`${r.runAt}-${idx}`}>
+                    <TableCell>{fmtDateTime(r.runAt)}</TableCell>
+                    <TableCell>{r.terminalMethod ?? "—"}</TableCell>
+                    <TableCell>{fmtCurrency(r.intrinsicValuePerShare ?? null, curr)}</TableCell>
+                    <TableCell>{fmtPct(r.waccUsed ?? null)}</TableCell>
+                    <TableCell>{fmtCurrency(r.enterpriseValue ?? null, curr)}</TableCell>
+                    <TableCell>{fmtInt(r.score ?? null)}</TableCell>
+                    <TableCell>{r.category ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     );
-  }
+  }, [history, loadingHistory, historyError, reloadHistory, curr]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Discounted Cash Flow (DCF)</CardTitle>
-      </CardHeader>
-
-      <CardContent className="space-y-6 text-sm">
-        {/* ================= SUMMARY ================= */}
-        <section className="space-y-2">
-          <div className="flex items-center gap-3">
-            <div className="font-medium">Intrinsic Value / Share:</div>
-            <div>
-              {intrinsicValuePerShare !== undefined && intrinsicValuePerShare !== null
-                ? intrinsicValuePerShare.toFixed(2)
-                : "—"}
-            </div>
-            {upsideDownsidePct !== null && upsideDownsidePct !== undefined && (
-              <Badge variant={upsideDownsidePct >= 0 ? "default" : "destructive"}>
-                {(upsideDownsidePct * 100).toFixed(1)}%
-              </Badge>
-            )}
-          </div>
-
-          <div>
-            <span className="font-medium">Current Price:</span>{" "}
-            {currentPrice !== null && currentPrice !== undefined
-              ? currentPrice.toFixed(2)
-              : "—"}
-          </div>
-
-          <div>
-            <span className="font-medium">WACC:</span>{" "}
-            {(waccUsed * 100).toFixed(2)}%
-          </div>
-
-          <div>
-            <span className="font-medium">Terminal Method:</span>{" "}
-            {terminalMethod}
-          </div>
-        </section>
-
-        <Separator />
-
-        {/* ================= HOW WE ARRIVED HERE ================= */}
-        <section className="space-y-4">
-          <h4 className="font-semibold">How We Arrived Here</h4>
-
-          {baseFcf !== null && baseFcf !== undefined && (
-            <div className="text-xs text-slate-500">
-              Base FCF used: {baseFcf.toFixed(2)}
-              {baseFcfFiscalYear && ` (FY ${baseFcfFiscalYear})`}
-            </div>
-          )}
-
-          {/* Forecast table */}
-          <div className="overflow-x-auto">
-            <table className="min-w-full border text-xs">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="border px-2 py-1 text-left">Year</th>
-                  <th className="border px-2 py-1 text-right">FCF</th>
-                  <th className="border px-2 py-1 text-right">Discount Factor</th>
-                  <th className="border px-2 py-1 text-right">PV of FCF</th>
-                </tr>
-              </thead>
-              <tbody>
-                {forecastFcf.map((cf, i) => (
-                  <tr key={i}>
-                    <td className="border px-2 py-1">{i + 1}</td>
-                    <td className="border px-2 py-1 text-right">
-                      {cf.toFixed(2)}
-                    </td>
-                    <td className="border px-2 py-1 text-right">
-                      {discountFactors?.[i]?.toFixed(4) ?? "—"}
-                    </td>
-                    <td className="border px-2 py-1 text-right">
-                      {pvFcf[i]?.toFixed(2) ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Terminal */}
-          <div className="space-y-1">
-            <div>
-              <span className="font-medium">Terminal Value:</span>{" "}
-              {terminalValue !== null && terminalValue !== undefined
-                ? terminalValue.toFixed(2)
-                : "—"}
-            </div>
-            <div>
-              <span className="font-medium">PV of Terminal Value:</span>{" "}
-              {pvTerminalValue !== null && pvTerminalValue !== undefined
-                ? pvTerminalValue.toFixed(2)
-                : "—"}
-            </div>
-
-            {terminalGrowthRateUsed !== null && terminalGrowthRateUsed !== undefined && (
-              <div className="text-xs text-slate-500">
-                Terminal growth (g): {(terminalGrowthRateUsed * 100).toFixed(2)}%
-                {cashFlowNPlus1 !== null && cashFlowNPlus1 !== undefined && (
-                  <> · CFₙ₊₁ = {cashFlowNPlus1.toFixed(2)}</>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Bridge */}
-          <div className="space-y-1">
-            <div>
-              <span className="font-medium">Enterprise Value:</span>{" "}
-              {enterpriseValue?.toFixed(2) ?? "—"}
-            </div>
-            <div>
-              <span className="font-medium">Net Debt:</span>{" "}
-              {netDebtUsed?.toFixed(2) ?? "—"}
-            </div>
-            <div>
-              <span className="font-medium">Equity Value:</span>{" "}
-              {equityValue?.toFixed(2) ?? "—"}
-            </div>
-            <div>
-              <span className="font-medium">Shares Outstanding:</span>{" "}
-              {sharesOutstanding?.toFixed(2) ?? "—"}
-            </div>
-          </div>
-        </section>
-
-        <Separator />
-
-        {/* ================= SUITABILITY ================= */}
-        {applicability && (
-          <section className="space-y-3">
-            <h4 className="font-semibold">DCF Suitability</h4>
-
-            <div className="flex items-center gap-3">
-              <Badge>
-                Score: {applicability.score} / 100
-              </Badge>
-              <Badge variant="outline">
-                {applicability.category}
-              </Badge>
-            </div>
-
-            <ul className="space-y-2">
-              {applicability.flags.map((f, idx) => (
-                <li key={idx} className="text-xs">
-                  <span className="font-medium">{f.code}</span>: {f.message}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {/* ================= SENSITIVITY (r x g) ================= */}
-        <Separator />
-        <section className="space-y-3">
-          <h4 className="font-semibold">Sensitivity (Discount Rate × Terminal Growth)</h4>
-          {!sensitivityScenarios ? (
-            <div className="text-xs text-slate-500">
-              Sensitivity grid not available for this run.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full border text-xs">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="border px-2 py-1 text-left">r \ g</th>
-                    {sensitivityScenarios.terminalGrowthRates.map((g, i) => (
-                      <th key={i} className="border px-2 py-1 text-right">
-                        {(g * 100).toFixed(1)}%
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sensitivityScenarios.discountRates.map((r, ri) => (
-                    <tr key={ri}>
-                      <td className="border px-2 py-1">
-                        {(r * 100).toFixed(1)}%
-                      </td>
-                      {sensitivityScenarios.intrinsicValuePerShareMatrix[ri].map((v, gi) => (
-                        <td key={gi} className="border px-2 py-1 text-right">
-                          {typeof v === "number" ? v.toFixed(2) : "—"}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {sensitivityScenarios.currency && (
-                <div className="text-[11px] text-slate-500 pt-1">
-                  Values are intrinsic value per share ({sensitivityScenarios.currency})
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-
-        <div className="pt-2">
-          <Button onClick={() => void load(true)}>Recompute</Button>
+    <div className="space-y-6">
+      {error ? (
+        <div className="rounded border border-rose-200 bg-rose-50 p-3 text-rose-700">
+          {error}
         </div>
+      ) : null}
 
-        {/* ================= HISTORY ================= */}
-        <Separator />
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h4 className="font-semibold">History</h4>
-            <Button variant="outline" size="sm" onClick={() => void reloadHistory()}>
-              Refresh History
+      {/* Summary */}
+      <Card className="glass rounded-3xl border border-white/5 text-white relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent opacity-50" />
+        <CardHeader className="space-y-2">
+          <div className="flex items-center justify-between gap-4">
+            <CardTitle>Discounted Cash Flow (DCF)</CardTitle>
+            <Button onClick={handleRecompute} disabled={loading || recomputing}>
+              {recomputing ? "Recomputing…" : "Recompute"}
             </Button>
           </div>
+          <div className="text-sm text-slate-400">
+            Cash‑flow based intrinsic value with full transparency.
+          </div>
+        </CardHeader>
 
-          {loadingHistory ? (
-            <div className="text-xs text-slate-500">Loading history…</div>
-          ) : history.items.length === 0 ? (
-            <div className="text-xs text-slate-500">
-              No previous DCF calculations found.
+        <CardContent className="space-y-4">
+          {loading ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full border text-xs">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="border px-2 py-1 text-left">Run At</th>
-                    <th className="border px-2 py-1 text-left">Method</th>
-                    <th className="border px-2 py-1 text-right">Intrinsic / Share</th>
-                    <th className="border px-2 py-1 text-right">WACC</th>
-                    <th className="border px-2 py-1 text-right">Score</th>
-                    <th className="border px-2 py-1 text-left">Category</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.items.map((it, idx) => (
-                    <tr key={idx}>
-                      <td className="border px-2 py-1">
-                        {it.runAt ? new Date(it.runAt).toLocaleString() : "—"}
-                      </td>
-                      <td className="border px-2 py-1">
-                        {it.terminalMethod ?? "—"}
-                      </td>
-                      <td className="border px-2 py-1 text-right">
-                        {typeof it.intrinsicValuePerShare === "number"
-                          ? it.intrinsicValuePerShare.toFixed(2)
-                          : "—"}
-                      </td>
-                      <td className="border px-2 py-1 text-right">
-                        {typeof it.waccUsed === "number"
-                          ? `${(it.waccUsed * 100).toFixed(2)}%`
-                          : "—"}
-                      </td>
-                      <td className="border px-2 py-1 text-right">
-                        {typeof it.score === "number" ? it.score : "—"}
-                      </td>
-                      <td className="border px-2 py-1">
-                        {it.category ?? "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Metric label="Intrinsic Value / Share" value={fmtCurrency(v?.intrinsicValuePerShare ?? null, curr)} />
+              <Metric label="Current Price" value={fmtCurrency(v?.currentPrice ?? null, curr)} />
+              <Metric label="Upside / Downside" value={fmtPct(v?.upsideDownsidePct ?? null)} />
             </div>
           )}
-        </section>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+
+      {/* How we arrived */}
+      <Card className="glass rounded-3xl border border-white/5 text-white">
+        <CardHeader>
+          <CardTitle>How We Arrived Here</CardTitle>
+        </CardHeader>
+
+        <CardContent>
+          {loading ? (
+            <div className="grid md:grid-cols-3 gap-4">
+              {Array.from({ length: 9 }).map((_, i) => (
+                <Skeleton key={i} className="h-16" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid md:grid-cols-3 gap-4">
+              <Metric label="Base FCF" value={fmtCurrency(v?.baseFcf ?? null, curr)} />
+              <Metric label="Forecast Years" value={fmtInt(v?.forecastYears ?? null)} />
+              <Metric label="WACC" value={fmtPct(v?.waccUsed ?? null)} />
+
+              <Metric label="Terminal Method" value={v?.terminalMethod ?? "—"} />
+              <Metric label="Enterprise Value" value={fmtCurrency(v?.enterpriseValue ?? null, curr)} />
+              <Metric label="Equity Value" value={fmtCurrency(v?.equityValue ?? null, curr)} />
+
+              <Metric label="Net Debt" value={fmtCurrency(v?.netDebtUsed ?? null, curr)} />
+              <Metric label="Shares Outstanding" value={fmtInt(v?.sharesOutstanding ?? null)} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Suitability */}
+      <Card className="glass rounded-3xl border border-white/5 text-white">
+        <CardHeader>
+          <CardTitle>Suitability</CardTitle>
+        </CardHeader>
+
+        <CardContent className="space-y-3">
+          {loading ? (
+            <Skeleton className="h-6 w-64" />
+          ) : (
+            <ScoreBar score={applicability?.score} category={applicability?.category} />
+          )}
+
+          {!loading && applicability?.flags?.length ? (
+            <div className="flex flex-wrap gap-2 items-center">
+              {applicability.flags.slice(0, 3).map((f, i) => (
+                <FlagPill key={`${f.code}-${i}`} text={f.code} />
+              ))}
+              {applicability.flags.length > 3 ? (
+                <span className="text-xs text-slate-300">
+                  +{applicability.flags.length - 3} more
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+
+          <button
+            className="text-sm underline text-slate-300 hover:text-white"
+            onClick={() => setShowDiagnostics((v) => !v)}
+          >
+            {showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
+          </button>
+
+          {showDiagnostics && <DiagnosticsList items={applicability?.flags} />}
+        </CardContent>
+      </Card>
+
+      <Separator />
+
+      {historyCard}
+    </div>
   );
 }

@@ -7,7 +7,6 @@ import { useDdmAnalysis } from "../hooks/useDdmAnalysis";
 import { useDdmHistory } from "../hooks/useDdmHistory";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,6 +24,7 @@ import {
   Metric,
   ScoreBar,
   DiagnosticsList,
+  FlagPill,
   fmtCurrency,
   fmtPct,
   fmtInt,
@@ -33,6 +33,7 @@ import {
 
 export function DdmPanel({ symbol }: { symbol: string }) {
   const [variant, setVariant] = useState<DdmVariant>("gordon");
+
   const { loading, error, valuation, applicability, dataQuality, freshness, recompute } =
     useDdmAnalysis(symbol, variant);
 
@@ -55,10 +56,11 @@ export function DdmPanel({ symbol }: { symbol: string }) {
   const summary = useMemo(() => {
     const curr = valuation?.currency ?? "USD";
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white relative overflow-hidden">
         <CardHeader className="space-y-2">
           <div className="flex items-center justify-between gap-4">
             <CardTitle>Dividend Discount Model (DDM)</CardTitle>
+
             <Tabs value={variant} onValueChange={(v) => setVariant(v as DdmVariant)}>
               <TabsList>
                 <TabsTrigger value="gordon">Gordon</TabsTrigger>
@@ -84,7 +86,7 @@ export function DdmPanel({ symbol }: { symbol: string }) {
           )}
 
           <div className="flex items-center justify-between">
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-slate-400">
               Method: {valuation?.method ?? (variant === "gordon" ? "gordon" : "two_stage")}
               {freshness?.lastEvaluatedDisplay ? <> • Last evaluated: {freshness.lastEvaluatedDisplay}</> : null}
             </div>
@@ -110,10 +112,11 @@ export function DdmPanel({ symbol }: { symbol: string }) {
     const isTwoStage = (v?.method ?? "gordon") === "two_stage";
 
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
           <CardTitle>How We Arrived Here</CardTitle>
         </CardHeader>
+
         <CardContent>
           {loading ? (
             <div className="grid md:grid-cols-3 gap-4">
@@ -124,12 +127,27 @@ export function DdmPanel({ symbol }: { symbol: string }) {
           ) : (
             <>
               <div className="grid md:grid-cols-3 gap-4">
-                <Metric label="D0 (Annual DPS)" value={fmtCurrency(v?.currentDps, curr)} hint={d0Src ? `Source: ${d0Src}` : undefined} />
+                <Metric
+                  label="D0 (Annual DPS)"
+                  value={fmtCurrency(v?.currentDps, curr)}
+                  hint={d0Src ? `Source: ${d0Src}` : undefined}
+                />
                 <Metric label="D1 (Next Year DPS)" value={fmtCurrency(v?.nextYearDps, curr)} />
-                <Metric label="g (Dividend Growth)" value={fmtPct(v?.dividendGrowthRate)} hint={gSrc ? `Source: ${gSrc}` : undefined} />
+                <Metric
+                  label="g (Dividend Growth)"
+                  value={fmtPct(v?.dividendGrowthRate)}
+                  hint={gSrc ? `Source: ${gSrc}` : undefined}
+                />
 
-                <Metric label="k (Required Return)" value={fmtPct(v?.requiredReturn)} hint={kSrc ? `Source: ${kSrc}` : undefined} />
-                <Metric label="Stability Check" value={v ? (v.dividendGrowthRate < v.requiredReturn ? "g < k ✅" : "g ≥ k ⚠️") : "—"} />
+                <Metric
+                  label="k (Required Return)"
+                  value={fmtPct(v?.requiredReturn)}
+                  hint={kSrc ? `Source: ${kSrc}` : undefined}
+                />
+                <Metric
+                  label="Stability Check"
+                  value={v ? (v.dividendGrowthRate < v.requiredReturn ? "g < k ✅" : "g ≥ k ⚠️") : "—"}
+                />
                 <Metric label="Model" value={isTwoStage ? "Two‑Stage" : "Gordon"} />
               </div>
 
@@ -144,7 +162,7 @@ export function DdmPanel({ symbol }: { symbol: string }) {
                   <Metric label="Intrinsic = PV1 + PVt" value={fmtCurrency(v?.intrinsicValue ?? null, curr)} />
                 </div>
               ) : (
-                <div className="mt-4 text-sm text-slate-600">
+                <div className="mt-4 text-sm text-slate-400">
                   Gordon model: <span className="font-mono">Intrinsic = D1 / (k − g)</span>
                 </div>
               )}
@@ -153,14 +171,15 @@ export function DdmPanel({ symbol }: { symbol: string }) {
         </CardContent>
       </Card>
     );
-  }, [loading, valuation, dataQuality]);
+  }, [loading, valuation, dataQuality, variant]);
 
   const suitability = useMemo(() => {
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
           <CardTitle>Suitability</CardTitle>
         </CardHeader>
+
         <CardContent className="space-y-3">
           {loading ? (
             <Skeleton className="h-6 w-64" />
@@ -169,19 +188,22 @@ export function DdmPanel({ symbol }: { symbol: string }) {
           )}
 
           {!loading && applicability?.flags?.length ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 items-center">
               {applicability.flags.slice(0, 3).map((f, i) => (
-                <Badge key={`${f.code}-${i}`} variant="outline">
-                  {f.code}
-                </Badge>
+                <FlagPill key={`${f.code}-${i}`} text={f.code} />
               ))}
               {applicability.flags.length > 3 ? (
-                <span className="text-xs text-slate-500">+{applicability.flags.length - 3} more</span>
+                <span className="text-xs text-slate-300">
+                  +{applicability.flags.length - 3} more
+                </span>
               ) : null}
             </div>
           ) : null}
 
-          <button className="text-sm underline" onClick={() => setShowDiagnostics((v) => !v)}>
+          <button
+            className="text-sm underline text-slate-300 hover:text-white"
+            onClick={() => setShowDiagnostics((v) => !v)}
+          >
             {showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
           </button>
 
@@ -196,10 +218,11 @@ export function DdmPanel({ symbol }: { symbol: string }) {
     const curr = valuation?.currency ?? "USD";
 
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
           <CardTitle>History</CardTitle>
         </CardHeader>
+
         <CardContent>
           {loadingHistory ? (
             <div className="space-y-2">
@@ -208,14 +231,14 @@ export function DdmPanel({ symbol }: { symbol: string }) {
               <Skeleton className="h-6" />
             </div>
           ) : historyError ? (
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-slate-300">
               Could not load history.{" "}
               <button className="underline" onClick={() => void reloadHistory()}>
                 Retry
               </button>
             </div>
           ) : items.length === 0 ? (
-            <p className="text-sm text-slate-500">No history yet.</p>
+            <p className="text-sm text-slate-300">No history yet.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -229,6 +252,7 @@ export function DdmPanel({ symbol }: { symbol: string }) {
                   <TableHead>Category</TableHead>
                 </TableRow>
               </TableHeader>
+
               <TableBody>
                 {items.map((r, idx) => (
                   <TableRow key={`${r.runAt}-${idx}`}>

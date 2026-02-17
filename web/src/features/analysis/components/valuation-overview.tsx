@@ -6,7 +6,7 @@ import { VALUATION_METHODS } from "../valuation/methods";
 
 export function ValuationOverview() {
   return (
-    <Card>
+    <Card className="glass rounded-3xl border border-white/5 text-white">
       <CardHeader>
         <CardTitle>Valuation Overview</CardTitle>
       </CardHeader>
@@ -18,14 +18,14 @@ export function ValuationOverview() {
           >
             <div>
               <div className="font-medium">{method.label}</div>
-              <div className="text-sm text-slate-500">{method.description}</div>
+              <div className="text-sm text-slate-400">{method.description}</div>
             </div>
 
             <Badge variant="secondary">Enabled</Badge>
           </div>
         ))}
 
-        <div className="text-sm text-slate-500 pt-2">
+        <div className="text-sm text-slate-400 pt-2">
           Compare intrinsic value estimates across valuation techniques.
           Select a method to deep dive into assumptions and diagnostics.
         </div>

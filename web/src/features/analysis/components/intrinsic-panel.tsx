@@ -25,6 +25,7 @@ import {
   Metric,
   ScoreBar,
   DiagnosticsList,
+  FlagPill,
   fmtCurrency,
   fmtPct,
   fmtInt,
@@ -63,7 +64,7 @@ export function IntrinsicPanel({
     const curr = valuation?.currency ?? "USD";
 
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
           <CardTitle>Intrinsic Value Summary</CardTitle>
         </CardHeader>
@@ -94,7 +95,7 @@ export function IntrinsicPanel({
           )}
 
           <div className="flex items-center justify-between">
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-slate-400">
               Calculated using Rule #1 (Phil Town)
               {freshness?.lastEvaluatedDisplay ? <> • Last evaluated: {freshness.lastEvaluatedDisplay}</> : null}
             </div>
@@ -146,7 +147,7 @@ export function IntrinsicPanel({
       typeof v?.futureEPS === "number" && v.futureEPS > 0 ? v.futureEPS : futureEPSDerived;
 
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
           <CardTitle>How We Arrived Here</CardTitle>
         </CardHeader>
@@ -175,7 +176,7 @@ export function IntrinsicPanel({
 
   const suitability = useMemo(() => {
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
           <CardTitle>Suitability</CardTitle>
         </CardHeader>
@@ -187,19 +188,20 @@ export function IntrinsicPanel({
           )}
 
           {!loading && applicability?.flags?.length ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 items-center">
               {applicability.flags.slice(0, 3).map((f, i) => (
-                <Badge key={`${f.code}-${i}`} variant="outline">
-                  {f.code}
-                </Badge>
+                <FlagPill key={`${f.code}-${i}`} text={f.code} />
               ))}
               {applicability.flags.length > 3 ? (
-                <span className="text-xs text-slate-500">+{applicability.flags.length - 3} more</span>
+                <span className="text-xs text-slate-300">+{applicability.flags.length - 3} more</span>
               ) : null}
             </div>
           ) : null}
 
-          <button className="text-sm underline" onClick={() => setShowDiagnostics((v) => !v)}>
+          <button
+            className="text-sm underline text-slate-300 hover:text-white"
+            onClick={() => setShowDiagnostics((v) => !v)}
+          >
             {showDiagnostics ? "Hide diagnostics" : "Show diagnostics"}
           </button>
 
@@ -214,7 +216,7 @@ export function IntrinsicPanel({
     const curr = valuation?.currency ?? "USD";
 
     return (
-      <Card>
+      <Card className="glass rounded-3xl border border-white/5 text-white">
         <CardHeader>
           <CardTitle>History</CardTitle>
         </CardHeader>
@@ -226,14 +228,14 @@ export function IntrinsicPanel({
               <Skeleton className="h-6" />
             </div>
           ) : historyError ? (
-            <div className="text-sm text-slate-600">
+            <div className="text-sm text-slate-300">
               Could not load history.{" "}
               <button className="underline" onClick={() => void reloadHistory()}>
                 Retry
               </button>
             </div>
           ) : items.length === 0 ? (
-            <p className="text-sm text-slate-500">No history yet.</p>
+            <p className="text-sm text-slate-300">No history yet.</p>
           ) : (
             <Table>
               <TableHeader>

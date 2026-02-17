@@ -1,36 +1,50 @@
-import { useCallback, useEffect, useState } from "react";
-import { fetchDcfHistory } from "../services/analysis.service";
-import type { DcfHistory } from "../types/analysis.types";
+"use client";
 
-/**
- * DCF History hook
- * - Must NEVER break the Analysis page.
- * - If endpoint fails, return empty history.
- */
-export function useDcfHistory(symbol: string) {
-  const [history, setHistory] = useState<DcfHistory>({ symbol: symbol.toUpperCase(), items: [] });
-  const [loadingHistory, setLoadingHistory] = useState(true);
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DcfHistory } from "../types/analysis.types";
+import { fetchDcfHistory } from "../services/analysis.service";
+
+export function useDcfHistory(symbol: string): {
+  loading: boolean;
+  error?: string;
+  history?: DcfHistory;
+  reload: () => Promise<void>;
+} {
+  const currentSymbol = (symbol ?? "").toUpperCase();
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<DcfHistory | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  const ranForSymbol = useRef<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
-    setLoadingHistory(true);
+    if (!currentSymbol) return;
+
+    setLoading(true);
+    setError(undefined);
+
     try {
-      const resp = await fetchDcfHistory(symbol);
-      // Defensive validation
-      if (resp && typeof resp === "object" && Array.isArray(resp.items)) {
-        setHistory({ symbol: (resp.symbol || symbol).toUpperCase(), items: resp.items });
-      } else {
-        setHistory({ symbol: symbol.toUpperCase(), items: [] });
-      }
-    } catch {
-      setHistory({ symbol: symbol.toUpperCase(), items: [] });
+      const h = await fetchDcfHistory(currentSymbol);
+      setHistory(h);
+    } catch (e: any) {
+      setError(e?.message || "Could not load DCF history.");
+      setHistory({ symbol: currentSymbol, items: [] });
     } finally {
-      setLoadingHistory(false);
+      setLoading(false);
     }
-  }, [symbol]);
+  }, [currentSymbol]);
 
   useEffect(() => {
-    void load();
+    if (!currentSymbol) return;
+    if (!ranForSymbol.current[currentSymbol]) {
+      ranForSymbol.current[currentSymbol] = true;
+      void load();
+    }
+  }, [currentSymbol, load]);
+
+  const reload = useCallback(async () => {
+    await load();
   }, [load]);
 
-  return { history, loadingHistory, reloadHistory: load };
+  return { loading, error, history, reload };
 }
