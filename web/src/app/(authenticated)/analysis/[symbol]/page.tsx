@@ -2,205 +2,239 @@
 
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-
+import { cn } from "@/lib/utils";
 import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
-
 import { MethodSelector, type IntrinsicMethod } from "@/features/analysis/components/method-selector";
 import { ValuationOverview } from "@/features/analysis/components/valuation-overview";
 import { IntrinsicPanel } from "@/features/analysis/components/intrinsic-panel";
 import { DcfPanel } from "@/features/analysis/components/dcf-panel";
 import { DdmPanel } from "@/features/analysis/components/ddm-panel";
+import {
+  TrendingUp,
+  Heart,
+  Shield,
+  TrendingDown,
+  BarChart2,
+  Users,
+  MoreHorizontal,
+  ArrowLeft,
+} from "lucide-react";
 
-/* ----------------------------------------------------------
-   Placeholder panel for all non‑Intrinsic sections
-   ---------------------------------------------------------- */
+/* ── Tab definitions ──────────────────────────────────────────── */
+const TOP_TABS = [
+  { id: "intrinsic", label: "Intrinsic Value", icon: TrendingUp    },
+  { id: "health",    label: "Financial Health", icon: Heart         },
+  { id: "moat",      label: "Moat",             icon: Shield        },
+  { id: "dividend",  label: "Dividend",         icon: TrendingDown  },
+  { id: "technical", label: "Technical",        icon: BarChart2     },
+  { id: "investors", label: "Super Investors",  icon: Users         },
+  { id: "others",    label: "Others",           icon: MoreHorizontal},
+] as const;
+
+type TopTab = (typeof TOP_TABS)[number]["id"];
+
+/* ── Coming-soon placeholder panel ───────────────────────────── */
 function ComingSoonPanel({
   title,
   description,
   items,
+  icon: Icon,
 }: {
-  title: string;
+  title:       string;
   description: string;
-  items: string[];
+  items:       string[];
+  icon:        React.ElementType;
 }) {
   return (
-    <Card className="glass rounded-3xl border border-white/5 text-white">
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-      </CardHeader>
-
-      <CardContent className="space-y-3">
-        <p className="text-slate-400 text-sm">{description}</p>
-
-        <div className="rounded bg-white/5 border border-white/10 p-3 inline-block text-xs text-slate-400">
-          Coming Soon
-        </div>
-
-        <ul className="list-disc ml-6 text-sm text-slate-400">
-          {items.map((i) => (
-            <li key={i}>{i}</li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
+    <div className="glass-panel p-12 flex flex-col items-center text-center space-y-6 animate-fade-up">
+      <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-white/5 border border-white/10">
+        <Icon className="h-9 w-9 text-white/25" />
+      </div>
+      <div>
+        <h3 className="text-xl font-black text-white tracking-tight">{title}</h3>
+        <p className="mt-2 text-sm text-white/40 leading-relaxed max-w-sm">{description}</p>
+      </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {items.map((item) => (
+          <span
+            key={item}
+            className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/8 text-[10px] font-bold uppercase tracking-widest text-white/30"
+          >
+            {item}
+          </span>
+        ))}
+      </div>
+      <div className="px-4 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-black uppercase tracking-widest text-indigo-400">
+        Coming Soon
+      </div>
+    </div>
   );
 }
 
-/* ----------------------------------------------------------
-   MAIN PAGE
-   ---------------------------------------------------------- */
+/* ── Main Page ────────────────────────────────────────────────── */
 export default function AnalysisPage() {
-  const router = useRouter();
+  const router     = useRouter();
   const { symbol } = useParams<{ symbol: string }>();
   const upperSymbol = symbol?.toString().toUpperCase() ?? "";
 
-  // Intrinsic METHOD state (single source of truth)
+  // Tab + method state (logic unchanged)
   const [method, setMethod] = useState<IntrinsicMethod>("overview");
+  const [tab,    setTab]    = useState<TopTab>("intrinsic");
 
-  // Top-level tab state
-  const [tab, setTab] = useState("intrinsic");
-
-  // Real-time price
+  // Real-time price (logic unchanged)
   const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
 
-  const priceDisplay = price != null ? `$${price.toFixed(2)}` : "Price unavailable";
+  const priceDisplay  = price != null ? `$${price.toFixed(2)}` : "—";
+  const changeDisplay = change != null
+    ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
+    : null;
+  const pctDisplay    = changePercent != null
+    ? `${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%`
+    : null;
+  const updatedDisplay = lastUpdated
+    ? new Date(lastUpdated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : null;
 
-  const changeDisplay =
-    change != null ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}` : null;
-
-  const pctDisplay =
-    changePercent != null
-      ? `(${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%)`
-      : null;
-
-  const updatedDisplay = lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : null;
+  const isPositiveChange = (change ?? 0) >= 0;
 
   return (
-    <div className="app-backdrop min-h-screen text-white">
-      <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-6">
-        {/* ------------------------------------------------------ */}
-        {/* STICKY HEADER                                          */}
-        {/* ------------------------------------------------------ */}
-        <div className="sticky top-0 z-20 pt-3">
-          <div className="glass rounded-3xl p-6 border border-white/5 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-600/10 blur-[100px] -mr-32 -mt-32" />
+    <div className="space-y-6 animate-fade-up">
 
-            <div className="relative flex flex-col md:flex-row md:items-center md:gap-3 gap-2">
-              <Button
-                variant="ghost"
-                className="bg-white/5 border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 w-fit"
+      {/* ── Sticky hero header ──────────────────────────────── */}
+      <div className="sticky top-14 z-20">
+        <div className="glass-panel rounded-[1.75rem] p-6 relative overflow-hidden">
+
+          {/* Ambient glow blob */}
+          <div
+            className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-indigo-600/10 blur-[80px]"
+            aria-hidden="true"
+          />
+
+          <div className="relative flex flex-col gap-4 md:flex-row md:items-center">
+
+            {/* Left: back + ticker */}
+            <div className="flex items-center gap-4">
+              <button
                 onClick={() => router.back()}
+                className="glass-btn flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0"
+                aria-label="Go back"
               >
-                ← Back
-              </Button>
+                <ArrowLeft className="h-4 w-4 text-white/60" />
+              </button>
 
-              <h1 className="text-2xl font-black tracking-tight uppercase">
-                {upperSymbol}
-              </h1>
-
-              <div className="text-sm text-slate-400 flex items-center gap-2 md:ml-auto">
-                <span>{priceDisplay}</span>
-
-                {changeDisplay && pctDisplay && (
-                  <span className={change != null && change >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                    {changeDisplay} {pctDisplay}
-                  </span>
-                )}
-
-                {updatedDisplay && (
-                  <span className="text-slate-500 text-xs">• updated {updatedDisplay}</span>
-                )}
+              <div className="flex items-center gap-3">
+                {/* Ticker avatar */}
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-indigo-500/20 border border-indigo-500/30 text-sm font-black text-indigo-300">
+                  {upperSymbol[0]}
+                </div>
+                <h1 className="text-2xl font-black tracking-tighter text-white uppercase">
+                  {upperSymbol}
+                </h1>
               </div>
+            </div>
+
+            {/* Right: price + change */}
+            <div className="flex items-baseline gap-3 md:ml-auto">
+              <span className="text-2xl font-black text-white tracking-tight">
+                {priceDisplay}
+              </span>
+
+              {changeDisplay && pctDisplay && (
+                <span className={cn(
+                  "text-sm font-bold",
+                  isPositiveChange ? "text-emerald-400" : "text-rose-400",
+                )}>
+                  {changeDisplay} ({pctDisplay})
+                </span>
+              )}
+
+              {updatedDisplay && (
+                <span className="text-[10px] font-medium text-white/25 hidden md:inline">
+                  · {updatedDisplay}
+                </span>
+              )}
             </div>
           </div>
         </div>
+      </div>
 
-        {/* ------------------------------------------------------ */}
-        {/* TOP‑LEVEL TABS                                         */}
-        {/* ------------------------------------------------------ */}
-        <Tabs value={tab} onValueChange={setTab} className="w-full">
-          <div className="glass rounded-2xl p-2 border border-white/5">
-            <TabsList className="flex flex-wrap">
-              <TabsTrigger value="intrinsic">Intrinsic Value</TabsTrigger>
-              <TabsTrigger value="health">Financial Health</TabsTrigger>
-              <TabsTrigger value="moat">Moat</TabsTrigger>
-              <TabsTrigger value="dividend">Dividend</TabsTrigger>
-              <TabsTrigger value="technical">Technical</TabsTrigger>
-              <TabsTrigger value="investors">Super Investors</TabsTrigger>
-              <TabsTrigger value="others">Others</TabsTrigger>
-            </TabsList>
-          </div>
+      {/* ── Top-level tab bar ───────────────────────────────── */}
+      <div className="glass-segmented overflow-x-auto no-scrollbar w-full">
+        {TOP_TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={cn("glass-segmented-item flex items-center gap-1.5", tab === id && "active")}
+          >
+            <Icon className="h-3 w-3 flex-shrink-0" />
+            <span className="hidden sm:inline">{label}</span>
+            <span className="sm:hidden">{label.split(" ")[0]}</span>
+          </button>
+        ))}
+      </div>
 
-          {/* ------------------------------------------------------ */}
-          {/* INTRINSIC VALUE                                       */}
-          {/* ------------------------------------------------------ */}
-          <TabsContent value="intrinsic" className="pt-4 space-y-6">
+      {/* ── Tab content ─────────────────────────────────────── */}
+      <div className="min-h-[40vh]">
+
+        {/* Intrinsic Value */}
+        {tab === "intrinsic" && (
+          <div className="space-y-6 animate-fade-up">
             <MethodSelector method={method} onChange={setMethod} />
-
             {method === "overview" && <ValuationOverview />}
+            {method === "rule1"    && <IntrinsicPanel symbol={upperSymbol} />}
+            {method === "dcf"      && <DcfPanel       symbol={upperSymbol} />}
+            {method === "ddm"      && <DdmPanel       symbol={upperSymbol} />}
+          </div>
+        )}
 
-            {method === "rule1" && <IntrinsicPanel symbol={upperSymbol} />}
-
-            {method === "dcf" && <DcfPanel symbol={upperSymbol} />}
-
-            {method === "ddm" && <DdmPanel symbol={upperSymbol} />}
-          </TabsContent>
-
-          {/* ------------------------------------------------------ */}
-          {/* OTHER TABS (placeholders)                              */}
-          {/* ------------------------------------------------------ */}
-          <TabsContent value="health" className="pt-4">
-            <ComingSoonPanel
-              title="Financial Health"
-              description="Balance sheet quality, leverage, cash flows, and risk indicators."
-              items={["Altman Z‑Score", "Piotroski F‑Score", "Ohlson O‑Score", "Leverage trends"]}
-            />
-          </TabsContent>
-
-          <TabsContent value="moat" className="pt-4">
-            <ComingSoonPanel
-              title="Moat Analysis"
-              description="Moat durability across ROIC, margins, and industry positioning."
-              items={["ROIC vs WACC", "Margin durability", "Return stability", "Capital efficiency"]}
-            />
-          </TabsContent>
-
-          <TabsContent value="dividend" className="pt-4">
-            <ComingSoonPanel
-              title="Dividend Safety"
-              description="Dividend payout stability, coverage ratios, and consistency."
-              items={["Payout ratio", "Dividend CAGR", "Cash flow coverage", "Stability profile"]}
-            />
-          </TabsContent>
-
-          <TabsContent value="technical" className="pt-4">
-            <ComingSoonPanel
-              title="Technical Analysis"
-              description="Momentum, trend, and market behavior indicators."
-              items={["RSI", "Moving averages", "MACD", "Trend strength"]}
-            />
-          </TabsContent>
-
-          <TabsContent value="investors" className="pt-4">
-            <ComingSoonPanel
-              title="Super Investors"
-              description="Insights from major value investors and 13F tracking."
-              items={["Buffett / Munger positions", "Pabrai clone tracking", "High‑conviction ideas", "Portfolio overlap"]}
-            />
-          </TabsContent>
-
-          <TabsContent value="others" className="pt-4">
-            <ComingSoonPanel
-              title="Other Models"
-              description="Additional valuation frameworks and investment models."
-              items={["Residual Income", "Magic Formula", "CAN SLIM", "Relative valuation"]}
-            />
-          </TabsContent>
-        </Tabs>
+        {tab === "health" && (
+          <ComingSoonPanel
+            title="Financial Health"
+            description="Balance sheet quality, leverage, cash flows, and risk indicators."
+            items={["Altman Z-Score", "Piotroski F-Score", "Ohlson O-Score", "Leverage Trends"]}
+            icon={Heart}
+          />
+        )}
+        {tab === "moat" && (
+          <ComingSoonPanel
+            title="Moat Analysis"
+            description="Moat durability across ROIC, margins, and industry positioning."
+            items={["ROIC vs WACC", "Margin Durability", "Return Stability", "Capital Efficiency"]}
+            icon={Shield}
+          />
+        )}
+        {tab === "dividend" && (
+          <ComingSoonPanel
+            title="Dividend Safety"
+            description="Dividend payout stability, coverage ratios, and consistency."
+            items={["Payout Ratio", "Dividend CAGR", "Cash Flow Coverage", "Stability Profile"]}
+            icon={TrendingDown}
+          />
+        )}
+        {tab === "technical" && (
+          <ComingSoonPanel
+            title="Technical Analysis"
+            description="Momentum, trend, and market behavior indicators."
+            items={["RSI", "Moving Averages", "MACD", "Trend Strength"]}
+            icon={BarChart2}
+          />
+        )}
+        {tab === "investors" && (
+          <ComingSoonPanel
+            title="Super Investors"
+            description="Insights from major value investors and 13F tracking."
+            items={["Buffett / Munger", "Pabrai Tracking", "High-Conviction Ideas", "Portfolio Overlap"]}
+            icon={Users}
+          />
+        )}
+        {tab === "others" && (
+          <ComingSoonPanel
+            title="Other Models"
+            description="Additional valuation frameworks and investment models."
+            items={["Residual Income", "Magic Formula", "CAN SLIM", "Relative Valuation"]}
+            icon={MoreHorizontal}
+          />
+        )}
       </div>
     </div>
   );

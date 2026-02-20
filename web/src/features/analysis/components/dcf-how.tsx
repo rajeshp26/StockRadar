@@ -1,5 +1,14 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDcfAnalysis } from "../hooks/useDcfAnalysis";
+import { SectionHeader, fmtPct } from "./shared-ui";
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-3 border-b border-white/5 last:border-0">
+      <span className="text-xs font-black uppercase tracking-widest text-white/30">{label}</span>
+      <span className="text-xs font-bold text-white/70 text-right">{value}</span>
+    </div>
+  );
+}
 
 export function DcfHow({ symbol }: { symbol: string }) {
   const { data, loading } = useDcfAnalysis(symbol);
@@ -9,45 +18,29 @@ export function DcfHow({ symbol }: { symbol: string }) {
   const v = data.valuation;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>How this DCF was calculated</CardTitle>
-      </CardHeader>
+    <div className="glass-panel p-8">
+      <SectionHeader
+        title="How This DCF Was Calculated"
+        subtitle="All assumptions resolved by the backend — no frontend calculations"
+      />
 
-      <CardContent className="space-y-2 text-sm">
-        <div>
-          <strong>Forecast horizon:</strong> {v.forecastYears} years
-        </div>
-
-        <div>
-          <strong>Free Cash Flow forecast:</strong>{" "}
-          {v.forecastFcf.length > 0
-            ? `${v.forecastFcf.length} years projected`
-            : "Not available"}
-        </div>
-
-        <div>
-          <strong>Discount rate (WACC):</strong>{" "}
-          {(v.waccUsed * 100).toFixed(2)}%
-        </div>
-
-        <div>
-          <strong>Terminal value method:</strong> {v.terminalMethod}
-        </div>
-
+      <div className="rounded-2xl border border-white/8 overflow-hidden px-4">
+        <Row label="Forecast Horizon"        value={`${v.forecastYears} years`} />
+        <Row
+          label="Free Cash Flow Forecast"
+          value={v.forecastFcf.length > 0 ? `${v.forecastFcf.length} years projected` : "Not available"}
+        />
+        <Row label="Discount Rate (WACC)"    value={`${(v.waccUsed * 100).toFixed(2)}%`} />
+        <Row label="Terminal Value Method"   value={v.terminalMethod} />
         {v.terminalValue != null && (
-          <div>
-            <strong>Terminal value:</strong>{" "}
-            {v.terminalValue.toLocaleString()}
-          </div>
+          <Row label="Terminal Value"        value={v.terminalValue.toLocaleString()} />
         )}
+      </div>
 
-        <div className="text-slate-500 text-xs pt-2">
-          All assumptions are resolved by the backend using reported financials,
-          method defaults, and company overrides. No frontend calculations are
-          performed.
-        </div>
-      </CardContent>
-    </Card>
+      <p className="mt-4 text-[10px] text-white/20 leading-relaxed">
+        All assumptions are resolved by the backend using reported financials, method defaults,
+        and company overrides. No frontend calculations are performed.
+      </p>
+    </div>
   );
 }

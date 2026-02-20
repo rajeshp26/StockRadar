@@ -1,29 +1,22 @@
 "use client";
 
 import { ReactNode } from "react";
-import { Separator } from "@/components/ui/separator";
 
 interface MethodPanelProps {
-  summary: ReactNode;
-  how: ReactNode;
+  summary:     ReactNode;
+  how:         ReactNode;
   suitability: ReactNode;
-  history: ReactNode;
+  history:     ReactNode;
 }
 
-export function MethodPanel({
-  summary,
-  how,
-  suitability,
-  history,
-}: MethodPanelProps) {
+export function MethodPanel({ summary, how, suitability, history }: MethodPanelProps) {
   return (
     <div className="space-y-6">
       {summary}
       {how}
       {suitability}
-
-      <Separator />
-
+      {/* Glass divider replaces shadcn Separator */}
+      <div className="glass-divider my-2" />
       {history}
     </div>
   );

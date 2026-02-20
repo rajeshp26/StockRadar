@@ -3,36 +3,30 @@
 import { useAuth } from '@/providers/auth-provider';
 import { Watchlist } from '@/components/dashboard/watchlist';
 
-/**
- * DashboardPage
- *
- * Phase 1:
- * - Dashboard is the primary surface.
- * - Dashboard renders Watchlist UI shell immediately.
- * - Dashboard does NOT fetch watchlist data.
- * - All watchlist logic is owned by the Watchlist component (Option B).
- */
 export default function DashboardPage() {
   const { status } = useAuth();
 
   if (status === 'initializing') {
-    return <div className="p-8">Authenticating...</div>;
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="relative flex items-center justify-center">
+          <div className="h-12 w-12 rounded-full border border-white/10" />
+          <div className="absolute h-12 w-12 animate-spin rounded-full border-t-2 border-indigo-500" />
+        </div>
+      </div>
+    );
   }
 
   if (status !== 'authenticated') {
-    return <div className="p-8">Please log in</div>;
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <p className="text-sm text-white/40">Please log in to continue.</p>
+      </div>
+    );
   }
 
   return (
-    <div
-      className="flex flex-1 items-start justify-center rounded-lg"
-      x-chunk="dashboard-02-chunk-1"
-    >
-      {/* 
-        Phase 1:
-        Render Watchlist immediately.
-        It will show skeletons first, then hydrate data.
-      */}
+    <div className="flex flex-1 items-start justify-center">
       <Watchlist />
     </div>
   );
