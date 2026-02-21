@@ -1,18 +1,24 @@
-// web/src/features/watchlists/services/watchlist.service.ts
+// src/features/watchlists/services/watchlist.service.ts
 import type { AxiosInstance } from "axios";
 import api from "@/lib/api";
-import type { WatchlistWithStocks } from "../types/watchlist.types";
+import type {
+  WatchlistWithStocks,
+  WatchlistMeta,
+  CreateWatchlistInput,
+  RenameWatchlistInput,
+} from "../types/watchlist.types";
 
+// ── Existing input types (unchanged) ───────────────────────────────────────
 export interface AddStockInput {
   watchlist_id: number;
-  symbol: string;
-  target_buy: number | null;
-  target_sell: number | null;
+  symbol:       string;
+  target_buy:   number | null;
+  target_sell:  number | null;
 }
 
 export interface UpdateStockInput {
-  item_id: number;
-  target_buy: number | null;
+  item_id:     number;
+  target_buy:  number | null;
   target_sell: number | null;
 }
 
@@ -20,33 +26,29 @@ export interface UpdateStockInput {
  * WatchlistService (axios-based)
  * - All calls go through Next proxy (/api/proxy/*)
  * - Identity is injected at the proxy; never pass tokens from the browser
- * - Cookies (__session) are sent by axios (withCredentials: true) to enable proxy auth
+ * - Cookies (__session) are sent by axios (withCredentials: true)
  */
 export class WatchlistService {
   private readonly api: AxiosInstance;
 
-  /**
-   * Default to the centralized api (withCredentials enforced).
-   * Tests can inject a mock Axios instance.
-   */
   constructor(client?: AxiosInstance) {
     this.api = client ?? api;
   }
 
+  // ── Existing methods (UNCHANGED) ─────────────────────────────────────────
+
   async getDefaultWatchlist(): Promise<WatchlistWithStocks> {
-    // If backend supports GET, you may switch to GET here.
     const res = await this.api.post<WatchlistWithStocks>(
       "/watchlists/default-with-items",
-      {}
+      {},
     );
     return res.data;
   }
 
-  // Phase 2: structure-only fast path
   async getDefaultWatchlistStructure(): Promise<WatchlistWithStocks> {
     const res = await this.api.post<WatchlistWithStocks>(
       "/watchlists/default-structure",
-      {}
+      {},
     );
     return res.data;
   }
@@ -66,15 +68,58 @@ export class WatchlistService {
     await this.api.post(`/watchlist-items/delete`, { item_id: itemId });
   }
 
-  /**
-   * SSE URL for real-time watchlist streaming.
-   * Use on client:
-   *   new EventSource(getWatchlistStreamUrl(), { withCredentials: true })
-   */
   getWatchlistStreamUrl(): string {
     return `/api/proxy/watchlists/stream`;
   }
+
+  // ── New methods — multi-watchlist ─────────────────────────────────────────
+
+  /**
+   * List all watchlists for the authenticated user (lightweight, no stock items).
+   * Returns WatchlistMeta[] including stock_count per list.
+   */
+  async getAllWatchlists(): Promise<WatchlistMeta[]> {
+    const res = await this.api.get<{ watchlists: WatchlistMeta[] }>("/watchlists");
+    return res.data.watchlists;
+  }
+
+  /**
+   * Create a new watchlist.
+   * Backend enforces: max 5 per user, unique name per user.
+   */
+  async createWatchlist(input: CreateWatchlistInput): Promise<WatchlistMeta> {
+    const res = await this.api.post<WatchlistMeta>("/watchlists", { name: input.name });
+    return res.data;
+  }
+
+  /**
+   * Rename a watchlist.
+   * Backend enforces: ownership check, unique name constraint.
+   */
+  async renameWatchlist(input: RenameWatchlistInput): Promise<void> {
+    await this.api.patch(`/watchlists/${input.watchlist_id}`, { name: input.name });
+  }
+
+  /**
+   * Delete a watchlist.
+   * Backend rules: cannot delete the default watchlist.
+   * Cascade delete removes all watchlist_items automatically.
+   */
+  async deleteWatchlist(watchlistId: number): Promise<void> {
+    await this.api.delete(`/watchlists/${watchlistId}`);
+  }
+
+  /**
+   * Get structure (symbols + targets, no live prices) for a specific watchlist.
+   * Used when switching the active watchlist.
+   */
+  async getWatchlistStructureById(watchlistId: number): Promise<WatchlistWithStocks> {
+    const res = await this.api.post<WatchlistWithStocks>(
+      `/watchlists/${watchlistId}/structure`,
+      {},
+    );
+    return res.data;
+  }
 }
 
-// Optional: a shared instance for convenience
 export const watchlistService = new WatchlistService();

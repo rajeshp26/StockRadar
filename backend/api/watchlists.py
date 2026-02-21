@@ -7,8 +7,9 @@ from typing import Dict, Set, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, field_validator
 
-from dependencies import get_current_user_dep
+from dependencies import get_current_user_dep, get_watchlist_service, limiter
 from application.services.watchlist_service import WatchlistService
 from infrastructure.repositories.supabase_repository import (
     SupabaseUserRepository,
@@ -20,20 +21,21 @@ from database import supabase
 
 router = APIRouter()
 
-# -----------------------------------------------------------------------------
-# SSE in‑memory state
-# -----------------------------------------------------------------------------
-# Each authenticated user (uid) gets one or more asyncio.Queue instances
-# (per active SSE connection). We broadcast updates into the user's queues.
-user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
+# ── Constants ──────────────────────────────────────────────────────────────
+MAX_WATCHLISTS_PER_USER  = 5
+MAX_STOCKS_PER_WATCHLIST = 50
+MAX_NAME_LENGTH          = 50
 
-# Track which users are subscribed to which symbols for targeted updates.
+# -----------------------------------------------------------------------------
+# SSE in‑memory state (UNCHANGED)
+# -----------------------------------------------------------------------------
+user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
 symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
 
 
-def get_watchlist_service() -> WatchlistService:
-    """Factory that wires the watchlist service to Supabase + providers."""
-    user_repo = SupabaseUserRepository(client=supabase)
+def get_watchlist_service_local() -> WatchlistService:
+    """Local factory — mirrors the original get_watchlist_service in this file."""
+    user_repo     = SupabaseUserRepository(client=supabase)
     watchlist_repo = SupabaseWatchlistRepository(client=supabase)
     stock_provider = YFinanceProvider()
     return WatchlistService(
@@ -43,22 +45,73 @@ def get_watchlist_service() -> WatchlistService:
     )
 
 
-# -----------------------------------------------------------------------------
-# Default watchlist with items (used by dashboard initial load)
-# -----------------------------------------------------------------------------
+# ── Helper ─────────────────────────────────────────────────────────────────
+def _resolve_db_user_id(auth_id: str) -> int:
+    """Resolve Firebase auth_id → internal user_id. Raises 403 if not found."""
+    res = (
+        supabase.table("users")
+        .select("user_id")
+        .eq("auth_id", auth_id)
+        .single()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=403, detail="User not found.")
+    return res.data["user_id"]
+
+
+def _assert_watchlist_ownership(watchlist_id: int, db_user_id: int) -> dict:
+    """
+    Fetch watchlist row and verify ownership.
+    Returns the row on success. Raises 404 if not found or not owned.
+    """
+    res = (
+        supabase.table("watchlists")
+        .select("id, user_id, watchlist_name, is_default")
+        .eq("id", watchlist_id)
+        .single()
+        .execute()
+    )
+    if not res.data or res.data["user_id"] != db_user_id:
+        raise HTTPException(status_code=404, detail="Watchlist not found.")
+    return res.data
+
+
+# ── Request models ──────────────────────────────────────────────────────────
+class CreateWatchlistRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH)
+
+    @field_validator("name")
+    @classmethod
+    def sanitize_name(cls, v: str) -> str:
+        v = " ".join(v.strip().split())
+        if not v:
+            raise ValueError("Watchlist name cannot be empty.")
+        return v
+
+
+class RenameWatchlistRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH)
+
+    @field_validator("name")
+    @classmethod
+    def sanitize_name(cls, v: str) -> str:
+        v = " ".join(v.strip().split())
+        if not v:
+            raise ValueError("Watchlist name cannot be empty.")
+        return v
+
+
+# =============================================================================
+# EXISTING ENDPOINTS (UNCHANGED)
+# =============================================================================
+
 @router.post("/watchlists/default-with-items", tags=["Watchlists"], status_code=200)
 def get_default_watchlist_with_items(
     request: Request,
-    service: WatchlistService = Depends(get_watchlist_service),
+    service: WatchlistService = Depends(get_watchlist_service_local),
     user: dict = Depends(get_current_user_dep),
 ):
-    """
-    Retrieves the default watchlist for the authenticated user.
-
-    IDENTITY:
-    - Uses 'uid' from the verified token (Authorization header decoded by get_current_user_dep).
-    - No identity is accepted from the request body for security.
-    """
     try:
         auth_id = user["uid"]
         return service.get_default_watchlist_with_items(auth_id)
@@ -69,24 +122,12 @@ def get_default_watchlist_with_items(
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-# -----------------------------------------------------------------------------
-# Default watchlist STRUCTURE only (fast path for Phase 2)
-# -----------------------------------------------------------------------------
 @router.post("/watchlists/default-structure", tags=["Watchlists"], status_code=200)
 def get_default_watchlist_structure(
     request: Request,
-    service: WatchlistService = Depends(get_watchlist_service),
+    service: WatchlistService = Depends(get_watchlist_service_local),
     user: dict = Depends(get_current_user_dep),
 ):
-    """
-    Retrieves the default watchlist STRUCTURE for the authenticated user.
-
-    Purpose (Phase 2):
-    - Fast initial render: symbols + targets
-    - No YFinance calls
-    - No current_market_data enrichment
-    - Prices will be filled progressively via SSE (/watchlists/stream)
-    """
     try:
         auth_id = user["uid"]
         return service.get_default_watchlist_structure(auth_id)
@@ -96,30 +137,12 @@ def get_default_watchlist_structure(
         print(f"[ERROR] get_default_watchlist_structure: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-# -----------------------------------------------------------------------------
-# Server‑Sent Events: real‑time price updates for the user's watchlist symbols
-# -----------------------------------------------------------------------------
+
 @router.get("/watchlists/stream", tags=["Watchlists"])
 async def stream_watchlist_updates(
     request: Request,
-    user: dict = Depends(get_current_user_dep),  # ✅ Identity via Authorization (proxy-injected)
+    user: dict = Depends(get_current_user_dep),
 ):
-    """
-    SSE stream for real-time stock updates.
-
-    SECURITY MODEL:
-    - The Next.js proxy reads the HTTP-only __session cookie and injects
-      `Authorization: Bearer <idToken>` to this backend.
-    - `get_current_user_dep` validates the Authorization header (issuer/aud/exp/signature)
-      and returns a dict that includes `uid`.
-    - No tokens in query params or request body; no browser-accessible tokens.
-
-    STREAM MODEL:
-    - On connect: we resolve the user's symbols from Supabase and subscribe this connection.
-    - When `broadcast_stock_update` is called (from background tasks), the update is
-      delivered to all queues for the subscribed user.
-    - Keep-alives are sent every 5s if there are no updates to keep the connection healthy.
-    """
     auth_id: Optional[str] = user.get("uid")
     if not auth_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -127,10 +150,7 @@ async def stream_watchlist_updates(
     async def event_generator():
         queue: asyncio.Queue = asyncio.Queue()
         user_queues[auth_id].append(queue)
-
         try:
-            # Resolve symbols for this user from Supabase.
-            # (Relational select: watchlist_items -> companies.ticker_symbol, watchlists.users.auth_id)
             items_res = (
                 supabase.table("watchlist_items")
                 .select("companies(ticker_symbol), watchlists(users(auth_id))")
@@ -143,30 +163,21 @@ async def stream_watchlist_updates(
                 for row in rows
                 if row.get("companies")
             ]
-
-            # Subscribe this user to all their symbols
             for sym in user_symbols:
                 symbol_subscribers[sym].add(auth_id)
 
-            # Stream loop
             while True:
                 if await request.is_disconnected():
                     break
-
                 try:
-                    # Wait for an update destined to this user (or timeout for keep-alive)
                     data = await asyncio.wait_for(queue.get(), timeout=5.0)
                     yield f"data: {json.dumps(data)}\n\n"
                 except asyncio.TimeoutError:
-                    # Keep the connection alive (comment frames are ignored by client)
                     yield ": keep-alive\n\n"
-
         finally:
-            # Clean up this connection's queue
             try:
                 if queue in user_queues.get(auth_id, []):
                     user_queues[auth_id].remove(queue)
-                # If no more active queues for this user, drop their symbol subscriptions
                 if not user_queues.get(auth_id):
                     user_queues.pop(auth_id, None)
                     for sym in list(symbol_subscribers.keys()):
@@ -174,10 +185,8 @@ async def stream_watchlist_updates(
                         if not symbol_subscribers[sym]:
                             symbol_subscribers.pop(sym, None)
             except Exception:
-                # Avoid throwing inside generator teardown
                 pass
 
-    # SSE-friendly headers
     headers = {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
@@ -186,32 +195,16 @@ async def stream_watchlist_updates(
     return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
 
-# -----------------------------------------------------------------------------
-# Symbol-scoped quote (used by Analysis useLivePrice)
-# -----------------------------------------------------------------------------
 @router.get("/stocks/{symbol}/quote", tags=["MarketData"], status_code=200)
 def get_stock_quote(
     symbol: str,
     user: dict = Depends(get_current_user_dep),
 ):
-    """
-    Returns a lightweight quote for a single symbol.
-
-    Purpose:
-    - Analysis pages should NOT mount watchlist state.
-    - This endpoint reads from current_market_data (fast, DB-backed).
-
-    Security:
-    - Auth via proxy-injected Authorization header (same as other routes).
-    """
     if not user or not user.get("uid"):
         raise HTTPException(status_code=401, detail="Unauthorized")
-
     sym = (symbol or "").upper().strip()
     if not sym:
         raise HTTPException(status_code=400, detail="Missing symbol")
-
-    # Lookup company_id by symbol
     c = (
         supabase.table("companies")
         .select("company_id,currency")
@@ -219,13 +212,11 @@ def get_stock_quote(
         .limit(1)
         .execute()
     )
-    company = (c.data[0] if c.data else None)
+    company = c.data[0] if c.data else None
     if not company:
         raise HTTPException(status_code=404, detail=f"Symbol '{sym}' not found")
-
     company_id = company["company_id"]
-    currency = company.get("currency") or "USD"
-
+    currency   = company.get("currency") or "USD"
     md = (
         supabase.table("current_market_data")
         .select("current_price,close_price,last_updated")
@@ -233,67 +224,280 @@ def get_stock_quote(
         .limit(1)
         .execute()
     )
-    row = (md.data[0] if md.data else None)
+    row = md.data[0] if md.data else None
     if not row:
-        # No market data yet; return nulls safely
-        return {
-            "symbol": sym,
-            "currency": currency,
-            "price": None,
-            "change": None,
-            "changePercent": None,
-            "lastUpdated": None,
-        }
-
-    price = row.get("current_price")
-    prev_close = row.get("close_price")
+        return {"symbol": sym, "currency": currency, "price": None,
+                "change": None, "changePercent": None, "lastUpdated": None}
+    price       = row.get("current_price")
+    prev_close  = row.get("close_price")
     last_updated = row.get("last_updated")
-
-    change = None
-    change_percent = None
+    change = change_percent = None
     try:
         if price is not None and prev_close is not None:
-            p = float(price)
-            pc = float(prev_close)
+            p, pc  = float(price), float(prev_close)
             change = p - pc
             change_percent = (change / pc) * 100 if pc else 0.0
     except Exception:
-        # Defensive: keep null if conversion fails
-        change = None
-        change_percent = None
-
+        pass
     return {
-        "symbol": sym,
-        "currency": currency,
-        "price": float(price) if price is not None else None,
-        "change": float(change) if change is not None else None,
+        "symbol":        sym,
+        "currency":      currency,
+        "price":         float(price)          if price          is not None else None,
+        "change":        float(change)         if change         is not None else None,
         "changePercent": float(change_percent) if change_percent is not None else None,
-        "lastUpdated": last_updated,
+        "lastUpdated":   last_updated,
     }
 
 
-# -----------------------------------------------------------------------------
-# Broadcast utility (called by your background_price_monitor)
-# -----------------------------------------------------------------------------
 async def broadcast_stock_update(symbol: str, price: float, change: float, change_percent: float):
-    """
-    Push a stock price update to all subscribed users for this symbol.
-    Called by the background task that polls providers (yfinance).
-    """
     uids = symbol_subscribers.get(symbol, set())
     if not uids:
         return
-
     now_iso = datetime.now().isoformat()
     payload = {
-        "symbol": symbol,
-        "price": float(price),
-        "change": float(change),
+        "symbol":        symbol,
+        "price":         float(price),
+        "change":        float(change),
         "changePercent": float(change_percent),
-        "lastUpdated": now_iso,
+        "lastUpdated":   now_iso,
     }
-
     for uid in uids:
-        # For each active SSE connection for this user, enqueue the payload
         for queue in user_queues.get(uid, []):
             await queue.put(payload)
+
+
+# =============================================================================
+# NEW ENDPOINTS — Multi-Watchlist
+# =============================================================================
+
+# ── GET /watchlists ───────────────────────────────────────────────────────
+@router.get("/watchlists", tags=["Watchlists"], status_code=200)
+@limiter.limit("30/minute")
+def list_watchlists(
+    request: Request,
+    user: dict = Depends(get_current_user_dep),
+):
+    """
+    List all watchlists for the authenticated user.
+    Returns lightweight metadata (no stock items) + stock_count per list.
+    Ordered: default first, then by created_at ascending.
+    """
+    try:
+        auth_id    = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        res = (
+            supabase.table("watchlists")
+            .select("id, watchlist_name, is_default, created_at, watchlist_items(count)")
+            .eq("user_id", db_user_id)
+            .order("is_default", desc=True)
+            .order("created_at",  desc=False)
+            .execute()
+        )
+
+        watchlists = []
+        for row in res.data or []:
+            count_rows  = row.get("watchlist_items") or []
+            stock_count = count_rows[0]["count"] if count_rows else 0
+            watchlists.append({
+                "watchlist_id": row["id"],
+                "name":         row["watchlist_name"],
+                "is_default":   row["is_default"],
+                "stock_count":  stock_count,
+            })
+
+        return {"watchlists": watchlists}
+
+    except HTTPException:
+        raise
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        print(f"[ERROR] list_watchlists: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+# ── POST /watchlists ──────────────────────────────────────────────────────
+@router.post("/watchlists", tags=["Watchlists"], status_code=201)
+@limiter.limit("10/minute")
+def create_watchlist(
+    request: Request,
+    body: CreateWatchlistRequest,
+    user: dict = Depends(get_current_user_dep),
+):
+    """
+    Create a new watchlist.
+
+    Constraints enforced here (server-side, not just UI):
+    - Max 5 watchlists per user → 409
+    - Unique name per user     → 409 (also enforced by DB unique constraint)
+    - Name: 1–50 chars, trimmed, whitespace-collapsed
+    """
+    try:
+        auth_id    = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        # Hard cap: count existing watchlists
+        count_res = (
+            supabase.table("watchlists")
+            .select("id", count="exact")
+            .eq("user_id", db_user_id)
+            .execute()
+        )
+        if (count_res.count or 0) >= MAX_WATCHLISTS_PER_USER:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Maximum of {MAX_WATCHLISTS_PER_USER} watchlists reached. "
+                       "Delete an existing watchlist to create a new one.",
+            )
+
+        try:
+            ins = (
+                supabase.table("watchlists")
+                .insert({
+                    "user_id":        db_user_id,
+                    "watchlist_name": body.name,
+                    "is_default":     False,
+                })
+                .execute()
+            )
+        except Exception as db_err:
+            if "unique_user_watchlist_name" in str(db_err) or "duplicate" in str(db_err).lower():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"A watchlist named '{body.name}' already exists.",
+                )
+            raise
+
+        row = ins.data[0] if ins.data else {}
+        return {
+            "watchlist_id": row.get("id"),
+            "name":         row.get("watchlist_name"),
+            "is_default":   row.get("is_default", False),
+            "stock_count":  0,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] create_watchlist: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+# ── PATCH /watchlists/{watchlist_id} ─────────────────────────────────────
+@router.patch("/watchlists/{watchlist_id}", tags=["Watchlists"], status_code=200)
+@limiter.limit("20/minute")
+def rename_watchlist(
+    request: Request,
+    watchlist_id: int,
+    body: RenameWatchlistRequest,
+    user: dict = Depends(get_current_user_dep),
+):
+    """
+    Rename a watchlist.
+
+    Security: ownership verified before any write.
+    Uniqueness: enforced by DB constraint (unique_user_watchlist_name).
+    """
+    try:
+        auth_id    = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        existing   = _assert_watchlist_ownership(watchlist_id, db_user_id)
+
+        try:
+            upd = (
+                supabase.table("watchlists")
+                .update({"watchlist_name": body.name})
+                .eq("id", watchlist_id)
+                .execute()
+            )
+        except Exception as db_err:
+            if "unique_user_watchlist_name" in str(db_err) or "duplicate" in str(db_err).lower():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"A watchlist named '{body.name}' already exists.",
+                )
+            raise
+
+        row = upd.data[0] if upd.data else {}
+        return {
+            "watchlist_id": row.get("id", watchlist_id),
+            "name":         row.get("watchlist_name", body.name),
+            "is_default":   row.get("is_default", existing["is_default"]),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] rename_watchlist: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+# ── DELETE /watchlists/{watchlist_id} ────────────────────────────────────
+@router.delete("/watchlists/{watchlist_id}", tags=["Watchlists"], status_code=204)
+@limiter.limit("10/minute")
+def delete_watchlist(
+    request: Request,
+    watchlist_id: int,
+    user: dict = Depends(get_current_user_dep),
+):
+    """
+    Delete a watchlist.
+
+    Rules:
+    - The default watchlist cannot be deleted.
+    - Cascade delete removes all watchlist_items (FK ON DELETE CASCADE confirmed in schema).
+    - Ownership verified before delete.
+    """
+    try:
+        auth_id    = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        existing   = _assert_watchlist_ownership(watchlist_id, db_user_id)
+
+        if existing["is_default"]:
+            raise HTTPException(
+                status_code=400,
+                detail="The default watchlist cannot be deleted.",
+            )
+
+        supabase.table("watchlists").delete().eq("id", watchlist_id).execute()
+        return  # 204 No Content
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] delete_watchlist: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+# ── POST /watchlists/{watchlist_id}/structure ─────────────────────────────
+@router.post("/watchlists/{watchlist_id}/structure", tags=["Watchlists"], status_code=200)
+@limiter.limit("30/minute")
+def get_watchlist_structure_by_id(
+    request: Request,
+    watchlist_id: int,
+    user: dict = Depends(get_current_user_dep),
+    service: WatchlistService = Depends(get_watchlist_service_local),
+):
+    """
+    Get structure (symbols + targets, no live prices) for a specific watchlist.
+    Mirrors /watchlists/default-structure but for any owned watchlist by ID.
+
+    NOTE: WatchlistService.get_watchlist_structure_by_id(auth_id, watchlist_id)
+    must be implemented in application/services/watchlist_service.py,
+    mirroring get_default_watchlist_structure() but accepting watchlist_id.
+    """
+    try:
+        auth_id    = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        _assert_watchlist_ownership(watchlist_id, db_user_id)  # security gate
+
+        return service.get_watchlist_structure_by_id(auth_id, watchlist_id)
+
+    except HTTPException:
+        raise
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        print(f"[ERROR] get_watchlist_structure_by_id: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")

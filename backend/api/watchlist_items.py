@@ -135,6 +135,22 @@ async def add_item_to_watchlist(
         watchlist_res = supabase.table('watchlists').select('user_id').eq('id', item.watchlist_id).single().execute()
         if not watchlist_res.data or watchlist_res.data['user_id'] != db_user_id:
             raise HTTPException(status_code=403, detail="Permission denied.")
+
+        # Hard cap: max 50 stocks per watchlist (enforced server-side)
+        cap_res = (
+            supabase.table("watchlist_items")
+            .select("watchlist_item_id", count="exact")
+            .eq("watchlist_id", item.watchlist_id)
+            .execute()
+        )
+        if (cap_res.count or 0) >= 50:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This watchlist is full (50/50 stocks). "
+                    "Create a new watchlist to continue adding stocks."
+                ),
+            )
         
         symbol = item.symbol.upper()
 
