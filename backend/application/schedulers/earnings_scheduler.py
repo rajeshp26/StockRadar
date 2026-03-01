@@ -22,6 +22,9 @@ from domain.exceptions import (
     CompanyNotFoundError,
 )
 
+from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
+from application.jobs.data_quality_audit_job import audit_company_data_quality
+
 logger = logging.getLogger(__name__)
 
 
@@ -274,6 +277,20 @@ class EarningsRefreshScheduler:
                 is_first_load=is_first_time_load,
                 next_earnings_date=financials.next_earnings_date,
             )
+
+            # NEW: Derived metrics compute after scheduler fundamentals refresh (non-blocking)
+            try:
+                await compute_and_upsert_derived_financial_metrics(company_id=company_id)
+                logger.info("[DERIVED] metrics computed after earnings refresh for %s", symbol)
+            except Exception as de:
+                logger.error("[DERIVED] compute failed after earnings refresh for %s: %s", symbol, de, exc_info=True)
+
+            # PHASE 8: Data quality audit (non-blocking)
+            try:
+                await audit_company_data_quality(company_id=company_id)
+                logger.info("[DQ] audit complete after earnings refresh for %s", symbol)
+            except Exception as qe:
+                logger.error("[DQ] audit failed after earnings refresh for %s: %s", symbol, qe, exc_info=True)
 
             total_rows = sum(upsert_results.values())
             logger.info(

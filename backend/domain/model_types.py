@@ -47,6 +47,12 @@ class IncomeStatementRow(BaseModel):
     ebit: Optional[Decimal] = None                                  # NEW
     last_validated_at: Optional[datetime] = None                    # NEW
 
+    # Canonical per-share metrics (stored in Supabase income_statements)
+    eps_basic: Optional[Decimal] = None
+    eps_diluted: Optional[Decimal] = None
+    shares_outstanding_basic: Optional[int] = None
+    shares_outstanding_diluted: Optional[int] = None
+
     # Metadata
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)

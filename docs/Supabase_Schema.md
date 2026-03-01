@@ -338,7 +338,6 @@ execute FUNCTION update_updated_at_column ();
 
 ## `public.income_statements`
 
-```sql
 create table public.income_statements (
   is_id serial not null,
   company_id integer not null,
@@ -372,6 +371,10 @@ create table public.income_statements (
   confidence_score double precision not null default 1.0,
   last_validated_at timestamp with time zone null,
   validation_notes text null,
+  eps_basic numeric(10, 4) null,
+  eps_diluted numeric(10, 4) null,
+  shares_outstanding_basic bigint null,
+  shares_outstanding_diluted bigint null,
   constraint income_statements_pkey primary key (is_id),
   constraint uq_income_statements_company_fiscal unique (company_id, fiscal_year, fiscal_quarter),
   constraint check_fiscal_quarter check (
@@ -1149,3 +1152,63 @@ create table public.valuation_diagnostics (
 ) TABLESPACE pg_default;
 
 create index IF not exists idx_valuation_diagnostics_company_method on public.valuation_diagnostics using btree (company_id, method, created_at desc) TABLESPACE pg_default;
+
+
+## `public.derived_financial_metrics`
+create table public.derived_financial_metrics (
+  metric_id bigserial not null,
+  company_id integer not null,
+  fiscal_year integer not null,
+  period_end_date date null,
+  roic numeric(10, 6) null,
+  roe numeric(10, 6) null,
+  gross_margin numeric(10, 6) null,
+  operating_margin numeric(10, 6) null,
+  net_margin numeric(10, 6) null,
+  fcf_margin numeric(10, 6) null,
+  free_cash_flow numeric(20, 2) null,
+  dividend_payout_ratio numeric(10, 6) null,
+  fcf_dividend_payout_ratio numeric(10, 6) null,
+  dividend_coverage_fcf numeric(10, 6) null,
+  computed_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  source_version_tag text null,
+  data_source character varying(50) not null default 'derived'::character varying,
+  confidence_score double precision not null default 1.0,
+  validation_notes text null,
+  fcf_conversion numeric(10, 6) null,
+  debt_to_equity numeric(10, 6) null,
+  interest_coverage numeric(10, 6) null,
+  constraint derived_financial_metrics_pkey primary key (metric_id),
+  constraint uq_derived_fin_metrics unique (company_id, fiscal_year),
+  constraint derived_financial_metrics_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_dfm_company_year on public.derived_financial_metrics using btree (company_id, fiscal_year desc) TABLESPACE pg_default;
+
+create index IF not exists idx_dfm_roic on public.derived_financial_metrics using btree (roic) TABLESPACE pg_default
+where
+  (roic is not null);
+
+create index IF not exists idx_dfm_roe on public.derived_financial_metrics using btree (roe) TABLESPACE pg_default
+where
+  (roe is not null);
+
+## `public.data_quality_events`
+create table public.data_quality_events (
+  event_id bigserial not null,
+  company_id integer not null,
+  scope character varying(40) not null,
+  metric character varying(60) not null,
+  severity character varying(10) not null,
+  message text not null,
+  details jsonb null,
+  detected_at timestamp with time zone not null default CURRENT_TIMESTAMP,
+  constraint data_quality_events_pkey primary key (event_id),
+  constraint data_quality_events_company_id_fkey foreign KEY (company_id) references companies (company_id) on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_dqe_company_time on public.data_quality_events using btree (company_id, detected_at desc) TABLESPACE pg_default;
+
+create index IF not exists idx_dqe_scope_metric on public.data_quality_events using btree (scope, metric) TABLESPACE pg_default;
+
+create index IF not exists idx_dqe_severity on public.data_quality_events using btree (severity) TABLESPACE pg_default;

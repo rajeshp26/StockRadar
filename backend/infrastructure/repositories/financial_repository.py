@@ -21,7 +21,7 @@ from database import supabase
 from itertools import islice
 
 from config import settings
-from backend.domain.model_types import (
+from domain.model_types import (
     IncomeStatementRow,
     BalanceSheetRow,
     CashFlowRow,
@@ -316,7 +316,16 @@ class SupabaseFinancialRepository:
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
-            logger.info(f"✅ Upserted {len(dedup)} income statement rows")
+            # Zero rows back when we sent rows in = constraint violation.
+            returned = len(response.data) if response.data is not None else -1
+            if returned == 0 and len(data) > 0:
+                logger.error(
+                    "[UPSERT][income_statements] Sent %d rows, got 0 back. "
+                    "Likely CHECK constraint failure — data_source='%s' may be invalid.",
+                    len(data), data[0].get("data_source", "MISSING") if data else "N/A",
+                )
+            else:
+                logger.info("✅ Upserted %d income statement rows", len(dedup))
             return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert income statements: {str(e)}")
@@ -340,7 +349,15 @@ class SupabaseFinancialRepository:
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
-            logger.info(f"✅ Upserted {len(dedup)} balance sheet rows")
+            returned = len(response.data) if response.data is not None else -1
+            if returned == 0 and len(data) > 0:
+                logger.error(
+                    "[UPSERT][balance_sheets] Sent %d rows, got 0 back. "
+                    "Likely CHECK constraint failure — data_source='%s' may be invalid.",
+                    len(data), data[0].get("data_source", "MISSING") if data else "N/A",
+                )
+            else:
+                logger.info("✅ Upserted %d balance sheet rows", len(dedup))
             return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert balance sheets: {str(e)}")
@@ -364,7 +381,15 @@ class SupabaseFinancialRepository:
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
-            logger.info(f"✅ Upserted {len(dedup)} cash flow rows")
+            returned = len(response.data) if response.data is not None else -1
+            if returned == 0 and len(data) > 0:
+                logger.error(
+                    "[UPSERT][cash_flow_statements] Sent %d rows, got 0 back. "
+                    "Likely CHECK constraint failure — data_source='%s' may be invalid.",
+                    len(data), data[0].get("data_source", "MISSING") if data else "N/A",
+                )
+            else:
+                logger.info("✅ Upserted %d cash flow rows", len(dedup))
             return response.data or {"count": len(dedup)}
         except Exception as e:
             logger.error(f"Failed to upsert cash flows: {str(e)}")
@@ -757,6 +782,33 @@ class SupabaseFinancialRepository:
 
         except Exception as e:
             logger.error(f"Failed to upsert company_summary: {e}")
+            raise
+
+
+    # ========================================================================
+    # DERIVED METRICS (Phase 4)
+    # ========================================================================
+    async def upsert_derived_financial_metrics(
+        self, rows: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Upsert annual derived metrics (unique by company_id, fiscal_year)."""
+        if not rows:
+            return {"count": 0}
+        try:
+            seen = {}
+            for r in rows:
+                key = (r.get("company_id"), r.get("fiscal_year"))
+                seen[key] = r
+            dedup = list(seen.values())
+
+            count = await self._chunked_upsert(
+                table="financial_ratios",
+                rows=dedup,
+                on_conflict="company_id,fiscal_year",
+            )
+            return {"count": count}
+        except Exception as e:
+            logger.error(f"Failed to upsert financial_ratios: {e}")
             raise
 
     # ========================================================================

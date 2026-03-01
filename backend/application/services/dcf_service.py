@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
-
+from shared.finance_math import compute_fcf   # shared sign-aware formula
 from application.services.recompute_guard import RecomputeGuard
 from domain.models.valuation_dcf import DcfRequestOverrides, DcfResponse, DcfValuation, TerminalMethod, DcfSensitivityGrid
 from domain.models.valuation_rule1 import Applicability, DataQuality, DiagnosticFlag
@@ -283,6 +283,15 @@ class DcfService:
         forecast_fcf = [float(x) for x in series]
 
         # ---------------------------
+        # Resolve terminal method early (needed for invariant-failure return path)
+        # ---------------------------
+        terminal_method: TerminalMethod = (
+            overrides.terminalMethod
+            or defaults.get("terminal_method_default")
+            or "perpetuity_growth"
+        )
+
+        # ---------------------------
         # Resolve WACC
         # ---------------------------
         if overrides.wacc is not None:
@@ -389,11 +398,7 @@ class DcfService:
         # ---------------------------
         # Terminal value (two methods)
         # ---------------------------
-        terminal_method: TerminalMethod = (
-            overrides.terminalMethod
-            or defaults.get("terminal_method_default")
-            or "perpetuity_growth"
-        )
+
 
         tv = None
         pv_tv = None
@@ -779,9 +784,7 @@ class DcfService:
         ocf = _safe_float(cf.get("cash_from_operating_activities")) if cf else None
         capex = _safe_float(cf.get("capital_expenditures")) if cf else None
 
-        value = None
-        if ocf is not None and capex is not None:
-            value = float(ocf) - float(capex)
+        value = compute_fcf(ocf, capex)
 
         return {
             "value": value,

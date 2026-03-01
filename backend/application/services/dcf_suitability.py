@@ -98,6 +98,7 @@ async def evaluate_dcf_suitability(
     results: List[MetricResult] = []
     flags: List[DiagnosticFlag] = []
     evidence: Dict[str, Any] = {}
+    coverage: Dict[str, Any] = {}
 
     def add(m: MetricResult) -> None:
         results.append(m)
@@ -146,16 +147,20 @@ async def evaluate_dcf_suitability(
     # Metric 1: FCF positivity (5y)
     # -------------------------------
     # FCF = OCF - Capex (already computed in fcf_series if available)
-    fcf_rows = sorted(
+    fcf_rows_all = sorted(
         [r for r in (fcf_series or []) if r.get("fiscal_year") is not None],
         key=lambda r: int(r.get("fiscal_year") or 0),
-    )[-5:]
+    )
+    # Use up-to-5 most recent years (do not under-sample if more data exists)
+    fcf_rows = fcf_rows_all[-5:]
 
     fcf_vals = [_safe_float(r.get("fcf")) for r in fcf_rows]
     years_vals = [r.get("fiscal_year") for r in fcf_rows]
 
     pos_count = sum(1 for v in fcf_vals if v is not None and v > 0)
-    evidence["m1_fcf_positivity_5y"] = {"positiveYears": pos_count, "yearsAvailable": len(fcf_rows), "years": years_vals}
+    evidence["m1_fcf_positivity_5y"] = {"positiveYears": pos_count, "yearsEvaluated": len(fcf_rows),
+        "years": years_vals}
+    coverage["DCF-FCF-POS"] = {"requiredYears": 5, "availableYears": len(fcf_rows), "positiveYears": pos_count}
 
     if len(fcf_rows) < 3:
         add(MetricResult(
@@ -214,7 +219,7 @@ async def evaluate_dcf_suitability(
     # - Use abs(mean) in denominator; treat non-positive mean as a suitability failure.
     vol = (sd / abs(mu)) if (mu is not None and sd is not None and mu != 0) else None
     evidence["m2_fcf_volatility"] = {"mean": mu, "stdev": sd, "volatility": vol}
-
+    coverage["DCF-FCF-VOL"] = {"requiredYears": 5, "availablePoints": len(fcf_clean)}
 
     if mu is not None and mu <= 0:
         add(MetricResult(
@@ -276,23 +281,43 @@ async def evaluate_dcf_suitability(
     # -------------------------------
     # Metric 3: Revenue CAGR (5y)
     # -------------------------------
-    rev_rows = sorted(
+    # 5-year CAGR requires 6 points (years+1). Use last 6 annual rows.
+    # Option: compute over actual span when >=2 points exist and
+    # emit an info diagnostic when span != 5y so UI can explain gaps.
+    rev_rows_all = sorted(
         [r for r in (rev_series or []) if r.get("fiscal_year") is not None],
         key=lambda r: int(r.get("fiscal_year") or 0),
-    )[-5:]
+    )
+    rev_rows = rev_rows_all[-6:] if len(rev_rows_all) >= 6 else rev_rows_all[-len(rev_rows_all):]
     rev_vals = [_safe_float(r.get("revenue")) for r in rev_rows]
     rev_years = [r.get("fiscal_year") for r in rev_rows]
     evidence["m3_revenue_cagr_5y"] = {"years": rev_years, "values": rev_vals}
 
     rev_cagr = None
+    years_span: Optional[int] = None
     if len(rev_rows) >= 2:
         v0 = _safe_float(rev_rows[0].get("revenue"))
         vN = _safe_float(rev_rows[-1].get("revenue"))
-        years_span = int(rev_rows[-1]["fiscal_year"]) - int(rev_rows[0]["fiscal_year"])
-        if v0 is not None and vN is not None and years_span > 0:
+        try:
+            years_span = int(rev_rows[-1]["fiscal_year"]) - int(rev_rows[0]["fiscal_year"])
+        except Exception:
+            years_span = None
+        if v0 is not None and vN is not None and years_span is not None and years_span > 0:
             rev_cagr = _cagr(v0, vN, years_span)
 
     evidence["m3_revenue_cagr_5y"]["cagr"] = rev_cagr
+    evidence["m3_revenue_cagr_5y"]["spanYears"] = years_span
+    coverage["DCF-REV-CAGR"] = {"targetYears": 5, "availableYears": len(rev_rows), "spanYears": years_span}
+
+    span_flag_m3: Optional[DiagnosticFlag] = None
+    if rev_cagr is not None and years_span is not None and years_span != 5:
+        span_flag_m3 = DiagnosticFlag(
+            code="DCF-REV-CAGR-SPAN",
+            severity="info",
+            message=f"Revenue CAGR computed over {years_span}y span (target 5y) due to missing fiscal years.",
+            evidence=evidence["m3_revenue_cagr_5y"],
+            recommendation="Backfill missing fiscal years for a true 5-year CAGR.",
+        )
 
     if rev_cagr is None:
         add(MetricResult(
@@ -304,18 +329,18 @@ async def evaluate_dcf_suitability(
                 code="DCF-REV-CAGR",
                 severity="low",
                 message="Could not compute revenue CAGR (insufficient revenue history).",
-                evidence={"availableYears": len(rev_rows)},
+                evidence={"availableYears": len(rev_rows), "spanYears": years_span, "years": rev_years},
             ),
         ))
     elif rev_cagr >= 0.04:
-        add(MetricResult("DCF-REV-CAGR", "Revenue CAGR (5y)", "pass", 1))
+        add(MetricResult("DCF-REV-CAGR", "Revenue CAGR (5y)", "pass", 1, span_flag_m3))
     elif 0.0 <= rev_cagr < 0.04:
         add(MetricResult(
             code="DCF-REV-CAGR",
             name="Revenue CAGR (5y)",
             status="caution",
             points=0,
-            flag=DiagnosticFlag(
+            flag=span_flag_m3 or DiagnosticFlag(
                 code="DCF-REV-CAGR",
                 severity="medium",
                 message=f"Revenue CAGR is {rev_cagr:.1%} (slow growth).",
@@ -480,12 +505,18 @@ async def evaluate_dcf_suitability(
     ebit = _safe_float(is_latest.get("ebit")) if is_latest else None
     interest = _safe_float(is_latest.get("interest_expense")) if is_latest else None
     ic = None
-    if ebit is not None and interest is not None and interest != 0:
-        ic = ebit / abs(interest)
+    if ebit is not None and interest is not None:
+        if interest == 0:
+            ic = math.inf if ebit > 0 else None
+        else:
+            ic = ebit / abs(interest)
 
     evidence["m6_interest_coverage"] = {"ebit": ebit, "interestExpense": interest, "interestCoverage": ic}
+    coverage["DCF-INT-COV"] = {"ebit": ebit, "interestExpense": interest}
 
-    if ic is None:
+    if interest == 0 and ebit is not None and ebit > 0:
+        add(MetricResult("DCF-INT-COV", "Interest Coverage", "pass", 1))
+    elif ic is None:
         add(MetricResult(
             code="DCF-INT-COV",
             name="Interest Coverage",
@@ -614,6 +645,16 @@ async def evaluate_dcf_suitability(
         "asOf": date.today().isoformat(),
         "sector": sector,
     }
+
+    # UI-friendly missing-data summary (does not affect score/category)
+    evidence["data_coverage"] = coverage
+    flags.insert(0, DiagnosticFlag(
+        code="DCF-DATA-COVERAGE",
+        severity="info",
+        message="DCF suitability data coverage summary (missing inputs may reduce confidence).",
+        evidence=coverage,
+        recommendation="Improve data completeness for higher-confidence suitability metrics.",
+    ))
 
     flags.insert(0, DiagnosticFlag(
         code="DCF-SCORECARD",

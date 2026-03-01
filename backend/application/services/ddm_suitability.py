@@ -97,7 +97,12 @@ async def evaluate_ddm_suitability(
       evidence
     """
     dividend_yearly = await repo.get_dividend_yearly_dps(company_id, years=10)  # [{year, dps}]
-    div_metrics = await repo.get_dividend_metrics_latest(company_id)
+    derived_latest = None
+    if hasattr(repo, "get_derived_metrics_latest"):
+        try:
+            derived_latest = await repo.get_derived_metrics_latest(company_id)
+        except Exception:
+            derived_latest = None
     is_latest = await repo.get_income_statement_latest(company_id)
     bs_latest = await repo.get_balance_sheet_latest(company_id)
     cf_latest = await repo.get_cash_flow_latest(company_id)
@@ -222,8 +227,11 @@ async def evaluate_ddm_suitability(
         ))
 
     # Metric 3: Earnings payout ratio
-    payout_eps = _safe_float(div_metrics.get("dividend_payout_ratio")) if div_metrics else None
+    # Source: derived_financial_metrics.dividend_payout_ratio (computed by derived_financial_metrics_job)
+    payout_eps = _safe_float((derived_latest or {}).get("dividend_payout_ratio"))
+    
     evidence["m3_earnings_payout_ratio"] = payout_eps
+    evidence["m3_source"] = "derived_financial_metrics"
 
     if payout_eps is None:
         add(MetricResult(
@@ -234,7 +242,9 @@ async def evaluate_ddm_suitability(
             flag=DiagnosticFlag(
                 code="DDM-PAYOUT-EPS",
                 severity="low",
-                message="Earnings payout ratio not available (dividend_metrics.dividend_payout_ratio missing).",
+                # FIX: was "dividend_metrics.dividend_payout_ratio missing" — stale message.
+                # Code reads from derived_financial_metrics, not dividend_metrics.
+                message="Earnings payout ratio not available (derived_financial_metrics.dividend_payout_ratio is null — run the derived metrics job).",
             ),
         ))
     else:
@@ -285,8 +295,10 @@ async def evaluate_ddm_suitability(
             ))
 
     # Metric 4: FCF payout ratio
-    fcf_payout = _safe_float(div_metrics.get("fcf_dividend_payout_ratio")) if div_metrics else None
+    # Source: derived_financial_metrics.fcf_dividend_payout_ratio (computed by derived_financial_metrics_job)
+    fcf_payout = _safe_float((derived_latest or {}).get("fcf_dividend_payout_ratio"))
     evidence["m4_fcf_payout_ratio"] = fcf_payout
+    evidence["m4_source"] = "derived_financial_metrics"
 
     if fcf_payout is None:
         add(MetricResult(
@@ -297,7 +309,9 @@ async def evaluate_ddm_suitability(
             flag=DiagnosticFlag(
                 code="DDM-PAYOUT-FCF",
                 severity="low",
-                message="FCF payout ratio not available (dividend_metrics.fcf_dividend_payout_ratio missing).",
+                # FIX: was "dividend_metrics.fcf_dividend_payout_ratio missing" — stale message.
+                # Code reads from derived_financial_metrics, not dividend_metrics.
+                message="FCF payout ratio not available (derived_financial_metrics.fcf_dividend_payout_ratio is null — run the derived metrics job).",
             ),
         ))
     else:
@@ -348,6 +362,7 @@ async def evaluate_ddm_suitability(
             ))
 
     # Metric 5: Net Debt to EBITDA
+    # Source: balance_sheets (debt, cash) + income_statements (ebitda)
     total_debt = _safe_float(bs_latest.get("total_debt")) if bs_latest else None
     cash = _safe_float(bs_latest.get("cash_and_cash_equivalents")) if bs_latest else None
     ebitda = _safe_float(is_latest.get("ebitda")) if is_latest else None
@@ -404,6 +419,7 @@ async def evaluate_ddm_suitability(
         ))
 
     # Metric 6: Interest coverage
+    # Source: income_statements (ebit, interest_expense)
     ebit = _safe_float(is_latest.get("ebit")) if is_latest else None
     interest = _safe_float(is_latest.get("interest_expense")) if is_latest else None
     ic = None

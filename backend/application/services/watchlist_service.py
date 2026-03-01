@@ -24,6 +24,8 @@ from providers.defeat_beta_provider import DefeatBetaProvider
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from application.services.recompute_guard import RecomputeGuard
 from application.services.valuation_service import ValuationService
+from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
+from application.jobs.data_quality_audit_job import audit_company_data_quality
 
 logger = logging.getLogger(__name__)
 
@@ -362,7 +364,10 @@ class WatchlistService:
             last_fy = refresh_info.last_refreshed_fiscal_year
             last_fq = refresh_info.last_refreshed_fiscal_quarter
             if financials.income_statements.rows:
-                latest = financials.income_statements.rows[-1]
+                latest = max(
+                    financials.income_statements.rows,
+                    key=lambda r: (r.fiscal_year or 0, r.fiscal_quarter or 0)
+                )
                 last_fy = latest.fiscal_year
                 last_fq = latest.fiscal_quarter
 
@@ -376,6 +381,20 @@ class WatchlistService:
 
             total_rows = sum(upsert_results.values())
             logger.info("✅ On-demand refresh complete for %s: %s rows", symbol, total_rows)
+
+            # NEW: Derived metrics compute after fundamentals refresh (non-blocking)
+            try:
+                await compute_and_upsert_derived_financial_metrics(company_id=company_id)
+                logger.info("[DERIVED] metrics computed after on-demand refresh for %s", symbol)
+            except Exception as de:
+                logger.error("[DERIVED] compute failed after on-demand refresh for %s: %s", symbol, de)
+
+            # PHASE 8: Data quality audit (non-blocking)
+            try:
+                await audit_company_data_quality(company_id=company_id)
+                logger.info("[DQ] audit complete after on-demand refresh for %s", symbol)
+            except Exception as qe:
+                logger.error("[DQ] audit failed after on-demand refresh for %s: %s", symbol, qe)
 
             # NEW: Auto-compute Rule #1 after on-demand refresh (definitely changed inputs)
             try:
@@ -561,7 +580,10 @@ class WatchlistService:
             last_fy = refresh_info.last_refreshed_fiscal_year
             last_fq = refresh_info.last_refreshed_fiscal_quarter
             if financials.income_statements.rows:
-                latest = financials.income_statements.rows[-1]
+                latest = max(
+                    financials.income_statements.rows,
+                    key=lambda r: (r.fiscal_year or 0, r.fiscal_quarter or 0)
+                )
                 last_fy = latest.fiscal_year
                 last_fq = latest.fiscal_quarter
 
@@ -576,6 +598,19 @@ class WatchlistService:
             total_rows = sum(upsert_results.values())
             logger.info("✅ Background load complete for %s: %s total rows upserted", symbol, total_rows)
 
+            # NEW: Derived metrics compute after fundamentals ingestion (non-blocking)
+            try:
+                await compute_and_upsert_derived_financial_metrics(company_id=company_id)
+                logger.info("[DERIVED] metrics computed after fundamentals ingestion for %s", symbol)
+            except Exception as de:
+                logger.error("[DERIVED] compute failed after fundamentals ingestion for %s: %s", symbol, de)
+                
+            # PHASE 8: Data quality audit (non-blocking)
+            try:
+                await audit_company_data_quality(company_id=company_id)  
+                logger.info("[DQ] audit complete after fundamentals ingestion for %s", symbol)
+            except Exception as qe:
+                logger.error("[DQ] audit failed after fundamentals ingestion for %s: %s", symbol, qe)  
             # NEW: Auto-compute Rule #1 after fundamentals ingestion (Trigger A)
             try:
                 val_repo = ValuationRepository()

@@ -36,6 +36,8 @@ from domain.model_types import (
     DividendRows,
 )
 
+from backend.application.normalizers.statement_normalizer import normalize_income_row, normalize_balance_row, normalize_cashflow_row
+
 from providers.base import StockDataProvider
 
 logger = logging.getLogger(__name__)
@@ -151,6 +153,12 @@ class DefeatBetaProvider(StockDataProvider):
         'normalized_income': ['Normalized Income'],
         'total_expenses': ['Total Expenses'],
         'rent_expense': ['Rent Expense Supplemental'],
+
+        # Per-share metrics
+        'eps_basic': ['Basic EPS'],
+        'eps_diluted': ['Diluted EPS'],
+        'shares_outstanding_basic': ['Basic Average Shares'],
+        'shares_outstanding_diluted': ['Diluted Average Shares'],
     }
 
     # Balance Sheet aliases
@@ -438,13 +446,13 @@ class DefeatBetaProvider(StockDataProvider):
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_income_statement(), f"quarterly_income_statement for {symbol}")
             if q_obj is not None:
-                # dump_defeatbeta_raw(symbol, "quarterly_income_statement", q_obj)
+                dump_defeatbeta_raw(symbol, "quarterly_income_statement", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_income_statement(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_income_statement(), f"annual_income_statement for {symbol}")
             if a_obj is not None:
-                # dump_defeatbeta_raw(symbol, "annual_income_statement", a_obj)
+                dump_defeatbeta_raw(symbol, "annual_income_statement", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_income_statement(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -460,7 +468,7 @@ class DefeatBetaProvider(StockDataProvider):
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_balance_sheet(), f"quarterly_balance_sheet for {symbol}")
             if q_obj is not None:
-                # dump_defeatbeta_raw(symbol, "quarterly_balance_sheet", q_obj)
+                dump_defeatbeta_raw(symbol, "quarterly_balance_sheet", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_balance_sheet(q_df, company_id, is_quarterly=True, symbol=symbol))
 
@@ -472,7 +480,7 @@ class DefeatBetaProvider(StockDataProvider):
                     logger.debug("[DBETA][%s] annual BS raw columns: %s", symbol, list(raw_df.columns))
                 except Exception:
                     pass
-                # dump_defeatbeta_raw(symbol, "annual_balance_sheet", a_obj)
+                dump_defeatbeta_raw(symbol, "annual_balance_sheet", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_balance_sheet(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -488,13 +496,13 @@ class DefeatBetaProvider(StockDataProvider):
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_cash_flow(), f"quarterly_cash_flow for {symbol}")
             if q_obj is not None:
-                # dump_defeatbeta_raw(symbol, "quarterly_cash_flow", q_obj)
+                dump_defeatbeta_raw(symbol, "quarterly_cash_flow", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
                 rows.extend(self._parse_cash_flow(q_df, company_id, is_quarterly=True, symbol=symbol))
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_cash_flow(), f"annual_cash_flow for {symbol}")
             if a_obj is not None:
-                # dump_defeatbeta_raw(symbol, "annual_cash_flow", a_obj)
+                dump_defeatbeta_raw(symbol, "annual_cash_flow", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
                 rows.extend(self._parse_cash_flow(a_df, company_id, is_quarterly=False, symbol=symbol))
 
@@ -1034,7 +1042,8 @@ class DefeatBetaProvider(StockDataProvider):
         if not col_to_dt:
             col_to_dt = {c: pd.to_datetime(str(c), errors='coerce') for c in df.columns}
 
-        for c, ts in col_to_dt.items():
+        # IMPORTANT: deterministic chronological iteration (oldest -> newest)
+        for c, ts in sorted(col_to_dt.items(), key=lambda kv: kv[1]):
             if pd.isna(ts):
                 continue
             fy = int(ts.year)
@@ -1060,7 +1069,7 @@ class DefeatBetaProvider(StockDataProvider):
 
         a = self.DB_INCOME_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
-            rows.append(IncomeStatementRow(
+            row = IncomeStatementRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
@@ -1090,9 +1099,15 @@ class DefeatBetaProvider(StockDataProvider):
                 ebit=self._safe_decimal(self._db_val(df, a.get('ebit', []), col)),
                 last_validated_at=None,
 
+                eps_basic=self._safe_decimal(self._db_val(df, a.get('eps_basic', []), col)),
+                eps_diluted=self._safe_decimal(self._db_val(df, a.get('eps_diluted', []), col)),
+                shares_outstanding_basic=self._safe_decimal(self._db_val(df, a.get('shares_outstanding_basic', []), col)),
+                shares_outstanding_diluted=self._safe_decimal(self._db_val(df, a.get('shares_outstanding_diluted', []), col)),
+
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
-            ))
+            )
+            rows.append(normalize_income_row(row))
         return rows
 
     # ---- Balance Sheet parser (DBeta) ----
@@ -1153,8 +1168,8 @@ class DefeatBetaProvider(StockDataProvider):
                     total_leq = Decimal(str(total_liab)) + Decimal(str(sh_equity)) + (Decimal(str(minority)) if minority is not None else Decimal('0'))
                 except InvalidOperation:
                     pass
+            row = BalanceSheetRow(
 
-            rows.append(BalanceSheetRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
@@ -1190,7 +1205,8 @@ class DefeatBetaProvider(StockDataProvider):
 
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
-            ))
+            )
+            rows.append(normalize_balance_row(row))
         return rows
 
     # ---- Cash Flow parser (DBeta) ----
@@ -1202,7 +1218,7 @@ class DefeatBetaProvider(StockDataProvider):
 
         a = self.DB_CASHFLOW_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
-            rows.append(CashFlowRow(
+            row = CashFlowRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
@@ -1231,7 +1247,8 @@ class DefeatBetaProvider(StockDataProvider):
 
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
-            ))
+            )
+            rows.append(normalize_cashflow_row(row))
         return rows
 
     # ---- Dividends parser (DBeta & YF) ----

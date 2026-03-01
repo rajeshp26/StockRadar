@@ -65,19 +65,37 @@ def _take_last_n_years(rows: List[Dict[str, Any]], key: str, n: int) -> List[Tup
         v = _safe_float(r.get(key))
         if isinstance(y, int) and v is not None:
             out.append((y, v))
+    # sort once (do not sort inside loop)
+    out.sort(key=lambda t: t[0])
     return out[-n:]
 
 
-def _series_cagr(rows: List[Dict[str, Any]], key: str, years: int) -> Optional[float]:
-    pairs = _take_last_n_years(rows, key=key, n=years + 1)
-    if len(pairs) < years + 1:
-        return None
+def _series_cagr_span(
+    rows: List[Dict[str, Any]],
+    key: str,
+    target_years: int,
+) -> Tuple[Optional[float], Optional[int], List[int], List[int]]:
+    """
+    Option 1: Compute CAGR over the actual span (yN - y0) and report gaps.
+    - Return gaps so UI can show "computed over 6y span due to missing fiscal years".
+    Returns: (cagr, span_years, years_present, missing_years_between)
+    """
+    pairs = _take_last_n_years(rows, key=key, n=target_years + 1)
+    if len(pairs) < 2:
+        return None, None, [], []
+
     y0, v0 = pairs[0]
     yN, vN = pairs[-1]
-    n = yN - y0
-    if n <= 0:
-        n = years
-    return _cagr(v0, vN, n)
+    span = yN - y0
+    if span <= 0:
+        return None, None, [y for y, _ in pairs], []
+
+    years_present = [y for y, _ in pairs]
+    present_set = set(years_present)
+    missing = [y for y in range(y0 + 1, yN) if y not in present_set]
+
+    cagr = _cagr(v0, vN, span)
+    return cagr, span, years_present, missing
 
 
 def _eps_drawdown(rows: List[Dict[str, Any]], key: str, window_years: int = 5) -> Optional[float]:
@@ -146,10 +164,30 @@ async def evaluate_rule1_suitability(
     bs_latest = await repo.get_balance_sheet_latest(company_id)          # {total_debt, shareholders_equity, ...}
     is_latest = await repo.get_income_statement_latest(company_id)       # {ebit, interest_expense, ...}
     cf_latest = await repo.get_cash_flow_latest(company_id)              # {cfo, capex, ...}
+    derived_latest = None
+    if hasattr(repo, "get_derived_metrics_latest"):
+        derived_latest = await repo.get_derived_metrics_latest(company_id)
 
     results: List[MetricResult] = []
     flags: List[DiagnosticFlag] = []
     evidence: Dict[str, Any] = {}
+
+    # ---------------------------------------------------------------------
+    # Debug / Transparency: Capture actual keys returned by repo snapshots.
+    # This avoids guessing field names and makes "missing data" diagnosable.
+    # ---------------------------------------------------------------------
+    evidence["repo_payload_keys"] = {
+        "balance_sheet_latest": sorted(list(bs_latest.keys())) if isinstance(bs_latest, dict) else None,
+        "income_statement_latest": sorted(list(is_latest.keys())) if isinstance(is_latest, dict) else None,
+        "cash_flow_latest": sorted(list(cf_latest.keys())) if isinstance(cf_latest, dict) else None,
+        "derived_metrics_latest": sorted(list(derived_latest.keys())) if isinstance(derived_latest, dict) else None,
+    }
+    flags.append(DiagnosticFlag(
+        code="R1-REPO-KEYS",
+        severity="info",
+        message="Repo payload keys captured for suitability debugging.",
+        evidence=evidence["repo_payload_keys"],
+    ))
 
     # Helper to append
     def add(m: MetricResult):
@@ -159,11 +197,15 @@ async def evaluate_rule1_suitability(
 
     hard_fail = False
 
+    # Collect per-metric coverage so UI can show "missing data" clearly.
+    # Filled progressively as metrics compute their input availability.
+    coverage: Dict[str, Any] = {}
     # ---------------------------------------------------------
     # Metric 1: Positive Earnings Consistency (last 5 years)
     # % of last 5 years with positive net income
     # ---------------------------------------------------------
     ni_pairs = _take_last_n_years(net_income_rows, "net_income", 5)
+    coverage["M1"] = {"requiredYears": 5, "availableYears": len(ni_pairs)}
     if len(ni_pairs) >= 3:
         pos = sum(1 for _, v in ni_pairs if v > 0)
         total = len(ni_pairs)
@@ -210,6 +252,7 @@ async def evaluate_rule1_suitability(
     # Metric 2: EPS Volatility (Std Dev / Avg EPS over 5 years)
     # ---------------------------------------------------------
     eps_pairs = _take_last_n_years(eps_rows, "eps", 5)
+    coverage["M2"] = {"requiredYears": 5, "availableYears": len(eps_pairs)}
     if len(eps_pairs) >= 3:
         eps_vals = [v for _, v in eps_pairs if v is not None]
         avg = _mean(eps_vals)
@@ -268,27 +311,50 @@ async def evaluate_rule1_suitability(
     # ---------------------------------------------------------
     # Metric 3: Revenue CAGR (5y)
     # ---------------------------------------------------------
-    rev_cagr = _series_cagr(revenue_rows, "revenue", 5)
-    evidence["growth_revenue_cagr_5y"] = rev_cagr
+    rev_cagr, rev_span, rev_years_present, rev_missing = _series_cagr_span(revenue_rows, "revenue", 5)
+    evidence["growth_revenue_cagr"] = {
+        "targetYears": 5,
+        "spanYears": rev_span,
+        "yearsPresent": rev_years_present,
+        "missingYears": rev_missing,
+        "cagr": rev_cagr,
+    }
+    coverage["M3"] = {
+        "requiredYears": 6,  # points needed for true 5y comparison
+        "availableYears": len(rev_years_present),
+        "spanYears": rev_span,
+        "missingYears": rev_missing,
+    }
+
+    span_flag_m3: Optional[DiagnosticFlag] = None
+    if rev_cagr is not None and rev_span is not None and rev_span != 5:
+        span_flag_m3 = DiagnosticFlag(
+            code="R1-REV-CAGR-SPAN",
+            severity="info",
+            message=f"Revenue CAGR computed over {rev_span}y span (target 5y) due to missing fiscal years.",
+            evidence=evidence["growth_revenue_cagr"],
+            recommendation="Backfill missing fiscal years for a true 5-year CAGR."
+        )
     if rev_cagr is None:
         add(MetricResult(
             "M3", "Revenue CAGR (5y)", "caution", 0,
             DiagnosticFlag(
                 code="R1-REV-CAGR",
                 severity="low",
-                message="Insufficient revenue history to compute 5-year CAGR.",
+                message="Insufficient revenue history to compute CAGR.",
+                evidence=evidence["growth_revenue_cagr"],
             )
         ))
     elif rev_cagr >= 0.05:
-        add(MetricResult("M3", "Revenue CAGR (5y)", "pass", 1))
+        add(MetricResult("M3", "Revenue CAGR (5y)", "pass", 1, span_flag_m3))
     elif rev_cagr >= 0.0:
         add(MetricResult(
             "M3", "Revenue CAGR (5y)", "caution", 0,
-            DiagnosticFlag(
+            span_flag_m3 or DiagnosticFlag(
                 code="R1-REV-CAGR",
                 severity="medium",
                 message=f"Revenue CAGR is {rev_cagr:.1%} (low growth).",
-                evidence={"revenueCagr5y": rev_cagr},
+                evidence={"revenueCagr": rev_cagr, **evidence["growth_revenue_cagr"]},
                 recommendation="Use conservative growth; validate business durability."
             )
         ))
@@ -300,7 +366,7 @@ async def evaluate_rule1_suitability(
                 code="R1-REV-CAGR",
                 severity="critical",
                 message=f"Revenue CAGR is {rev_cagr:.1%} (declining). Rule #1 not suitable.",
-                evidence={"revenueCagr5y": rev_cagr},
+                evidence={"revenueCagr": rev_cagr, **evidence["growth_revenue_cagr"]},
                 recommendation="Avoid Rule #1; consider turnaround-specific methods."
             )
         ))
@@ -308,15 +374,39 @@ async def evaluate_rule1_suitability(
     # ---------------------------------------------------------
     # Metric 4: EPS CAGR (5y)
     # ---------------------------------------------------------
-    eps_cagr = _series_cagr(eps_rows, "eps", 5)
-    evidence["growth_eps_cagr_5y"] = eps_cagr
+
+    eps_cagr, eps_span, eps_years_present, eps_missing = _series_cagr_span(eps_rows, "eps", 5)
+    evidence["growth_eps_cagr"] = {
+        "targetYears": 5,
+        "spanYears": eps_span,
+        "yearsPresent": eps_years_present,
+        "missingYears": eps_missing,
+        "cagr": eps_cagr,
+    }
+    coverage["M4"] = {
+        "requiredYears": 6,
+        "availableYears": len(eps_years_present),
+        "spanYears": eps_span,
+        "missingYears": eps_missing,
+    }
+
+    span_flag_m4: Optional[DiagnosticFlag] = None
+    if eps_cagr is not None and eps_span is not None and eps_span != 5:
+        span_flag_m4 = DiagnosticFlag(
+            code="R1-EPS-CAGR-SPAN",
+            severity="info",
+            message=f"EPS CAGR computed over {eps_span}y span (target 5y) due to missing fiscal years.",
+            evidence=evidence["growth_eps_cagr"],
+            recommendation="Backfill missing fiscal years for a true 5-year CAGR."
+        )
     if eps_cagr is None:
         add(MetricResult(
             "M4", "EPS CAGR (5y)", "caution", 0,
             DiagnosticFlag(
                 code="R1-EPS-CAGR",
                 severity="low",
-                message="Insufficient EPS history to compute 5-year CAGR.",
+                message="Insufficient EPS history to compute CAGR.",
+                evidence=evidence["growth_eps_cagr"],
             )
         ))
     elif eps_cagr >= 0.08:
@@ -324,11 +414,11 @@ async def evaluate_rule1_suitability(
     elif eps_cagr >= 0.03:
         add(MetricResult(
             "M4", "EPS CAGR (5y)", "caution", 0,
-            DiagnosticFlag(
+            span_flag_m4 or DiagnosticFlag(
                 code="R1-EPS-CAGR",
                 severity="medium",
                 message=f"EPS CAGR is {eps_cagr:.1%} (slow compounding).",
-                evidence={"epsCagr5y": eps_cagr},
+                evidence={"epsCagr": eps_cagr, **evidence["growth_eps_cagr"]},
                 recommendation="Use conservative growth assumptions; validate drivers."
             )
         ))
@@ -340,7 +430,7 @@ async def evaluate_rule1_suitability(
                 code="R1-EPS-CAGR",
                 severity="critical",
                 message=f"EPS CAGR is {eps_cagr:.1%} (weak). Rule #1 not suitable.",
-                evidence={"epsCagr5y": eps_cagr},
+                evidence={"epsCagr": eps_cagr, **evidence["growth_eps_cagr"]},
                 recommendation="Avoid Rule #1; use scenario-based cash flow approaches."
             )
         ))
@@ -451,14 +541,30 @@ async def evaluate_rule1_suitability(
             )
         ))
     else:
-        total_debt = _safe_float(bs_latest.get("total_debt")) if bs_latest else None
-        equity = _safe_float(bs_latest.get("shareholders_equity")) if bs_latest else None
-        dte = None
-        if total_debt is not None and equity is not None and equity != 0:
-            dte = total_debt / equity
-        evidence["balance_debt_to_equity"] = dte
-
+        dte = _safe_float((derived_latest or {}).get("debt_to_equity"))
         if dte is None:
+            total_debt = _safe_float(bs_latest.get("total_debt")) if bs_latest else None
+            equity = _safe_float(bs_latest.get("shareholders_equity")) if bs_latest else None
+            if total_debt is not None and equity is not None:
+                if equity <= 0:
+                    dte = None
+                    hard_fail = True
+                    add(MetricResult(
+                        "M7", "Debt to Equity", "fail", 0,
+                        DiagnosticFlag(
+                            code="R1-DEBT-EQUITY",
+                            severity="critical",
+                            message="Shareholders' equity is <= 0; leverage risk is high / ratio not meaningful. Avoid Rule #1.",
+                            evidence={"equity": equity, "totalDebt": total_debt},
+                        )
+                    ))
+                else:
+                    dte = total_debt / equity
+            evidence["balance_debt_to_equity"] = dte
+        # if we already emitted the negative equity fail above, skip normal evaluation
+        if hard_fail and any(r.id == "M7" and r.status == "fail" for r in results):
+            pass
+        elif dte is None:
             add(MetricResult(
                 "M7", "Debt to Equity", "caution", 0,
                 DiagnosticFlag(
@@ -506,12 +612,16 @@ async def evaluate_rule1_suitability(
             )
         ))
     else:
-        ebit = _safe_float(is_latest.get("ebit")) if is_latest else None
-        interest = _safe_float(is_latest.get("interest_expense")) if is_latest else None
-        ic = None
-        if ebit is not None and interest is not None and interest != 0:
-            ic = ebit / abs(interest)
-        evidence["balance_interest_coverage"] = ic
+        ic = _safe_float((derived_latest or {}).get("interest_coverage"))
+        if ic is None:
+            ebit = _safe_float(is_latest.get("ebit")) if is_latest else None
+            interest = _safe_float(is_latest.get("interest_expense")) if is_latest else None
+            if ebit is not None and interest is not None:
+                if interest == 0 and ebit > 0:
+                    ic = math.inf
+                elif interest != 0:
+                    ic = ebit / abs(interest)
+            evidence["balance_interest_coverage"] = ic
 
         if ic is None:
             add(MetricResult(
@@ -550,31 +660,37 @@ async def evaluate_rule1_suitability(
     # Metric 9: FCF Conversion (FCF / Net Income)
     # FCF = CFO +/- CapEx (sign-normalized; do NOT assume sign convention)
     # ---------------------------------------------------------
-    cfo = _safe_float(cf_latest.get("cash_from_operating_activities")) if cf_latest else None
-    capex = _safe_float(cf_latest.get("capital_expenditures")) if cf_latest else None
-    ni_latest = _safe_float(is_latest.get("net_income_to_common")) if is_latest else None
+    conv: Optional[float] = None
+    fcf: Optional[float] = None
+    capex_rule: str = "n/a"
 
-    fcf = None
-    conv = None
-    capex_rule = None
-    if cfo is not None and capex is not None:
-        if capex < 0:
-            # CapEx stored as negative outflow
-            fcf = cfo + capex
-            capex_rule = "fcf=cfo+capex (capex negative)"
-        else:
-            # CapEx stored as positive outflow
-            fcf = cfo - capex
-            capex_rule = "fcf=cfo-capex (capex positive)"
-    if fcf is not None and ni_latest is not None and ni_latest != 0:
-        conv = fcf / ni_latest
+    # Prefer derived metrics if present (safe: does not assume keys exist)
+    if derived_latest:
+        conv = _safe_float(derived_latest.get("fcf_conversion"))
+        fcf = _safe_float(derived_latest.get("free_cash_flow"))
+        if conv is not None:
+            capex_rule = "derived"
+
+    # Fallback only if derived is missing or unusable (keys may differ; debug keys are emitted above)
+    if conv is None:
+        cfo = _safe_float(cf_latest.get("cash_from_operating_activities")) if cf_latest else None
+        capex = _safe_float(cf_latest.get("capital_expenditures")) if cf_latest else None
+        ni_latest = _safe_float(is_latest.get("net_income_to_common")) if is_latest else None
+
+        if cfo is not None and capex is not None:
+            if capex < 0:
+                fcf = cfo + capex
+                capex_rule = "fallback: fcf=cfo+capex (capex negative)"
+            else:
+                fcf = cfo - capex
+                capex_rule = "fallback: fcf=cfo-capex (capex positive)"
+
+        if fcf is not None and ni_latest is not None and ni_latest != 0:
+            conv = fcf / ni_latest
 
     evidence["cashflow_fcf_conversion"] = {
-        "cfo": cfo,
-        "capex": capex,
         "fcf": fcf,
         "capexRule": capex_rule,
-        "netIncome": ni_latest,
         "fcfConversion": conv
         }
 
@@ -724,6 +840,16 @@ async def evaluate_rule1_suitability(
         "category": category,
         "hardFail": hard_fail,
     }
+
+    # Expose missing/coverage explicitly for UI
+    evidence["data_coverage"] = coverage
+    flags.insert(0, DiagnosticFlag(
+        code="R1-DATA-COVERAGE",
+        severity="info",
+        message="Suitability data coverage summary (missing inputs may reduce confidence).",
+        evidence=coverage,
+        recommendation="Backfill missing fiscal years / statements to reduce 'unknowns' in suitability."
+    ))
 
     # Add a summary diagnostic (info) so it’s transparent & spreadsheet-friendly
     flags.insert(0, DiagnosticFlag(

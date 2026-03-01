@@ -96,8 +96,8 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("⏭️  Earnings scheduler disabled (ENABLE_EARNINGS_SCHEDULER=false)")
 
-    # Market Data scheduler (flag may not exist; default False)
-    if getattr(settings, "ENABLE_MARKET_DATA_SCHEDULER", False):
+    # Market Data scheduler (flag may not exist; default True to match design intent)
+    if getattr(settings, "ENABLE_MARKET_DATA_SCHEDULER", True):
         try:
             market_sched = MarketDataRefreshScheduler()
             await market_sched.start()
