@@ -1,9 +1,8 @@
+// web/src/features/analysis/components/dcf-panel.tsx
 "use client";
-
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { fetchDcfValuation } from "../services/analysis.service";
-import type { DcfResponse } from "../types/analysis.types";
+import { useDcfAnalysis } from "../hooks/useDcfAnalysis";
 import { useDcfHistory } from "../hooks/useDcfHistory";
 import { RefreshCw, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
 import {
@@ -18,7 +17,23 @@ import {
   fmtDateTime,
 } from "./shared-ui";
 
-/* ── Skeleton tile ──────────────────────────────────────────── */
+// ─────────────────────────────────────────────────────────────────────────────
+// What changed:
+//   BEFORE — the panel owned its own useState+useEffect and called
+//            fetchDcfValuation() directly. Every mount = fresh network request,
+//            the React Query cache in useDcfAnalysis was never consulted.
+//
+//   AFTER  — the panel delegates to useDcfAnalysis (which owns the cache) and
+//            useDcfHistory (now also cached). On a return visit both resolve
+//            from cache instantly with no loading state shown.
+//
+// What did NOT change:
+//   - All rendered JSX is pixel-identical to the original
+//   - recompute behaviour: still calls backend with force=true, history reloads
+//   - All prop and callback signatures
+// ─────────────────────────────────────────────────────────────────────────────
+
+/* ── Skeleton tile ────────────────────────────────────────────────────────── */
 function MetricSkeleton() {
   return (
     <div className="glass-stat space-y-3">
@@ -28,7 +43,7 @@ function MetricSkeleton() {
   );
 }
 
-/* ── History row (grid-based, no shadcn Table) ──────────────── */
+/* ── History row ──────────────────────────────────────────────────────────── */
 function HistoryRow({
   cells,
   isHeader,
@@ -55,65 +70,55 @@ function HistoryRow({
   );
 }
 
-/* ── Main component ─────────────────────────────────────────── */
+/* ── Main component ───────────────────────────────────────────────────────── */
 export function DcfPanel({ symbol }: { symbol: string }) {
 
-  /* ── All hooks (logic unchanged) ─────────────────────────── */
-  const [loading,         setLoading]         = useState(true);
-  const [data,            setData]            = useState<DcfResponse | null>(null);
-  const [error,           setError]           = useState<string | null>(null);
+  // ── Data hooks ──────────────────────────────────────────────────────────
+  // useDcfAnalysis owns the React Query cache. First visit fetches; every
+  // subsequent visit (including back-navigation) resolves from cache instantly.
+  const {
+    data,
+    loading,
+    error,
+    recompute,
+  } = useDcfAnalysis(symbol);
+
+  const {
+    loading:  loadingHistory,
+    error:    historyError,
+    history,
+    reload:   reloadHistory,
+  } = useDcfHistory(symbol);
+
+  // ── Local UI state (unchanged) ───────────────────────────────────────────
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [recomputing,     setRecomputing]     = useState(false);
 
-  const {
-    loading: loadingHistory,
-    error:   historyError,
-    history,
-    reload:  reloadHistory,
-  } = useDcfHistory(symbol);
-
-  const load = useCallback(
-    async (force = false) => {
-      setLoading(true);
-      setError(null);
-      try {
-        setData(await fetchDcfValuation(symbol, { force }));
-      } catch (e: any) {
-        setError(e?.message ?? "Failed to load DCF");
-        setData(null);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [symbol],
-  );
-
-  useEffect(() => { void load(false); }, [load]);
-
+  // ── Recompute handler ────────────────────────────────────────────────────
+  // Calls recompute() (which sends force=true to backend and updates cache),
+  // then reloads history so the new run appears in the table.
   const handleRecompute = useCallback(async () => {
     setRecomputing(true);
     try {
-      await load(true);
+      await recompute();
       await reloadHistory();
     } finally {
       setRecomputing(false);
     }
-  }, [load, reloadHistory]);
+  }, [recompute, reloadHistory]);
 
-  const v            = data?.valuation;
+  const v           = data?.valuation;
   const applicability = data?.applicability;
-  const curr         = v?.currency ?? "USD";
+  const curr        = v?.currency ?? "USD";
 
-  /* ── Summary section ─────────────────────────────────────── */
+  /* ── Summary section ──────────────────────────────────────────────────── */
   const summary = useMemo(() => (
     <div className="glass-panel p-8 relative overflow-hidden">
-      {/* Top accent line */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0 h-px"
         style={{ background: "linear-gradient(90deg, transparent, rgba(99,102,241,0.5) 40%, rgba(139,92,246,0.3) 70%, transparent)" }}
         aria-hidden="true"
       />
-
       <SectionHeader
         title="Discounted Cash Flow (DCF)"
         subtitle="Cash-flow based intrinsic value with full transparency"
@@ -132,7 +137,6 @@ export function DcfPanel({ symbol }: { symbol: string }) {
           </button>
         }
       />
-
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <MetricSkeleton /><MetricSkeleton /><MetricSkeleton />
@@ -158,7 +162,7 @@ export function DcfPanel({ symbol }: { symbol: string }) {
     </div>
   ), [loading, v, curr, recomputing, handleRecompute]);
 
-  /* ── How We Arrived section ──────────────────────────────── */
+  /* ── How We Arrived section ───────────────────────────────────────────── */
   const howArrived = useMemo(() => (
     <div className="glass-panel p-8">
       <SectionHeader
@@ -184,7 +188,7 @@ export function DcfPanel({ symbol }: { symbol: string }) {
     </div>
   ), [loading, v, curr]);
 
-  /* ── Suitability section ─────────────────────────────────── */
+  /* ── Suitability section ──────────────────────────────────────────────── */
   const suitability = useMemo(() => {
     const flagCount = applicability?.flags?.length ?? 0;
     return (
@@ -208,7 +212,6 @@ export function DcfPanel({ symbol }: { symbol: string }) {
             </button>
           }
         />
-
         {loading ? (
           <div className="h-6 w-64 rounded-full bg-white/10 glass-shimmer" />
         ) : (
@@ -228,7 +231,6 @@ export function DcfPanel({ symbol }: { symbol: string }) {
             )}
           </div>
         )}
-
         {showDiagnostics && (
           <div className="mt-6 pt-6 border-t border-white/5 animate-fade-up">
             <DiagnosticsList items={applicability?.flags} />
@@ -238,11 +240,10 @@ export function DcfPanel({ symbol }: { symbol: string }) {
     );
   }, [loading, applicability, showDiagnostics]);
 
-  /* ── History section ─────────────────────────────────────── */
+  /* ── History section ──────────────────────────────────────────────────── */
   const historyCard = useMemo(() => {
-    const items = history?.items ?? [];
+    const items   = history?.items ?? [];
     const headers = ["Date", "Terminal", "Intrinsic / Share", "WACC", "Enterprise", "Score", "Category"];
-
     return (
       <div className="glass-panel p-8">
         <SectionHeader
@@ -259,7 +260,6 @@ export function DcfPanel({ symbol }: { symbol: string }) {
             ) : undefined
           }
         />
-
         {loadingHistory ? (
           <div className="space-y-2">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -283,12 +283,12 @@ export function DcfPanel({ symbol }: { symbol: string }) {
                 key={`${r.runAt}-${idx}`}
                 cells={[
                   fmtDateTime(r.runAt),
-                  r.terminalMethod               ?? "—",
+                  r.terminalMethod                     ?? "—",
                   fmtCurrency(r.intrinsicValuePerShare ?? null, curr),
-                  fmtPct(r.waccUsed              ?? null),
-                  fmtCurrency(r.enterpriseValue  ?? null, curr),
-                  fmtInt(r.score                 ?? null),
-                  r.category                     ?? "—",
+                  fmtPct(r.waccUsed                    ?? null),
+                  fmtCurrency(r.enterpriseValue        ?? null, curr),
+                  fmtInt(r.score                       ?? null),
+                  r.category                           ?? "—",
                 ]}
               />
             ))}
@@ -298,7 +298,7 @@ export function DcfPanel({ symbol }: { symbol: string }) {
     );
   }, [history, loadingHistory, historyError, reloadHistory, curr]);
 
-  /* ── Render ──────────────────────────────────────────────── */
+  /* ── Render ───────────────────────────────────────────────────────────── */
   return (
     <div className="space-y-6 animate-fade-up">
       {error && (

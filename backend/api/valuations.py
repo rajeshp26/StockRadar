@@ -49,6 +49,7 @@ def _normalize_symbol(symbol: str) -> str:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid symbol format.")
     return s
 
+# ── Rule #1 ───────────────────────────────────────────────────────────────────
 
 @router.post(
     "/{symbol}/rule1",
@@ -80,6 +81,27 @@ async def compute_rule1_valuation(
             detail="Valuation unavailable due to missing market data or financials.",
         ) from e
 
+@router.get(
+    "/{symbol}/rule1/history",
+    summary="Recent Rule #1 valuation runs. Returns empty list when none exist.",
+)
+@limiter.limit("30/minute")
+async def get_rule1_history(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+):
+    try:
+        sym = _normalize_symbol(symbol)
+        items = await valuation_service.repo.get_rule1_history(sym)
+        return {"symbol": sym, "items": items or []}
+    except Exception:
+        # fail-safe: never break UI — mirrors DCF and DDM history behaviour
+        return {"symbol": (symbol or "").strip().upper(), "items": []}
+
+
+# ── DDM ───────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/{symbol}/ddm",
@@ -115,6 +137,33 @@ async def compute_ddm_valuation(
             detail="DDM valuation unavailable due to missing dividend or financial data.",
         ) from e
 
+
+@router.get(
+    "/{symbol}/ddm/history",
+    summary="Recent DDM valuation runs (method-specific). Returns empty list when none exist.",
+)
+@limiter.limit("30/minute")
+async def get_ddm_history(
+    request: Request,
+    symbol: str,
+    variant: str = Query(default="gordon", description="gordon | two_stage"),
+    user=Depends(get_current_user_dep),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+):
+    try:
+        sym = _normalize_symbol(symbol)
+        v = (variant or "gordon").strip().lower()
+        if v not in {"gordon", "two_stage"}:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid variant. Use gordon|two_stage.")
+        method = "ddm_gordon" if v == "gordon" else "ddm_two_stage"
+        items = await valuation_service.repo.get_ddm_history(sym, method=method)
+        return {"symbol": sym, "items": items or []}
+    except Exception:
+        # fail-safe: never break UI
+        return {"symbol": (symbol or "").strip().upper(), "items": []}
+
+
+# ── DCF ───────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/{symbol}/dcf",

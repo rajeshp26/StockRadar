@@ -1,5 +1,6 @@
-// src/features/watchlists/hooks/useWatchlist.ts
+// web/src/features/watchlists/hooks/useWatchlist.ts
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServices } from "@/shared/contexts/ServiceContext";
 import {
   StockPriceInfo,
@@ -9,125 +10,129 @@ import {
 } from "../types/watchlist.types";
 import { useAuth } from "@/providers/auth-provider";
 import { useToast } from "@/hooks/use-toast";
+import { QK } from "@/lib/query-keys";
+import { STALE, GC } from "@/lib/query-client";
 
 interface UseWatchlistOptions {
   /**
    * Initial watchlist data provided by parent component.
-   * When provided, the hook skips its own initial fetch.
+   * When provided, the hook pre-populates the React Query cache immediately
+   * so the component renders with data on the very first paint.
    */
   initialWatchlist?: WatchlistWithStocks;
 }
 
 export function useWatchlist(options?: UseWatchlistOptions) {
-  // ── Core watchlist state (existing) ──────────────────────────────────────
-  const [stocks,      setStocks]      = useState<StockPriceInfo[]>([]);
-  const [isLoading,   setIsLoading]   = useState(!options?.initialWatchlist);
-  const [watchlistId, setWatchlistId] = useState<number | null>(null);
-  const [watchlistName, setWatchlistName] = useState<string>("My Watchlist");
-  const [error,       setError]       = useState<Error | null>(null);
-  const [streamEpoch, setStreamEpoch] = useState(0);
-
-  // ── Multi-watchlist state (new) ───────────────────────────────────────────
-  const [allWatchlists,    setAllWatchlists]    = useState<WatchlistMeta[]>([]);
-  const [listsLoading,     setListsLoading]     = useState(false);
-  const [isCreating,       setIsCreating]       = useState(false);
-  const [isRenaming,       setIsRenaming]       = useState(false);
-  const [isDeleting,       setIsDeleting]       = useState(false);
-  const [isSwitching,      setIsSwitching]      = useState(false);
-
-  const { watchlistService } = useServices();
+  const { watchlistService }  = useServices();
   const { firebaseUser: user } = useAuth();
-  const { toast } = useToast();
+  const { toast }             = useToast();
+  const queryClient           = useQueryClient();
 
-  const hasInitializedRef    = useRef(false);
-  const hasAutoEnrichedRef   = useRef(false);
-  const eventSourceRef       = useRef<EventSource | null>(null);
-  const reconnectTimeoutRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ── Derived cap state ─────────────────────────────────────────────────────
-  const stockCount       = stocks.length;
-  const isWatchlistFull  = stockCount >= WATCHLIST_LIMITS.MAX_STOCKS;
-  const isListCapReached = allWatchlists.length >= WATCHLIST_LIMITS.MAX_WATCHLISTS;
-
-  // ── Fetch single watchlist structure (by ID or default) ──────────────────
-  const fetchWatchlistById = useCallback(
-    async (id: number) => {
-      if (!user) return;
-      try {
-        setIsLoading(true);
-        setError(null);
-        const data = await watchlistService.getWatchlistStructureById(id);
-        setStocks(data.stocks ?? []);
-        setWatchlistId(data.watchlist_id);
-        setWatchlistName(data.name ?? "My Watchlist");
-      } catch (err) {
-        const e = err instanceof Error ? err : new Error(String(err));
-        setError(e);
-        toast({ title: "Error", description: "Failed to load watchlist.", variant: "destructive" });
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [user, watchlistService, toast],
+  // ── Determine the initial active query ID ──────────────────────────────────
+  // "default" means "fetch the user's default watchlist".
+  // After fetching we learn the real numeric ID and store it in watchlistId state.
+  const initialId = useMemo<number | "default">(
+    () => options?.initialWatchlist?.watchlist_id ?? "default",
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [], // intentionally stable — we only read this on mount
   );
 
-  const fetchWatchlist = useCallback(async () => {
-    if (!user) return;
-    try {
-      setIsLoading(true);
-      setError(null);
-      const data = await watchlistService.getDefaultWatchlistStructure();
-      setStocks(data.stocks ?? []);
-      setWatchlistId(data.watchlist_id);
-      setWatchlistName(data.name ?? "My Watchlist");
-    } catch (err) {
-      const e = err instanceof Error ? err : new Error(String(err));
-      setError(e);
-      toast({ title: "Error", description: "Failed to load watchlist.", variant: "destructive" });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [user, watchlistService, toast]);
+  const [activeQueryId, setActiveQueryId] = useState<number | "default">(initialId);
 
-  // ── Fetch all watchlists (lightweight, for switcher) ─────────────────────
-  const fetchAllWatchlists = useCallback(async () => {
-    if (!user) return;
-    try {
-      setListsLoading(true);
-      const lists = await watchlistService.getAllWatchlists();
-      setAllWatchlists(lists);
-    } catch (err) {
-      // Non-critical — don't surface to user if switcher fails
-      console.warn("[useWatchlist] Failed to fetch all watchlists:", err);
-    } finally {
-      setListsLoading(false);
+  // ── Pre-populate cache from initialWatchlist (synchronous path) ───────────
+  // This runs before any useEffect, so the query starts with data already
+  // in cache — no loading state, no flicker on the first render.
+  if (options?.initialWatchlist) {
+    const cacheKey = QK.watchlist(options.initialWatchlist.watchlist_id);
+    if (!queryClient.getQueryData(cacheKey)) {
+      queryClient.setQueryData<WatchlistWithStocks>(cacheKey, options.initialWatchlist);
     }
-  }, [user, watchlistService]);
+  }
 
-  // ── Initialization (existing logic preserved exactly) ────────────────────
+  // ── Watchlist structure query ───────────────────────────────────────────────
+  const structureQuery = useQuery<WatchlistWithStocks, Error>({
+    queryKey: QK.watchlist(activeQueryId),
+    queryFn:  () =>
+      activeQueryId === "default"
+        ? watchlistService.getDefaultWatchlistStructure()
+        : watchlistService.getWatchlistStructureById(activeQueryId as number),
+    enabled:   !!user,
+    staleTime: STALE.WATCHLIST,
+    gcTime:    GC.WATCHLIST,
+    retry:     1,
+  });
+
+  // ── All watchlists query (lightweight, for the switcher) ─────────────────
+  const allWatchlistsQuery = useQuery<WatchlistMeta[], Error>({
+    queryKey: QK.watchlists(),
+    queryFn:  () => watchlistService.getAllWatchlists(),
+    enabled:  !!user,
+    staleTime: STALE.LISTS,
+    gcTime:    GC.LISTS,
+    retry:     1,
+  });
+
+  // ── Local stocks state ────────────────────────────────────────────────────
+  //
+  // WHY local state instead of reading structureQuery.data directly?
+  // The SSE stream patches individual stock prices in-place. These patches
+  // are ephemeral (not written back to the server) and must survive
+  // re-renders without triggering full re-fetches. Local state lets SSE
+  // update prices freely while React Query owns the authoritative structure.
+  //
+  // KEY PERFORMANCE DETAIL:
+  // The useState initializer runs synchronously on mount and reads from the
+  // React Query cache. On a return visit (cache is populated), stocks, name,
+  // and watchlistId are all populated on the FIRST render — zero loading state,
+  // zero flicker, zero network request needed.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  const [stocks, setStocks] = useState<StockPriceInfo[]>(() => {
+    const cached = queryClient.getQueryData<WatchlistWithStocks>(QK.watchlist(initialId));
+    return cached?.stocks ?? options?.initialWatchlist?.stocks ?? [];
+  });
+
+  const [watchlistId, setWatchlistId] = useState<number | null>(() => {
+    const cached = queryClient.getQueryData<WatchlistWithStocks>(QK.watchlist(initialId));
+    return cached?.watchlist_id ?? options?.initialWatchlist?.watchlist_id ?? null;
+  });
+
+  const [watchlistName, setWatchlistName] = useState<string>(() => {
+    const cached = queryClient.getQueryData<WatchlistWithStocks>(QK.watchlist(initialId));
+    return cached?.name ?? options?.initialWatchlist?.name ?? "My Watchlist";
+  });
+
+  // ── Sync query data → local state ────────────────────────────────────────
+  // Runs whenever the query data changes (initial fetch, invalidation after
+  // mutation, or watchlist switch). Resets hasAutoEnrichedRef so the SSE
+  // can re-enrich the new list's prices.
   useEffect(() => {
-    if (hasInitializedRef.current) return;
+    if (!structureQuery.data) return;
+    setStocks(structureQuery.data.stocks ?? []);
+    setWatchlistId(structureQuery.data.watchlist_id);
+    setWatchlistName(structureQuery.data.name ?? "My Watchlist");
+    hasAutoEnrichedRef.current = false;
+  }, [structureQuery.data]);
 
-    if (options?.initialWatchlist) {
-      setWatchlistId(options.initialWatchlist.watchlist_id);
-      setStocks(options.initialWatchlist.stocks ?? []);
-      setWatchlistName(options.initialWatchlist.name ?? "My Watchlist");
-      setIsLoading(false);
-      hasInitializedRef.current = true;
-      void fetchAllWatchlists();
-      return;
-    }
+  // ── Mutation loading states (unchanged) ───────────────────────────────────
+  const [isCreating,  setIsCreating]  = useState(false);
+  const [isRenaming,  setIsRenaming]  = useState(false);
+  const [isDeleting,  setIsDeleting]  = useState(false);
+  const [isSwitching, setIsSwitching] = useState(false);
+  const [streamEpoch, setStreamEpoch] = useState(0);
 
-    if (!user) return;
+  // ── SSE refs (completely unchanged) ───────────────────────────────────────
+  const hasAutoEnrichedRef  = useRef(false);
+  const eventSourceRef      = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    void (async () => {
-      await fetchWatchlist();
-      await fetchAllWatchlists();
-      hasInitializedRef.current = true;
-    })();
-  }, [options?.initialWatchlist, user, fetchWatchlist, fetchAllWatchlists]);
+  // ── Derived cap state ──────────────────────────────────────────────────────
+  const stockCount       = stocks.length;
+  const isWatchlistFull  = stockCount >= WATCHLIST_LIMITS.MAX_STOCKS;
+  const allWatchlists    = allWatchlistsQuery.data ?? [];
+  const isListCapReached = allWatchlists.length >= WATCHLIST_LIMITS.MAX_WATCHLISTS;
 
-  // ── SSE setup (existing logic unchanged) ─────────────────────────────────
+  // ── SSE setup (COMPLETELY UNCHANGED — zero logic modifications) ───────────
   useEffect(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -173,6 +178,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
           eventSourceRef.current?.close();
           eventSourceRef.current = null;
           if (cancelled) return;
+
           reconnectTimeoutRef.current = setTimeout(() => {
             if (cancelled) return;
             if (user && watchlistId) void setupStream();
@@ -212,7 +218,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     };
   }, [user, watchlistId, watchlistService, streamEpoch]);
 
-  // ── Prices map (existing, unchanged) ─────────────────────────────────────
+  // ── Prices map (unchanged) ─────────────────────────────────────────────────
   const prices = useMemo(() => {
     const map: Record<string, number> = {};
     for (const s of stocks) {
@@ -232,16 +238,18 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     [prices],
   );
 
-  // ── Existing mutations (unchanged logic, cap check added to addStock) ─────
+  // ── refresh (replaces fetchWatchlist) ────────────────────────────────────
+  const refresh = useCallback(async (): Promise<void> => {
+    await queryClient.invalidateQueries({ queryKey: QK.watchlist(activeQueryId) });
+  }, [queryClient, activeQueryId]);
 
+  // ── addStock ───────────────────────────────────────────────────────────────
   const addStock = async (
-    symbol: string,
-    targetBuy: number | null,
+    symbol:     string,
+    targetBuy:  number | null,
     targetSell: number | null,
   ) => {
     if (!watchlistId) return;
-
-    // Client-side cap guard (UX layer — backend enforces independently)
     if (isWatchlistFull) {
       toast({
         title:       "Watchlist Full",
@@ -250,7 +258,6 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       });
       return;
     }
-
     try {
       await watchlistService.addStock({
         watchlist_id: watchlistId,
@@ -258,10 +265,11 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         target_buy:   targetBuy,
         target_sell:  targetSell,
       });
-      await fetchWatchlist();
-      // Update the stock_count in allWatchlists optimistically
-      setAllWatchlists((prev) =>
-        prev.map((w) =>
+      // Invalidate structure so the new stock appears after SSE re-enriches
+      await queryClient.invalidateQueries({ queryKey: QK.watchlist(activeQueryId) });
+      // Optimistic count update on the switcher list
+      queryClient.setQueryData<WatchlistMeta[]>(QK.watchlists(), (prev) =>
+        prev?.map((w) =>
           w.watchlist_id === watchlistId
             ? { ...w, stock_count: w.stock_count + 1 }
             : w,
@@ -270,7 +278,6 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       setStreamEpoch((x) => x + 1);
       toast({ title: "Stock Added" });
     } catch (err: any) {
-      // Propagate 409 cap error from backend verbatim
       const detail = err?.response?.data?.detail;
       toast({
         title:       "Error",
@@ -280,9 +287,10 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     }
   };
 
+  // ── updateTargets ──────────────────────────────────────────────────────────
   const updateTargets = async (
-    itemId: number,
-    targetBuy: number | null,
+    itemId:     number,
+    targetBuy:  number | null,
     targetSell: number | null,
   ) => {
     try {
@@ -291,10 +299,22 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         target_buy:  targetBuy,
         target_sell: targetSell,
       });
+      // Optimistic local update
       setStocks((prev) =>
-        prev.map((s) =>
-          s.id === itemId ? { ...s, targetBuy, targetSell } : s,
-        ),
+        prev.map((s) => (s.id === itemId ? { ...s, targetBuy, targetSell } : s)),
+      );
+      // Keep query cache in sync so a subsequent invalidation returns correct data
+      queryClient.setQueryData<WatchlistWithStocks>(
+        QK.watchlist(activeQueryId),
+        (prev) =>
+          prev
+            ? {
+                ...prev,
+                stocks: prev.stocks.map((s) =>
+                  s.id === itemId ? { ...s, targetBuy, targetSell } : s,
+                ),
+              }
+            : prev,
       );
       toast({ title: "Targets Updated" });
     } catch (err) {
@@ -302,12 +322,22 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     }
   };
 
+  // ── removeStock ────────────────────────────────────────────────────────────
   const removeStock = async (itemId: number) => {
     try {
+      // Optimistic removal (instant UI response)
       setStocks((prev) => prev.filter((s) => s.id !== itemId));
       await watchlistService.removeStock(itemId);
-      setAllWatchlists((prev) =>
-        prev.map((w) =>
+      // Keep cache consistent
+      queryClient.setQueryData<WatchlistWithStocks>(
+        QK.watchlist(activeQueryId),
+        (prev) =>
+          prev
+            ? { ...prev, stocks: prev.stocks.filter((s) => s.id !== itemId) }
+            : prev,
+      );
+      queryClient.setQueryData<WatchlistMeta[]>(QK.watchlists(), (prev) =>
+        prev?.map((w) =>
           w.watchlist_id === watchlistId
             ? { ...w, stock_count: Math.max(0, w.stock_count - 1) }
             : w,
@@ -316,30 +346,37 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       setStreamEpoch((x) => x + 1);
       toast({ title: "Stock Removed" });
     } catch (err) {
-      await fetchWatchlist();
+      // Revert by re-fetching the authoritative server state
+      await queryClient.invalidateQueries({ queryKey: QK.watchlist(activeQueryId) });
       toast({ title: "Error", description: "Could not remove stock.", variant: "destructive" });
     }
   };
 
-  // ── New multi-watchlist operations ────────────────────────────────────────
-
-  /** Switch the active watchlist. Restarts SSE for the new watchlist. */
+  // ── switchWatchlist ────────────────────────────────────────────────────────
   const switchWatchlist = useCallback(
     async (id: number) => {
       if (id === watchlistId || isSwitching) return;
       setIsSwitching(true);
       hasAutoEnrichedRef.current = false;
       try {
-        await fetchWatchlistById(id);
-        setStreamEpoch((x) => x + 1); // restart SSE
+        setActiveQueryId(id);
+        // fetchQuery: returns from cache instantly if fresh, otherwise fetches.
+        // Either way, resolves before we clear isSwitching — the overlay
+        // dismisses only when data is guaranteed available.
+        await queryClient.fetchQuery({
+          queryKey: QK.watchlist(id),
+          queryFn:  () => watchlistService.getWatchlistStructureById(id),
+          staleTime: STALE.WATCHLIST,
+        });
+        setStreamEpoch((x) => x + 1);
       } finally {
         setIsSwitching(false);
       }
     },
-    [watchlistId, isSwitching, fetchWatchlistById],
+    [watchlistId, isSwitching, queryClient, watchlistService],
   );
 
-  /** Create a new watchlist and switch to it. */
+  // ── createWatchlist ────────────────────────────────────────────────────────
   const createWatchlist = useCallback(
     async (name: string) => {
       if (isListCapReached) {
@@ -353,11 +390,23 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       setIsCreating(true);
       try {
         const created = await watchlistService.createWatchlist({ name });
-        await fetchAllWatchlists(); // refresh the full list with correct counts
-        // Switch to the new (empty) list
-        setWatchlistId(created.watchlist_id);
-        setWatchlistName(created.name);
-        setStocks([]);
+        // Seed an empty structure in cache for the new list immediately
+        // so switching to it is instant with no loading state
+        const emptyStructure: WatchlistWithStocks = {
+          watchlist_id: created.watchlist_id,
+          name:         created.name,
+          is_default:   false,
+          stock_count:  0,
+          stocks:       [],
+        };
+        queryClient.setQueryData<WatchlistWithStocks>(
+          QK.watchlist(created.watchlist_id),
+          emptyStructure,
+        );
+        // Refresh the switcher list
+        await queryClient.invalidateQueries({ queryKey: QK.watchlists() });
+        // Switch to the new list
+        setActiveQueryId(created.watchlist_id);
         setStreamEpoch((x) => x + 1);
         toast({ title: "Watchlist Created", description: `"${created.name}" is ready.` });
       } catch (err: any) {
@@ -371,10 +420,10 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         setIsCreating(false);
       }
     },
-    [isListCapReached, watchlistService, fetchAllWatchlists, toast],
+    [isListCapReached, watchlistService, queryClient, toast],
   );
 
-  /** Rename the active watchlist. */
+  // ── renameWatchlist ────────────────────────────────────────────────────────
   const renameWatchlist = useCallback(
     async (newName: string) => {
       if (!watchlistId) return;
@@ -382,12 +431,17 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       if (!trimmed || trimmed === watchlistName) return;
 
       const previousName = watchlistName;
-      // Optimistic update
+
+      // Optimistic updates in local state + both caches
       setWatchlistName(trimmed);
-      setAllWatchlists((prev) =>
-        prev.map((w) =>
+      queryClient.setQueryData<WatchlistMeta[]>(QK.watchlists(), (prev) =>
+        prev?.map((w) =>
           w.watchlist_id === watchlistId ? { ...w, name: trimmed } : w,
         ),
+      );
+      queryClient.setQueryData<WatchlistWithStocks>(
+        QK.watchlist(activeQueryId),
+        (prev) => (prev ? { ...prev, name: trimmed } : prev),
       );
 
       setIsRenaming(true);
@@ -398,12 +452,16 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         });
         toast({ title: "Watchlist Renamed" });
       } catch (err: any) {
-        // Revert on failure
+        // Revert all optimistic updates on failure
         setWatchlistName(previousName);
-        setAllWatchlists((prev) =>
-          prev.map((w) =>
+        queryClient.setQueryData<WatchlistMeta[]>(QK.watchlists(), (prev) =>
+          prev?.map((w) =>
             w.watchlist_id === watchlistId ? { ...w, name: previousName } : w,
           ),
+        );
+        queryClient.setQueryData<WatchlistWithStocks>(
+          QK.watchlist(activeQueryId),
+          (prev) => (prev ? { ...prev, name: previousName } : prev),
         );
         const detail = err?.response?.data?.detail;
         toast({
@@ -415,29 +473,38 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         setIsRenaming(false);
       }
     },
-    [watchlistId, watchlistName, watchlistService, toast],
+    [watchlistId, watchlistName, watchlistService, queryClient, activeQueryId, toast],
   );
 
-  /** Delete a watchlist (cannot delete the default). Switches to default after. */
+  // ── deleteWatchlist ────────────────────────────────────────────────────────
   const deleteWatchlist = useCallback(
     async (id: number) => {
       const target = allWatchlists.find((w) => w.watchlist_id === id);
       if (!target) return;
       if (target.is_default) {
-        toast({ title: "Cannot Delete", description: "The default watchlist cannot be deleted.", variant: "destructive" });
+        toast({
+          title:       "Cannot Delete",
+          description: "The default watchlist cannot be deleted.",
+          variant:     "destructive",
+        });
         return;
       }
-
       setIsDeleting(true);
       try {
         await watchlistService.deleteWatchlist(id);
-        // If we deleted the active one, switch to default
+        // Evict the deleted list from cache
+        queryClient.removeQueries({ queryKey: QK.watchlist(id) });
+        // If we deleted the active list, fall back to the default
         if (id === watchlistId) {
-          await fetchWatchlist(); // fallback to default
+          setActiveQueryId("default");
+          await queryClient.invalidateQueries({ queryKey: QK.watchlist("default") });
           setStreamEpoch((x) => x + 1);
         }
-        await fetchAllWatchlists();
-        toast({ title: "Watchlist Deleted", description: `"${target.name}" has been deleted.` });
+        await queryClient.invalidateQueries({ queryKey: QK.watchlists() });
+        toast({
+          title:       "Watchlist Deleted",
+          description: `"${target.name}" has been deleted.`,
+        });
       } catch (err: any) {
         const detail = err?.response?.data?.detail;
         toast({
@@ -449,28 +516,27 @@ export function useWatchlist(options?: UseWatchlistOptions) {
         setIsDeleting(false);
       }
     },
-    [allWatchlists, watchlistId, watchlistService, fetchWatchlist, fetchAllWatchlists, toast],
+    [allWatchlists, watchlistId, watchlistService, queryClient, toast],
   );
 
-  // ── Return value ──────────────────────────────────────────────────────────
+  // ── Return value — contract is IDENTICAL to the original ─────────────────
   return {
-    // ── Existing return values (UNCHANGED — all callers unaffected) ─────────
+    // ── Existing (UNCHANGED — all callers unaffected) ─────────────────────
     stocks,
-    isLoading,
-    loading:     isLoading,   // alias
-    error,
+    isLoading:   structureQuery.isPending,
+    loading:     structureQuery.isPending,   // alias
+    error:       structureQuery.error ?? null,
     watchlistId,
     prices,
     getPrice,
-    refresh:     fetchWatchlist,
+    refresh,
     addStock,
     updateTargets,
     removeStock,
-
-    // ── New return values ──────────────────────────────────────────────────
+    // ── New (unchanged names and types) ──────────────────────────────────
     watchlistName,
     allWatchlists,
-    listsLoading,
+    listsLoading: allWatchlistsQuery.isPending,
     stockCount,
     isWatchlistFull,
     isListCapReached,
