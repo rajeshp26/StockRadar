@@ -471,6 +471,26 @@ class ValuationRepository:
         assumptions = (dq.get("inputDecisions") or {}).get("assumptions", {}) if isinstance(dq, dict) else {}
         return {"applicability": app, "dataQuality": dq, "assumptions": assumptions}
 
+    async def get_company_summary_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Latest company_summary row.
+        Used as shares_outstanding fallback in DCF when
+        income_statements.shares_outstanding_diluted is not populated.
+        """
+        try:
+            resp = (
+                supabase.table("company_summary")
+                .select("snapshot_date, shares_outstanding, implied_shares_outstanding, trailing_eps")
+                .eq("company_id", company_id)
+                .order("snapshot_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return _first(resp.data)
+        except Exception as e:
+            logger.error("get_company_summary_latest failed: %s", e)
+            return None
+
     # ── Persistence ────────────────────────────────────────────────────────────
 
     async def insert_valuation_run(self, company_id: int, run: Dict[str, Any], method: str = "rule1") -> None:

@@ -4,34 +4,17 @@ import { useMemo, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { useDcfAnalysis } from "../hooks/useDcfAnalysis";
 import { useDcfHistory } from "../hooks/useDcfHistory";
-import { RefreshCw, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { RefreshCw, AlertTriangle, Sparkles } from "lucide-react";
 import {
   Metric,
-  ScoreBar,
   DiagnosticsList,
-  FlagPill,
   SectionHeader,
+  SuitabilitySidebar,
   fmtCurrency,
   fmtPct,
   fmtInt,
   fmtDateTime,
 } from "./shared-ui";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// What changed:
-//   BEFORE — the panel owned its own useState+useEffect and called
-//            fetchDcfValuation() directly. Every mount = fresh network request,
-//            the React Query cache in useDcfAnalysis was never consulted.
-//
-//   AFTER  — the panel delegates to useDcfAnalysis (which owns the cache) and
-//            useDcfHistory (now also cached). On a return visit both resolve
-//            from cache instantly with no loading state shown.
-//
-// What did NOT change:
-//   - All rendered JSX is pixel-identical to the original
-//   - recompute behaviour: still calls backend with force=true, history reloads
-//   - All prop and callback signatures
-// ─────────────────────────────────────────────────────────────────────────────
 
 /* ── Skeleton tile ────────────────────────────────────────────────────────── */
 function MetricSkeleton() {
@@ -43,14 +26,35 @@ function MetricSkeleton() {
   );
 }
 
+
+/* ── AI analyst note ──────────────────────────────────────────────────────── */
+function AnalystNote({ summary, loading }: { summary?: string | null; loading: boolean }) {
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-white/6 bg-white/3 px-5 py-4 space-y-2">
+        <div className="h-2 w-20 rounded-full bg-white/8 glass-shimmer" />
+        <div className="h-2 w-full rounded-full bg-white/5 glass-shimmer" />
+        <div className="h-2 w-4/5 rounded-full bg-white/5 glass-shimmer" />
+        <div className="h-2 w-3/5 rounded-full bg-white/5 glass-shimmer" />
+      </div>
+    );
+  }
+  if (!summary) return null;
+  return (
+    <div className="rounded-2xl border border-indigo-500/15 bg-indigo-500/5 px-5 py-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Sparkles className="h-3 w-3 text-indigo-400/70" />
+        <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400/70">
+          AI Suitability Analysis
+        </span>
+      </div>
+      <p className="text-[12px] leading-relaxed text-white/60">{summary}</p>
+    </div>
+  );
+}
+
 /* ── History row ──────────────────────────────────────────────────────────── */
-function HistoryRow({
-  cells,
-  isHeader,
-}: {
-  cells:     React.ReactNode[];
-  isHeader?: boolean;
-}) {
+function HistoryRow({ cells, isHeader }: { cells: React.ReactNode[]; isHeader?: boolean }) {
   return (
     <div
       className={cn(
@@ -72,31 +76,18 @@ function HistoryRow({
 
 /* ── Main component ───────────────────────────────────────────────────────── */
 export function DcfPanel({ symbol }: { symbol: string }) {
-
-  // ── Data hooks ──────────────────────────────────────────────────────────
-  // useDcfAnalysis owns the React Query cache. First visit fetches; every
-  // subsequent visit (including back-navigation) resolves from cache instantly.
-  const {
-    data,
-    loading,
-    error,
-    recompute,
-  } = useDcfAnalysis(symbol);
+  const { data, loading, error, recompute } = useDcfAnalysis(symbol);
 
   const {
-    loading:  loadingHistory,
-    error:    historyError,
+    loading: loadingHistory,
+    error:   historyError,
     history,
-    reload:   reloadHistory,
+    reload:  reloadHistory,
   } = useDcfHistory(symbol);
 
-  // ── Local UI state (unchanged) ───────────────────────────────────────────
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [recomputing,     setRecomputing]     = useState(false);
 
-  // ── Recompute handler ────────────────────────────────────────────────────
-  // Calls recompute() (which sends force=true to backend and updates cache),
-  // then reloads history so the new run appears in the table.
   const handleRecompute = useCallback(async () => {
     setRecomputing(true);
     try {
@@ -107,12 +98,12 @@ export function DcfPanel({ symbol }: { symbol: string }) {
     }
   }, [recompute, reloadHistory]);
 
-  const v           = data?.valuation;
+  const v             = data?.valuation;
   const applicability = data?.applicability;
-  const curr        = v?.currency ?? "USD";
+  const curr          = v?.currency ?? "USD";
 
-  /* ── Summary section ──────────────────────────────────────────────────── */
-  const summary = useMemo(() => (
+  /* ── Combined summary + suitability card ──────────────────────────────── */
+  const summaryCard = useMemo(() => (
     <div className="glass-panel p-8 relative overflow-hidden">
       <div
         className="pointer-events-none absolute inset-x-0 top-0 h-px"
@@ -137,32 +128,68 @@ export function DcfPanel({ symbol }: { symbol: string }) {
           </button>
         }
       />
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MetricSkeleton /><MetricSkeleton /><MetricSkeleton />
+
+      {/* Two-column layout: metrics left, suitability ring right */}
+      <div className="flex flex-col lg:flex-row gap-8">
+        {/* Left: value metrics */}
+        <div className="flex-1">
+          {loading ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <MetricSkeleton /><MetricSkeleton /><MetricSkeleton />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Metric
+                label="Intrinsic Value / Share"
+                value={fmtCurrency(v?.intrinsicValuePerShare ?? null, curr)}
+                accent="indigo"
+              />
+              <Metric
+                label="Current Price"
+                value={fmtCurrency(v?.currentPrice ?? null, curr)}
+              />
+              <Metric
+                label="Upside / Downside"
+                value={fmtPct(v?.upsideDownsidePct ?? null)}
+                accent={(v?.upsideDownsidePct ?? 0) >= 0 ? "emerald" : "rose"}
+              />
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Metric
-            label="Intrinsic Value / Share"
-            value={fmtCurrency(v?.intrinsicValuePerShare ?? null, curr)}
-            accent="indigo"
+
+        {/* Dividers */}
+        <div className="hidden lg:block w-px bg-white/8 self-stretch" />
+        <div className="block lg:hidden h-px bg-white/8" />
+
+        {/* Right: suitability ring */}
+        <div className="flex justify-center lg:justify-end">
+          <SuitabilitySidebar
+            loading={loading}
+            score={applicability?.score}
+            category={applicability?.category}
+            flags={applicability?.flags}
+            showDiagnostics={showDiagnostics}
+            onToggleDiagnostics={() => setShowDiagnostics((s) => !s)}
           />
-          <Metric
-            label="Current Price"
-            value={fmtCurrency(v?.currentPrice ?? null, curr)}
-          />
-          <Metric
-            label="Upside / Downside"
-            value={fmtPct(v?.upsideDownsidePct ?? null)}
-            accent={(v?.upsideDownsidePct ?? 0) >= 0 ? "emerald" : "rose"}
-          />
+        </div>
+      </div>
+
+      {/* AI analyst note — full width below metrics row */}
+      {(loading || applicability?.suitabilitySummary) && (
+        <div className="mt-6">
+          <AnalystNote summary={applicability?.suitabilitySummary} loading={loading} />
+        </div>
+      )}
+      {/* Diagnostics drawer — expands below both columns */}
+      {showDiagnostics && (
+        <div className="mt-6 pt-6 border-t border-white/5 animate-fade-up">
+          <DiagnosticsList items={applicability?.flags} />
         </div>
       )}
     </div>
-  ), [loading, v, curr, recomputing, handleRecompute]);
+  ), [loading, v, curr, recomputing, handleRecompute, applicability, showDiagnostics, applicability?.suitabilitySummary]);
 
-  /* ── How We Arrived section ───────────────────────────────────────────── */
+  /* ── How We Arrived section (unchanged) ───────────────────────────────── */
   const howArrived = useMemo(() => (
     <div className="glass-panel p-8">
       <SectionHeader
@@ -188,59 +215,7 @@ export function DcfPanel({ symbol }: { symbol: string }) {
     </div>
   ), [loading, v, curr]);
 
-  /* ── Suitability section ──────────────────────────────────────────────── */
-  const suitability = useMemo(() => {
-    const flagCount = applicability?.flags?.length ?? 0;
-    return (
-      <div className="glass-panel p-8">
-        <SectionHeader
-          title="Model Suitability"
-          subtitle="How well DCF applies to this stock"
-          action={
-            <button
-              onClick={() => setShowDiagnostics((s) => !s)}
-              className={cn(
-                "glass-btn inline-flex items-center gap-2 px-4 py-2 rounded-xl",
-                "text-[10px] font-black uppercase tracking-widest",
-                showDiagnostics && "bg-white/10 border-white/15",
-              )}
-            >
-              {showDiagnostics
-                ? <><ChevronUp   className="h-3 w-3" /> Hide Diagnostics</>
-                : <><ChevronDown className="h-3 w-3" /> Diagnostics {flagCount > 0 && `(${flagCount})`}</>
-              }
-            </button>
-          }
-        />
-        {loading ? (
-          <div className="h-6 w-64 rounded-full bg-white/10 glass-shimmer" />
-        ) : (
-          <div className="space-y-5">
-            <ScoreBar score={applicability?.score} category={applicability?.category} />
-            {(applicability?.flags?.length ?? 0) > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {applicability!.flags.slice(0, 4).map((f, i) => (
-                  <FlagPill key={`${f.code}-${i}`} text={f.code} />
-                ))}
-                {applicability!.flags.length > 4 && (
-                  <span className="text-xs text-white/30 self-center">
-                    +{applicability!.flags.length - 4} more
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        {showDiagnostics && (
-          <div className="mt-6 pt-6 border-t border-white/5 animate-fade-up">
-            <DiagnosticsList items={applicability?.flags} />
-          </div>
-        )}
-      </div>
-    );
-  }, [loading, applicability, showDiagnostics]);
-
-  /* ── History section ──────────────────────────────────────────────────── */
+  /* ── History section (unchanged) ─────────────────────────────────────── */
   const historyCard = useMemo(() => {
     const items   = history?.items ?? [];
     const headers = ["Date", "Terminal", "Intrinsic / Share", "WACC", "Enterprise", "Score", "Category"];
@@ -307,9 +282,8 @@ export function DcfPanel({ symbol }: { symbol: string }) {
           <p className="text-sm text-white/60">{error}</p>
         </div>
       )}
-      {summary}
+      {summaryCard}
       {howArrived}
-      {suitability}
       <div className="glass-divider" />
       {historyCard}
     </div>

@@ -56,7 +56,8 @@ class Settings(BaseSettings):
     # 🤖 AI & External Providers
     # ============================================
     GEMINI_API_KEY: Optional[str] = Field(default=None, description="Google Gemini API key for stock analysis")
-    
+    # config.py — already has GEMINI_API_KEY, add this next to it:
+    GEMINI_MODEL: str = Field(default="gemini-1.5-flash", description="Gemini model for suitability summaries")
     # ============================================
     # 📊 DEFEAT BETA INTEGRATION
     # ============================================

@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from application.services.ai_service import generate_suitability_summary
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
@@ -535,6 +535,7 @@ class DcfService:
         # Shares outstanding
         shares = overrides.sharesOutstanding
         shares_source = "override.sharesOutstanding" if shares is not None else None
+
         if shares is None:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
@@ -542,7 +543,16 @@ class DcfService:
                 sh = _safe_float(last.get("shares_outstanding_diluted"))
                 if sh is not None and sh > 0:
                     shares = float(sh)
-                    shares_source = "statistics.shares_outstanding_diluted(latest)"
+                    shares_source = "income_statements.shares_outstanding_diluted(latest)"
+                    fallbacks_used = True
+
+        if shares is None:
+            summary = await self.repo.get_company_summary_latest(company_id)
+            if summary:
+                sh = _safe_float(summary.get("shares_outstanding"))
+                if sh is not None and sh > 0:
+                    shares = float(sh)
+                    shares_source = "company_summary.shares_outstanding"
                     fallbacks_used = True
 
         input_decisions["dcf"]["sharesOutstanding"] = {"source": shares_source, "value": shares}
@@ -664,6 +674,29 @@ class DcfService:
         )
         flags.extend(dcf_flags)
 
+        # AI-generated plain-English summary (stored once; returned free on cached reads)
+        suitability_summary = await generate_suitability_summary(
+            symbol=symbol,
+            method="dcf",
+            score=int(dcf_score),
+            category=dcf_category,
+            flags=[f.dict() for f in flags],
+            evidence=dcf_evidence,
+            valuation_inputs={
+                "currency":               currency,
+                "baseFcf":                float(base_fcf_value) if base_fcf_value is not None else None,
+                "forecastYears":          int(n),
+                "waccUsed":               float(wacc) if wacc else None,
+                "terminalMethod":         terminal_method,
+                "terminalGrowthRateUsed": float(terminal_g_used) if terminal_g_used is not None else None,
+                "enterpriseValue":        float(enterprise_value) if enterprise_value is not None else None,
+                "intrinsicValuePerShare": float(intrinsic_ps) if intrinsic_ps is not None else None,
+                "currentPrice":           current_price,
+                "upsideDownsidePct":      upside,
+            },
+            input_decisions=input_decisions,
+        )
+
         if intrinsic_ps is None:
             flags.append(DiagnosticFlag(
                 code="DCF-NO-PER-SHARE",
@@ -737,6 +770,7 @@ class DcfService:
                 "score": dcf_score,
                 "category": dcf_category,
                 "flags": [f.dict() for f in flags],
+                "suitabilitySummary": suitability_summary,   # ← NEW
             },
             "dataQuality": {
                 "freshnessDays": {"lastComputedAt": now_iso},
@@ -764,7 +798,12 @@ class DcfService:
 
         return DcfResponse(
             valuation=valuation,
-            applicability=Applicability(score=dcf_score, category=dcf_category, flags=flags),
+            applicability=Applicability(
+            score=dcf_score,
+            category=dcf_category,
+            flags=flags,
+            suitabilitySummary=suitability_summary,  # ← NEW
+            ),
             dataQuality=DataQuality(
                 freshnessDays={"lastComputedAt": now_iso},
                 fallbacksUsed=bool(fallbacks_used),

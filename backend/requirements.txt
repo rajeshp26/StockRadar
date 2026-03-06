@@ -14,3 +14,5 @@ pandas>=2.3.3
 requests
 defeatbeta-api>=0.0.6
 lxml>=4.9.3
+google-generativeai
+fsspec<=2025.10.0

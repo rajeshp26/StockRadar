@@ -1,0 +1,860 @@
+# backend/application/services/ai_service.py
+"""
+AI service — generates plain-English suitability summaries via Gemini REST API.
+
+Fixes applied (2026-03-05):
+  1. thinkingConfig moved INSIDE generationConfig (was a sibling key — silently
+     ignored by Gemini, causing thinking tokens to consume the entire output budget)
+  2. systemInstruction added as a separate field so the model weights formatting
+     rules more heavily than the data context
+  3. Branch A (broken formula) example now uses neutral "XYZ Corp" placeholder,
+     not a hardcoded ticker
+  4. _prompt_ddm: broken-formula branch for DDM-NO-DIV and g>=k cases
+  5. _prompt_dcf: broken-formula branch for DCF-NO-FORECAST, DCF-GE-WACC,
+     negative base FCF, and missing per-share bridge
+  6. All metric display blocks filter to available (non-None) values only —
+     no N/A fields are shown to the model, eliminating N/A starvation
+"""
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+_GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models"
+    "/{model}:generateContent?key={key}"
+)
+
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+async def generate_suitability_summary(
+    symbol:           str,
+    method:           str,
+    score:            int,
+    category:         str,
+    flags:            List[dict],
+    evidence:         Optional[Dict[str, Any]] = None,
+    valuation_inputs: Optional[Dict[str, Any]] = None,
+    input_decisions:  Optional[Dict[str, Any]] = None,
+    timeout:          float = 8.0,
+) -> Optional[str]:
+    """
+    Generate a plain-English suitability summary via Gemini REST.
+    Returns None (never raises) if key missing, call fails, or times out.
+    """
+    key = os.environ.get("GEMINI_API_KEY") or ""
+    if not key:
+        logger.info("[AI] GEMINI_API_KEY not set — suitability summaries disabled")
+        return None
+
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    url   = _GEMINI_URL.format(model=model, key=key)
+
+    prompt = _build_prompt(
+        symbol, method, score, category, flags,
+        evidence or {}, valuation_inputs or {}, input_decisions or {},
+    )
+
+    logger.info(
+        "[AI] Sending prompt for %s/%s (%d chars):\n--- PROMPT START ---\n%s\n--- PROMPT END ---",
+        symbol, method, len(prompt), prompt,
+    )
+
+    system_instruction = (
+        "You are a financial analysis assistant writing plain-English summaries "
+        "for retail investors. You always complete every sentence fully. "
+        "You never use bullet points, headers, or labels. "
+        "You only reference metric values that are explicitly provided — never invent numbers."
+    )
+
+    body = {
+        "system_instruction": {
+            "parts": [{"text": system_instruction}]
+        },
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": 600,
+            "temperature":     0.1,
+            "topP":            0.85,
+            # thinkingConfig MUST be inside generationConfig for gemini-2.5-flash.
+            # As a top-level sibling key it is silently ignored and thinking tokens
+            # consume the entire output budget, leaving ~0 tokens for the response.
+            "thinkingConfig": {
+                "thinkingBudget": 0,
+            },
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=body)
+            if not resp.is_success:
+                logger.warning(
+                    "[AI] Gemini %s for %s/%s | body: %s",
+                    resp.status_code, symbol, method, resp.text[:500],
+                )
+                return None
+            data = resp.json()
+            candidate = data.get("candidates", [{}])[0]
+            finish    = candidate.get("finishReason", "UNKNOWN")
+            usage     = data.get("usageMetadata", {})
+            summary = (
+                candidate
+                    .get("content", {})
+                    .get("parts", [{}])[0]
+                    .get("text", "")
+                    .strip()
+            )
+            if summary:
+                logger.info(
+                    "[AI] %s/%s: %d chars | finishReason=%s | prompt=%s out=%s thinking=%s\n"
+                    "--- AI OUTPUT START ---\n%s\n--- AI OUTPUT END ---",
+                    symbol, method, len(summary), finish,
+                    usage.get("promptTokenCount"),
+                    usage.get("candidatesTokenCount"),
+                    usage.get("thoughtsTokenCount"),
+                    summary,
+                )
+            else:
+                logger.warning(
+                    "[AI] Empty response %s/%s | finishReason=%s | usage=%s | raw=%s",
+                    symbol, method, finish, usage, str(data)[:300],
+                )
+            return summary or None
+    except httpx.TimeoutException:
+        logger.warning("[AI] Suitability summary timed out for %s/%s", symbol, method)
+        return None
+    except Exception as exc:
+        logger.warning("[AI] Suitability summary failed for %s/%s: %s", symbol, method, exc)
+        return None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _fmt(val: Any, as_pct: bool = False, decimals: int = 1) -> str:
+    if val is None:
+        return "N/A"
+    try:
+        f = float(val)
+        if as_pct:
+            return f"{f * 100:.{decimals}f}%"
+        return f"{f:.{decimals}f}"
+    except Exception:
+        return str(val)
+
+
+def _critical_flags(flags: List[dict]) -> List[dict]:
+    skip = {"-SCORECARD", "-DATA-COVERAGE", "-REPO-KEYS"}
+    return [
+        f for f in flags
+        if f.get("severity") in ("critical", "high")
+        and not any(f.get("code", "").endswith(s) for s in skip)
+    ]
+
+
+def _input_source_summary(input_decisions: Dict[str, Any], method: str) -> str:
+    lines = []
+
+    if method == "rule1":
+        eps = input_decisions.get("eps0", {})
+        if eps:
+            lines.append(f"EPS₀: value={_fmt(eps.get('value'))}, source={eps.get('source','?')}, "
+                         f"snapshotDate={eps.get('snapshotDate','?')}")
+
+        g = input_decisions.get("growth", {})
+        if g:
+            lines.append(f"Growth: raw={_fmt(g.get('valueRaw'), as_pct=True)}, "
+                         f"clamped={_fmt(g.get('valueClamped'), as_pct=True)}, "
+                         f"source={g.get('source','?')}")
+
+        pe = input_decisions.get("futurePE", {})
+        if pe:
+            lines.append(f"Future PE: selected={_fmt(pe.get('selected'))}, rule={pe.get('rule','?')}")
+
+        assum = input_decisions.get("assumptions", {})
+        if assum:
+            lines.append(f"Assumptions: discountRate={_fmt(assum.get('discountRate'), as_pct=True)}, "
+                         f"horizonYears={assum.get('horizonYears','?')}, "
+                         f"MOS={_fmt(assum.get('mos'), as_pct=True)}")
+
+    elif method in ("ddm_gordon", "ddm_two_stage"):
+        ddm = input_decisions.get("ddm", input_decisions)
+        lines.append(f"D₀ source: {ddm.get('d0Source','?')}")
+
+        k_ev = ddm.get("requiredReturn", {})
+        if k_ev:
+            lines.append(f"k (required return): source={k_ev.get('source','?')}, "
+                         f"raw={_fmt(k_ev.get('kRaw'), as_pct=True)}, "
+                         f"final={_fmt(k_ev.get('kFinal'), as_pct=True)}, "
+                         f"beta={_fmt(k_ev.get('beta'))}, "
+                         f"rf={_fmt(k_ev.get('rf'), as_pct=True)}, "
+                         f"erp={_fmt(k_ev.get('erp'), as_pct=True)}, "
+                         f"clamped={k_ev.get('clamped', False)}")
+
+        g_ev = ddm.get("dividendGrowthRate", {})
+        if g_ev:
+            lines.append(f"g (div growth): source={g_ev.get('source','?')}, "
+                         f"gHist={_fmt(g_ev.get('gHist'), as_pct=True)}, "
+                         f"gSgr={_fmt(g_ev.get('gSgr'), as_pct=True)}, "
+                         f"raw={_fmt(g_ev.get('gRaw'), as_pct=True)}, "
+                         f"final={_fmt(g_ev.get('gFinal'), as_pct=True)}, "
+                         f"clamped={g_ev.get('clamped', False)}")
+
+    elif method == "dcf":
+        dcf = input_decisions.get("dcf", input_decisions)
+
+        bf = dcf.get("baseFcf", {})
+        if bf:
+            lines.append(f"Base FCF: OCF={_fmt(bf.get('cashFromOperatingActivities'))}, "
+                         f"capex={_fmt(bf.get('capitalExpenditures'))}, "
+                         f"FCF={_fmt(bf.get('computedFcf'))}, "
+                         f"fiscalYear={bf.get('asOfFiscalYear','?')}")
+
+        gr = dcf.get("fcfGrowthRate", {})
+        if gr:
+            lines.append(f"FCF growth: source={gr.get('source','?')}, "
+                         f"raw={_fmt(gr.get('valueRaw'), as_pct=True)}, "
+                         f"final={_fmt(gr.get('valueFinal'), as_pct=True)}")
+
+        w = dcf.get("wacc", {})
+        if w:
+            lines.append(f"WACC: source={w.get('source','?')}, "
+                         f"raw={_fmt(w.get('valueRaw'), as_pct=True)}, "
+                         f"final={_fmt(w.get('valueFinal'), as_pct=True)}, "
+                         f"clamped={w.get('clamped', False)} "
+                         f"(floor={_fmt(w.get('waccFloor'), as_pct=True)}, "
+                         f"cap={_fmt(w.get('waccCap'), as_pct=True)})")
+
+        t = dcf.get("terminal", {})
+        if t:
+            if t.get("method") == "perpetuity_growth":
+                lines.append(f"Terminal: perpetuity_growth, "
+                             f"g={_fmt(t.get('gFinal'), as_pct=True)} (source={t.get('source','?')}), "
+                             f"CF(n+1)={_fmt(t.get('cfNPlus1'))}, valid={t.get('valid','?')}")
+            else:
+                lines.append(f"Terminal: exit_multiple, "
+                             f"multiple={_fmt(t.get('exitMultiple'))}x, "
+                             f"terminalEBITDA={_fmt(t.get('terminalEbitda'))}")
+
+        nd = dcf.get("netDebt", {})
+        if nd:
+            lines.append(f"Net debt: source={nd.get('source','?')}, value={_fmt(nd.get('value'))}")
+
+        sh = dcf.get("sharesOutstanding", {})
+        if sh:
+            lines.append(f"Shares: source={sh.get('source','?')}, value={_fmt(sh.get('value'))}")
+
+    return "\n".join(f"  {l}" for l in lines) if lines else "  (not available)"
+
+
+# ── Prompt router ─────────────────────────────────────────────────────────────
+
+def _build_prompt(
+    symbol:           str,
+    method:           str,
+    score:            int,
+    category:         str,
+    flags:            List[dict],
+    evidence:         Dict[str, Any],
+    valuation_inputs: Dict[str, Any],
+    input_decisions:  Dict[str, Any],
+) -> str:
+    if method == "rule1":
+        return _prompt_rule1(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)
+    elif method in ("ddm_gordon", "ddm_two_stage"):
+        return _prompt_ddm(symbol, method, score, category, flags, evidence, valuation_inputs, input_decisions)
+    elif method == "dcf":
+        return _prompt_dcf(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)
+    else:
+        return _prompt_generic(symbol, method, score, category, flags)
+
+
+# ── Rule #1 prompt ────────────────────────────────────────────────────────────
+
+def _prompt_rule1(symbol, score, category, flags, ev, vi, id_) -> str:
+    fs    = ev.get("final_scoring", {})
+    points = fs.get("points", "N/A")
+    total  = fs.get("totalPossible", "N/A")
+    hfail  = fs.get("hardFail", False)
+
+    eps_cagr = ev.get("growth_eps_cagr", {}).get("cagr")
+    rev_cagr = ev.get("growth_revenue_cagr", {}).get("cagr")
+    ni_ev    = ev.get("eps_quality_positive_net_income_years", {})
+    eps_vol  = ev.get("eps_quality_volatility", {}).get("volatility")
+    drawdown = ev.get("cyclicality_eps_drawdown_5y")
+    dte      = ev.get("balance_debt_to_equity")
+    int_cov  = ev.get("balance_interest_coverage")
+    fcf_conv = ev.get("cashflow_fcf_conversion", {}).get("fcfConversion")
+    dilution = ev.get("cashflow_share_dilution_cagr")
+    roic     = ev.get("compounding_roic_avg_5y")
+
+    currency = vi.get("currency", "USD")
+    eps0     = vi.get("eps0")
+    growth   = vi.get("growth")
+    fpe      = vi.get("futurePE")
+    sticker  = vi.get("stickerPrice")
+    mos_p    = vi.get("mosPrice")
+    dr       = vi.get("discountRate")
+    horizon  = vi.get("horizonYears")
+    mos      = vi.get("mos")
+    feps     = vi.get("futureEPS")
+    fprice   = vi.get("futurePrice")
+
+    crit      = _critical_flags(flags)
+    crit_text = "\n".join(f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}" for f in crit[:4]) or "  None"
+    id_trace  = _input_source_summary(id_, "rule1")
+
+    # ── Detect broken/sparse conditions ───────────────────────────────────
+    eps_negative   = eps0 is not None and float(eps0) < 0
+    formula_broken = eps_negative or (sticker is not None and float(sticker) == 0.0 and eps_negative)
+
+    metric_vals = [eps_cagr, rev_cagr, ni_ev.get("positive"), eps_vol, drawdown,
+                   dte, int_cov, fcf_conv, dilution, roic]
+    available  = sum(1 for v in metric_vals if v is not None)
+    na_count   = len(metric_vals) - available
+    data_sparse = na_count >= 6
+
+    g_raw     = id_.get("growth", {}).get("valueRaw")
+    g_clamped = id_.get("growth", {}).get("valueClamped")
+    growth_clamped_positive = (
+        g_raw is not None and g_clamped is not None
+        and float(g_raw) < 0 and float(g_clamped) > 0
+    )
+    clamp_note = ""
+    if growth_clamped_positive:
+        clamp_note = (
+            f"\nNOTE: Raw growth was {_fmt(g_raw, as_pct=True)} (negative) but was clamped to "
+            f"{_fmt(g_clamped, as_pct=True)} by the system floor. This floor does NOT fix the "
+            f"negative EPS problem — growing a negative EPS at any positive rate still yields "
+            f"a negative future value."
+        )
+
+    gaps = [k for k, v in ev.get("data_coverage", {}).items()
+            if isinstance(v, dict) and v.get("availableYears", 99) < v.get("requiredYears", 0)]
+    gaps_text = ", ".join(gaps) or "None"
+
+    # Build available-only metrics block
+    mlines = []
+    if rev_cagr is not None: mlines.append(f"Revenue CAGR (5y): {_fmt(rev_cagr, as_pct=True)} [pass: ≥5%]")
+    if eps_cagr is not None: mlines.append(f"EPS CAGR (5y): {_fmt(eps_cagr, as_pct=True)} [pass: ≥8%]")
+    if ni_ev.get("positive") is not None:
+        mlines.append(f"Positive NI years: {ni_ev.get('positive')} of {ni_ev.get('total')} [pass: ≥80%]")
+    if eps_vol  is not None: mlines.append(f"EPS volatility: {_fmt(eps_vol, as_pct=True)} [pass: <30%]")
+    if drawdown is not None: mlines.append(f"EPS drawdown (5y): {_fmt(drawdown, as_pct=True)} [pass: <30%]")
+    if dte      is not None: mlines.append(f"Debt/Equity: {_fmt(dte)} [pass: <0.8]")
+    if int_cov  is not None: mlines.append(f"Interest coverage: {_fmt(int_cov)}x [pass: >5x]")
+    if fcf_conv is not None: mlines.append(f"FCF conversion: {_fmt(fcf_conv, as_pct=True)} [pass: ≥70%]")
+    if dilution is not None: mlines.append(f"Share dilution CAGR: {_fmt(dilution, as_pct=True)} [pass: ≤0%]")
+    if roic     is not None: mlines.append(f"ROIC (5y avg): {_fmt(roic, as_pct=True)} [pass: ≥15%]")
+    metrics_block = "\n".join(f"  {l}" for l in mlines) or "  (no metrics computable — insufficient history)"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH A — Negative EPS / broken formula
+    # ══════════════════════════════════════════════════════════════════════
+    if formula_broken:
+        example = (
+            '"XYZ Corp scores 9/100 (Poor) and is fundamentally unsuitable for Rule #1 because '
+            'the formula requires a positive, growing earnings base — XYZ has never reported '
+            'positive net income in 5 years (0 of 5) and carries a trailing EPS of -$1.60, '
+            'meaning Future EPS = EPS₀ × (1+g)^n stays at or below zero regardless of the '
+            'growth rate applied, and both Sticker Price and MOS Price resolve to $0.00. '
+            'The system clamped a raw growth estimate of -2.0% up to 2.0%, but this floor is '
+            'cosmetic — growing a negative number at any positive rate still yields a negative '
+            'future value, so the clamp does not rescue the valuation. '
+            'The balance sheet deepens the concern: debt/equity of 8.2x and interest coverage '
+            'of -22.5x indicate the company is both unprofitable and financially over-levered. '
+            'An investor should not use this output; the right action is to monitor whether XYZ '
+            'achieves sustained positive net income before revisiting Rule #1."'
+        )
+        return f"""Analyse this Rule #1 suitability for {symbol.upper()}. The formula cannot produce a valid result because EPS is negative.
+Do NOT describe the sticker/MOS price as meaningful values — they are $0 because the math breaks down.
+Instead explain WHY the formula fails and what the evidence reveals about financial health.
+
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {points}/{total} | Hard fail: {hfail}
+
+=== FORMULA BREAKDOWN ===
+EPS₀ = {_fmt(eps0)} {currency} ← NEGATIVE: Future EPS = EPS₀ × (1+g)^n ≤ 0 regardless of g
+Growth input: raw={_fmt(g_raw, as_pct=True)}, clamped to={_fmt(g_clamped, as_pct=True)}{clamp_note}
+Result: Sticker={_fmt(sticker)} {currency}, MOS Price={_fmt(mos_p)} {currency} — both meaningless
+
+=== AVAILABLE METRIC EVIDENCE ({available} of {len(metric_vals)} computable) ===
+{metrics_block}
+
+=== DATA GAPS ===
+{gaps_text}
+
+=== INPUT DECISIONS ===
+{id_trace}
+
+=== CRITICAL FLAGS ===
+{crit_text}
+
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Cover: (1) why the Rule #1 formula fails with negative EPS, (2) what the available metrics say about financial health, (3) what an investor should do instead."""
+
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH B — Formula valid but data sparse
+    # ══════════════════════════════════════════════════════════════════════
+    if data_sparse:
+        example = (
+            '"ACME scores 45/100 (Caution) with only 4 of 10 metrics computable due to limited '
+            'financial history, which reduces confidence in this Rule #1 assessment. '
+            'Of the available metrics, revenue CAGR of 12.3% clears the 5% threshold and '
+            'debt/equity of 0.6x is safely below 0.8x, but interest coverage of 2.1x falls '
+            'below the 5x minimum and triggers a hard fail on balance sheet safety. '
+            'The growth input of 8% was sourced from an analyst earnings forecast because '
+            'insufficient EPS history exists — this is a lower-confidence assumption than '
+            'the formula ideally requires. '
+            'Until at least 5 years of EPS, ROIC, and FCF data are available, the sticker '
+            'price of $34.20 should be treated as preliminary."'
+        )
+        return f"""Analyse this Rule #1 suitability for {symbol.upper()}. Most metrics are N/A due to limited history.
+Write a summary that is honest about what IS known and frames the data gaps as a confidence issue.
+
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {points}/{total} | Hard fail: {hfail}
+
+=== AVAILABLE METRIC EVIDENCE ({available} of {len(metric_vals)} computable) ===
+{metrics_block}
+
+=== DATA GAPS ({na_count} metrics not computable) ===
+{gaps_text}
+
+=== FORMULA INPUTS ===
+EPS₀={_fmt(eps0)} {currency}, g={_fmt(growth, as_pct=True)}, Future PE={_fmt(fpe)}
+n={horizon} yrs, discount={_fmt(dr, as_pct=True)}, MOS={_fmt(mos, as_pct=True)}
+→ Sticker={_fmt(sticker)} {currency}, MOS Price={_fmt(mos_p)} {currency}{clamp_note}
+
+=== INPUT DECISIONS ===
+{id_trace}
+
+=== CRITICAL FLAGS ===
+{crit_text}
+
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Explicitly mention how many metrics were computable and how that affects confidence in the sticker price."""
+
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH C — Formula valid, data rich
+    # ══════════════════════════════════════════════════════════════════════
+    example = (
+        '"ACME scores 33/100 (Poor) primarily because EPS CAGR of -4.2% is negative and only '
+        '3 of 5 years had positive net income, triggering a hard fail that makes Rule #1 '
+        'unsuitable regardless of other metrics. '
+        'The 8% growth input came from a revenue CAGR approximation rather than earnings '
+        'history, and the future PE of 15x was set by the industry median rule — both '
+        'inputs are low-confidence fallbacks rather than company-specific data. '
+        'Applying the formula produces a sticker of $18.40 and MOS price of $9.20, but '
+        'these are unreliable because the compounding assumption breaks down when base '
+        'earnings are inconsistent. '
+        'Before trusting this valuation, confirm that ACME has returned to sustained '
+        'profitability and that at least 5 years of positive EPS history is available."'
+    )
+    return f"""Analyse this Rule #1 suitability and valuation for {symbol.upper()}. Write a 3-4 sentence plain-English summary.
+
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {points}/{total} | Hard fail: {hfail}
+
+=== FORMULA ===
+Future EPS = EPS₀ × (1+g)^n | Future Price = Future EPS × PE
+Sticker = Future Price / (1+r)^n | MOS Price = Sticker × (1 - MOS%)
+
+=== AVAILABLE METRICS ({available} of {len(metric_vals)} computable) ===
+{metrics_block}
+
+=== FORMULA INPUTS ===
+EPS₀={_fmt(eps0)} {currency}, g={_fmt(growth, as_pct=True)}, Future PE={_fmt(fpe)}
+n={horizon} yrs, discount={_fmt(dr, as_pct=True)}, MOS={_fmt(mos, as_pct=True)}
+→ Future EPS={_fmt(feps)} {currency}, Future Price={_fmt(fprice)} {currency}
+→ Sticker={_fmt(sticker)} {currency}, MOS Price={_fmt(mos_p)} {currency}{clamp_note}
+
+=== INPUT DECISIONS ===
+{id_trace}
+
+=== CRITICAL FLAGS ===
+{crit_text}
+
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Sentence 1: Verdict + the 1-2 biggest metric failures with actual values.
+Sentence 2: Input reliability — were growth and PE from good sources or fallbacks?
+Sentence 3: What the formula produces and whether sticker/MOS are trustworthy.
+Sentence 4: What an investor must verify before trusting this valuation."""
+
+
+# ── DDM prompt ────────────────────────────────────────────────────────────────
+
+def _prompt_ddm(symbol, method, score, category, flags, ev, vi, id_) -> str:
+    fs          = ev.get("final_scoring", {})
+    passes      = fs.get("passes", "N/A")
+    total       = fs.get("totalPossible", "N/A")
+    hfail       = fs.get("hardFail", False)
+    recommended = fs.get("recommendedModel", "N/A")
+    model_label = "Gordon Growth" if method == "ddm_gordon" else "Two-Stage"
+
+    div_ev      = ev.get("m1_dividend_paid_years_10y", {})
+    div_vol     = ev.get("m2_dividend_volatility_10y", {}).get("volatility")
+    payout_eps  = ev.get("m3_earnings_payout_ratio")
+    payout_fcf  = ev.get("m4_fcf_payout_ratio")
+    nd_ebitda   = ev.get("m5_net_debt_to_ebitda")
+    int_cov     = ev.get("m6_interest_coverage")
+    div_cagr    = ev.get("m7_dividend_cagr")
+
+    currency  = vi.get("currency", "USD")
+    d0        = vi.get("currentDps")
+    d1        = vi.get("nextYearDps")
+    g         = vi.get("dividendGrowthRate")
+    k         = vi.get("requiredReturn")
+    intrinsic = vi.get("intrinsicValue")
+    upside    = vi.get("upsideDownsidePct")
+
+    crit      = _critical_flags(flags)
+    crit_text = "\n".join(f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}" for f in crit[:4]) or "  None"
+    id_trace  = _input_source_summary(id_, method)
+
+    # Detect broken formula
+    has_no_div = any(f.get("code") == "DDM-NO-DIV" for f in flags)
+    has_g_ge_k = (
+        any(f.get("code") == "DDM-GE-K" for f in flags)
+        or (g is not None and k is not None and float(g) >= float(k) and method == "ddm_gordon")
+    )
+    formula_broken = has_no_div or has_g_ge_k
+
+    # Normalise payout ratios (may be fraction or percentage)
+    def _payout(v):
+        if v is None: return "N/A"
+        f = float(v)
+        return f"{f:.1f}%" if f > 1.0 else f"{f*100:.1f}%"
+
+    # Available-only metrics block
+    mlines = []
+    paid = div_ev.get("paidYears")
+    tot  = div_ev.get("totalYears")
+    if paid  is not None: mlines.append(f"Dividend history (10y): {paid} of {tot} years paid [pass: ≥8]")
+    if div_vol   is not None: mlines.append(f"Dividend volatility: {_fmt(div_vol, as_pct=True)} [pass: <25%]")
+    if div_cagr  is not None: mlines.append(f"Dividend CAGR: {_fmt(div_cagr, as_pct=True)} [pass: 3–10%]")
+    if payout_eps is not None: mlines.append(f"Earnings payout ratio: {_payout(payout_eps)} [pass: 25–70%]")
+    if payout_fcf is not None: mlines.append(f"FCF payout ratio: {_payout(payout_fcf)} [pass: <70%]")
+    if nd_ebitda is not None: mlines.append(f"Net Debt / EBITDA: {_fmt(nd_ebitda)}x [pass: <3x]")
+    if int_cov   is not None: mlines.append(f"Interest coverage: {_fmt(int_cov)}x [pass: >4x]")
+    metrics_block = "\n".join(f"  {l}" for l in mlines) or "  (insufficient data)"
+
+    # ── BRANCH A: Formula invalid ──────────────────────────────────────────
+    if formula_broken:
+        if has_no_div:
+            reason    = "the company pays no dividends — DDM has no inputs"
+            breakdown = "DDM requires a dividend stream to discount. Without dividends there is no D₀, D₁, or growth to work with."
+        else:
+            reason    = f"g ({_fmt(g, as_pct=True)}) ≥ k ({_fmt(k, as_pct=True)}) — Gordon formula denominator is zero or negative"
+            breakdown = (
+                f"Gordon Growth formula: Intrinsic = D₁ / (k - g). "
+                f"With g={_fmt(g, as_pct=True)} and k={_fmt(k, as_pct=True)}, "
+                f"(k-g) ≤ 0, making the result infinite or negative. "
+                f"The Two-Stage model handles this by separating high-growth and stable phases."
+            )
+
+        example = (
+            '"XYZ Corp scores 43/100 (Caution) but the Gordon Growth DDM formula cannot produce '
+            'a valid intrinsic value because g of 10.5% meets the required return k of 10.0% — '
+            'the denominator (k-g) equals zero, making the formula undefined. '
+            'The required return k=10.0% was derived via CAPM using a beta of 1.1 and an ERP '
+            'of 5.5%, while g=10.5% came from the minimum of historical dividend CAGR and '
+            'sustainable growth rate — both are reasonable estimates, but their convergence '
+            'breaks the Gordon constraint. '
+            'The dividend track record is strong (10 of 10 years paid, 12% volatility), so '
+            'the underlying business is DDM-eligible — the fix is to switch to Two-Stage DDM '
+            'which separates the high-growth phase from the stable terminal phase and avoids '
+            'the g ≥ k constraint."'
+        )
+        return f"""Analyse this DDM ({model_label}) suitability for {symbol.upper()}.
+The formula cannot produce a valid intrinsic value because {reason}.
+
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total} | Hard fail: {hfail}
+
+=== FORMULA BREAKDOWN ===
+{breakdown}
+D₀={_fmt(d0)} {currency}, D₁={_fmt(d1)} {currency}, g={_fmt(g, as_pct=True)}, k={_fmt(k, as_pct=True)}
+Intrinsic Value = {_fmt(intrinsic)} {currency} (invalid)
+
+=== AVAILABLE METRIC EVIDENCE ===
+{metrics_block}
+
+=== INPUT DECISIONS ===
+{id_trace}
+
+=== CRITICAL FLAGS ===
+{crit_text}
+
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Cover: (1) why the DDM formula fails, (2) what the dividend track record looks like, (3) what the investor should do (Two-Stage or wait)."""
+
+    # ── BRANCH B: Valid formula ────────────────────────────────────────────
+    if method == "ddm_gordon":
+        formula = f"Intrinsic = D₁ / (k - g) = {_fmt(d1)} / ({_fmt(k, as_pct=True)} - {_fmt(g, as_pct=True)}) = {_fmt(intrinsic)} {currency}"
+    else:
+        formula = f"Two-Stage DDM: PV(high-growth dividends) + PV(Gordon terminal value) = {_fmt(intrinsic)} {currency}"
+
+    upside_text = f"{_fmt(upside, as_pct=True)} vs current price" if upside is not None else "N/A"
+
+    example = (
+        '"JNJ scores 71/100 (Good) with dividends paid in 10 of 10 years and volatility of 8%, '
+        'confirming the consistent history Gordon Growth DDM requires. '
+        'k of 9.2% was derived via CAPM using a beta of 0.68 and an ERP of 5.5%, while g of '
+        '5.1% closely matches the historical dividend CAGR of 5.3%, so the g < k constraint '
+        'is comfortably satisfied and the growth assumption is well-anchored in history. '
+        'Payout ratios are healthy — earnings payout at 48% and FCF payout at 41% — confirming '
+        'dividends are sustainably covered without straining the balance sheet. '
+        'The intrinsic value of $172.40 carries reasonable confidence; the main risk is rising '
+        'interest rates which would increase k and compress the intrinsic value."'
+    )
+
+    return f"""Analyse this DDM ({model_label}) suitability and valuation for {symbol.upper()}. Write a 3-4 sentence plain-English summary.
+
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total}
+Hard fail: {hfail} | Scorecard recommends: {recommended}
+
+=== FORMULA RESULT ===
+{formula}
+Upside / downside: {upside_text}
+
+=== AVAILABLE METRICS ===
+{metrics_block}
+
+=== INPUT DECISIONS ===
+{id_trace}
+
+=== CRITICAL FLAGS ===
+{crit_text}
+
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Sentence 1: Verdict + dividend consistency (paid years, volatility, CAGR).
+Sentence 2: How k and g were derived — are they realistic and is g < k well-satisfied?
+Sentence 3: Payout sustainability — are dividends covered by earnings and FCF?
+Sentence 4: How much to trust the intrinsic value of {_fmt(intrinsic)} {currency} and the main risk."""
+
+
+# ── DCF prompt ────────────────────────────────────────────────────────────────
+
+def _prompt_dcf(symbol, score, category, flags, ev, vi, id_) -> str:
+    fs    = ev.get("final_scoring", {})
+    passes = fs.get("passes", "N/A")
+    total  = fs.get("totalPossible", "N/A")
+
+    fcf_pos  = ev.get("m1_fcf_positivity_5y", {})
+    fcf_vol  = ev.get("m2_fcf_volatility", {})
+    rev_ev   = ev.get("m3_revenue_cagr_5y", {})
+    rev_vol  = ev.get("m4_revenue_volatility", {}).get("stdev")
+    lev_ev   = ev.get("m5_net_debt_to_ebitda", {})
+    ic_ev    = ev.get("m6_interest_coverage", {})
+    capex_ev = ev.get("m7_capex_to_revenue", {})
+
+    currency  = vi.get("currency", "USD")
+    base_fcf  = vi.get("baseFcf")
+    n_years   = vi.get("forecastYears")
+    wacc      = vi.get("waccUsed")
+    term_g    = vi.get("terminalGrowthRateUsed")
+    term_meth = vi.get("terminalMethod", "N/A")
+    intrinsic = vi.get("intrinsicValuePerShare")
+    ev_val    = vi.get("enterpriseValue")
+    upside    = vi.get("upsideDownsidePct")
+
+    crit      = _critical_flags(flags)
+    crit_text = "\n".join(f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}" for f in crit[:4]) or "  None"
+    id_trace  = _input_source_summary(id_, "dcf")
+
+    # Detect broken formula
+    has_no_forecast  = any(f.get("code") == "DCF-NO-FORECAST" for f in flags)
+    has_g_ge_wacc    = any(f.get("code") == "DCF-GE-WACC"     for f in flags)
+    has_no_per_share = any(f.get("code") == "DCF-NO-PER-SHARE" for f in flags)
+    base_fcf_neg     = base_fcf is not None and float(base_fcf) < 0
+    formula_broken   = has_no_forecast or has_g_ge_wacc or (intrinsic is None and has_no_per_share)
+
+    # Available-only metrics block
+    mlines = []
+    pos  = fcf_pos.get("positiveYears")
+    eyrs = fcf_pos.get("yearsEvaluated")
+    fvol = fcf_vol.get("volatility")
+    fmn  = fcf_vol.get("mean")
+    rc   = rev_ev.get("cagr")
+    rsp  = rev_ev.get("spanYears", "?")
+    nd   = lev_ev.get("netDebtToEbitda")
+    ebi  = lev_ev.get("ebitda")
+    ic   = ic_ev.get("interestCoverage")
+    cr   = capex_ev.get("avg")
+    if pos  is not None: mlines.append(f"FCF positive years (5y): {pos} of {eyrs} [pass: ≥4]")
+    if fvol is not None: mlines.append(f"FCF volatility: {_fmt(fvol, as_pct=True)} | mean FCF={_fmt(fmn)} {currency} [pass: <40%]")
+    if rc   is not None: mlines.append(f"Revenue CAGR ({rsp}y): {_fmt(rc, as_pct=True)} [pass: ≥4%]")
+    if rev_vol is not None: mlines.append(f"Revenue YoY volatility: {_fmt(rev_vol, as_pct=True)} [pass: <10%]")
+    if nd   is not None: mlines.append(f"Net Debt / EBITDA: {_fmt(nd)}x | EBITDA={_fmt(ebi)} {currency} [pass: <3x]")
+    if ic   is not None: mlines.append(f"Interest coverage: {_fmt(ic)}x [pass: >4x]")
+    if cr   is not None: mlines.append(f"Capex / Revenue (5y avg): {_fmt(cr, as_pct=True)} [pass: <8%]")
+    metrics_block = "\n".join(f"  {l}" for l in mlines) or "  (insufficient data)"
+
+    coverage  = ev.get("data_coverage", {})
+    na_items  = [k for k, v in coverage.items() if isinstance(v, dict) and not v.get("availableYears")]
+    gaps_text = ", ".join(na_items) or "None"
+
+    # ── BRANCH A: Formula invalid ──────────────────────────────────────────
+    if formula_broken:
+        if has_no_forecast:
+            breakdown = (
+                f"No FCF forecast could be built — base FCF={_fmt(base_fcf)} {currency} "
+                f"and/or no FCF growth rate was configured. Without a forecast series "
+                f"there are no cash flows to discount."
+            )
+        elif has_g_ge_wacc:
+            breakdown = (
+                f"Terminal growth rate g={_fmt(term_g, as_pct=True)} ≥ WACC={_fmt(wacc, as_pct=True)}. "
+                f"The perpetuity formula TV = CF(n+1)/(WACC-g) requires WACC > g; "
+                f"with this constraint violated the terminal value is infinite or negative."
+            )
+        elif base_fcf_neg:
+            breakdown = (
+                f"Base FCF is negative ({_fmt(base_fcf)} {currency}). "
+                f"Growing a negative base at any positive rate compounds the problem — "
+                f"forecast FCFs remain negative, making the discounting result meaningless."
+            )
+        else:
+            breakdown = "Intrinsic value per share could not be computed (missing net debt or shares outstanding)."
+
+        example = (
+            '"XYZ Corp scores 29/100 (Poor) and DCF cannot produce a valid intrinsic value '
+            'because the base FCF of -$2.1B is negative — the company is cash flow negative '
+            'and compounding that at any growth rate produces increasingly negative forecast '
+            'cash flows, making discounting meaningless. '
+            'FCF was positive in only 1 of 5 years with a mean of -$800M, revenue CAGR of '
+            '28% is strong but has not yet converted to positive cash generation, and '
+            'net debt/EBITDA of 4.2x adds balance sheet pressure. '
+            'Investors should not rely on this DCF output; the right action is to track '
+            'when XYZ achieves sustained positive FCF before rerunning, at which point '
+            'the formula will have a valid base to discount."'
+        )
+        return f"""Analyse this DCF suitability for {symbol.upper()}. The formula cannot produce a valid intrinsic value.
+Do NOT describe the intrinsic value as meaningful — instead explain WHY the formula breaks down.
+
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total}
+
+=== FORMULA BREAKDOWN ===
+{breakdown}
+Base FCF: {_fmt(base_fcf)} {currency} | WACC: {_fmt(wacc, as_pct=True)} | Terminal g: {_fmt(term_g, as_pct=True)}
+Enterprise Value: {_fmt(ev_val)} {currency} | Intrinsic/share: {_fmt(intrinsic)} {currency}
+
+=== AVAILABLE METRIC EVIDENCE ===
+{metrics_block}
+
+=== DATA GAPS ===
+{gaps_text}
+
+=== INPUT DECISIONS ===
+{id_trace}
+
+=== CRITICAL FLAGS ===
+{crit_text}
+
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Cover: (1) exactly why the formula fails, (2) what the cash flow evidence shows, (3) what investors should monitor."""
+
+    # ── BRANCH B: Valid formula ────────────────────────────────────────────
+    upside_text = f"{_fmt(upside, as_pct=True)} vs current price" if upside is not None else "N/A"
+
+    example = (
+        '"MSFT scores 86/100 (Good) with FCF positive in 5 of 5 years and FCF volatility of '
+        '18%, confirming the cash flow stability that makes DCF reliable here. '
+        'The base FCF of $72.3B came from the latest annual cash flow statement and a growth '
+        'rate of 12% was applied from method defaults, with WACC of 9.0% also from defaults — '
+        'both are reasonable but neither is company-specifically derived, so the investor '
+        'should sense-check whether 12% FCF growth is sustainable given the 14% revenue CAGR. '
+        'The terminal growth rate of 3.0% is well below the 5-year revenue CAGR, providing a '
+        'conservative perpetuity anchor, and net debt/EBITDA of 0.4x means leverage poses no '
+        'material equity bridge risk. '
+        'The intrinsic value of $412 per share carries moderate confidence — the key '
+        'sensitivity is the FCF growth assumption; halving it to 6% would materially '
+        'reduce the output."'
+    )
+
+    return f"""Analyse this DCF suitability and valuation for {symbol.upper()}. Write a 3-4 sentence plain-English summary.
+
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total}
+
+=== FORMULA INPUTS & RESULT ===
+Base FCF={_fmt(base_fcf)} {currency}, forecast={n_years} yrs, WACC={_fmt(wacc, as_pct=True)}
+Terminal method={term_meth}, terminal g={_fmt(term_g, as_pct=True)}
+Enterprise Value={_fmt(ev_val)} {currency} | Intrinsic/share={_fmt(intrinsic)} {currency}
+Upside/downside: {upside_text}
+
+=== AVAILABLE METRICS ===
+{metrics_block}
+
+=== DATA GAPS ===
+{gaps_text}
+
+=== INPUT DECISIONS ===
+{id_trace}
+
+=== CRITICAL FLAGS ===
+{crit_text}
+
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Sentence 1: Is FCF reliable enough for DCF? Cite positive years and volatility.
+Sentence 2: Are the forecast inputs (base FCF, growth, WACC) well-supported or defaults/fallbacks?
+Sentence 3: Are the terminal value assumptions conservative? Does leverage pose a risk?
+Sentence 4: How much to trust {_fmt(intrinsic)} {currency}/share and the single biggest sensitivity risk."""
+
+
+# ── Generic fallback ──────────────────────────────────────────────────────────
+
+def _prompt_generic(symbol, method, score, category, flags) -> str:
+    sorted_flags = sorted(flags, key=lambda f: _SEVERITY_ORDER.get(f.get("severity", "info"), 99))
+    flags_text = "\n".join(
+        f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}"
+        for f in sorted_flags[:3]
+    ) or "  None"
+    return f"""Write a 3-4 sentence plain-English suitability summary for retail investors.
+
+Stock: {symbol.upper()} | Model: {method} | Score: {score}/100 | Category: {category}
+
+Key flags:
+{flags_text}
+
+Output only the paragraph. No bullet points. No preamble.
+Explain WHY suitability is {category}, reference the most important flags with their values, and state how much an investor should trust this valuation."""

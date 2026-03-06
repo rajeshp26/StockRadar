@@ -44,10 +44,16 @@ class DiagnosticFlag(BaseModel):
 class Applicability(BaseModel):
     """
     Suitability assessment for Rule #1 on this company, with a roll-up score.
+    suitabilitySummary: AI-generated plain-English explanation of the score/category.
+      - Generated once at compute time and stored in output_snapshot.
+      - Returned as-is on cached reads at zero cost.
+      - None when AI is disabled (GEMINI_API_KEY not set) or generation failed.
+        UI falls back to showing only the score ring and flag pills.
     """
     score: int = Field(ge=0, le=100)
     category: Literal["Good", "Caution", "Poor"]
     flags: List[DiagnosticFlag] = Field(default_factory=list)
+    suitabilitySummary:  Optional[str]          = None  # ← NEW
 
 
 class DataQuality(BaseModel):

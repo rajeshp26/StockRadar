@@ -1,8 +1,6 @@
 // web/src/features/analysis/types/analysis.types.ts
-
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type SuitabilityCategory = "Good" | "Caution" | "Poor";
-
 export interface DiagnosticFlag {
   code: string;
   severity: Severity;
@@ -10,13 +8,12 @@ export interface DiagnosticFlag {
   evidence?: Record<string, unknown>;
   recommendation?: string;
 }
-
 export interface Applicability {
-  score: number;
-  category: SuitabilityCategory;
-  flags: DiagnosticFlag[];
+  score:               number;
+  category:            SuitabilityCategory;
+  flags:               DiagnosticFlag[];
+  suitabilitySummary?: string | null;  // ← AI-generated plain-English explanation
 }
-
 export interface DataQuality {
   freshnessDays: Record<string, unknown>;
   fallbacksUsed: boolean;
@@ -43,32 +40,26 @@ export interface DataQuality {
     [k: string]: unknown;
   };
 }
-
 export interface Rule1Valuation {
   symbol: string;
   companyId: number;
   currency: string;
-
   eps0: number;
   growth: number;
   futurePE: number;
-
   futureEPS: number;
   futurePrice: number;
   discountRate: number;
   horizonYears: number;
   mos: number;
-
   stickerPrice: number;
   mosPrice: number;
 }
-
 export interface Rule1Response {
   valuation: Rule1Valuation;
   applicability: Applicability;
   dataQuality: DataQuality;
 }
-
 export interface Rule1HistoryEntry {
   runAt: string;
   stickerPrice?: number;
@@ -79,68 +70,54 @@ export interface Rule1HistoryEntry {
   score?: number;
   category?: SuitabilityCategory;
 }
-
 export interface Rule1History {
   symbol: string;
   items: Rule1HistoryEntry[];
 }
-
 export interface ApiError {
   detail: string;
 }
-
 export interface FreshnessInfo {
   lastEvaluatedDisplay?: string;
   lastEvaluatedIso?: string;
 }
-
 export interface AnalysisState {
   loading: boolean;
   loadingHistory: boolean;
   error?: string;
-
   valuation?: Rule1Valuation;
   applicability?: Applicability;
   dataQuality?: DataQuality;
-
   history?: Rule1History;
   freshness?: FreshnessInfo;
 }
-
 /* ====================================================================== */
 /* DDM TYPES                                                               */
 /* ====================================================================== */
-
 export type DdmVariant = "gordon" | "two_stage";
-
 export interface DdmValuation {
   symbol: string;
   companyId: number;
   currency: string;
   method: "gordon" | "two_stage";
-
   currentDps: number;
   nextYearDps: number;
-  dividendGrowthRate: number; // g
-  requiredReturn: number;     // k
+  dividendGrowthRate: number;
+  requiredReturn: number;
   intrinsicValue: number;
-
   highGrowthYears?: number | null;
   highGrowthRate?: number | null;
   stableGrowthRate?: number | null;
   pvStage1?: number | null;
   pvTerminal?: number | null;
-
   currentPrice?: number | null;
   upsideDownsidePct?: number | null;
 }
-
 export interface DdmResponse {
   valuation: DdmValuation;
   applicability: Applicability;
   dataQuality: DataQuality;
 }
-
 export interface DdmHistoryEntry {
   runAt: string;
   method?: "gordon" | "two_stage";
@@ -150,93 +127,60 @@ export interface DdmHistoryEntry {
   score?: number;
   category?: SuitabilityCategory;
 }
-
 export interface DdmHistory {
   symbol: string;
   items: DdmHistoryEntry[];
 }
-
 export interface DdmState {
   loading: boolean;
   loadingHistory: boolean;
   error?: string;
-
   valuation?: DdmValuation;
   applicability?: Applicability;
   dataQuality?: DataQuality;
-
   history?: DdmHistory;
   freshness?: FreshnessInfo;
 }
-
 // ---------------------------
 // DCF Types
 // ---------------------------
-
 export type DcfTerminalMethod = "perpetuity_growth" | "exit_multiple";
-
 export interface DcfSensitivityGrid {
-  /** Discount rates (r-axis), as fractions (e.g. 0.09 for 9%) */
   discountRates: number[];
-
-  /** Terminal growth rates (g-axis), as fractions (e.g. 0.03 for 3%) */
   terminalGrowthRates: number[];
-
-  /**
-   * Matrix of intrinsic value per share.
-   * Indexed as [rIndex][gIndex]
-   */
   intrinsicValuePerShareMatrix: (number | null)[][];
-
-  /** Currency of intrinsic values (e.g. USD) */
   currency?: string | null;
 }
-
 export interface DcfValuation {
   symbol: string;
   companyId: number;
   currency: string;
-
   terminalMethod: DcfTerminalMethod;
-
   forecastYears: number;
   forecastFcf: number[];
   pvFcf: number[];
   totalPvFcf: number;
-  // Transparency
   discountFactors?: number[] | null;
-
   waccUsed: number;
-
   terminalValue?: number;
   pvTerminalValue?: number;
-
-  // Transparency
   terminalGrowthRateUsed?: number | null;
   cashFlowNPlus1?: number | null;
   baseFcf?: number | null;
   baseFcfFiscalYear?: number | null;
-
   enterpriseValue?: number;
   netDebtUsed?: number;
   equityValue?: number;
-
   sharesOutstanding?: number;
   intrinsicValuePerShare?: number;
-
   currentPrice?: number;
   upsideDownsidePct?: number;
-
-  /** Optional DCF sensitivity grid (r × g) */
   sensitivityScenarios?: DcfSensitivityGrid | null;
 }
-
-// Optional: if you later type request overrides on FE, use this naming:
 export interface DcfRequestOverrides {
   forecastYears?: number | null;
   forecastFcf?: number[] | null;
-  fcfGrowthRate?: number | null; // accepts percent or fraction
-  // revenueGrowthRate intentionally not used on FE going forward
+  fcfGrowthRate?: number | null;
   fcfMarginAssumption?: number | null;
   wacc?: number | null;
   terminalMethod?: DcfTerminalMethod | null;
@@ -250,17 +194,11 @@ export interface DcfRequestOverrides {
   analystName?: string | null;
   notes?: string | null;
 }
-
 export interface DcfResponse {
   valuation: DcfValuation;
   applicability: Applicability;
   dataQuality: DataQuality;
 }
-
-// ---------------------------
-// DCF History Types
-// ---------------------------
-
 export interface DcfHistoryEntry {
   runAt: string;
   terminalMethod?: DcfTerminalMethod;
@@ -271,7 +209,6 @@ export interface DcfHistoryEntry {
   score?: number;
   category?: SuitabilityCategory;
 }
-
 export interface DcfHistory {
   symbol: string;
   items: DcfHistoryEntry[];

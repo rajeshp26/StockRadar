@@ -1,24 +1,22 @@
 "use client";
-
 import { useMemo, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { DdmVariant, DdmValuation } from "../types/analysis.types";
 import { useDdmAnalysis } from "../hooks/useDdmAnalysis";
 import { useDdmHistory } from "../hooks/useDdmHistory";
-import { RefreshCw, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { RefreshCw, AlertTriangle, Sparkles } from "lucide-react";
 import {
   Metric,
-  ScoreBar,
   DiagnosticsList,
-  FlagPill,
   SectionHeader,
+  SuitabilitySidebar,
   fmtCurrency,
   fmtPct,
   fmtInt,
   fmtDateTime,
 } from "./shared-ui";
 
-/* ── Skeleton tile ──────────────────────────────────────────── */
+/* ── Skeleton tile ────────────────────────────────────────────────────────── */
 function MetricSkeleton() {
   return (
     <div className="glass-stat space-y-3">
@@ -28,14 +26,34 @@ function MetricSkeleton() {
   );
 }
 
-/* ── History row ────────────────────────────────────────────── */
-function HistoryRow({
-  cells,
-  isHeader,
-}: {
-  cells:     React.ReactNode[];
-  isHeader?: boolean;
-}) {
+/* ── AI Analyst Note ──────────────────────────────────────────────────────── */
+function AnalystNote({ summary, loading }: { summary?: string | null; loading: boolean }) {
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-white/6 bg-white/3 px-5 py-4 space-y-2">
+        <div className="h-2 w-20 rounded-full bg-white/8 glass-shimmer" />
+        <div className="h-2 w-full rounded-full bg-white/5 glass-shimmer" />
+        <div className="h-2 w-4/5 rounded-full bg-white/5 glass-shimmer" />
+        <div className="h-2 w-3/5 rounded-full bg-white/5 glass-shimmer" />
+      </div>
+    );
+  }
+  if (!summary) return null;
+  return (
+    <div className="rounded-2xl border border-indigo-500/15 bg-indigo-500/5 px-5 py-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Sparkles className="h-3 w-3 text-indigo-400/70" />
+        <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400/70">
+          AI Suitability Analysis
+        </span>
+      </div>
+      <p className="text-[12px] leading-relaxed text-white/60">{summary}</p>
+    </div>
+  );
+}
+
+/* ── History row ──────────────────────────────────────────────────────────── */
+function HistoryRow({ cells, isHeader }: { cells: React.ReactNode[]; isHeader?: boolean }) {
   return (
     <div
       className={cn(
@@ -55,19 +73,13 @@ function HistoryRow({
   );
 }
 
-/* ── Variant toggle (Gordon / Two-Stage) ────────────────────── */
+/* ── Variant toggle ───────────────────────────────────────────────────────── */
 const DDM_VARIANTS: { id: DdmVariant; label: string }[] = [
-  { id: "gordon",    label: "Gordon"    },
-  { id: "two_stage", label: "Two-Stage" },
+  { id: "gordon",    label: "Gordon"  },
+  { id: "two_stage", label: "2-Stage" },
 ];
 
-function VariantToggle({
-  value,
-  onChange,
-}: {
-  value:    DdmVariant;
-  onChange: (v: DdmVariant) => void;
-}) {
+function VariantToggle({ value, onChange }: { value: DdmVariant; onChange: (v: DdmVariant) => void }) {
   return (
     <div className="flex items-center gap-1 bg-white/5 rounded-xl p-1 border border-white/8">
       {DDM_VARIANTS.map(({ id, label }) => (
@@ -88,10 +100,8 @@ function VariantToggle({
   );
 }
 
-/* ── Main component ─────────────────────────────────────────── */
+/* ── Main component ───────────────────────────────────────────────────────── */
 export function DdmPanel({ symbol }: { symbol: string }) {
-
-  /* ── All hooks (logic unchanged) ─────────────────────────── */
   const [variant,         setVariant]         = useState<DdmVariant>("gordon");
   const [recomputing,     setRecomputing]     = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -100,7 +110,6 @@ export function DdmPanel({ symbol }: { symbol: string }) {
     loading, error, valuation, applicability,
     dataQuality, freshness, recompute,
   } = useDdmAnalysis(symbol, variant);
-
   const {
     loading: loadingHistory,
     error:   historyError,
@@ -118,12 +127,11 @@ export function DdmPanel({ symbol }: { symbol: string }) {
     }
   }, [recompute, reloadHistory]);
 
-  /* ── Summary section ─────────────────────────────────────── */
-  const summary = useMemo(() => {
+  /* ── Summary card ─────────────────────────────────────────────────────── */
+  const summaryCard = useMemo(() => {
     const curr = valuation?.currency ?? "USD";
     return (
       <div className="glass-panel p-8 relative overflow-hidden">
-        {/* Top accent line */}
         <div
           className="pointer-events-none absolute inset-x-0 top-0 h-px"
           style={{ background: "linear-gradient(90deg, transparent, rgba(99,102,241,0.5) 40%, rgba(139,92,246,0.3) 70%, transparent)" }}
@@ -139,9 +147,7 @@ export function DdmPanel({ symbol }: { symbol: string }) {
           }
           action={
             <div className="flex items-center gap-3">
-              {/* Variant toggle — replaces shadcn Tabs */}
               <VariantToggle value={variant} onChange={setVariant} />
-
               <button
                 onClick={handleRecompute}
                 disabled={recomputing}
@@ -158,54 +164,90 @@ export function DdmPanel({ symbol }: { symbol: string }) {
           }
         />
 
-        {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <MetricSkeleton /><MetricSkeleton /><MetricSkeleton />
+        {/* Two-column layout */}
+        <div className="flex flex-col lg:flex-row gap-8">
+          {/* Left: value metrics */}
+          <div className="flex-1">
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <MetricSkeleton /><MetricSkeleton /><MetricSkeleton />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Metric
+                  label="Intrinsic Value"
+                  value={fmtCurrency(valuation?.intrinsicValue, curr)}
+                  accent="indigo"
+                />
+                <Metric
+                  label="Current Price"
+                  value={fmtCurrency(valuation?.currentPrice ?? null, curr)}
+                />
+                <Metric
+                  label="Upside / Downside"
+                  value={fmtPct(valuation?.upsideDownsidePct ?? null)}
+                  accent={(valuation?.upsideDownsidePct ?? 0) >= 0 ? "emerald" : "rose"}
+                />
+              </div>
+            )}
+            {!loading && valuation && (
+              <div className="mt-5 pt-5 border-t border-white/5 flex items-center gap-3">
+                <span className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-black uppercase tracking-widest text-indigo-400">
+                  {valuation.method ?? (variant === "gordon" ? "gordon" : "two_stage")}
+                </span>
+                <span className="text-[10px] text-white/25">
+                  {variant === "gordon"
+                    ? "Formula: D₁ / (k − g)"
+                    : "PV of high-growth dividends + Gordon terminal value"
+                  }
+                </span>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Metric
-              label="Intrinsic Value"
-              value={fmtCurrency(valuation?.intrinsicValue, curr)}
-              accent="indigo"
+
+          {/* Dividers */}
+          <div className="hidden lg:block w-px bg-white/8 self-stretch" />
+          <div className="block lg:hidden h-px bg-white/8" />
+
+          {/* Right: suitability ring */}
+          <div className="flex justify-center lg:justify-end">
+            <SuitabilitySidebar
+              loading={loading}
+              score={applicability?.score}
+              category={applicability?.category}
+              flags={applicability?.flags}
+              showDiagnostics={showDiagnostics}
+              onToggleDiagnostics={() => setShowDiagnostics((s) => !s)}
             />
-            <Metric
-              label="Current Price"
-              value={fmtCurrency(valuation?.currentPrice ?? null, curr)}
-            />
-            <Metric
-              label="Upside / Downside"
-              value={fmtPct(valuation?.upsideDownsidePct ?? null)}
-              accent={(valuation?.upsideDownsidePct ?? 0) >= 0 ? "emerald" : "rose"}
-            />
+          </div>
+        </div>
+
+        {/* AI analyst note — full width below metrics row */}
+        {(loading || applicability?.suitabilitySummary) && (
+          <div className="mt-6">
+            <AnalystNote summary={applicability?.suitabilitySummary} loading={loading} />
           </div>
         )}
-
-        {/* Method footer tag */}
-        {!loading && valuation && (
-          <div className="mt-6 pt-5 border-t border-white/5 flex items-center gap-3">
-            <span className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-black uppercase tracking-widest text-indigo-400">
-              {valuation.method ?? (variant === "gordon" ? "gordon" : "two_stage")}
-            </span>
-            <span className="text-[10px] text-white/25">
-              {variant === "gordon"
-                ? "Formula: D₁ / (k − g)"
-                : "PV of high-growth dividends + Gordon terminal value"
-              }
-            </span>
+        {/* Diagnostics drawer */}
+        {showDiagnostics && (
+          <div className="mt-6 pt-6 border-t border-white/5 animate-fade-up">
+            <DiagnosticsList items={applicability?.flags} />
           </div>
         )}
       </div>
     );
-  }, [loading, valuation, freshness, recomputing, handleRecompute, variant]);
+  }, [
+    loading, valuation, freshness, recomputing, handleRecompute,
+    variant, applicability, showDiagnostics,
+  ]);
 
-  /* ── How We Arrived section ──────────────────────────────── */
+  /* ── How We Arrived section ───────────────────────────────────────────── */
   const howArrived = useMemo(() => {
     const v: DdmValuation | undefined = valuation;
-    const curr     = v?.currency ?? "USD";
+    const curr      = v?.currency ?? "USD";
     const decisions = (dataQuality?.inputDecisions as any)?.ddm;
-    const d0Src     = decisions?.d0Source            as string | undefined;
-    const kSrc      = decisions?.requiredReturn?.source as string | undefined;
+    const d0Src     = decisions?.d0Source                   as string | undefined;
+    const kSrc      = decisions?.requiredReturn?.source     as string | undefined;
     const gSrc      = decisions?.dividendGrowthRate?.source as string | undefined;
     const isTwoStage = (v?.method ?? "gordon") === "two_stage";
 
@@ -215,68 +257,34 @@ export function DdmPanel({ symbol }: { symbol: string }) {
           title="How We Arrived Here"
           subtitle="Input assumptions and derived values"
         />
-
         {loading ? (
           <div className="grid md:grid-cols-3 gap-4">
             {Array.from({ length: 6 }).map((_, i) => <MetricSkeleton key={i} />)}
           </div>
         ) : (
           <>
-            {/* Core inputs — always shown */}
             <div className="grid md:grid-cols-3 gap-4">
-              <Metric
-                label="D₀ (Annual DPS)"
-                value={fmtCurrency(v?.currentDps, curr)}
-                hint={d0Src ? `Source: ${d0Src}` : undefined}
-              />
-              <Metric
-                label="D₁ (Next Year DPS)"
-                value={fmtCurrency(v?.nextYearDps, curr)}
-              />
-              <Metric
-                label="g (Dividend Growth)"
-                value={fmtPct(v?.dividendGrowthRate)}
-                hint={gSrc ? `Source: ${gSrc}` : undefined}
-              />
-              <Metric
-                label="k (Required Return)"
-                value={fmtPct(v?.requiredReturn)}
-                hint={kSrc ? `Source: ${kSrc}` : undefined}
-              />
+              <Metric label="D₀ (Annual DPS)"    value={fmtCurrency(v?.currentDps, curr)}   hint={d0Src ? `Source: ${d0Src}` : undefined} />
+              <Metric label="D₁ (Next Year DPS)" value={fmtCurrency(v?.nextYearDps, curr)} />
+              <Metric label="g (Dividend Growth)" value={fmtPct(v?.dividendGrowthRate)}     hint={gSrc ? `Source: ${gSrc}` : undefined} />
+              <Metric label="k (Required Return)" value={fmtPct(v?.requiredReturn)}         hint={kSrc ? `Source: ${kSrc}` : undefined} />
               <Metric
                 label="Stability Check"
-                value={
-                  v
-                    ? v.dividendGrowthRate < v.requiredReturn
-                      ? "g < k ✅"
-                      : "g ≥ k ⚠️"
-                    : "—"
-                }
-                accent={
-                  v
-                    ? v.dividendGrowthRate < v.requiredReturn ? "emerald" : "rose"
-                    : undefined
-                }
+                value={v ? (v.dividendGrowthRate < v.requiredReturn ? "g < k ✅" : "g ≥ k ⚠️") : "—"}
+                accent={v ? (v.dividendGrowthRate < v.requiredReturn ? "emerald" : "rose") : undefined}
               />
-              <Metric
-                label="Model"
-                value={isTwoStage ? "Two-Stage" : "Gordon"}
-              />
+              <Metric label="Model" value={isTwoStage ? "Two-Stage" : "Gordon"} />
             </div>
-
-            {/* Two-stage extras */}
             {isTwoStage && (
               <div className="mt-4 pt-4 border-t border-white/5 grid md:grid-cols-3 gap-4">
-                <Metric label="High Growth Years (n)" value={v?.highGrowthYears ?? "—"} />
-                <Metric label="High Growth Rate (g₁)" value={fmtPct(v?.highGrowthRate ?? null)} />
-                <Metric label="Stable Growth (g₂)"    value={fmtPct(v?.stableGrowthRate ?? null)} />
-                <Metric label="PV Stage 1"             value={fmtCurrency(v?.pvStage1 ?? null, curr)} />
-                <Metric label="PV Terminal"            value={fmtCurrency(v?.pvTerminal ?? null, curr)} />
+                <Metric label="High Growth Years (n)" value={v?.highGrowthYears ?? "—"}                  />
+                <Metric label="High Growth Rate (g₁)" value={fmtPct(v?.highGrowthRate ?? null)}          />
+                <Metric label="Stable Growth (g₂)"    value={fmtPct(v?.stableGrowthRate ?? null)}        />
+                <Metric label="PV Stage 1"             value={fmtCurrency(v?.pvStage1 ?? null, curr)}     />
+                <Metric label="PV Terminal"            value={fmtCurrency(v?.pvTerminal ?? null, curr)}   />
                 <Metric label="Intrinsic = PV₁ + PVₜ" value={fmtCurrency(v?.intrinsicValue ?? null, curr)} accent="indigo" />
               </div>
             )}
-
-            {/* Gordon formula hint */}
             {!isTwoStage && (
               <div className="mt-5 pt-4 border-t border-white/5">
                 <p className="text-xs text-white/30">
@@ -291,64 +299,10 @@ export function DdmPanel({ symbol }: { symbol: string }) {
     );
   }, [loading, valuation, dataQuality, variant]);
 
-  /* ── Suitability section ─────────────────────────────────── */
-  const suitability = useMemo(() => {
-    const flagCount = applicability?.flags?.length ?? 0;
-    return (
-      <div className="glass-panel p-8">
-        <SectionHeader
-          title="Model Suitability"
-          subtitle="How well DDM applies to this stock"
-          action={
-            <button
-              onClick={() => setShowDiagnostics((s) => !s)}
-              className={cn(
-                "glass-btn inline-flex items-center gap-2 px-4 py-2 rounded-xl",
-                "text-[10px] font-black uppercase tracking-widest",
-                showDiagnostics && "bg-white/10 border-white/15",
-              )}
-            >
-              {showDiagnostics
-                ? <><ChevronUp   className="h-3 w-3" /> Hide Diagnostics</>
-                : <><ChevronDown className="h-3 w-3" /> Diagnostics {flagCount > 0 && `(${flagCount})`}</>
-              }
-            </button>
-          }
-        />
-
-        {loading ? (
-          <div className="h-6 w-64 rounded-full bg-white/10 glass-shimmer" />
-        ) : (
-          <div className="space-y-5">
-            <ScoreBar score={applicability?.score} category={applicability?.category} />
-            {(applicability?.flags?.length ?? 0) > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {applicability!.flags.slice(0, 4).map((f, i) => (
-                  <FlagPill key={`${f.code}-${i}`} text={f.code} />
-                ))}
-                {applicability!.flags.length > 4 && (
-                  <span className="text-xs text-white/30 self-center">
-                    +{applicability!.flags.length - 4} more
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {showDiagnostics && (
-          <div className="mt-6 pt-6 border-t border-white/5 animate-fade-up">
-            <DiagnosticsList items={applicability?.flags} />
-          </div>
-        )}
-      </div>
-    );
-  }, [loading, applicability, showDiagnostics]);
-
-  /* ── History section ─────────────────────────────────────── */
+  /* ── History section ──────────────────────────────────────────────────── */
   const historyCard = useMemo(() => {
-    const items = history?.items ?? [];
-    const curr  = valuation?.currency ?? "USD";
+    const items   = history?.items ?? [];
+    const curr    = valuation?.currency ?? "USD";
     const headers = ["Date", "Method", "Intrinsic", "g", "k", "Score", "Category"];
 
     return (
@@ -367,7 +321,6 @@ export function DdmPanel({ symbol }: { symbol: string }) {
             ) : undefined
           }
         />
-
         {loadingHistory ? (
           <div className="space-y-2">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -380,9 +333,7 @@ export function DdmPanel({ symbol }: { symbol: string }) {
             <p className="text-sm text-white/50">Could not load history.</p>
           </div>
         ) : items.length === 0 ? (
-          <p className="text-sm text-white/30 italic">
-            No history yet — run a computation to start tracking.
-          </p>
+          <p className="text-sm text-white/30 italic">No history yet — run a computation to start tracking.</p>
         ) : (
           <div className="rounded-2xl overflow-hidden border border-white/8">
             <HistoryRow cells={headers} isHeader />
@@ -392,11 +343,11 @@ export function DdmPanel({ symbol }: { symbol: string }) {
                 cells={[
                   fmtDateTime(r.runAt),
                   r.method ?? (variant === "gordon" ? "gordon" : "two_stage"),
-                  fmtCurrency(r.intrinsicValue       ?? null, curr),
-                  fmtPct(r.dividendGrowthRate        ?? null),
-                  fmtPct(r.requiredReturn            ?? null),
-                  fmtInt(r.score                     ?? null),
-                  r.category                         ?? "—",
+                  fmtCurrency(r.intrinsicValue    ?? null, curr),
+                  fmtPct(r.dividendGrowthRate     ?? null),
+                  fmtPct(r.requiredReturn         ?? null),
+                  fmtInt(r.score                  ?? null),
+                  r.category                      ?? "—",
                 ]}
               />
             ))}
@@ -406,7 +357,7 @@ export function DdmPanel({ symbol }: { symbol: string }) {
     );
   }, [loadingHistory, historyError, history, reloadHistory, valuation?.currency, variant]);
 
-  /* ── Render ──────────────────────────────────────────────── */
+  /* ── Render ───────────────────────────────────────────────────────────── */
   return (
     <div className="space-y-6 animate-fade-up">
       {error && (
@@ -415,9 +366,8 @@ export function DdmPanel({ symbol }: { symbol: string }) {
           <p className="text-sm text-white/60">{error}</p>
         </div>
       )}
-      {summary}
+      {summaryCard}
       {howArrived}
-      {suitability}
       <div className="glass-divider" />
       {historyCard}
     </div>

@@ -1,6 +1,6 @@
 # backend/application/services/valuation_service.py
 from __future__ import annotations
-
+from application.services.ai_service import generate_suitability_summary
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
@@ -324,6 +324,37 @@ class ValuationService:
 
         all_flags: List[DiagnosticFlag] = list(metric_flags) + list(extra_flags)
 
+        # AI-generated plain-English summary (stored once; returned free on cached reads)
+        suitability_summary = await generate_suitability_summary(
+            symbol=symbol,
+            method="rule1",
+            score=int(metric_score),
+            category=metric_category,
+            flags=[f.dict() for f in all_flags],
+            evidence=suitability_evidence,
+            valuation_inputs={
+                "currency":     currency,
+                "eps0":         eps0_safe,
+                "growth":       growth,
+                "futurePE":     float(future_pe),
+                "futureEPS":    float(future_eps),
+                "futurePrice":  float(future_price),
+                "stickerPrice": float(sticker_price),
+                "mosPrice":     float(mos_price),
+                "discountRate": float(discount_rate),
+                "horizonYears": int(horizon_years),
+                "mos":          float(mos),
+            },
+            input_decisions={
+                **input_decisions,
+                "assumptions": {
+                    "discountRate": float(discount_rate),
+                    "horizonYears": int(horizon_years),
+                    "mos":          float(mos),
+                },
+            },
+        )
+
         await self.repo.upsert_intrinsic_value_analysis(
             company_id,
             {
@@ -359,6 +390,7 @@ class ValuationService:
                 "score": int(metric_score),
                 "category": metric_category,
                 "flags": [f.dict() for f in all_flags],
+                "suitabilitySummary":  suitability_summary,   # ← NEW
             },
             "dataQuality": {
                 "freshnessDays": dq_freshness,
@@ -453,3 +485,14 @@ class ValuationService:
             return None
 
         return self._cagr(v0, vN, n_years)
+
+    async def get_company_summary_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+        """Latest company_summary row — used as shares fallback in DCF."""
+        rows = await self._fetch(
+            table="company_summary",
+            select="snapshot_date,shares_outstanding,implied_shares_outstanding,trailing_eps",
+            filters={"company_id": f"eq.{company_id}"},
+            order="snapshot_date.desc",
+            limit=1,
+        )
+        return rows[0] if rows else None
