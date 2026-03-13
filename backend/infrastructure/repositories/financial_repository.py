@@ -1048,3 +1048,60 @@ class SupabaseFinancialRepository:
             return response.data
         except Exception:
             return None
+
+    async def get_shares_history(
+        self, company_id: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Return annual income_statement rows that have shares_outstanding_diluted populated,
+        ordered oldest-to-newest. Used by valuation services to get a per-year shares series.
+
+        Returns [] if no rows have shares_outstanding_diluted (non-null).
+        Callers should fall back to get_company_summary_latest() in that case.
+        """
+        try:
+            resp = (
+                self.client.table("income_statements")
+                .select("fiscal_year, shares_outstanding_diluted, shares_outstanding_basic")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", "null")          # annual rows only
+                .not_.is_("shares_outstanding_diluted", "null")
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            logger.error(
+                "Failed to get shares history for company_id=%s: %s", company_id, e
+            )
+            return []
+
+    async def get_company_summary_latest(
+        self, company_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Return the most recent company_summary row for a company.
+        Used as a fallback shares source when income_statements.shares_outstanding_diluted
+        is null for all rows (e.g. defeatbeta omits share counts for some tickers).
+
+        company_summary.shares_outstanding is reliably populated by the
+        defeat_beta_provider / yfinance summary pipeline (confirmed for SIRI: 334,772,877).
+        """
+        try:
+            resp = (
+                self.client.table("company_summary")
+                .select(
+                    "company_id, shares_outstanding, implied_shares_outstanding, "
+                    "snapshot_date, provider"
+                )
+                .eq("company_id", company_id)
+                .order("snapshot_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return resp.data[0] if resp.data else None
+        except Exception as e:
+            logger.error(
+                "Failed to get company_summary_latest for company_id=%s: %s", company_id, e
+            )
+            return None            

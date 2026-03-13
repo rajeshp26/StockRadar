@@ -67,9 +67,9 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     is_resp = (
         supabase.table("income_statements")
         .select(
-            "fiscal_year, period_end_date, revenue, cost_of_goods_sold, gross_profit, "
-            "operating_income, net_income, ebit, ebitda, pretax_income, tax_expense, "
-            "net_income_to_common, interest_expense, shares_outstanding_diluted"
+           "is_id, fiscal_year, period_end_date, revenue, cost_of_goods_sold, gross_profit, "
+           "operating_income, net_income, ebit, ebitda, pretax_income, tax_expense, "
+           "net_income_to_common, interest_expense, shares_outstanding_diluted"
         )
         .eq("company_id", company_id)
         .is_("fiscal_quarter", None)
@@ -79,7 +79,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     bs_resp = (
         supabase.table("balance_sheets")
         .select(
-            "fiscal_year, period_end_date, total_assets, current_assets, current_liabilities, "
+            "bs_id, fiscal_year, period_end_date, total_assets, current_assets, current_liabilities, "
             "total_debt, long_term_debt, shareholders_equity, cash_and_cash_equivalents, "
             "intangible_assets, goodwill, inventory"
         )
@@ -91,7 +91,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     cf_resp = (
         supabase.table("cash_flow_statements")
         .select(
-            "fiscal_year, period_end_date, cash_from_operating_activities, "
+            "cf_id, fiscal_year, period_end_date, cash_from_operating_activities, "
             "capital_expenditures, dividends_paid"
         )
         .eq("company_id", company_id)
@@ -104,9 +104,47 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     bs_rows = bs_resp.data or []
     cf_rows = cf_resp.data or []
 
-    is_by_year = {r["fiscal_year"]: r for r in is_rows if r.get("fiscal_year") is not None}
-    bs_by_year = {r["fiscal_year"]: r for r in bs_rows if r.get("fiscal_year") is not None}
-    cf_by_year = {r["fiscal_year"]: r for r in cf_rows if r.get("fiscal_year") is not None}
+    def _best_row(rows: List[Dict], score_fields: List[str], pk_field: str) -> Dict[int, Dict]:
+       """
+       Build a fiscal_year -> row dict by picking the most complete row per year.
+       'Most complete' = most non-null values in score_fields.
+       Tiebreaker: largest pk_field value (most recently written = likely defeatbeta path).
+       """
+       by_year: Dict[int, Dict] = {}
+       for r in rows:
+           fy = r.get("fiscal_year")
+           if fy is None:
+               continue
+           if fy not in by_year:
+               by_year[fy] = r
+               continue
+           existing_score = sum(1 for f in score_fields if by_year[fy].get(f) is not None)
+           candidate_score = sum(1 for f in score_fields if r.get(f) is not None)
+           if candidate_score > existing_score:
+               by_year[fy] = r
+           elif candidate_score == existing_score:
+               # Tiebreak by PK — larger value = more recently inserted
+               if (r.get(pk_field) or 0) > (by_year[fy].get(pk_field) or 0):
+                   by_year[fy] = r
+       return by_year
+
+    # income_statements scoring fields:
+    #   - depreciation_amortization is NOT in income_statements (it's in cash_flow_statements)
+    #   - PK is is_id (NOT "id")
+    is_by_year = _best_row(is_rows, [
+       "net_income_to_common", "shares_outstanding_diluted",
+       "net_income", "ebit", "ebitda", "revenue", "gross_profit",
+    ], pk_field="is_id")
+
+    bs_by_year = _best_row(bs_rows, [
+       "total_assets", "shareholders_equity", "total_debt",
+       "intangible_assets", "goodwill",
+    ], pk_field="bs_id")
+
+    cf_by_year = _best_row(cf_rows, [
+       "cash_from_operating_activities", "capital_expenditures",
+       "depreciation_amortization", "change_in_working_capital",
+    ], pk_field="cf_id")
 
     years = sorted(set(is_by_year) | set(bs_by_year) | set(cf_by_year))
     out: List[Dict[str, Any]] = []

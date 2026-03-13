@@ -1,14 +1,24 @@
+// web/src/features/analysis/components/method-selector.tsx
+// CHANGE: IntrinsicMethod union extended; METHODS array gains OE + RI entries.
+// No callers break — type is exported and page.tsx is updated alongside.
 "use client";
-
 import { cn } from "@/lib/utils";
 
-export type IntrinsicMethod = "overview" | "rule1" | "dcf" | "ddm";
+export type IntrinsicMethod =
+  | "overview"
+  | "rule1"
+  | "dcf"
+  | "ddm"
+  | "ownerEarnings"
+  | "residualIncome";
 
 const METHODS: { id: IntrinsicMethod; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "rule1",    label: "Rule #1"  },
-  { id: "dcf",      label: "DCF"      },
-  { id: "ddm",      label: "DDM"      },
+  { id: "overview",       label: "Overview" },
+  { id: "rule1",          label: "Rule #1"  },
+  { id: "dcf",            label: "DCF"      },
+  { id: "ddm",            label: "DDM"      },
+  { id: "ownerEarnings",  label: "OE"       },
+  { id: "residualIncome", label: "RI"       },
 ];
 
 export function MethodSelector({
@@ -19,7 +29,11 @@ export function MethodSelector({
   onChange: (m: IntrinsicMethod) => void;
 }) {
   return (
-    <div className="flex items-center gap-2" role="tablist" aria-label="Valuation method">
+    <div
+      className="flex items-center gap-2 flex-wrap"
+      role="tablist"
+      aria-label="Valuation method"
+    >
       {METHODS.map(({ id, label }) => (
         <button
           key={id}
@@ -31,7 +45,7 @@ export function MethodSelector({
             "border transition-all duration-200",
             method === id
               ? "bg-indigo-600 border-indigo-400/50 text-white shadow-[0_4px_16px_rgba(99,102,241,0.3)]"
-              : "bg-white/5 border-white/8 text-white/30 hover:text-white/60 hover:bg-white/8",
+              : "bg-white/5 border-white/8 text-white/30 hover:text-white/60 hover:bg-white/8"
           )}
         >
           {label}

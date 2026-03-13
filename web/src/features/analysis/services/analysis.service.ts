@@ -14,6 +14,10 @@ import type {
   DdmVariant,
   DcfResponse,
   DcfHistory,
+  OwnerEarningsResponse,
+  OwnerEarningsHistory,
+  ResidualIncomeResponse,
+  ResidualIncomeHistory,
 } from "../types/analysis.types";
 
 type Json = Record<string, any>;
@@ -267,4 +271,134 @@ export async function fetchDcfHistory(symbol: string): Promise<DcfHistory> {
   }
 
   return { symbol: symbol.toUpperCase(), items: [] };
+}
+
+/* -------------------------------------------------------------------------- */
+/* OWNER EARNINGS                                                              */
+/* -------------------------------------------------------------------------- */
+
+export type OwnerEarningsOutcome =
+  | { status: "ok"; payload: OwnerEarningsResponse }
+  | { status: "error"; message: string; httpStatus?: number };
+
+export async function fetchOwnerEarningsOutcome(
+  ticker: string
+): Promise<OwnerEarningsOutcome> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/owner_earnings`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
+  } catch (err: any) {
+    return {
+      status: "error",
+      message: err?.message || "Network error while computing Owner Earnings.",
+    };
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<OwnerEarningsResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return {
+        status: "error",
+        message: "Invalid response from server (missing Owner Earnings payload).",
+        httpStatus: 502,
+      };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  const message =
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`;
+  return { status: "error", message, httpStatus: res.status };
+}
+
+/**
+ * OE History — never throws; returns empty list on any failure.
+ * GET /valuations/:symbol/owner_earnings/history
+ */
+export async function fetchOwnerEarningsHistory(
+  ticker: string
+): Promise<OwnerEarningsHistory> {
+  const url = apiPath(
+    `/valuations/${encodeURIComponent(ticker)}/owner_earnings/history`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch {
+    return { symbol: ticker.toUpperCase(), items: [] };
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<OwnerEarningsHistory>(res);
+    if (body && typeof body === "object" && Array.isArray(body.items)) {
+      return body;
+    }
+  }
+  return { symbol: ticker.toUpperCase(), items: [] };
+}
+
+/* -------------------------------------------------------------------------- */
+/* RESIDUAL INCOME                                                             */
+/* -------------------------------------------------------------------------- */
+
+export type ResidualIncomeOutcome =
+  | { status: "ok"; payload: ResidualIncomeResponse }
+  | { status: "error"; message: string; httpStatus?: number };
+
+export async function fetchResidualIncomeOutcome(
+  ticker: string
+): Promise<ResidualIncomeOutcome> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/residual_income`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
+  } catch (err: any) {
+    return {
+      status: "error",
+      message: err?.message || "Network error while computing Residual Income.",
+    };
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<ResidualIncomeResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return {
+        status: "error",
+        message: "Invalid response from server (missing Residual Income payload).",
+        httpStatus: 502,
+      };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  const message =
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`;
+  return { status: "error", message, httpStatus: res.status };
+}
+
+/**
+ * RI History — never throws; returns empty list on any failure.
+ * GET /valuations/:symbol/residual_income/history
+ */
+export async function fetchResidualIncomeHistory(
+  ticker: string
+): Promise<ResidualIncomeHistory> {
+  const url = apiPath(
+    `/valuations/${encodeURIComponent(ticker)}/residual_income/history`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch {
+    return { symbol: ticker.toUpperCase(), items: [] };
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<ResidualIncomeHistory>(res);
+    if (body && typeof body === "object" && Array.isArray(body.items)) {
+      return body;
+    }
+  }
+  return { symbol: ticker.toUpperCase(), items: [] };
 }

@@ -253,7 +253,7 @@ def _input_source_summary(input_decisions: Dict[str, Any], method: str) -> str:
             lines.append(f"Shares: source={sh.get('source','?')}, value={_fmt(sh.get('value'))}")
 
     return "\n".join(f"  {l}" for l in lines) if lines else "  (not available)"
-
+    
 
 # ── Prompt router ─────────────────────────────────────────────────────────────
 
@@ -273,6 +273,10 @@ def _build_prompt(
         return _prompt_ddm(symbol, method, score, category, flags, evidence, valuation_inputs, input_decisions)
     elif method == "dcf":
         return _prompt_dcf(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)
+    elif method == "owner_earnings":
+        return _prompt_owner_earnings(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)
+    elif method == "residual_income":
+        return _prompt_residual_income(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)
     else:
         return _prompt_generic(symbol, method, score, category, flags)
 
@@ -840,7 +844,189 @@ Sentence 2: Are the forecast inputs (base FCF, growth, WACC) well-supported or d
 Sentence 3: Are the terminal value assumptions conservative? Does leverage pose a risk?
 Sentence 4: How much to trust {_fmt(intrinsic)} {currency}/share and the single biggest sensitivity risk."""
 
+def _prompt_owner_earnings(symbol, score, category, flags, ev, vi, id_) -> str:
+    fs     = ev.get("final_scoring", {})
+    passes = fs.get("passes", "N/A")
+    total  = fs.get("totalPossible", "N/A")
 
+    # Evidence from owner_earnings_suitability.py
+    pos_ev   = ev.get("m1_oe_positivity",   {})
+    vol_ev   = ev.get("m2_oe_volatility",   {})
+    mgn_ev   = ev.get("m3_oe_margin",       {})
+    cagr_ev  = ev.get("m4_oe_cagr",         {})
+    cd_ev    = ev.get("m5_capex_da_ratio",   {})
+    lev_ev   = ev.get("m6_net_debt_to_ebitda", {})
+    roic_ev  = ev.get("m7_roic_5y",         {})
+
+    currency  = vi.get("currency", "USD")
+    base_oe   = vi.get("baseOe")
+    intrinsic = vi.get("intrinsicValuePerShare")
+    upside    = vi.get("upsideDownsidePct")
+    g         = vi.get("oeGrowthRateUsed")
+    r         = vi.get("discountRateUsed")
+    tg        = vi.get("terminalGrowthRateUsed")
+    ev_val    = vi.get("enterpriseValue")
+    n_years   = vi.get("forecastYears")
+
+    crit      = _critical_flags(flags)
+    crit_text = "\n".join(
+        f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}"
+        for f in crit[:4]
+    ) or "  None"
+
+    # Available-only metrics block
+    mlines = []
+    pos_y = pos_ev.get("positiveYears")
+    tot_y = pos_ev.get("totalYears")
+    vol   = vol_ev.get("volatility")
+    mu    = vol_ev.get("mean")
+    mgn   = mgn_ev.get("avg")
+    oe_cagr = cagr_ev.get("cagr")
+    cd    = cd_ev.get("avg")
+    nd    = lev_ev.get("ratio")
+    roic  = roic_ev.get("roicAvg")
+
+    if pos_y  is not None: mlines.append(f"OE positive years (5y): {pos_y} of {tot_y} [pass: ≥4]")
+    if vol    is not None: mlines.append(f"OE volatility (StdDev/|Mean|): {_fmt(vol, as_pct=True)} | mean OE={_fmt(mu)} {currency} [pass: <40%]")
+    if mgn    is not None: mlines.append(f"OE margin (5y avg): {_fmt(mgn, as_pct=True)} [pass: ≥5%]")
+    if oe_cagr is not None: mlines.append(f"OE CAGR (5y): {_fmt(oe_cagr, as_pct=True)} [pass: ≥4%]")
+    if cd     is not None: mlines.append(f"Capex / D&A ratio (5y avg): {_fmt(cd)}x [pass: <1.5x]")
+    if nd     is not None: mlines.append(f"Net Debt / EBITDA: {_fmt(nd)}x [pass: <3x]")
+    if roic   is not None: mlines.append(f"ROIC (5y avg): {_fmt(roic, as_pct=True)} [pass: ≥15%]")
+    metrics_block = "\n".join(f"  {l}" for l in mlines) or "  (insufficient data)"
+
+    formula_broken = intrinsic is None
+    upside_text = f"{_fmt(upside, as_pct=True)} vs current price" if upside is not None else "N/A"
+
+    if formula_broken:
+        return f"""Analyse this Owner Earnings suitability for {symbol.upper()}. The model could not produce an intrinsic value (missing base OE or growth rate).
+Explain why it breaks down and what the evidence shows about earnings quality.
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total}
+=== FORMULA BREAKDOWN ===
+Base OE: {_fmt(base_oe)} {currency} | OE growth: {_fmt(g, as_pct=True)} | Discount rate: {_fmt(r, as_pct=True)}
+Intrinsic/share: unavailable
+=== AVAILABLE METRIC EVIDENCE ===
+{metrics_block}
+=== CRITICAL FLAGS ===
+{crit_text}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Cover: (1) why the OE formula cannot compute an intrinsic value, (2) what the available metrics reveal about earnings quality, (3) what an investor should monitor."""
+
+    return f"""Analyse this Owner Earnings (Buffett Method) suitability and valuation for {symbol.upper()}. Write a 3-4 sentence plain-English summary.
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total}
+=== FORMULA RESULT ===
+OE = Net Income + D&A − Maintenance Capex
+Base OE: {_fmt(base_oe)} {currency}/yr | growth: {_fmt(g, as_pct=True)} | discount: {_fmt(r, as_pct=True)} | terminal g: {_fmt(tg, as_pct=True)} | horizon: {n_years} yrs
+Enterprise Value: {_fmt(ev_val)} {currency} | Intrinsic/share: {_fmt(intrinsic)} {currency}
+Upside/downside: {upside_text}
+=== AVAILABLE METRICS ===
+{metrics_block}
+=== CRITICAL FLAGS ===
+{crit_text}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Sentence 1: Verdict + OE consistency (positive years, volatility, CAGR) with actual values.
+Sentence 2: Are the OE margin and capital intensity (Capex/D&A) sustainable? Reference ROIC.
+Sentence 3: Are discount rate and terminal growth assumptions conservative? Note leverage risk if present.
+Sentence 4: How much to trust the intrinsic value of {_fmt(intrinsic)} {currency}/share and the main sensitivity risk."""
+
+
+def _prompt_residual_income(symbol, score, category, flags, ev, vi, id_) -> str:
+    fs     = ev.get("final_scoring", {})
+    passes = fs.get("passes", "N/A")
+    total  = fs.get("totalPossible", "N/A")
+
+    # Evidence from residual_income_suitability.py
+    eq_ev    = ev.get("m1_equity_positivity",  {})
+    roe_ev   = ev.get("m2_roe_vs_ke",          {})
+    roe_c_ev = ev.get("m3_roe_consistency",    {})
+    bv_ev    = ev.get("m4_bv_growth",          {})
+    lev_ev   = ev.get("m5_net_debt_to_equity", {})
+    eps_ev   = ev.get("m6_eps_positivity",     {})
+    roic_ev  = ev.get("m7_roic_5y",            {})
+
+    currency  = vi.get("currency", "USD")
+    bv        = vi.get("bvPerShare")
+    eps0      = vi.get("eps0")
+    roe0      = vi.get("roe0")
+    ke        = vi.get("costOfEquityUsed")
+    ri0       = vi.get("ri0PerShare")
+    intrinsic = vi.get("intrinsicValuePerShare")
+    upside    = vi.get("upsideDownsidePct")
+    g         = vi.get("riGrowthRateUsed")
+    tg        = vi.get("terminalGrowthRateUsed")
+    n_years   = vi.get("forecastYears")
+
+    crit      = _critical_flags(flags)
+    crit_text = "\n".join(
+        f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}"
+        for f in crit[:4]
+    ) or "  None"
+
+    # Available-only metrics
+    mlines = []
+    roe_avg  = roe_ev.get("roeAvg")
+    ke_used  = roe_ev.get("keUsed")
+    spread   = (roe_avg - ke_used) if (roe_avg is not None and ke_used is not None) else None
+    roe_pos  = roe_c_ev.get("positiveYears")
+    roe_tot  = roe_c_ev.get("totalYears")
+    bv_cagr  = bv_ev.get("cagr")
+    nd_eq    = lev_ev.get("ratio")
+    eps_pos  = eps_ev.get("positiveYears")
+    eps_tot  = eps_ev.get("totalYears")
+    roic     = roic_ev.get("roicAvg")
+
+    if spread   is not None: mlines.append(f"ROE − CoE spread: {_fmt(spread, as_pct=True)} (ROE={_fmt(roe_avg, as_pct=True)}, CoE={_fmt(ke_used, as_pct=True)}) [pass: spread>0]")
+    if roe_pos  is not None: mlines.append(f"ROE positive years: {roe_pos} of {roe_tot} [pass: ≥4]")
+    if bv_cagr  is not None: mlines.append(f"Book value CAGR (5y): {_fmt(bv_cagr, as_pct=True)} [pass: ≥3%]")
+    if eps_pos  is not None: mlines.append(f"EPS positive years (5y): {eps_pos} of {eps_tot} [pass: ≥4]")
+    if nd_eq    is not None: mlines.append(f"Net Debt / Equity: {_fmt(nd_eq)}x [pass: <1.5x]")
+    if roic     is not None: mlines.append(f"ROIC (5y avg): {_fmt(roic, as_pct=True)} [pass: ≥10%]")
+    metrics_block = "\n".join(f"  {l}" for l in mlines) or "  (insufficient data)"
+
+    spread_text = f"{_fmt(spread, as_pct=True)} (value {'creating' if spread and spread > 0 else 'destroying'})" if spread is not None else "N/A"
+    upside_text = f"{_fmt(upside, as_pct=True)} vs current price" if upside is not None else "N/A"
+    formula_broken = intrinsic is None
+
+    if formula_broken:
+        return f"""Analyse this Residual Income suitability for {symbol.upper()}. The model could not produce an intrinsic value.
+Explain the specific failure and what the evidence reveals about value creation.
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total}
+=== FORMULA BREAKDOWN ===
+RI = Intrinsic = BV₀/share + PV(EPS − CoE × BV) + Terminal
+BV/share: {_fmt(bv)} {currency} | EPS: {_fmt(eps0)} {currency} | ROE: {_fmt(roe0, as_pct=True)} | CoE: {_fmt(ke, as_pct=True)}
+RI₀/share: {_fmt(ri0)} {currency} | Intrinsic: unavailable
+=== AVAILABLE METRIC EVIDENCE ===
+{metrics_block}
+=== CRITICAL FLAGS ===
+{crit_text}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
++Cover: (1) why the RI formula fails (negative equity or missing data), (2) what the ROE vs CoE evidence shows about economic profit, (3) what an investor should watch."""
+
+    return f"""Analyse this Residual Income (Economic Profit) suitability and valuation for {symbol.upper()}. Write a 3-4 sentence plain-English summary.
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Passes: {passes}/{total}
+=== FORMULA RESULT ===
+Intrinsic = BV₀/share + Σ[(ROE−CoE)×BVₜ₋₁]/(1+CoE)ᵗ + Terminal
+BV/share={_fmt(bv)} {currency} | EPS={_fmt(eps0)} {currency} | ROE={_fmt(roe0, as_pct=True)} | CoE={_fmt(ke, as_pct=True)}
+RI₀/share={_fmt(ri0)} {currency} | ROE−CoE spread={spread_text}
+g={_fmt(g, as_pct=True)} | terminal g={_fmt(tg, as_pct=True)} | horizon={n_years} yrs
+Intrinsic/share={_fmt(intrinsic)} {currency} | Upside/downside={upside_text}
+=== AVAILABLE METRICS ===
+{metrics_block}
+=== CRITICAL FLAGS ===
+{crit_text}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Sentence 1: Verdict + the ROE vs CoE spread — is the company generating or destroying value above its cost of equity?
+Sentence 2: Is book value growing consistently? Are earnings reliably positive to anchor the RI stream?
+Sentence 3: Are the CoE and growth assumptions defensible? Does leverage pose a risk to the book value anchor?
+Sentence 4: How much to trust the intrinsic value of {_fmt(intrinsic)} {currency}/share and the main sensitivity risk."""
 # ── Generic fallback ──────────────────────────────────────────────────────────
 
 def _prompt_generic(symbol, method, score, category, flags) -> str:

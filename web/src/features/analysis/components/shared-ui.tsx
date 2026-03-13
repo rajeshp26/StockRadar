@@ -1,4 +1,5 @@
 "use client";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { DiagnosticFlag } from "../types/analysis.types";
 
@@ -43,16 +44,17 @@ export function Metric({
   accent,
 }: {
   label:   string;
-  value:   string | number | React.ReactNode;
+  value:   string | number | ReactNode;
   hint?:   string;
   accent?: "indigo" | "emerald" | "rose" | "amber";
 }) {
-  const valueColor = {
+  const COLOR_MAP: Record<NonNullable<typeof accent>, string> = {
     indigo:  "text-indigo-400",
     emerald: "text-emerald-400",
     rose:    "text-rose-400",
     amber:   "text-amber-400",
-  }[accent ?? ""] ?? "text-white";
+  };
+  const valueColor = accent ? COLOR_MAP[accent] : "text-white";
   return (
     <div className="glass-stat">
       <p className="glass-overline">{label}</p>

@@ -4,7 +4,10 @@ from application.services.ai_service import generate_suitability_summary
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
-
+from application.services.owner_earnings_service import OwnerEarningsService
+from application.services.residual_income_service import ResidualIncomeService
+from domain.models.valuation_owner_earnings import (OwnerEarningsRequestOverrides, OwnerEarningsResponse)
+from domain.models.valuation_residual_income import (ResidualIncomeRequestOverrides, ResidualIncomeResponse)
 from domain.models.valuation_rule1 import (
     Rule1RequestOverrides,
     Rule1Valuation,
@@ -55,6 +58,8 @@ class ValuationService:
         self.guard = guard
         self.ddm = DdmService(repo=repo, guard=guard)
         self.dcf = DcfService(repo=repo, guard=guard)  # ✅ NEW
+        self.owner_earnings = OwnerEarningsService(repo=repo, guard=guard)
+        self.residual_income = ResidualIncomeService(repo=repo, guard=guard)
 
     # ---------------------------------------------------------------------
     # Rule #1 (existing)
@@ -447,6 +452,47 @@ class ValuationService:
         force: bool = False,
     ) -> DcfResponse:
         return await self.dcf.compute_dcf_if_stale(symbol=symbol, user_id=user_id, overrides=overrides, force=force)
+
+    # ── Owner Earnings public API ─────────────────────────────────────────────
+
+    async def compute_owner_earnings_if_stale(
+        self,
+        symbol: str,
+        user_id: Optional[int],
+        overrides: Optional["OwnerEarningsRequestOverrides"] = None,
+        force: bool = False,
+    ) -> "OwnerEarningsResponse":
+        """
+        Compute or return cached Owner Earnings (Buffett Method) valuation.
+        Delegates entirely to OwnerEarningsService — ValuationService is a thin
+        orchestration layer, consistent with the DCF / DDM pattern.
+        """
+        return await self.owner_earnings.compute_owner_earnings_if_stale(
+            symbol=symbol,
+            user_id=user_id,
+            overrides=overrides,
+            force=force,
+        )
+
+    # ── Residual Income public API ────────────────────────────────────────────
+
+    async def compute_residual_income_if_stale(
+        self,
+        symbol: str,
+        user_id: Optional[int],
+        overrides: Optional["ResidualIncomeRequestOverrides"] = None,
+        force: bool = False,
+    ) -> "ResidualIncomeResponse":
+        """
+        Compute or return cached Residual Income (Economic Profit) valuation.
+        Delegates entirely to ResidualIncomeService.
+        """
+        return await self.residual_income.compute_residual_income_if_stale(
+            symbol=symbol,
+            user_id=user_id,
+            overrides=overrides,
+            force=force,
+        )
 
     # Internals (existing)
     @staticmethod

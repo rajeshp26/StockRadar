@@ -14,6 +14,7 @@ ALLOWED_METHODS = {
     "ddm_two_stage",
     "dcf",
     "owner_earnings",
+    "residual_income", 
     "relative",
 }
 
@@ -162,6 +163,10 @@ class ValuationRepository:
             return await self._latest_dependency_ddm(company_id, method=method)
         if method == "dcf":
             return await self._latest_dependency_dcf(company_id)
+        if method == "owner_earnings":
+            return await self._latest_dependency_owner_earnings(company_id)
+        if method == "residual_income":
+            return await self._latest_dependency_residual_income(company_id)
         return None
 
     async def _latest_dependency_rule1(self, company_id: int) -> Optional[datetime]:
@@ -391,6 +396,463 @@ class ValuationRepository:
         except Exception as e:
             logger.error("get_latest_dependency_ts(dcf) failed company_id=%s: %s", company_id, e)
             return None
+
+    # ── Owner Earnings dependency timestamp ───────────────────────────────────
+
+    async def _latest_dependency_owner_earnings(self, company_id: int) -> Optional[datetime]:
+        """
+        Dependency set for Owner Earnings:
+        - income_statements  (net_income, shares)
+        - cash_flow_statements  (D&A, capex, WC change)
+        - balance_sheets  (net debt equity bridge)
+        - financial_ratios  (ROIC for suitability)
+        - valuation_method_defaults  (method = owner_earnings)
+        - company_valuation_overrides  (method = owner_earnings)
+        """
+        try:
+            is_ = (
+                supabase.table("income_statements")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            is_dt = _normalize_datetime((_first(is_.data) or {}).get("updated_at"))
+
+            cf = (
+                supabase.table("cash_flow_statements")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            cf_dt = _normalize_datetime((_first(cf.data) or {}).get("updated_at"))
+
+            bs = (
+                supabase.table("balance_sheets")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            bs_dt = _normalize_datetime((_first(bs.data) or {}).get("updated_at"))
+
+            fr = (
+                supabase.table("financial_ratios")
+                .select("computed_at")
+                .eq("company_id", company_id)
+                .order("computed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            fr_dt = _normalize_datetime((_first(fr.data) or {}).get("computed_at"))
+
+            md = (
+                supabase.table("valuation_method_defaults")
+                .select("updated_at")
+                .eq("method", "owner_earnings")
+                .limit(1)
+                .execute()
+            )
+            md_dt = _normalize_datetime((_first(md.data) or {}).get("updated_at"))
+
+            co = (
+                supabase.table("company_valuation_overrides")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .eq("method", "owner_earnings")
+                .limit(1)
+                .execute()
+            )
+            co_dt = _normalize_datetime((_first(co.data) or {}).get("updated_at"))
+
+            return _max_dt(is_dt, cf_dt, bs_dt, fr_dt, md_dt, co_dt)
+        except Exception as e:
+            logger.error("_latest_dependency_owner_earnings failed company_id=%s: %s", company_id, e)
+            return None
+
+    # ── Residual Income dependency timestamp ──────────────────────────────────
+
+    async def _latest_dependency_residual_income(self, company_id: int) -> Optional[datetime]:
+        """
+        Dependency set for Residual Income:
+        - income_statements  (EPS, net_income)
+        - balance_sheets  (shareholders_equity, total_assets, intangibles)
+        - company_summary  (beta)
+        - financial_ratios  (ROE for suitability)
+        - valuation_method_defaults  (method = residual_income)
+        - company_valuation_overrides  (method = residual_income)
+        """
+        try:
+            is_ = (
+                supabase.table("income_statements")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            is_dt = _normalize_datetime((_first(is_.data) or {}).get("updated_at"))
+
+            bs = (
+                supabase.table("balance_sheets")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            bs_dt = _normalize_datetime((_first(bs.data) or {}).get("updated_at"))
+
+            cs = (
+                supabase.table("company_summary")
+                .select("snapshot_date")
+                .eq("company_id", company_id)
+                .order("snapshot_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            cs_dt = _as_datetime_from_date((_first(cs.data) or {}).get("snapshot_date"))
+
+            fr = (
+                supabase.table("financial_ratios")
+                .select("computed_at")
+                .eq("company_id", company_id)
+                .order("computed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            fr_dt = _normalize_datetime((_first(fr.data) or {}).get("computed_at"))
+
+            md = (
+                supabase.table("valuation_method_defaults")
+                .select("updated_at")
+                .eq("method", "residual_income")
+                .limit(1)
+                .execute()
+            )
+            md_dt = _normalize_datetime((_first(md.data) or {}).get("updated_at"))
+
+            co = (
+                supabase.table("company_valuation_overrides")
+                .select("updated_at")
+                .eq("company_id", company_id)
+                .eq("method", "residual_income")
+                .limit(1)
+                .execute()
+            )
+            co_dt = _normalize_datetime((_first(co.data) or {}).get("updated_at"))
+
+            return _max_dt(is_dt, bs_dt, cs_dt, fr_dt, md_dt, co_dt)
+        except Exception as e:
+            logger.error("_latest_dependency_residual_income failed company_id=%s: %s", company_id, e)
+            return None
+
+    # ── Analytics stream inserts ──────────────────────────────────────────────
+
+    # ── Owner Earnings repo helpers ───────────────────────────────────────────
+
+    async def get_cash_flow_oe_inputs(self, company_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Latest annual cash flow row including D&A and WC change — required for OE computation.
+        Intentionally a separate method from get_cash_flow_latest to avoid widening
+        the existing method's SELECT (no breaking changes to callers).
+        """
+        try:
+            resp = (
+                supabase.table("cash_flow_statements")
+                .select(
+                    "fiscal_year, fiscal_quarter, "
+                    "cash_from_operating_activities, capital_expenditures, "
+                    "depreciation_amortization, change_in_working_capital, "
+                    "updated_at"
+                )
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .not_.is_("cash_from_operating_activities", "null")
+                .order("fiscal_year", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return _first(resp.data)
+        except Exception as e:
+            logger.error("get_cash_flow_oe_inputs failed: %s", e)
+            return None
+
+    async def get_annual_owner_earnings(
+        self, company_id: int, years: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Compute annual Owner Earnings history: NI + D&A − |Capex| per year.
+        Joins income_statements (net_income) with cash_flow_statements (D&A, capex).
+        Used by owner_earnings_suitability for multi-year metrics.
+
+        Note: Uses total capex as maintenance capex proxy (conservative; no ratio applied).
+        """
+        try:
+            cf_resp = (
+                supabase.table("cash_flow_statements")
+                .select(
+                    "fiscal_year, fiscal_quarter, "
+                    "capital_expenditures, depreciation_amortization"
+                )
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            is_resp = (
+                supabase.table("income_statements")
+                .select("fiscal_year, fiscal_quarter, net_income, net_income_to_common")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .not_.is_("net_income", "null")
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+
+            cf_by_year: Dict[int, Dict[str, Any]] = {}
+            for r in (cf_resp.data or []):
+                y = r.get("fiscal_year")
+                if isinstance(y, int):
+                    cf_by_year[y] = r
+
+            out: List[Dict[str, Any]] = []
+            for r in (is_resp.data or []):
+                y = r.get("fiscal_year")
+                if not isinstance(y, int):
+                    continue
+                ni_raw = r.get("net_income_to_common") or r.get("net_income")
+                ni = float(ni_raw) if ni_raw is not None else None
+
+                cf = cf_by_year.get(y, {})
+                da_raw = cf.get("depreciation_amortization")
+                capex_raw = cf.get("capital_expenditures")
+                da = float(da_raw) if da_raw is not None else None
+                capex = float(capex_raw) if capex_raw is not None else None
+
+                # Sign-aware: same logic as _compute_fcf
+                oe: Optional[float] = None
+                if ni is not None:
+                    da_val = da if da is not None else 0.0
+                    capex_adj = 0.0
+                    if capex is not None:
+                        capex_adj = capex if capex < 0 else -capex
+                    oe = ni + da_val + capex_adj
+
+                out.append({
+                    "fiscal_year": y,
+                    "oe": oe,
+                    "net_income": ni,
+                    "da": da,
+                    "capex": capex,
+                })
+
+            out = sorted(out, key=lambda x: x.get("fiscal_year", 0))
+            return out[-years:] if years and len(out) > years else out
+        except Exception as e:
+            logger.error("get_owner_earnings_history failed: %s", e)
+            return []
+
+    async def get_capex_da_history(
+        self, company_id: int, years: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Annual Capex + D&A history for OE suitability Capex/D&A ratio metric.
+        Returns [{fiscal_year, capex, da}] sorted ascending.
+        """
+        try:
+            resp = (
+                supabase.table("cash_flow_statements")
+                .select(
+                    "fiscal_year, fiscal_quarter, "
+                    "capital_expenditures, depreciation_amortization"
+                )
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            rows = resp.data or []
+            out = [
+                {
+                    "fiscal_year": r["fiscal_year"],
+                    "capex": r.get("capital_expenditures"),
+                    "da": r.get("depreciation_amortization"),
+                }
+                for r in rows if r.get("fiscal_year") is not None
+            ]
+            return out[-years:] if years and len(out) > years else out
+        except Exception as e:
+            logger.error("get_capex_da_history failed: %s", e)
+            return []
+
+    # ── Residual Income repo helpers ──────────────────────────────────────────
+
+    async def get_balance_sheet_ri_inputs(self, company_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Latest annual balance sheet with intangibles and total_assets for RI suitability.
+        Separate from get_balance_sheet_latest to avoid widening that method's SELECT.
+        """
+        try:
+            resp = (
+                supabase.table("balance_sheets")
+                .select(
+                    "fiscal_year, total_assets, shareholders_equity, "
+                    "intangible_assets, goodwill, "
+                    "total_debt, cash_and_cash_equivalents"
+                )
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .not_.is_("total_assets", "null")
+                .order("fiscal_year", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return _first(resp.data)
+        except Exception as e:
+            logger.error("get_balance_sheet_ri_inputs failed: %s", e)
+            return None
+
+    async def get_book_value_history(
+        self, company_id: int, years: int = 6
+    ) -> List[Dict[str, Any]]:
+        """
+        Annual shareholders' equity (book value) history.
+        Used by RI suitability for book value CAGR metric.
+        Returns [{fiscal_year, book_value}] ascending.
+        """
+        try:
+            resp = (
+                supabase.table("balance_sheets")
+                .select("fiscal_year, fiscal_quarter, shareholders_equity")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .not_.is_("shareholders_equity", "null")
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            rows = resp.data or []
+            out = [
+                {
+                    "fiscal_year": r["fiscal_year"],
+                    "book_value": r.get("shareholders_equity"),
+                }
+                for r in rows if r.get("fiscal_year") is not None
+            ]
+            return out[-years:] if years and len(out) > years else out
+        except Exception as e:
+            logger.error("get_book_value_history failed: %s", e)
+            return []
+
+    async def get_roe_history(
+        self, company_id: int, years: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Annual ROE history from financial_ratios.
+        Used by RI suitability.
+        Returns [{fiscal_year, roe}] ascending.
+        """
+        try:
+            resp = (
+                supabase.table("financial_ratios")
+                .select("fiscal_year, roe")
+                .eq("company_id", company_id)
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            rows = resp.data or []
+            out = [
+                {"fiscal_year": r["fiscal_year"], "roe": r.get("roe")}
+                for r in rows if r.get("fiscal_year") is not None
+            ]
+            return out[-years:] if years and len(out) > years else out
+        except Exception as e:
+            logger.error("get_roe_history failed: %s", e)
+            return []
+
+    # ── Run history (used by API history endpoints) ───────────────────────────
+
+    async def get_owner_earnings_history(
+        self, symbol: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        try:
+            ctx = await self.get_company_context(symbol)
+            if not ctx:
+                return []
+            company_id = ctx["company_id"]
+            resp = (
+                supabase.table("valuation_runs")
+                .select("run_at, output_snapshot")
+                .eq("company_id", company_id)
+                .eq("method", "owner_earnings")
+                .order("run_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            items = []
+            for r in (resp.data or []):
+                run_at = _normalize_datetime(r.get("run_at"))
+                snap = r.get("output_snapshot") or {}
+                val = snap.get("valuation") or {}
+                app = snap.get("applicability") or {}
+                items.append({
+                    "runAt": run_at.isoformat() if run_at else None,
+                    "intrinsicValuePerShare": val.get("intrinsicValuePerShare"),
+                    "baseOe": val.get("baseOe"),
+                    "discountRateUsed": val.get("discountRateUsed"),
+                    "oeGrowthRateUsed": val.get("oeGrowthRateUsed"),
+                    "terminalGrowthRateUsed": val.get("terminalGrowthRateUsed"),
+                    "enterpriseValue": val.get("enterpriseValue"),
+                    "score": app.get("score"),
+                    "category": app.get("category"),
+                })
+            return items
+        except Exception as e:
+            logger.error("get_owner_earnings_history failed for %s: %s", symbol, e)
+            return []
+
+    async def get_residual_income_history(
+        self, symbol: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        try:
+            ctx = await self.get_company_context(symbol)
+            if not ctx:
+                return []
+            company_id = ctx["company_id"]
+            resp = (
+                supabase.table("valuation_runs")
+                .select("run_at, output_snapshot")
+                .eq("company_id", company_id)
+                .eq("method", "residual_income")
+                .order("run_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            items = []
+            for r in (resp.data or []):
+                run_at = _normalize_datetime(r.get("run_at"))
+                snap = r.get("output_snapshot") or {}
+                val = snap.get("valuation") or {}
+                app = snap.get("applicability") or {}
+                items.append({
+                    "runAt": run_at.isoformat() if run_at else None,
+                    "intrinsicValuePerShare": val.get("intrinsicValuePerShare"),
+                    "bvPerShare": val.get("bvPerShare"),
+                    "costOfEquityUsed": val.get("costOfEquityUsed"),
+                    "ri0PerShare": val.get("ri0PerShare"),
+                    "riGrowthRateUsed": val.get("riGrowthRateUsed"),
+                    "score": app.get("score"),
+                    "category": app.get("category"),
+                })
+            return items
+        except Exception as e:
+            logger.error("get_residual_income_history failed for %s: %s", symbol, e)
+            return []
+
 
     # ── Parameters ─────────────────────────────────────────────────────────────
 

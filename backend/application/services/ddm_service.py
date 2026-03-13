@@ -346,25 +346,27 @@ class DdmService:
         )
 
         # ── Persist to ddm_valuations (analytics stream) ───────────────────
-        await self.repo.insert_ddm_valuation(
-            payload={
-                "company_id":                  company_id,
-                "analysis_date":               date.today().isoformat(),
-                "current_dps":                 d0,
-                "next_year_dps":               float(d1),
-                "dividend_growth_rate":        float(g),
-                "required_return":             float(k),
-                "intrinsic_value_gordon":      float(intrinsic) if method == "ddm_gordon" else None,
-                "high_growth_years":           valuation.highGrowthYears,
-                "high_growth_rate":            valuation.highGrowthRate,
-                "stable_growth_rate":          valuation.stableGrowthRate,
-                "intrinsic_value_multistage":  float(intrinsic) if method != "ddm_gordon" else None,
-                "current_stock_price":         current_price,
-                "upside_downside_pct":         upside,
-                "analyst_name":               overrides.analystName,
-                "notes":                       overrides.notes,
-            }
-        )
+        try:
+            await self.repo.insert_ddm_valuation(
+                payload={
+                    "company_id":                  company_id,
+                    "analysis_date":               date.today().isoformat(),
+                    "current_dps":                 d0,
+                    "next_year_dps":               float(d1),
+                    "dividend_growth_rate":        float(g),
+                    "required_return":             float(k),
+                    "intrinsic_value_gordon":      float(intrinsic) if method == "ddm_gordon" else None,
+                    "high_growth_years":           valuation.highGrowthYears,
+                    "high_growth_rate":            valuation.highGrowthRate,
+                    "stable_growth_rate":          valuation.stableGrowthRate,
+                    "intrinsic_value_multistage":  float(intrinsic) if method != "ddm_gordon" else None,
+                    "current_stock_price":         current_price,
+                    "upside_downside_pct":         upside,
+                    "analyst_name":               overrides.analystName,
+                    "notes":                       overrides.notes,
+                }
+            )
+        except Exception as e:logger.error("insert_ddm_valuation failed: %s", e)
 
         # ── Persist audited valuation_runs record (append-only) ────────────
         now_iso = datetime.utcnow().isoformat() + "Z"

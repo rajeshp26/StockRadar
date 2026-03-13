@@ -2,7 +2,7 @@
 
 import { ReactNode } from "react";
 
-interface MethodPanelProps {
+export interface MethodPanelProps {
   summary:     ReactNode;
   how:         ReactNode;
   suitability: ReactNode;

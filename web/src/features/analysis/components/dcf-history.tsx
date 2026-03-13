@@ -19,7 +19,8 @@ function HistoryRow({ cells, isHeader }: { cells: React.ReactNode[]; isHeader?: 
 }
 
 export function DcfHistory({ symbol }: { symbol: string }) {
-  const { items, loading, error } = useDcfHistory(symbol);
+  const { history, loading, error } = useDcfHistory(symbol);
+  const items = history?.items;
 
   if (loading) return null;
 

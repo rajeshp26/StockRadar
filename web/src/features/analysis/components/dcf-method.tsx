@@ -1,3 +1,4 @@
+"use client";
 import type { MethodPanelProps } from "./method-panel";
 import { DcfSummary } from "./dcf-summary";
 import { DcfHow } from "./dcf-how";

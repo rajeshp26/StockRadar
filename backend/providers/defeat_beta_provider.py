@@ -748,7 +748,98 @@ class DefeatBetaProvider(StockDataProvider):
             except Exception:
                 pass
 
+        if fin.income_statements.rows and any(
+           r.shares_outstanding_diluted is None for r in fin.income_statements.rows
+        ):
+           fin = await self._fill_shares_gap(fin, symbol)
+        
         return fin
+
+    async def _fill_shares_gap(
+       self,
+       fin: "CompleteFundamentals",
+       symbol: str,
+    ) -> "CompleteFundamentals":
+        """
+        Field-level gap-fill for shares_outstanding_diluted.
+
+        Strategy (in order of preference):
+            1. yfinance income statement has shares for this period -> use it
+                (already populated by _parse_yf_income_statement if called)
+            2. yfinance info.sharesOutstanding -> backfill into rows missing shares
+                (snapshot value, same for all years — acceptable for ratios)
+
+        Only fills rows where shares_outstanding_diluted IS None.
+        Skips rows that already have a value.
+        """
+        if not self.yfinance_provider:
+            return fin
+        try:
+            # Attempt 1: fetch yfinance annual IS which may contain share counts
+            yf_a_is = await asyncio.to_thread(
+                self.yfinance_provider.get_annual_income_statement_df, symbol
+            )
+            if yf_a_is is not None and not yf_a_is.empty:
+                # Build year -> shares map from yfinance IS
+                shares_by_year: Dict[int, Optional[Decimal]] = {}
+                for col in yf_a_is.columns:
+                    if not hasattr(col, "year"):
+                        continue
+                    fy = col.year
+                    for label in ["DilutedAverageShares", "Diluted Average Shares",
+                                  "BasicAverageShares", "Basic Average Shares",
+                                  "Ordinary Shares Number"]:
+                        if label in yf_a_is.index:
+                            v = yf_a_is.loc[label, col]
+                            if pd.notna(v):
+                                shares_by_year[fy] = self._safe_decimal(
+                                   pd.to_numeric(v, errors="coerce")
+                                )
+                                break
+                # Fill annual IS rows with year-matched share counts
+                if shares_by_year:
+                    for row in fin.income_statements.rows:
+                        if row.shares_outstanding_diluted is None and row.fiscal_year in shares_by_year:
+                            row.shares_outstanding_diluted = shares_by_year[row.fiscal_year]
+                            if row.shares_outstanding_basic is None:
+                                row.shares_outstanding_basic = shares_by_year[row.fiscal_year]
+                    # Check if any rows still missing shares
+                    still_missing = any(
+                        r.shares_outstanding_diluted is None for r in fin.income_statements.rows
+                    )
+                    if not still_missing:
+                        logger.debug("[SHARES][%s] Filled from yfinance annual IS", symbol)
+                        return fin
+
+            # Attempt 2: yfinance info.sharesOutstanding (snapshot, applies to all years)
+            snapshot_shares: Optional[Decimal] = None
+            try:
+                details = await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
+                # get_stock_details caches yf.Ticker.info; sharesOutstanding lives there
+                # Access the raw yfinance ticker to get sharesOutstanding directly
+                import yfinance as yf
+                info = await asyncio.to_thread(lambda: yf.Ticker(symbol.upper()).info)
+                raw_shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+                if raw_shares:
+                    snapshot_shares = self._safe_decimal(raw_shares)
+            except Exception as e:
+                logger.debug("[SHARES][%s] yfinance info fetch failed: %s", symbol, e)
+
+            if snapshot_shares is not None:
+                for row in fin.income_statements.rows:
+                    if row.shares_outstanding_diluted is None:
+                        row.shares_outstanding_diluted = snapshot_shares
+                    if row.shares_outstanding_basic is None:
+                        row.shares_outstanding_basic = snapshot_shares
+                logger.debug("[SHARES][%s] Filled from yfinance sharesOutstanding snapshot", symbol)
+
+        except Exception as e:
+            logger.warning("[SHARES][%s] shares gap-fill failed: %s", symbol, e)
+
+        return fin
+
+
+
 
     # -----------------------------------------------------------
     # NEW: DefeatBeta fetchers for new tables (+ date filters)
@@ -1368,6 +1459,13 @@ class DefeatBetaProvider(StockDataProvider):
                 discontinued_operations=None,
                 net_income_to_common=None,
                 preferred_dividends=None,
+                shares_outstanding_basic=self._safe_decimal(
+                    pd.to_numeric(gv(['BasicAverageShares', 'Basic Average Shares', 'Ordinary Shares Number']), errors='coerce')
+                ),
+                shares_outstanding_diluted=self._safe_decimal(
+                    pd.to_numeric(gv(['DilutedAverageShares', 'Diluted Average Shares', 'BasicAverageShares', 'Basic Average Shares']), errors='coerce')
+                ),
+
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,

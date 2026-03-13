@@ -18,7 +18,8 @@ from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
 from domain.models.valuation_dcf import DcfRequestOverrides, DcfResponse  # ✅ NEW
 from infrastructure.repositories.supabase_repository import SupabaseUserRepository
 from application.services.valuation_service import ValuationService
-
+from domain.models.valuation_owner_earnings import (OwnerEarningsRequestOverrides, OwnerEarningsResponse)
+from domain.models.valuation_residual_income import (ResidualIncomeRequestOverrides, ResidualIncomeResponse)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/valuations", tags=["Valuations"])
@@ -240,4 +241,151 @@ async def get_dcf_history(
         return {"symbol": sym, "items": items or []}
     except Exception:
         # fail-safe: never break UI
+        return {"symbol": (symbol or "").strip().upper(), "items": []}
+
+
+
+# ── Owner Earnings ────────────────────────────────────────────────────────────
+
+@router.post(
+    "/{symbol}/owner_earnings",
+    response_model=OwnerEarningsResponse,
+    summary=(
+        "Compute or return cached Owner Earnings (Buffett Method) valuation. "
+        "OE = Net Income + D&A − Maintenance Capex, discounted to enterprise value."
+    ),
+)
+@limiter.limit("10/minute")
+async def compute_owner_earnings_valuation(
+    request: Request,
+    symbol: str,
+    overrides: OwnerEarningsRequestOverrides = Body(
+        default_factory=OwnerEarningsRequestOverrides
+    ),
+    force: bool = Query(
+        default=False,
+        description="If true, recompute even when cached result is fresh.",
+    ),
+    user=Depends(get_current_user_dep),
+    user_repo: SupabaseUserRepository = Depends(get_user_repository),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+) -> OwnerEarningsResponse:
+    try:
+        sym = _normalize_symbol(symbol)
+        internal_user_id = _resolve_internal_user_id(user, user_repo)
+        return await valuation_service.compute_owner_earnings_if_stale(
+            sym, internal_user_id, overrides=overrides, force=force
+        )
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(ve)
+        ) from ve
+    except Exception as e:
+        logger.error(
+            "Owner Earnings valuation failed for %s: %s", symbol, e, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Owner Earnings valuation unavailable due to missing income, "
+                "cash flow, or financial data."
+            ),
+        ) from e
+
+
+@router.get(
+    "/{symbol}/owner_earnings/history",
+    summary=(
+        "Recent Owner Earnings valuation runs. "
+        "Returns empty list when none exist."
+    ),
+)
+@limiter.limit("30/minute")
+async def get_owner_earnings_history(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+):
+    try:
+        sym = _normalize_symbol(symbol)
+        items = await valuation_service.repo.get_owner_earnings_history(sym)
+        return {"symbol": sym, "items": items or []}
+    except Exception:
+        # Fail-safe: never break UI — mirrors DCF / DDM history behaviour.
+        return {"symbol": (symbol or "").strip().upper(), "items": []}
+
+
+# ── Residual Income ───────────────────────────────────────────────────────────
+
+@router.post(
+    "/{symbol}/residual_income",
+    response_model=ResidualIncomeResponse,
+    summary=(
+        "Compute or return cached Residual Income (Economic Profit / Ohlson Model) valuation. "
+        "Intrinsic/Share = BV₀/share + PV(EPS − k_e × BV per share)."
+    ),
+)
+@limiter.limit("10/minute")
+async def compute_residual_income_valuation(
+    request: Request,
+    symbol: str,
+    overrides: ResidualIncomeRequestOverrides = Body(
+        default_factory=ResidualIncomeRequestOverrides
+    ),
+    force: bool = Query(
+        default=False,
+        description="If true, recompute even when cached result is fresh.",
+    ),
+    user=Depends(get_current_user_dep),
+    user_repo: SupabaseUserRepository = Depends(get_user_repository),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+) -> ResidualIncomeResponse:
+    try:
+        sym = _normalize_symbol(symbol)
+        internal_user_id = _resolve_internal_user_id(user, user_repo)
+        return await valuation_service.compute_residual_income_if_stale(
+            sym, internal_user_id, overrides=overrides, force=force
+        )
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(ve)
+        ) from ve
+    except Exception as e:
+        logger.error(
+            "Residual Income valuation failed for %s: %s", symbol, e, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Residual Income valuation unavailable due to missing income statement, "
+                "balance sheet, or cost of equity inputs."
+            ),
+        ) from e
+
+
+@router.get(
+    "/{symbol}/residual_income/history",
+    summary=(
+        "Recent Residual Income valuation runs. "
+        "Returns empty list when none exist."
+    ),
+)
+@limiter.limit("30/minute")
+async def get_residual_income_history(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+):
+    try:
+        sym = _normalize_symbol(symbol)
+        items = await valuation_service.repo.get_residual_income_history(sym)
+        return {"symbol": sym, "items": items or []}
+    except Exception:
+        # Fail-safe: never break UI.
         return {"symbol": (symbol or "").strip().upper(), "items": []}

@@ -213,3 +213,150 @@ export interface DcfHistory {
   symbol: string;
   items: DcfHistoryEntry[];
 }
+
+/* ====================================================================== */
+/* OWNER EARNINGS TYPES                                                    */
+/* Buffett owner-earnings model:                                           */
+/*   OE = Net Income + D&A − CapEx ± ΔWorking Capital                    */
+/* ====================================================================== */
+
+export interface OwnerEarningsValuation {
+  symbol:                    string;
+  companyId:                 number;
+  currency:                  string;
+  // Forecast parameters
+  forecastYears:             number;
+  discountRateUsed:          number;        // NOT "discountRate"
+  oeGrowthRateUsed?:         number | null; // NOT "growthRate"
+  terminalGrowthRateUsed?:   number | null; // NOT "terminalGrowthRate"
+  maintenanceCapexRatioUsed?: number | null;
+  // Base OE decomposition (waterfall transparency)
+  baseOe?:                   number | null; // computed OE — NOT "ownerEarnings"
+  baseOeFiscalYear?:         number | null;
+  netIncomeUsed?:            number | null; // NOT "netIncome"
+  daUsed?:                   number | null; // D&A — NOT "depreciation"
+  capexUsed?:                number | null; // sign-normalised negative — NOT "capex"
+  wcChangeUsed?:             number | null; // NOT "workingCapitalChange"
+  // Forecast stream
+  forecastOe:                number[];
+  pvOe:                      number[];
+  discountFactors?:          number[] | null;
+  totalPvOe:                 number;        // NOT "pvForecastOe"
+  // Terminal value
+  terminalValue?:            number | null;
+  pvTerminalValue?:          number | null; // NOT "pvTerminal"
+  oeNPlus1?:                 number | null;
+  // Equity bridge
+  enterpriseValue?:          number | null;
+  netDebtUsed?:              number | null;
+  equityValue?:              number | null;
+  sharesOutstanding?:        number | null;
+  intrinsicValuePerShare?:   number | null;
+  // Market comparison (read-time)
+  currentPrice?:             number | null;
+  upsideDownsidePct?:        number | null;
+}
+
+export interface OwnerEarningsResponse {
+  valuation:    OwnerEarningsValuation;
+  applicability: Applicability;
+  dataQuality:  DataQuality;
+}
+
+export interface OwnerEarningsHistoryEntry {
+  runAt:                   string;
+  baseOe?:                 number; // NOT "ownerEarnings"
+  intrinsicValuePerShare?: number;
+  oeGrowthRateUsed?:       number; // NOT "growthRate"
+  discountRateUsed?:       number; // NOT "discountRate"
+  enterpriseValue?:        number;
+  score?:                  number;
+  category?:               SuitabilityCategory;
+}
+
+export interface OwnerEarningsHistory {
+  symbol: string;
+  items:  OwnerEarningsHistoryEntry[];
+}
+
+export interface OwnerEarningsState {
+  loading:        boolean;
+  loadingHistory: boolean;
+  error?:         string;
+  valuation?:     OwnerEarningsValuation;
+  applicability?: Applicability;
+  dataQuality?:   DataQuality;
+  history?:       OwnerEarningsHistory;
+  freshness?:     FreshnessInfo;
+}
+
+/* ====================================================================== */
+/* RESIDUAL INCOME TYPES                                                   */
+/* RI = BV/Share + Σ [ (ROE − CoE) × BV ] / (1 + CoE)^t + Terminal      */
+/* ====================================================================== */
+
+export interface ResidualIncomeValuation {
+  symbol:                  string;
+  companyId:               number;
+  currency:                string;
+  // Inputs used
+  forecastYears:           number;
+  costOfEquityUsed:        number;          // NOT "costOfEquity"
+  betaUsed?:               number | null;
+  rfUsed?:                 number | null;
+  erpUsed?:                number | null;
+  riGrowthRateUsed?:       number | null;
+  terminalGrowthRateUsed?: number | null;
+  // Base values
+  eps0?:                   number | null;   // NOT "eps"
+  bvPerShare?:             number | null;   // NOT "bookValuePerShare"
+  roe0?:                   number | null;   // NOT "roe"
+  ri0PerShare?:            number | null;   // NOT "residualIncomePerShare"
+  bvFiscalYear?:           number | null;
+  // Forecast stream
+  forecastRiPerShare:      number[];
+  pvRiPerShare:            number[];
+  discountFactors?:        number[] | null;
+  totalPvRiPerShare:       number;          // NOT "pvForecastRi"
+  // Terminal value
+  terminalRiPerShare?:     number | null;
+  terminalValueRi?:        number | null;
+  pvTerminalRiPerShare?:   number | null;   // NOT "pvTerminal"
+  // Intrinsic (equity-native — no EV bridge)
+  intrinsicValuePerShare?: number | null;
+  // Market comparison (read-time)
+  currentPrice?:           number | null;
+  upsideDownsidePct?:      number | null;
+}
+
+export interface ResidualIncomeResponse {
+  valuation:    ResidualIncomeValuation;
+  applicability: Applicability;
+  dataQuality:  DataQuality;
+}
+
+export interface ResidualIncomeHistoryEntry {
+  runAt:                   string;
+  intrinsicValuePerShare?: number;
+  roe0?:                   number;  // NOT "roe"
+  costOfEquityUsed?:       number;  // NOT "costOfEquity"
+  ri0PerShare?:            number;  // NOT "residualIncomePerShare"
+  score?:                  number;
+  category?:               SuitabilityCategory;
+}
+
+export interface ResidualIncomeHistory {
+  symbol: string;
+  items:  ResidualIncomeHistoryEntry[];
+}
+
+export interface ResidualIncomeState {
+  loading:        boolean;
+  loadingHistory: boolean;
+  error?:         string;
+  valuation?:     ResidualIncomeValuation;
+  applicability?: Applicability;
+  dataQuality?:   DataQuality;
+  history?:       ResidualIncomeHistory;
+  freshness?:     FreshnessInfo;
+}

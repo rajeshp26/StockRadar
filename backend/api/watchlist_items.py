@@ -12,7 +12,6 @@ from typing import Optional
 
 from database import supabase
 from providers.yfinance_provider import YFinanceProvider
-from services.sync_service import sync_service
 from dependencies import get_current_user_dep, get_watchlist_service, limiter
 from application.services.watchlist_service import WatchlistService
 

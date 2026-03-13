@@ -49,6 +49,7 @@ from database import supabase  # used for lightweight existence checks
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from application.services.recompute_guard import RecomputeGuard
 from application.services.valuation_service import ValuationService
+from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,15 @@ class MarketDataRefreshScheduler:
         if summary:
             await self.financial_repo.upsert_company_summary(summary)
 
+        # 5b) Derived financial metrics (ratios) — non-blocking
+        # Ensures financial_ratios is populated for ALL active companies on every
+        # market-data cycle, not only companies within the earnings scheduler window.
+        try:
+            await compute_and_upsert_derived_financial_metrics(company_id=company_id)
+            logger.debug("[RATIOS] computed during market-data refresh for %s", symbol)
+        except Exception as me:
+            logger.error("[RATIOS] compute failed during market-data refresh for %s: %s", symbol, me)
+
         # 6) NEW: Rule #1 evaluation with freshness gate (Trigger B)
         # Only recompute if any dependency inputs are newer than the last valuation.
         try:
@@ -303,6 +313,7 @@ class MarketDataRefreshScheduler:
             "revenue_forecast": len(rev_fcst_rows or []),
             "earnings_forecast": len(eps_fcst_rows or []),
             "company_summary": 1 if summary else 0,
+            "ratios_computed": True,
         }
 
     # ----------------------------------------------------------------------

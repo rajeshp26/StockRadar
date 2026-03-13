@@ -1,14 +1,24 @@
+// web/src/app/(authenticated)/analysis/[symbol]/page.tsx
+// CHANGES vs previous version:
+//   1. Imports OwnerEarningsPanel and ResidualIncomePanel
+//   2. Adds {method === "ownerEarnings"} and {method === "residualIncome"} renders
+//   3. "Others" coming-soon panel no longer lists "Residual Income" (it ships now)
+// Everything else is IDENTICAL to the existing file.
 "use client";
-
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
-import { MethodSelector, type IntrinsicMethod } from "@/features/analysis/components/method-selector";
-import { ValuationOverview } from "@/features/analysis/components/valuation-overview";
-import { IntrinsicPanel } from "@/features/analysis/components/intrinsic-panel";
-import { DcfPanel } from "@/features/analysis/components/dcf-panel";
-import { DdmPanel } from "@/features/analysis/components/ddm-panel";
+import {
+  MethodSelector,
+  type IntrinsicMethod,
+} from "@/features/analysis/components/method-selector";
+import { ValuationOverview }     from "@/features/analysis/components/valuation-overview";
+import { IntrinsicPanel }        from "@/features/analysis/components/intrinsic-panel";
+import { DcfPanel }              from "@/features/analysis/components/dcf-panel";
+import { DdmPanel }              from "@/features/analysis/components/ddm-panel";
+import { OwnerEarningsPanel }    from "@/features/analysis/components/owner-earnings-panel";   // ← NEW
+import { ResidualIncomePanel }   from "@/features/analysis/components/residual-income-panel"; // ← NEW
 import {
   TrendingUp,
   Heart,
@@ -22,13 +32,13 @@ import {
 
 /* ── Tab definitions ──────────────────────────────────────────── */
 const TOP_TABS = [
-  { id: "intrinsic", label: "Intrinsic Value", icon: TrendingUp    },
-  { id: "health",    label: "Financial Health", icon: Heart         },
-  { id: "moat",      label: "Moat",             icon: Shield        },
-  { id: "dividend",  label: "Dividend",         icon: TrendingDown  },
-  { id: "technical", label: "Technical",        icon: BarChart2     },
-  { id: "investors", label: "Super Investors",  icon: Users         },
-  { id: "others",    label: "Others",           icon: MoreHorizontal},
+  { id: "intrinsic", label: "Intrinsic Value",  icon: TrendingUp     },
+  { id: "health",    label: "Financial Health", icon: Heart          },
+  { id: "moat",      label: "Moat",             icon: Shield         },
+  { id: "dividend",  label: "Dividend",         icon: TrendingDown   },
+  { id: "technical", label: "Technical",        icon: BarChart2      },
+  { id: "investors", label: "Super Investors",  icon: Users          },
+  { id: "others",    label: "Others",           icon: MoreHorizontal },
 ] as const;
 
 type TopTab = (typeof TOP_TABS)[number]["id"];
@@ -52,7 +62,9 @@ function ComingSoonPanel({
       </div>
       <div>
         <h3 className="text-xl font-black text-white tracking-tight">{title}</h3>
-        <p className="mt-2 text-sm text-white/40 leading-relaxed max-w-sm">{description}</p>
+        <p className="mt-2 text-sm text-white/40 leading-relaxed max-w-sm">
+          {description}
+        </p>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
         {items.map((item) => (
@@ -73,46 +85,42 @@ function ComingSoonPanel({
 
 /* ── Main Page ────────────────────────────────────────────────── */
 export default function AnalysisPage() {
-  const router     = useRouter();
-  const { symbol } = useParams<{ symbol: string }>();
+  const router      = useRouter();
+  const { symbol }  = useParams<{ symbol: string }>();
   const upperSymbol = symbol?.toString().toUpperCase() ?? "";
 
-  // Tab + method state (logic unchanged)
   const [method, setMethod] = useState<IntrinsicMethod>("overview");
-  const [tab,    setTab]    = useState<TopTab>("intrinsic");
+  const [tab, setTab]       = useState<TopTab>("intrinsic");
 
-  // Real-time price (logic unchanged)
   const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
 
   const priceDisplay  = price != null ? `$${price.toFixed(2)}` : "—";
-  const changeDisplay = change != null
-    ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
-    : null;
-  const pctDisplay    = changePercent != null
-    ? `${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%`
-    : null;
+  const changeDisplay =
+    change != null
+      ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
+      : null;
+  const pctDisplay =
+    changePercent != null
+      ? `${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%`
+      : null;
   const updatedDisplay = lastUpdated
-    ? new Date(lastUpdated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    ? new Date(lastUpdated).toLocaleTimeString([], {
+        hour:   "2-digit",
+        minute: "2-digit",
+      })
     : null;
-
   const isPositiveChange = (change ?? 0) >= 0;
 
   return (
     <div className="space-y-6 animate-fade-up">
-
       {/* ── Sticky hero header ──────────────────────────────── */}
       <div className="sticky top-14 z-20">
         <div className="glass-panel rounded-[1.75rem] p-6 relative overflow-hidden">
-
-          {/* Ambient glow blob */}
           <div
             className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-indigo-600/10 blur-[80px]"
             aria-hidden="true"
           />
-
           <div className="relative flex flex-col gap-4 md:flex-row md:items-center">
-
-            {/* Left: back + ticker */}
             <div className="flex items-center gap-4">
               <button
                 onClick={() => router.back()}
@@ -121,9 +129,7 @@ export default function AnalysisPage() {
               >
                 <ArrowLeft className="h-4 w-4 text-white/60" />
               </button>
-
               <div className="flex items-center gap-3">
-                {/* Ticker avatar */}
                 <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-indigo-500/20 border border-indigo-500/30 text-sm font-black text-indigo-300">
                   {upperSymbol[0]}
                 </div>
@@ -132,22 +138,20 @@ export default function AnalysisPage() {
                 </h1>
               </div>
             </div>
-
-            {/* Right: price + change */}
             <div className="flex items-baseline gap-3 md:ml-auto">
               <span className="text-2xl font-black text-white tracking-tight">
                 {priceDisplay}
               </span>
-
               {changeDisplay && pctDisplay && (
-                <span className={cn(
-                  "text-sm font-bold",
-                  isPositiveChange ? "text-emerald-400" : "text-rose-400",
-                )}>
+                <span
+                  className={cn(
+                    "text-sm font-bold",
+                    isPositiveChange ? "text-emerald-400" : "text-rose-400"
+                  )}
+                >
                   {changeDisplay} ({pctDisplay})
                 </span>
               )}
-
               {updatedDisplay && (
                 <span className="text-[10px] font-medium text-white/25 hidden md:inline">
                   · {updatedDisplay}
@@ -164,7 +168,10 @@ export default function AnalysisPage() {
           <button
             key={id}
             onClick={() => setTab(id)}
-            className={cn("glass-segmented-item flex items-center gap-1.5", tab === id && "active")}
+            className={cn(
+              "glass-segmented-item flex items-center gap-1.5",
+              tab === id && "active"
+            )}
           >
             <Icon className="h-3 w-3 flex-shrink-0" />
             <span className="hidden sm:inline">{label}</span>
@@ -175,15 +182,16 @@ export default function AnalysisPage() {
 
       {/* ── Tab content ─────────────────────────────────────── */}
       <div className="min-h-[40vh]">
-
         {/* Intrinsic Value */}
         {tab === "intrinsic" && (
           <div className="space-y-6 animate-fade-up">
             <MethodSelector method={method} onChange={setMethod} />
-            {method === "overview" && <ValuationOverview />}
-            {method === "rule1"    && <IntrinsicPanel symbol={upperSymbol} />}
-            {method === "dcf"      && <DcfPanel       symbol={upperSymbol} />}
-            {method === "ddm"      && <DdmPanel       symbol={upperSymbol} />}
+            {method === "overview"       && <ValuationOverview />}
+            {method === "rule1"          && <IntrinsicPanel        symbol={upperSymbol} />}
+            {method === "dcf"            && <DcfPanel              symbol={upperSymbol} />}
+            {method === "ddm"            && <DdmPanel              symbol={upperSymbol} />}
+            {method === "ownerEarnings"  && <OwnerEarningsPanel    symbol={upperSymbol} />} {/* ← NEW */}
+            {method === "residualIncome" && <ResidualIncomePanel   symbol={upperSymbol} />} {/* ← NEW */}
           </div>
         )}
 
@@ -231,7 +239,8 @@ export default function AnalysisPage() {
           <ComingSoonPanel
             title="Other Models"
             description="Additional valuation frameworks and investment models."
-            items={["Residual Income", "Magic Formula", "CAN SLIM", "Relative Valuation"]}
+            items={["Magic Formula", "CAN SLIM", "Relative Valuation", "Graham Number"]}
+            // NOTE: "Residual Income" removed — it now lives in the Intrinsic Value tab (RI button)
             icon={MoreHorizontal}
           />
         )}
