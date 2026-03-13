@@ -160,7 +160,7 @@ class ResidualIncomeService:
         bs_row = await self.repo.get_balance_sheet_latest(company_id)
 
         # Book value per share and EPS require shares
-        shares_history = await self.financial_repo.get_shares_history(company_id)
+        shares_history = await self.repo.get_shares_history(company_id)
 
         shares: Optional[float] = None
 
@@ -176,7 +176,7 @@ class ResidualIncomeService:
                 symbol,
             )
             try:
-                summary = await self.financial_repo.get_company_summary_latest(company_id)
+                summary = await self.repo.get_company_summary_latest(company_id)
                 if summary:
                     raw = summary.get("shares_outstanding") or summary.get("implied_shares_outstanding")
                     if raw:
@@ -187,10 +187,73 @@ class ResidualIncomeService:
 
         if shares is None or shares <= 0:
             logger.warning("[RI][%s] No shares available from any source, returning empty", symbol)
-            return self._build_empty_response(
-                company_id=company_id,
-                symbol=symbol,
-                reason="shares_not_available",
+            n_default = int(defaults.get("forecast_years_default", 5))
+            k_e_default = float(defaults.get("k_default", 0.10))
+            ri_score, ri_category, ri_flags, ri_evidence = await evaluate_residual_income_suitability(
+                repo=self.repo, company_id=company_id, sector=sector,
+                cost_of_equity=k_e_default,
+            )
+            abort_flags = flags + ri_flags
+            abort_flags.append(DiagnosticFlag(
+                code="RI-NO-SHARES", severity="critical",
+                message="Shares outstanding unavailable from income_statements and company_summary.",
+                recommendation="Trigger a financial data refresh for this company.",
+            ))
+            suitability_summary = None
+            try:
+                suitability_summary = await generate_suitability_summary(
+                    symbol=symbol, method="residual_income",
+                    score=int(ri_score), category=ri_category,
+                    flags=[f.dict() for f in abort_flags], evidence=ri_evidence,
+                    valuation_inputs={"currency": currency, "note": "Early abort — shares unavailable."},
+                    input_decisions=input_decisions,
+                )
+            except Exception:
+                pass
+            now_iso = datetime.utcnow().isoformat() + "Z"
+            abort_valuation = ResidualIncomeValuation(
+                symbol=symbol.upper(), companyId=company_id, currency=currency,
+                forecastYears=n_default, costOfEquityUsed=k_e_default,
+                currentPrice=current_price,
+            )
+            try:
+                await self.repo.insert_valuation_run(
+                    company_id=company_id,
+                    method="residual_income",
+                    run={
+                        "run_by_user_id": user_id,
+                        "input_snapshot": input_decisions,
+                        "assumption_snapshot": defaults,
+                        "output_snapshot": {
+                            "valuation": abort_valuation.dict(),
+                            "applicability": {
+                                "score": int(ri_score), "category": ri_category,
+                                "flags": [f.dict() for f in abort_flags],
+                                "suitabilitySummary": suitability_summary,
+                            },
+                            "dataQuality": {
+                                "freshnessDays": {"lastComputedAt": now_iso},
+                                "fallbacksUsed": True,
+                                "inputDecisions": input_decisions,
+                            },
+                            "earlyAbort": True, "lastComputedAt": now_iso,
+                        },
+                        "data_version_tag": None,
+                        "notes": "early_abort:shares_not_available",
+                    },
+                )
+            except Exception as e:
+                logger.warning("[RI][%s] Failed to persist early-abort run: %s", symbol, e)
+            return ResidualIncomeResponse(
+                valuation=abort_valuation,
+                applicability=Applicability(
+                    score=int(ri_score), category=ri_category, flags=abort_flags,
+                    suitabilitySummary=suitability_summary,
+                ),
+                dataQuality=DataQuality(
+                    freshnessDays={"lastComputedAt": now_iso},
+                    fallbacksUsed=True, inputDecisions=input_decisions,
+                ),
             )
 
         equity = _safe_float(bs_row.get("shareholders_equity")) if bs_row else None

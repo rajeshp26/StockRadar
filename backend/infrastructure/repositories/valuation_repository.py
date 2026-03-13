@@ -1357,23 +1357,7 @@ class ValuationRepository:
             logger.error("get_roic_history failed: %s", e)
             return []
 
-    # ── Shares (BUG-08 fix) ────────────────────────────────────────────────────
 
-    async def get_shares_history(self, company_id: int) -> List[Dict[str, Any]]:
-        """
-        Diluted shares history.
-
-        Primary source: statistics table.
-        Fallback: income_statements.shares_outstanding_diluted.
-
-        The defeat_beta_provider writes shares to income_statements via the
-        'Diluted Average Shares' row alias. The statistics table has no current
-        write path, so the fallback fires on every call until a statistics
-        population job is added.
-
-        FIX (BUG-08): Both queries now correctly use the module-level `supabase`
-        client (not self.client which does not exist in this class).
-        """
     async def get_shares_history(self, company_id: int) -> List[Dict[str, Any]]:
         """
         Diluted shares history from income_statements.
