@@ -1,6 +1,8 @@
 # application/services/residual_income_service.py
 from __future__ import annotations
 import logging
+import hashlib
+import json
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,6 +39,9 @@ def _safe_float(x: Any) -> Optional[float]:
     except Exception:
         return None
 
+def _build_fingerprint(dep_values: Dict[str, Any]) -> str:
+    raw = json.dumps(dep_values, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:32]
 
 # ── Service ───────────────────────────────────────────────────────────────────
 
@@ -60,63 +65,148 @@ class ResidualIncomeService:
 
     async def compute_residual_income_if_stale(
         self,
-        symbol: str,
-        user_id: Optional[int],
+        symbol:    str,
+        user_id:   Optional[int],
         overrides: Optional[ResidualIncomeRequestOverrides] = None,
-        force: bool = False,
+        force:     bool = False,
     ) -> ResidualIncomeResponse:
-        overrides = overrides or ResidualIncomeRequestOverrides()
-        method = "residual_income"
-
+        overrides  = overrides or ResidualIncomeRequestOverrides()
+        method     = "residual_income"
+ 
         ctx = await self.repo.get_company_context(symbol)
         if not ctx:
             raise ValueError(f"Symbol '{symbol}' not found in companies.")
-
         company_id = int(ctx["company_id"])
-        currency = ctx.get("currency") or "USD"
-        sector = ctx.get("sector")
-
-        decision = await self.guard.cached_or_recompute(
-            company_id=company_id, method=method, force=force
-        )
-
-        if decision.should_recompute:
-            logger.info(
-                "[VALUATION][RI] recompute: company=%s symbol=%s reason=%s dep_ts=%s last_ts=%s",
-                company_id, symbol, decision.reason,
-                decision.latest_dependency_at, decision.last_valuation_at,
-            )
+        currency   = ctx.get("currency") or "USD"
+        sector     = ctx.get("sector")
+ 
+        # ── Force: bypass all gates ────────────────────────────────────────
+        if force:
+            dep_values  = await self.repo.get_ri_dependency_values(company_id)
+            fingerprint = _build_fingerprint(dep_values)
+            logger.info("[VALUATION][RI] forced recompute: %s", symbol)
             return await self._compute_and_persist(
-                symbol, company_id, currency, sector, user_id, overrides
+                symbol, company_id, currency, sector, user_id, overrides,
+                dependency_fingerprint=fingerprint,
             )
-
-        # ── Cached path ───────────────────────────────────────────────────────
-
+ 
+        # ── Gate 1: Timestamp ──────────────────────────────────────────────
+        gate1 = await self.guard.should_recompute(company_id, method=method)
+ 
+        if not gate1.should_recompute:
+            return await self._serve_cached(
+                symbol, company_id, currency, sector, user_id, method, overrides
+            )
+ 
+        logger.info(
+            "[VALUATION][RI] Gate 1 fired: %s reason=%s dep_ts=%s last_ts=%s",
+            symbol, gate1.reason, gate1.latest_dependency_at, gate1.last_valuation_at,
+        )
+ 
+        # ── No prior valuation ─────────────────────────────────────────────
+        if gate1.reason == "no_prior_valuation":
+            dep_values  = await self.repo.get_ri_dependency_values(company_id)
+            fingerprint = _build_fingerprint(dep_values)
+            return await self._compute_and_persist(
+                symbol, company_id, currency, sector, user_id, overrides,
+                dependency_fingerprint=fingerprint,
+            )
+ 
+        # ── Override present: bypass Gates 2 & 3 ──────────────────────────
+        if self._has_overrides(overrides):
+            dep_values  = await self.repo.get_ri_dependency_values(company_id)
+            fingerprint = _build_fingerprint(dep_values)
+            logger.info("[VALUATION][RI] Override present → bypass Gates 2&3: %s", symbol)
+            return await self._compute_and_persist(
+                symbol, company_id, currency, sector, user_id, overrides,
+                dependency_fingerprint=fingerprint,
+            )
+ 
+        # ── Gate 2: Fingerprint ────────────────────────────────────────────
+        dep_values  = await self.repo.get_ri_dependency_values(company_id)
+        fingerprint = _build_fingerprint(dep_values)
+ 
+        gate2 = await self.guard.check_fingerprint(company_id, method, fingerprint)
+        if not gate2.should_recompute:
+            logger.info("[VALUATION][RI] Gate 2 → cached (fingerprint_match): %s", symbol)
+            return await self._serve_cached(
+                symbol, company_id, currency, sector, user_id, method, overrides
+            )
+ 
+        logger.info("[VALUATION][RI] Gate 2 fired: %s reason=%s", symbol, gate2.reason)
+ 
+        # ── Gate 3: Materiality ────────────────────────────────────────────
+        last_input_snap = await self.repo.get_last_input_snapshot(company_id, method)
+        stored_resolved = (last_input_snap or {}).get("resolved")
+ 
+        if stored_resolved:
+            defaults         = await self.repo.get_method_params(company_id, method=method)
+            current_resolved = await self.resolve_current_inputs(company_id, overrides, defaults)
+            is_material, gate3_reason, gate3_details = self.guard.is_material_change(
+                current_resolved, stored_resolved, method
+            )
+            if not is_material:
+                logger.info(
+                    "[VALUATION][RI] Gate 3 → cached (immaterial): %s reason=%s",
+                    symbol, gate3_reason,
+                )
+                await self.guard.record_immaterial_change(company_id, method, fingerprint)
+                return await self._serve_cached(
+                    symbol, company_id, currency, sector, user_id, method, overrides
+                )
+            logger.info(
+                "[VALUATION][RI] Gate 3 → recompute (material): %s reason=%s",
+                symbol, gate3_reason,
+            )
+        else:
+            logger.debug("[VALUATION][RI] Gate 3 skipped: no stored resolved yet: %s", symbol)
+ 
+        return await self._compute_and_persist(
+            symbol, company_id, currency, sector, user_id, overrides,
+            dependency_fingerprint=fingerprint,
+        )
+ 
+    # ─────────────────────────────────────────────────────────────────────────
+    # NEW helper methods — add to ResidualIncomeService class
+    # ─────────────────────────────────────────────────────────────────────────
+ 
+    async def _serve_cached(
+        self,
+        symbol:     str,
+        company_id: int,
+        currency:   str,
+        sector:     Optional[str],
+        user_id:    Optional[int],
+        method:     str,
+        overrides:  ResidualIncomeRequestOverrides,
+    ) -> ResidualIncomeResponse:
+        """Hydrate and return the last persisted output snapshot with a fresh price."""
         snap = await self.repo.get_last_output_snapshot(company_id=company_id, method=method)
         if not snap:
-            logger.info("[VALUATION][RI] cached path missing; recomputing for %s", symbol)
+            dep_values  = await self.repo.get_ri_dependency_values(company_id)
+            fingerprint = _build_fingerprint(dep_values)
             return await self._compute_and_persist(
-                symbol, company_id, currency, sector, user_id, overrides
+                symbol, company_id, currency, sector, user_id, overrides,
+                dependency_fingerprint=fingerprint,
             )
-
-        valuation_payload = snap.get("valuation") or {}
+ 
+        valuation_payload     = snap.get("valuation")     or {}
         applicability_payload = snap.get("applicability") or {}
-        dq_payload = snap.get("dataQuality") or {}
+        dq_payload            = snap.get("dataQuality")   or {}
         last_computed = (
             (dq_payload.get("freshnessDays") or {}).get("lastComputedAt")
             or snap.get("lastComputedAt")
         )
-
-        # Read-time price
+ 
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic_ps = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
-        upside = None
+        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        upside        = None
         if current_price is not None and float(current_price) > 0 and intrinsic_ps is not None:
             upside = (intrinsic_ps - float(current_price)) / float(current_price)
-
-        valuation_payload["currentPrice"] = current_price
+ 
+        valuation_payload["currentPrice"]      = current_price
         valuation_payload["upsideDownsidePct"] = upside
-
+ 
         if not applicability_payload:
             applicability_payload = {
                 "score": 0, "category": "Caution",
@@ -130,12 +220,105 @@ class ResidualIncomeService:
             dq_payload = {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
         if isinstance(dq_payload.get("freshnessDays"), dict) and last_computed:
             dq_payload["freshnessDays"]["lastComputedAt"] = last_computed
-
+ 
         return ResidualIncomeResponse(
             valuation=ResidualIncomeValuation(**valuation_payload),
             applicability=Applicability(**applicability_payload),
             dataQuality=DataQuality(**dq_payload),
         )
+ 
+    @staticmethod
+    def _has_overrides(overrides: ResidualIncomeRequestOverrides) -> bool:
+        return any([
+            overrides.requiredReturn    is not None,
+            overrides.beta              is not None,
+            overrides.riskFreeRate      is not None,
+            overrides.equityRiskPremium is not None,
+            overrides.riGrowthRate      is not None,
+            overrides.terminalGrowthRate is not None,
+            overrides.forecastYears     is not None,
+        ])
+ 
+    async def resolve_current_inputs(
+        self,
+        company_id: int,
+        overrides:  ResidualIncomeRequestOverrides,
+        defaults:   Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Lightweight input resolution for Gate 3.
+        Resolves bv_per_share, eps0, k_e, g_ri without computing intrinsic value.
+        """
+        # ── Shares ────────────────────────────────────────────────────────
+        shares: Optional[float] = None
+        try:
+            rows = await self.repo.get_shares_history(company_id)
+            if rows:
+                sh = _safe_float(rows[-1].get("shares_outstanding_diluted"))
+                if sh and sh > 0:
+                    shares = float(sh)
+        except Exception:
+            pass
+        if shares is None:
+            try:
+                summary = await self.repo.get_company_summary_latest(company_id)
+                if summary:
+                    sh = _safe_float(summary.get("shares_outstanding")
+                                     or summary.get("implied_shares_outstanding"))
+                    if sh and sh > 0:
+                        shares = float(sh)
+            except Exception:
+                pass
+ 
+        # ── Base financial values ──────────────────────────────────────────
+        bv_per_share: Optional[float] = None
+        eps0:         Optional[float] = None
+        try:
+            bs_row = await self.repo.get_balance_sheet_latest(company_id)
+            equity = _safe_float(bs_row.get("shareholders_equity")) if bs_row else None
+            if equity is not None and shares and float(shares) > 0:
+                bv_per_share = float(equity) / float(shares)
+        except Exception:
+            pass
+ 
+        try:
+            is_row = await self.repo.get_income_statement_latest(company_id)
+            net_income = _safe_float(
+                (is_row or {}).get("net_income_to_common") or (is_row or {}).get("net_income")
+            )
+            if net_income is not None and shares and float(shares) > 0:
+                eps0 = float(net_income) / float(shares)
+        except Exception:
+            pass
+ 
+        # ── Cost of equity ─────────────────────────────────────────────────
+        k_e, k_evidence = await self._resolve_cost_of_equity(company_id, overrides, defaults)
+ 
+        # ── RI growth rate ─────────────────────────────────────────────────
+        g_ri, g_evidence = await self._resolve_ri_growth(company_id, overrides, defaults, k_e)
+ 
+        # ── Terminal growth ────────────────────────────────────────────────
+        tg_used: Optional[float] = None
+        if overrides.terminalGrowthRate is not None:
+            tg_used = _pct_or_frac_to_frac(float(overrides.terminalGrowthRate))
+        else:
+            tg_raw = _safe_float(defaults.get("terminal_growth_default"))
+            if tg_raw is not None:
+                tg_used = _pct_or_frac_to_frac(float(tg_raw))
+ 
+        n = int(overrides.forecastYears) if overrides.forecastYears is not None else int(defaults.get("forecast_years_default", 5))
+ 
+        return {
+            "bv_per_share":    round(bv_per_share, 4) if bv_per_share is not None else None,
+            "eps0":            round(eps0, 4)          if eps0         is not None else None,
+            "k_e_final":       round(k_e, 4),
+            "k_e_source":      k_evidence.get("source"),
+            "g_ri_final":      round(g_ri, 4),
+            "g_ri_source":     g_evidence.get("source"),
+            "terminal_g_final": round(tg_used, 4)     if tg_used      is not None else None,
+            "forecast_years":  n,
+        }
+ 
 
     async def _compute_and_persist(
         self,
@@ -145,6 +328,7 @@ class ResidualIncomeService:
         sector: Optional[str],
         user_id: Optional[int],
         overrides: ResidualIncomeRequestOverrides,
+        dependency_fingerprint: Optional[str] = None,
     ) -> ResidualIncomeResponse:
 
         defaults = await self.repo.get_method_params(company_id, method="residual_income")
@@ -538,12 +722,16 @@ class ResidualIncomeService:
             company_id=company_id,
             method="residual_income",
             run={
-                "run_by_user_id": user_id,
-                "input_snapshot": {"overrides": overrides.dict()},
+                "run_by_user_id":    user_id,
+                "input_snapshot":    {
+                    "overrides":              overrides.dict(),
+                    "dependency_fingerprint": dependency_fingerprint,   # Gate 2 storage
+                    "resolved":               resolved_inputs,           # Gate 3 storage
+                },
                 "assumption_snapshot": defaults,
-                "output_snapshot": output_snapshot,
-                "data_version_tag": None,
-                "notes": overrides.notes,
+                "output_snapshot":   output_snapshot,
+                "data_version_tag":  None,
+                "notes":             overrides.notes,
             },
         )
 

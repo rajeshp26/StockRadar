@@ -1,4 +1,22 @@
-# backend/application/jobs/derived_financial_metrics_job.py
+# -*- coding: utf-8 -*-
+# application/jobs/derived_financial_metrics_job.py
+#
+# CHANGES vs previous version
+# ─────────────────────────────────────────────────
+# Phase 1 — Version-gate upsert:
+#   Before writing to financial_ratios, batch-fetch the stored source_version_tag
+#   for every (company_id, fiscal_year) we computed. Only upsert rows whose tag
+#   differs from what is already stored.
+#
+#   Effect: computed_at no longer advances when IS/BS/CF source data is unchanged.
+#   This eliminates the primary driver of spurious DDM/Rule1/DCF recomputes.
+#
+#   Return shape extended: {"count", "rows_changed", "upserted"}
+#   - rows_changed: number of rows actually written (0 = no-op cycle)
+#   - upserted:     False when all rows were identical (tag match)
+#   The market_data_scheduler reads rows_changed to gate Rule #1 evaluation.
+# ─────────────────────────────────────────────────
+
 from __future__ import annotations
 
 import hashlib
@@ -54,15 +72,26 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     to financial_ratios (Phase 2 consolidated table).
 
     Sources (read-only):
-      income_statements   — P&L items, EBITDA, EBIT, shares
-      balance_sheets      — assets, liabilities, equity, debt
+      income_statements    — P&L items, EBITDA, EBIT, shares
+      balance_sheets       — assets, liabilities, equity, debt
       cash_flow_statements — OCF, capex, dividends paid
 
     Writes to: financial_ratios (on_conflict: company_id, fiscal_year)
     Does NOT write to: derived_financial_metrics (deprecated), statistics, dividend_metrics
+
+    Phase 1 change: version-gated upsert.
+    Rows whose source_version_tag matches the stored tag are skipped entirely,
+    so computed_at does NOT advance when underlying data is unchanged.
+
+    Returns:
+      {
+        "count":        int,   # total fiscal years evaluated
+        "rows_changed": int,   # rows actually written to DB (0 = no-op)
+        "upserted":     bool,  # True only when at least one row was written
+      }
     """
 
-    # ── Fetch annual statement series ─────────────────────────────────────────
+    # ── Fetch annual statement series ──────────────────────────────────────────
 
     is_resp = (
         supabase.table("income_statements")
@@ -123,14 +152,10 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
            if candidate_score > existing_score:
                by_year[fy] = r
            elif candidate_score == existing_score:
-               # Tiebreak by PK — larger value = more recently inserted
                if (r.get(pk_field) or 0) > (by_year[fy].get(pk_field) or 0):
                    by_year[fy] = r
        return by_year
 
-    # income_statements scoring fields:
-    #   - depreciation_amortization is NOT in income_statements (it's in cash_flow_statements)
-    #   - PK is is_id (NOT "id")
     is_by_year = _best_row(is_rows, [
        "net_income_to_common", "shares_outstanding_diluted",
        "net_income", "ebit", "ebitda", "revenue", "gross_profit",
@@ -154,7 +179,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         bsr = bs_by_year.get(y) or {}
         cfr = cf_by_year.get(y) or {}
 
-        # ── Income statement ──────────────────────────────────────────────────
         revenue      = _f(isr.get("revenue"))
         cogs         = _f(isr.get("cost_of_goods_sold"))
         gross_profit = _f(isr.get("gross_profit"))
@@ -168,7 +192,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         interest_exp = _f(isr.get("interest_expense"))
         shares       = _f(isr.get("shares_outstanding_diluted"))
 
-        # ── Balance sheet ─────────────────────────────────────────────────────
         total_assets      = _f(bsr.get("total_assets"))
         current_assets    = _f(bsr.get("current_assets"))
         current_liab      = _f(bsr.get("current_liabilities"))
@@ -180,31 +203,25 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         goodwill          = _f(bsr.get("goodwill"))
         inventory         = _f(bsr.get("inventory"))
 
-        # ── Cash flow ─────────────────────────────────────────────────────────
         cfo          = _f(cfr.get("cash_from_operating_activities"))
         capex        = _f(cfr.get("capital_expenditures"))
         div_paid     = _f(cfr.get("dividends_paid"))
         div_paid_abs = abs(div_paid) if div_paid is not None else None
 
-        # ── Derived values ────────────────────────────────────────────────────
         fcf = _fcf(cfo, capex)
 
-        # Invested capital for ROIC
         invested_capital = None
         if total_debt is not None and equity is not None:
             invested_capital = total_debt + equity - (cash or 0.0)
 
-        # Tax rate (best-effort; clamp 0–1)
         tax_rate = None
         if pretax is not None and pretax != 0 and tax is not None:
             tax_rate = max(0.0, min(1.0, tax / pretax))
 
-        # NOPAT for ROIC (default 21% if tax rate unavailable)
         nopat = None
         if ebit is not None:
             nopat = ebit * (1.0 - (tax_rate if tax_rate is not None else 0.21))
 
-        # ── Returns ───────────────────────────────────────────────────────────
         roic = (
             _safe_div(nopat, invested_capital)
             if nopat is not None and invested_capital not in (None, 0.0)
@@ -221,21 +238,18 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             else None
         )
 
-        # ── Margins ───────────────────────────────────────────────────────────
         gross_margin     = _safe_div(gross_profit, revenue)
         operating_margin = _safe_div(op_inc, revenue)
         ebitda_margin    = _safe_div(ebitda, revenue)
         net_margin       = _safe_div(net_inc, revenue)
         fcf_margin       = _safe_div(fcf, revenue)
 
-        # ── FCF quality ───────────────────────────────────────────────────────
         fcf_conversion = (
             _safe_div(fcf, net_inc_common)
             if fcf is not None and net_inc_common not in (None, 0.0)
             else None
         )
 
-        # ── Dividend ratios ───────────────────────────────────────────────────
         payout = (
             _safe_div(div_paid_abs, net_inc_common)
             if div_paid_abs is not None and net_inc_common not in (None, 0.0)
@@ -252,7 +266,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             else None
         )
 
-        # ── Leverage ──────────────────────────────────────────────────────────
         debt_to_equity = (
             _safe_div(total_debt, equity)
             if total_debt is not None and equity not in (None, 0.0)
@@ -277,7 +290,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         if ebit is not None and interest_exp is not None and interest_exp != 0:
             interest_coverage = ebit / abs(interest_exp)
 
-        # ── Liquidity ─────────────────────────────────────────────────────────
         current_ratio = (
             _safe_div(current_assets, current_liab)
             if current_assets is not None and current_liab not in (None, 0.0)
@@ -288,7 +300,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             liquid = current_assets - (inventory or 0.0)
             quick_ratio = _safe_div(liquid, current_liab)
 
-        # ── Efficiency ────────────────────────────────────────────────────────
         asset_turnover = (
             _safe_div(revenue, total_assets)
             if revenue is not None and total_assets not in (None, 0.0)
@@ -300,9 +311,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             else None
         )
 
-        # ── Per-share fundamentals ────────────────────────────────────────────
-        # shares is diluted count from income_statements (canonical source)
-        # capex stored as negative outflow → abs() for per-share presentation
         capex_abs = abs(capex) if capex is not None else None
         working_capital = (
             (current_assets - current_liab)
@@ -328,7 +336,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         wc_ps         = _per_share(working_capital)
         capex_ps      = _per_share(capex_abs)
 
-        # ── Version tag (for idempotency auditing) ────────────────────────────
         source_payload = {
             "is": {k: isr.get(k) for k in [
                 "revenue", "gross_profit", "operating_income", "net_income",
@@ -355,43 +362,35 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             "fiscal_year":  int(y),
             "period_end_date": period_end,
 
-            # Returns
             "roic":  roic,
             "roe":   roe,
             "roa":   roa,
 
-            # Margins
             "gross_margin":     gross_margin,
             "operating_margin": operating_margin,
             "ebitda_margin":    ebitda_margin,
             "net_margin":       net_margin,
             "fcf_margin":       fcf_margin,
 
-            # FCF
             "free_cash_flow":  fcf,
             "fcf_conversion":  fcf_conversion,
 
-            # Dividend ratios
             "dividend_payout_ratio":     payout,
             "fcf_dividend_payout_ratio": fcf_payout,
             "dividend_coverage_fcf":     coverage,
 
-            # Leverage
             "debt_to_equity":           debt_to_equity,
             "debt_to_assets":           debt_to_assets,
             "long_term_debt_to_equity": lt_debt_to_equity,
             "long_term_debt_to_assets": lt_debt_to_assets,
             "interest_coverage":        interest_coverage,
 
-            # Liquidity
             "current_ratio": current_ratio,
             "quick_ratio":   quick_ratio,
 
-            # Efficiency
             "asset_turnover":    asset_turnover,
             "inventory_turnover": inventory_turnover,
 
-            # Per-share
             "revenue_per_share":             revenue_ps,
             "ocf_per_share":                 ocf_ps,
             "fcf_per_share":                 fcf_ps,
@@ -404,7 +403,6 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             "working_capital_per_share":     wc_ps,
             "capex_per_share":               capex_ps,
 
-            # Metadata
             "computed_at":        datetime.utcnow().isoformat(),
             "source_version_tag": _version_tag(source_payload),
             "data_source":        "derived",
@@ -415,12 +413,62 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
 
     if not out:
         logger.info("[RATIOS] No statement rows found for company_id=%s", company_id)
-        return {"count": 0}
+        return {"count": 0, "rows_changed": 0, "upserted": False}
 
-    resp = (
-        supabase.table("financial_ratios")
-        .upsert(out, on_conflict="company_id,fiscal_year")
-        .execute()
+    # ── Phase 1: Version-gate — only upsert rows whose source data changed ─────
+    #
+    # Batch-fetch the stored source_version_tag for every fiscal year we computed.
+    # Filter out rows where the tag matches what is already in financial_ratios.
+    #
+    # This prevents computed_at from advancing when IS/BS/CF values are identical,
+    # which was the primary cause of spurious downstream recomputes for all
+    # valuation methods (DDM, Rule1, DCF, Owner Earnings, Residual Income).
+    #
+    # If the pre-fetch itself fails (network/permission error), we fall back to
+    # the full upsert so the job never silently drops an update.
+
+    existing_tags: Dict[int, str] = {}
+    try:
+        fiscal_years = [row["fiscal_year"] for row in out]
+        tags_resp = (
+            supabase.table("financial_ratios")
+            .select("fiscal_year, source_version_tag")
+            .eq("company_id", company_id)
+            .in_("fiscal_year", fiscal_years)
+            .execute()
+        )
+        for r in (tags_resp.data or []):
+            fy  = r.get("fiscal_year")
+            tag = r.get("source_version_tag")
+            if fy is not None and tag:
+                existing_tags[int(fy)] = tag
+    except Exception as e:
+        logger.warning(
+            "[RATIOS] Tag pre-fetch failed for company_id=%s; "
+            "falling back to full upsert: %s",
+            company_id, e,
+        )
+        # existing_tags remains empty → all rows treated as changed → full upsert
+
+    changed_rows = [
+        row for row in out
+        if existing_tags.get(row["fiscal_year"]) != row["source_version_tag"]
+    ]
+
+    if not changed_rows:
+        logger.debug(
+            "[RATIOS] All %d rows unchanged for company_id=%s "
+            "(source_version_tag match — skipping upsert)",
+            len(out), company_id,
+        )
+        return {"count": len(out), "rows_changed": 0, "upserted": False}
+
+    supabase.table("financial_ratios").upsert(
+        changed_rows, on_conflict="company_id,fiscal_year"
+    ).execute()
+
+    logger.info(
+        "[RATIOS] Upserted %d/%d changed rows into financial_ratios for company_id=%s",
+        len(changed_rows), len(out), company_id,
     )
-    logger.info("[RATIOS] Upserted %d rows into financial_ratios for company_id=%s", len(out), company_id)
-    return {"count": len(out), "upserted": True}
+    return {"count": len(out), "rows_changed": len(changed_rows), "upserted": True}

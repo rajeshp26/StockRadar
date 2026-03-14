@@ -249,71 +249,99 @@ class MarketDataRefreshScheduler:
     async def _process_company(self, symbol: str, company_id: int) -> Dict[str, Any]:
         """
         Steps:
-          1) Price history (monthly EOM compression; bootstrap or incremental) respecting rolling retention
+          1) Price history (monthly EOM compression; bootstrap or incremental)
           2) Splits
           3) Revenue forecast
           4) Earnings forecast
           5) Company summary snapshot
-          6) NEW: Rule #1 evaluation (freshness gate)
+          5b) Derived financial metrics (version-gated — only writes when data changed)
+          6) Rule #1 evaluation (only triggered when derived metrics actually changed)
         """
-        # 1) PRICE HISTORY (monthly EOM)
+        # 1) PRICE HISTORY
         price_rows_written = await self._upsert_monthly_price_history(symbol, company_id)
 
-        # 2) SPLITS (DefeatBeta -> fallback YF inside provider)
+        # 2) SPLITS
         split_rows = await self.defeat_beta_provider.get_splits_optimized(symbol, company_id)
         if split_rows:
             await self.financial_repo.upsert_splits(split_rows)
 
-        # 3) REVENUE FORECAST (DefeatBeta only currently)
+        # 3) REVENUE FORECAST
         rev_fcst_rows = await self.defeat_beta_provider.fetch_revenue_forecast(symbol, company_id)
         if rev_fcst_rows:
             await self.financial_repo.upsert_revenue_forecast(rev_fcst_rows)
 
-        # 4) EARNINGS FORECAST (DefeatBeta only currently)
+        # 4) EARNINGS FORECAST
         eps_fcst_rows = await self.defeat_beta_provider.fetch_earnings_forecast(symbol, company_id)
         if eps_fcst_rows:
             await self.financial_repo.upsert_earnings_forecast(eps_fcst_rows)
 
-        # 5) COMPANY SUMMARY (DBeta -> fallback YF inside provider)
+        # 5) COMPANY SUMMARY
         summary = await self.defeat_beta_provider.get_company_summary_optimized(symbol, company_id)
         if summary:
             await self.financial_repo.upsert_company_summary(summary)
 
-        # 5b) Derived financial metrics (ratios) — non-blocking
-        # Ensures financial_ratios is populated for ALL active companies on every
-        # market-data cycle, not only companies within the earnings scheduler window.
+        # 5b) Derived financial metrics (ratios) — version-gated, non-blocking.
+        #
+        #  The job now returns rows_changed so we know whether IS/BS/CF source data
+        #  actually changed. When rows_changed == 0, computed_at is NOT advanced in
+        #  financial_ratios, and Rule #1 below is skipped entirely.
+        ratios_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
         try:
-            await compute_and_upsert_derived_financial_metrics(company_id=company_id)
-            logger.debug("[RATIOS] computed during market-data refresh for %s", symbol)
-        except Exception as me:
-            logger.error("[RATIOS] compute failed during market-data refresh for %s: %s", symbol, me)
-
-        # 6) NEW: Rule #1 evaluation with freshness gate (Trigger B)
-        # Only recompute if any dependency inputs are newer than the last valuation.
-        try:
-            val_repo = ValuationRepository()
-            guard = RecomputeGuard(val_repo)
-            valuation_service = ValuationService(val_repo, guard)
-
-            await valuation_service.compute_rule1_if_stale(
-                symbol=symbol,
-                user_id=None,
-                overrides=None,
-                force=False,  # recompute only when dependencies changed
+            ratios_result = await compute_and_upsert_derived_financial_metrics(
+                company_id=company_id
             )
-            logger.info("[VALUATION][R1] evaluated after market-data refresh for %s", symbol)
+            logger.debug(
+                "[RATIOS] market-data refresh for %s: %d/%d rows changed",
+                symbol,
+                ratios_result.get("rows_changed", 0),
+                ratios_result.get("count", 0),
+            )
+        except Exception as me:
+            logger.error(
+                "[RATIOS] compute failed during market-data refresh for %s: %s", symbol, me
+            )
 
-        except Exception as ve:
-            # Do not let valuation errors affect the scheduler pipeline
-            logger.error("[VALUATION] Rule #1 auto-evaluation (market data) failed for %s: %s", symbol, ve, exc_info=True)
+        # 6) Rule #1 evaluation — only when derived metrics were actually written.
+        #
+        #  Rationale: financial_ratios is the primary dependency timestamp for Rule #1.
+        #  If rows_changed == 0, the ratios job was a no-op, computed_at did not advance,
+        #  and Rule #1's Gate 1 timestamp check will correctly return "up_to_date".
+        #  Running the evaluation anyway would be wasted work — skip it explicitly here
+        #  so we don't even pay for the two DB queries in Gate 1.
+        ratios_changed = ratios_result.get("rows_changed", 0) > 0
+        if ratios_changed:
+            try:
+                val_repo = ValuationRepository()
+                guard = RecomputeGuard(val_repo)
+                valuation_service = ValuationService(val_repo, guard)
+                await valuation_service.compute_rule1_if_stale(
+                    symbol=symbol,
+                    user_id=None,
+                    overrides=None,
+                    force=False,
+                )
+                logger.info(
+                    "[VALUATION][R1] evaluated after market-data refresh for %s", symbol
+                )
+            except Exception as ve:
+                logger.error(
+                    "[VALUATION] Rule #1 auto-evaluation failed for %s: %s",
+                    symbol, ve, exc_info=True,
+                )
+        else:
+            logger.debug(
+                "[VALUATION][R1] skipped for %s: derived metrics unchanged (rows_changed=0)",
+                symbol,
+            )
 
         return {
             "price_history_monthly": price_rows_written,
-            "splits": len(split_rows or []),
-            "revenue_forecast": len(rev_fcst_rows or []),
-            "earnings_forecast": len(eps_fcst_rows or []),
-            "company_summary": 1 if summary else 0,
-            "ratios_computed": True,
+            "splits":                len(split_rows or []),
+            "revenue_forecast":      len(rev_fcst_rows or []),
+            "earnings_forecast":     len(eps_fcst_rows or []),
+            "company_summary":       1 if summary else 0,
+            "ratios_computed":       True,
+            "ratios_changed":        ratios_changed,   # NEW: observable by tests/logging
         }
 
     # ----------------------------------------------------------------------

@@ -1,5 +1,7 @@
 # infrastructure/repositories/valuation_repository.py
 from __future__ import annotations
+import hashlib
+import json
 import logging
 import math
 from datetime import datetime, date, time, timedelta
@@ -14,7 +16,7 @@ ALLOWED_METHODS = {
     "ddm_two_stage",
     "dcf",
     "owner_earnings",
-    "residual_income", 
+    "residual_income",
     "relative",
 }
 
@@ -46,11 +48,14 @@ def _normalize_datetime(ts: Any) -> Optional[datetime]:
     if ts is None:
         return None
     if isinstance(ts, datetime):
-        return ts
+        # Strip tzinfo so all timestamps are naive UTC.
+        # Supabase stores everything in UTC; discarding the timezone label
+        # makes offset-aware and offset-naive values comparable in _max_dt().
+        return ts.replace(tzinfo=None)
     if isinstance(ts, str):
         try:
             s = ts.replace("Z", "+00:00")
-            return datetime.fromisoformat(s)
+            return datetime.fromisoformat(s).replace(tzinfo=None)
         except Exception:
             return None
     return None
@@ -75,12 +80,56 @@ def _pct_to_frac(x: float) -> float:
 def _compute_fcf(ocf_f: Optional[float], capex_f: Optional[float]) -> Optional[float]:
     """
     Sign-aware FCF: capex is stored as a NEGATIVE outflow in cash_flow_statements.
-    BUG-01 fix applied here too: the previous get_fcf_history() used ocf - capex
-    which produced the wrong sign when capex is negative.
+    BUG-01 fix: previous get_fcf_history() used ocf - capex which produced the
+    wrong sign when capex is negative.
     """
     if ocf_f is None or capex_f is None:
         return None
     return (ocf_f + capex_f) if capex_f < 0 else (ocf_f - capex_f)
+
+
+def _hash_params(params_rows: list) -> str:
+    """
+    Stable content-hash of valuation_method_defaults params values.
+    Hashes the actual JSONB params content, not updated_at, so that an
+    administrative timestamp touch without a value change does not alter
+    the fingerprint and does not trigger downstream recomputes.
+    """
+    normalized = sorted(
+        [
+            {"method": r.get("method"), "params": r.get("params")}
+            for r in params_rows
+        ],
+        key=lambda x: x.get("method") or "",
+    )
+    raw = json.dumps(normalized, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _safe_float_repo(x: Any) -> Optional[float]:
+    """Local safe float for repo helpers — avoids importing from service layer."""
+    try:
+        if x is None:
+            return None
+        f = float(x)
+        return f if f == f else None
+    except Exception:
+        return None
+
+
+def _round2(x: Any) -> Optional[float]:
+    v = _safe_float_repo(x)
+    return round(v, 2) if v is not None else None
+
+
+def _round6(x: Any) -> Optional[float]:
+    v = _safe_float_repo(x)
+    return round(v, 6) if v is not None else None
+
+
+def _round8(x: Any) -> Optional[float]:
+    v = _safe_float_repo(x)
+    return round(v, 8) if v is not None else None
 
 
 # ─── Repository ───────────────────────────────────────────────────────────────
@@ -170,10 +219,6 @@ class ValuationRepository:
         return None
 
     async def _latest_dependency_rule1(self, company_id: int) -> Optional[datetime]:
-        """
-        Phase 2: statistics table removed (dropped in 002_phase2a).
-        Dependency set updated: statistics → financial_ratios (computed_at).
-        """
         try:
             cm = await self.get_company_meta(company_id)
             sector = cm.get("sector") if cm else None
@@ -295,7 +340,6 @@ class ValuationRepository:
                 .execute()
             )
             dm_dt = _normalize_datetime((_first(dm.data) or {}).get("created_at"))
-            # Phase 2: statistics removed — financial_ratios (computed_at) replaces it.
             fr = (
                 supabase.table("financial_ratios")
                 .select("computed_at")
@@ -356,7 +400,6 @@ class ValuationRepository:
                 .execute()
             )
             bs_dt = _normalize_datetime((_first(bs.data) or {}).get("updated_at"))
-            # Phase 2: statistics removed — financial_ratios (computed_at) replaces it.
             fr = (
                 supabase.table("financial_ratios")
                 .select("computed_at")
@@ -397,18 +440,7 @@ class ValuationRepository:
             logger.error("get_latest_dependency_ts(dcf) failed company_id=%s: %s", company_id, e)
             return None
 
-    # ── Owner Earnings dependency timestamp ───────────────────────────────────
-
     async def _latest_dependency_owner_earnings(self, company_id: int) -> Optional[datetime]:
-        """
-        Dependency set for Owner Earnings:
-        - income_statements  (net_income, shares)
-        - cash_flow_statements  (D&A, capex, WC change)
-        - balance_sheets  (net debt equity bridge)
-        - financial_ratios  (ROIC for suitability)
-        - valuation_method_defaults  (method = owner_earnings)
-        - company_valuation_overrides  (method = owner_earnings)
-        """
         try:
             is_ = (
                 supabase.table("income_statements")
@@ -419,7 +451,6 @@ class ValuationRepository:
                 .execute()
             )
             is_dt = _normalize_datetime((_first(is_.data) or {}).get("updated_at"))
-
             cf = (
                 supabase.table("cash_flow_statements")
                 .select("updated_at")
@@ -429,7 +460,6 @@ class ValuationRepository:
                 .execute()
             )
             cf_dt = _normalize_datetime((_first(cf.data) or {}).get("updated_at"))
-
             bs = (
                 supabase.table("balance_sheets")
                 .select("updated_at")
@@ -439,7 +469,6 @@ class ValuationRepository:
                 .execute()
             )
             bs_dt = _normalize_datetime((_first(bs.data) or {}).get("updated_at"))
-
             fr = (
                 supabase.table("financial_ratios")
                 .select("computed_at")
@@ -449,7 +478,6 @@ class ValuationRepository:
                 .execute()
             )
             fr_dt = _normalize_datetime((_first(fr.data) or {}).get("computed_at"))
-
             md = (
                 supabase.table("valuation_method_defaults")
                 .select("updated_at")
@@ -458,7 +486,6 @@ class ValuationRepository:
                 .execute()
             )
             md_dt = _normalize_datetime((_first(md.data) or {}).get("updated_at"))
-
             co = (
                 supabase.table("company_valuation_overrides")
                 .select("updated_at")
@@ -468,24 +495,12 @@ class ValuationRepository:
                 .execute()
             )
             co_dt = _normalize_datetime((_first(co.data) or {}).get("updated_at"))
-
             return _max_dt(is_dt, cf_dt, bs_dt, fr_dt, md_dt, co_dt)
         except Exception as e:
             logger.error("_latest_dependency_owner_earnings failed company_id=%s: %s", company_id, e)
             return None
 
-    # ── Residual Income dependency timestamp ──────────────────────────────────
-
     async def _latest_dependency_residual_income(self, company_id: int) -> Optional[datetime]:
-        """
-        Dependency set for Residual Income:
-        - income_statements  (EPS, net_income)
-        - balance_sheets  (shareholders_equity, total_assets, intangibles)
-        - company_summary  (beta)
-        - financial_ratios  (ROE for suitability)
-        - valuation_method_defaults  (method = residual_income)
-        - company_valuation_overrides  (method = residual_income)
-        """
         try:
             is_ = (
                 supabase.table("income_statements")
@@ -496,7 +511,6 @@ class ValuationRepository:
                 .execute()
             )
             is_dt = _normalize_datetime((_first(is_.data) or {}).get("updated_at"))
-
             bs = (
                 supabase.table("balance_sheets")
                 .select("updated_at")
@@ -506,7 +520,6 @@ class ValuationRepository:
                 .execute()
             )
             bs_dt = _normalize_datetime((_first(bs.data) or {}).get("updated_at"))
-
             cs = (
                 supabase.table("company_summary")
                 .select("snapshot_date")
@@ -516,7 +529,6 @@ class ValuationRepository:
                 .execute()
             )
             cs_dt = _as_datetime_from_date((_first(cs.data) or {}).get("snapshot_date"))
-
             fr = (
                 supabase.table("financial_ratios")
                 .select("computed_at")
@@ -526,7 +538,6 @@ class ValuationRepository:
                 .execute()
             )
             fr_dt = _normalize_datetime((_first(fr.data) or {}).get("computed_at"))
-
             md = (
                 supabase.table("valuation_method_defaults")
                 .select("updated_at")
@@ -535,7 +546,6 @@ class ValuationRepository:
                 .execute()
             )
             md_dt = _normalize_datetime((_first(md.data) or {}).get("updated_at"))
-
             co = (
                 supabase.table("company_valuation_overrides")
                 .select("updated_at")
@@ -545,22 +555,14 @@ class ValuationRepository:
                 .execute()
             )
             co_dt = _normalize_datetime((_first(co.data) or {}).get("updated_at"))
-
             return _max_dt(is_dt, bs_dt, cs_dt, fr_dt, md_dt, co_dt)
         except Exception as e:
             logger.error("_latest_dependency_residual_income failed company_id=%s: %s", company_id, e)
             return None
 
-    # ── Analytics stream inserts ──────────────────────────────────────────────
-
     # ── Owner Earnings repo helpers ───────────────────────────────────────────
 
     async def get_cash_flow_oe_inputs(self, company_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Latest annual cash flow row including D&A and WC change — required for OE computation.
-        Intentionally a separate method from get_cash_flow_latest to avoid widening
-        the existing method's SELECT (no breaking changes to callers).
-        """
         try:
             resp = (
                 supabase.table("cash_flow_statements")
@@ -582,23 +584,11 @@ class ValuationRepository:
             logger.error("get_cash_flow_oe_inputs failed: %s", e)
             return None
 
-    async def get_annual_owner_earnings(
-        self, company_id: int, years: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Compute annual Owner Earnings history: NI + D&A − |Capex| per year.
-        Joins income_statements (net_income) with cash_flow_statements (D&A, capex).
-        Used by owner_earnings_suitability for multi-year metrics.
-
-        Note: Uses total capex as maintenance capex proxy (conservative; no ratio applied).
-        """
+    async def get_annual_owner_earnings(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
         try:
             cf_resp = (
                 supabase.table("cash_flow_statements")
-                .select(
-                    "fiscal_year, fiscal_quarter, "
-                    "capital_expenditures, depreciation_amortization"
-                )
+                .select("fiscal_year, fiscal_quarter, capital_expenditures, depreciation_amortization")
                 .eq("company_id", company_id)
                 .is_("fiscal_quarter", None)
                 .order("fiscal_year", desc=False)
@@ -613,13 +603,11 @@ class ValuationRepository:
                 .order("fiscal_year", desc=False)
                 .execute()
             )
-
             cf_by_year: Dict[int, Dict[str, Any]] = {}
             for r in (cf_resp.data or []):
                 y = r.get("fiscal_year")
                 if isinstance(y, int):
                     cf_by_year[y] = r
-
             out: List[Dict[str, Any]] = []
             for r in (is_resp.data or []):
                 y = r.get("fiscal_year")
@@ -627,14 +615,11 @@ class ValuationRepository:
                     continue
                 ni_raw = r.get("net_income_to_common") or r.get("net_income")
                 ni = float(ni_raw) if ni_raw is not None else None
-
                 cf = cf_by_year.get(y, {})
                 da_raw = cf.get("depreciation_amortization")
                 capex_raw = cf.get("capital_expenditures")
                 da = float(da_raw) if da_raw is not None else None
                 capex = float(capex_raw) if capex_raw is not None else None
-
-                # Sign-aware: same logic as _compute_fcf
                 oe: Optional[float] = None
                 if ni is not None:
                     da_val = da if da is not None else 0.0
@@ -642,35 +627,18 @@ class ValuationRepository:
                     if capex is not None:
                         capex_adj = capex if capex < 0 else -capex
                     oe = ni + da_val + capex_adj
-
-                out.append({
-                    "fiscal_year": y,
-                    "oe": oe,
-                    "net_income": ni,
-                    "da": da,
-                    "capex": capex,
-                })
-
+                out.append({"fiscal_year": y, "oe": oe, "net_income": ni, "da": da, "capex": capex})
             out = sorted(out, key=lambda x: x.get("fiscal_year", 0))
             return out[-years:] if years and len(out) > years else out
         except Exception as e:
             logger.error("get_owner_earnings_history failed: %s", e)
             return []
 
-    async def get_capex_da_history(
-        self, company_id: int, years: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Annual Capex + D&A history for OE suitability Capex/D&A ratio metric.
-        Returns [{fiscal_year, capex, da}] sorted ascending.
-        """
+    async def get_capex_da_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
         try:
             resp = (
                 supabase.table("cash_flow_statements")
-                .select(
-                    "fiscal_year, fiscal_quarter, "
-                    "capital_expenditures, depreciation_amortization"
-                )
+                .select("fiscal_year, fiscal_quarter, capital_expenditures, depreciation_amortization")
                 .eq("company_id", company_id)
                 .is_("fiscal_quarter", None)
                 .order("fiscal_year", desc=False)
@@ -678,11 +646,7 @@ class ValuationRepository:
             )
             rows = resp.data or []
             out = [
-                {
-                    "fiscal_year": r["fiscal_year"],
-                    "capex": r.get("capital_expenditures"),
-                    "da": r.get("depreciation_amortization"),
-                }
+                {"fiscal_year": r["fiscal_year"], "capex": r.get("capital_expenditures"), "da": r.get("depreciation_amortization")}
                 for r in rows if r.get("fiscal_year") is not None
             ]
             return out[-years:] if years and len(out) > years else out
@@ -693,17 +657,12 @@ class ValuationRepository:
     # ── Residual Income repo helpers ──────────────────────────────────────────
 
     async def get_balance_sheet_ri_inputs(self, company_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Latest annual balance sheet with intangibles and total_assets for RI suitability.
-        Separate from get_balance_sheet_latest to avoid widening that method's SELECT.
-        """
         try:
             resp = (
                 supabase.table("balance_sheets")
                 .select(
                     "fiscal_year, total_assets, shareholders_equity, "
-                    "intangible_assets, goodwill, "
-                    "total_debt, cash_and_cash_equivalents"
+                    "intangible_assets, goodwill, total_debt, cash_and_cash_equivalents"
                 )
                 .eq("company_id", company_id)
                 .is_("fiscal_quarter", None)
@@ -717,14 +676,7 @@ class ValuationRepository:
             logger.error("get_balance_sheet_ri_inputs failed: %s", e)
             return None
 
-    async def get_book_value_history(
-        self, company_id: int, years: int = 6
-    ) -> List[Dict[str, Any]]:
-        """
-        Annual shareholders' equity (book value) history.
-        Used by RI suitability for book value CAGR metric.
-        Returns [{fiscal_year, book_value}] ascending.
-        """
+    async def get_book_value_history(self, company_id: int, years: int = 6) -> List[Dict[str, Any]]:
         try:
             resp = (
                 supabase.table("balance_sheets")
@@ -737,10 +689,7 @@ class ValuationRepository:
             )
             rows = resp.data or []
             out = [
-                {
-                    "fiscal_year": r["fiscal_year"],
-                    "book_value": r.get("shareholders_equity"),
-                }
+                {"fiscal_year": r["fiscal_year"], "book_value": r.get("shareholders_equity")}
                 for r in rows if r.get("fiscal_year") is not None
             ]
             return out[-years:] if years and len(out) > years else out
@@ -748,14 +697,7 @@ class ValuationRepository:
             logger.error("get_book_value_history failed: %s", e)
             return []
 
-    async def get_roe_history(
-        self, company_id: int, years: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Annual ROE history from financial_ratios.
-        Used by RI suitability.
-        Returns [{fiscal_year, roe}] ascending.
-        """
+    async def get_roe_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
         try:
             resp = (
                 supabase.table("financial_ratios")
@@ -776,9 +718,7 @@ class ValuationRepository:
 
     # ── Run history (used by API history endpoints) ───────────────────────────
 
-    async def get_owner_earnings_history(
-        self, symbol: str, limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    async def get_owner_earnings_history(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
         try:
             ctx = await self.get_company_context(symbol)
             if not ctx:
@@ -815,9 +755,7 @@ class ValuationRepository:
             logger.error("get_owner_earnings_history failed for %s: %s", symbol, e)
             return []
 
-    async def get_residual_income_history(
-        self, symbol: str, limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    async def get_residual_income_history(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
         try:
             ctx = await self.get_company_context(symbol)
             if not ctx:
@@ -852,7 +790,6 @@ class ValuationRepository:
         except Exception as e:
             logger.error("get_residual_income_history failed for %s: %s", symbol, e)
             return []
-
 
     # ── Parameters ─────────────────────────────────────────────────────────────
 
@@ -912,6 +849,61 @@ class ValuationRepository:
         except Exception:
             return None
 
+    async def get_last_input_snapshot(self, company_id: int, method: str) -> Optional[Dict[str, Any]]:
+        """
+        Returns the input_snapshot from the most recent valuation run.
+        Contains: dependency_fingerprint, resolved inputs, overrides.
+        Used by Gate 2 (fingerprint comparison) and Gate 3 (resolved comparison).
+        """
+        if method not in ALLOWED_METHODS:
+            method = "rule1"
+        try:
+            resp = (
+                supabase.table("valuation_runs")
+                .select("input_snapshot")
+                .eq("company_id", company_id)
+                .eq("method", method)
+                .order("run_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            row = _first(resp.data)
+            return (row.get("input_snapshot") if row else None) or None
+        except Exception as exc:
+            logger.error("get_last_input_snapshot failed (%s): %s", method, exc)
+            return None
+
+    async def update_valuation_fingerprint(self, company_id: int, method: str, new_fingerprint: str) -> None:
+        """
+        Gate 3 skip action: advance the stored dependency_fingerprint in the most
+        recent valuation run's input_snapshot without writing a new run record.
+        """
+        if method not in ALLOWED_METHODS:
+            return
+        try:
+            resp = (
+                supabase.table("valuation_runs")
+                .select("run_at, input_snapshot")
+                .eq("company_id", company_id)
+                .eq("method", method)
+                .order("run_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            row = _first(resp.data)
+            if not row:
+                return
+            run_at = row.get("run_at")
+            if not run_at:
+                return
+            existing_snap = row.get("input_snapshot") or {}
+            existing_snap["dependency_fingerprint"] = new_fingerprint
+            supabase.table("valuation_runs").update(
+                {"input_snapshot": existing_snap}
+            ).eq("company_id", company_id).eq("method", method).eq("run_at", run_at).execute()
+        except Exception as exc:
+            logger.error("update_valuation_fingerprint failed (%s, %s): %s", company_id, method, exc)
+
     async def get_last_rule1_output_snapshot(self, company_id: int) -> Optional[Dict[str, Any]]:
         return await self.get_last_output_snapshot(company_id, method="rule1")
 
@@ -933,12 +925,411 @@ class ValuationRepository:
         assumptions = (dq.get("inputDecisions") or {}).get("assumptions", {}) if isinstance(dq, dict) else {}
         return {"applicability": app, "dataQuality": dq, "assumptions": assumptions}
 
+    # ── Fingerprint dependency values ─────────────────────────────────────────
+
+    async def get_ddm_dependency_values(self, company_id: int) -> Dict[str, Any]:
+        ttm_rows = await self.get_dividend_history(company_id, limit=300)
+        cutoff   = date.today() - timedelta(days=365)
+        ttm_dividends = sorted(
+            [
+                {"date": str(r["ex_dividend_date"]), "amount": round(float(r["dividend_amount"]), 6)}
+                for r in ttm_rows
+                if (
+                    _normalize_date(r.get("ex_dividend_date")) is not None
+                    and _normalize_date(r["ex_dividend_date"]) >= cutoff
+                    and r.get("dividend_amount") is not None
+                )
+            ],
+            key=lambda x: x["date"],
+        )
+        yearly_dps = await self.get_dividend_yearly_dps(company_id, years=10)
+        yearly_dps_rounded = [
+            {"year": r["year"], "dps": round(float(r["dps"]), 6)}
+            for r in yearly_dps if r.get("dps") is not None
+        ]
+        roe: Optional[float] = None
+        try:
+            fr_resp = (
+                supabase.table("financial_ratios")
+                .select("roe")
+                .eq("company_id", company_id)
+                .order("fiscal_year", desc=True)
+                .limit(1)
+                .execute()
+            )
+            fr_row = _first(fr_resp.data)
+            if fr_row and fr_row.get("roe") is not None:
+                roe = round(float(fr_row["roe"]), 8)
+        except Exception as exc:
+            logger.warning("get_ddm_dependency_values: ROE fetch failed: %s", exc)
+        retention: Optional[float] = None
+        dm = await self.get_dividend_metrics_latest(company_id)
+        if dm and dm.get("retention_ratio") is not None:
+            retention = round(float(dm["retention_ratio"]), 8)
+        beta: Optional[float] = None
+        try:
+            cs_resp = (
+                supabase.table("company_summary")
+                .select("beta")
+                .eq("company_id", company_id)
+                .order("snapshot_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            cs_row = _first(cs_resp.data)
+            if cs_row and cs_row.get("beta") is not None:
+                beta = round(float(cs_row["beta"]), 6)
+        except Exception as exc:
+            logger.warning("get_ddm_dependency_values: beta fetch failed: %s", exc)
+        params_hash: Optional[str] = None
+        try:
+            md_resp = (
+                supabase.table("valuation_method_defaults")
+                .select("method, params")
+                .in_("method", ["ddm_gordon", "ddm_two_stage"])
+                .execute()
+            )
+            params_hash = _hash_params(md_resp.data or [])
+        except Exception as exc:
+            logger.warning("get_ddm_dependency_values: params fetch failed: %s", exc)
+        return {
+            "ttm_dividends":   ttm_dividends,
+            "yearly_dps_10yr": yearly_dps_rounded,
+            "roe_latest":      roe,
+            "retention_ratio": retention,
+            "beta_latest":     beta,
+            "params_version":  params_hash,
+        }
+
+    async def get_rule1_dependency_values(self, company_id: int) -> Dict[str, Any]:
+        ratios_series: list = []
+        try:
+            r = (
+                supabase.table("financial_ratios")
+                .select("fiscal_year, roic, roe, debt_to_equity, interest_coverage, fcf_conversion, free_cash_flow")
+                .eq("company_id", company_id)
+                .order("fiscal_year", desc=True)
+                .limit(6)
+                .execute()
+            )
+            for row in sorted(r.data or [], key=lambda x: x.get("fiscal_year") or 0):
+                ratios_series.append({
+                    "fiscal_year":       row.get("fiscal_year"),
+                    "roic":              _round8(row.get("roic")),
+                    "roe":               _round8(row.get("roe")),
+                    "debt_to_equity":    _round6(row.get("debt_to_equity")),
+                    "interest_coverage": _round6(row.get("interest_coverage")),
+                    "fcf_conversion":    _round6(row.get("fcf_conversion")),
+                    "free_cash_flow":    _round2(row.get("free_cash_flow")),
+                })
+        except Exception as exc:
+            logger.warning("get_rule1_dependency_values: ratios series failed: %s", exc)
+        is_series: list = []
+        try:
+            r = (
+                supabase.table("income_statements")
+                .select("fiscal_year, revenue, net_income, net_income_to_common, shares_outstanding_diluted")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .order("fiscal_year", desc=True)
+                .limit(7)
+                .execute()
+            )
+            for row in sorted(r.data or [], key=lambda x: x.get("fiscal_year") or 0):
+                is_series.append({
+                    "fiscal_year":                row.get("fiscal_year"),
+                    "revenue":                    _round2(row.get("revenue")),
+                    "net_income":                 _round2(row.get("net_income")),
+                    "net_income_to_common":       _round2(row.get("net_income_to_common")),
+                    "shares_outstanding_diluted": _round2(row.get("shares_outstanding_diluted")),
+                })
+        except Exception as exc:
+            logger.warning("get_rule1_dependency_values: IS series failed: %s", exc)
+        bs_snap: dict = {}
+        try:
+            bs = await self.get_balance_sheet_latest(company_id)
+            if bs:
+                bs_snap = {
+                    "total_debt":                _round2(bs.get("total_debt")),
+                    "shareholders_equity":       _round2(bs.get("shareholders_equity")),
+                    "cash_and_cash_equivalents": _round2(bs.get("cash_and_cash_equivalents")),
+                }
+        except Exception as exc:
+            logger.warning("get_rule1_dependency_values: BS latest failed: %s", exc)
+        is_snap: dict = {}
+        try:
+            is_row = await self.get_income_statement_latest(company_id)
+            if is_row:
+                is_snap = {
+                    "ebit":             _round2(is_row.get("ebit")),
+                    "interest_expense": _round2(is_row.get("interest_expense")),
+                }
+        except Exception as exc:
+            logger.warning("get_rule1_dependency_values: IS latest failed: %s", exc)
+        cf_snap: dict = {}
+        try:
+            cf = await self.get_cash_flow_latest(company_id)
+            if cf:
+                cf_snap = {
+                    "cash_from_operating_activities": _round2(cf.get("cash_from_operating_activities")),
+                    "capital_expenditures":           _round2(cf.get("capital_expenditures")),
+                }
+        except Exception as exc:
+            logger.warning("get_rule1_dependency_values: CF latest failed: %s", exc)
+        beta: Optional[float] = None
+        try:
+            cs = (
+                supabase.table("company_summary")
+                .select("beta")
+                .eq("company_id", company_id)
+                .order("snapshot_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            cs_row = _first(cs.data)
+            if cs_row and cs_row.get("beta") is not None:
+                beta = _round6(cs_row["beta"])
+        except Exception as exc:
+            logger.warning("get_rule1_dependency_values: beta failed: %s", exc)
+        params_hash: Optional[str] = None
+        try:
+            md = (
+                supabase.table("valuation_method_defaults")
+                .select("method, params")
+                .in_("method", ["rule1"])
+                .execute()
+            )
+            params_hash = _hash_params(md.data or [])
+        except Exception as exc:
+            logger.warning("get_rule1_dependency_values: params failed: %s", exc)
+        return {
+            "ratios_series":      ratios_series,
+            "is_series":          is_series,
+            "balance_sheet":      bs_snap,
+            "income_stmt_latest": is_snap,
+            "cash_flow_latest":   cf_snap,
+            "beta_latest":        beta,
+            "params_version":     params_hash,
+        }
+
+    async def get_dcf_dependency_values(self, company_id: int) -> Dict[str, Any]:
+        cf_snap: dict = {}
+        try:
+            cf = await self.get_cash_flow_latest(company_id)
+            if cf:
+                cf_snap = {
+                    "fiscal_year":                    cf.get("fiscal_year"),
+                    "cash_from_operating_activities": _round2(cf.get("cash_from_operating_activities")),
+                    "capital_expenditures":           _round2(cf.get("capital_expenditures")),
+                }
+        except Exception as exc:
+            logger.warning("get_dcf_dependency_values: CF latest failed: %s", exc)
+        bs_snap: dict = {}
+        try:
+            bs = await self.get_balance_sheet_latest(company_id)
+            if bs:
+                bs_snap = {
+                    "fiscal_year":               bs.get("fiscal_year"),
+                    "total_debt":                _round2(bs.get("total_debt")),
+                    "cash_and_cash_equivalents": _round2(bs.get("cash_and_cash_equivalents")),
+                }
+        except Exception as exc:
+            logger.warning("get_dcf_dependency_values: BS latest failed: %s", exc)
+        shares: Optional[float] = None
+        shares_source: Optional[str] = None
+        try:
+            rows = await self.get_shares_history(company_id)
+            if rows:
+                sh = _safe_float_repo(rows[-1].get("shares_outstanding_diluted"))
+                if sh and sh > 0:
+                    shares        = _round2(sh)
+                    shares_source = "income_statements"
+        except Exception as exc:
+            logger.warning("get_dcf_dependency_values: shares history failed: %s", exc)
+        if shares is None:
+            try:
+                summary = await self.get_company_summary_latest(company_id)
+                if summary:
+                    sh = _safe_float_repo(summary.get("shares_outstanding"))
+                    if sh and sh > 0:
+                        shares        = _round2(sh)
+                        shares_source = "company_summary"
+            except Exception as exc:
+                logger.warning("get_dcf_dependency_values: shares summary failed: %s", exc)
+        params_hash: Optional[str] = None
+        try:
+            md = (
+                supabase.table("valuation_method_defaults")
+                .select("method, params")
+                .in_("method", ["dcf"])
+                .execute()
+            )
+            params_hash = _hash_params(md.data or [])
+        except Exception as exc:
+            logger.warning("get_dcf_dependency_values: params failed: %s", exc)
+        return {
+            "cash_flow_latest": cf_snap,
+            "balance_sheet":    bs_snap,
+            "shares":           shares,
+            "shares_source":    shares_source,
+            "params_version":   params_hash,
+        }
+
+    async def get_oe_dependency_values(self, company_id: int) -> Dict[str, Any]:
+        cf_snap: dict = {}
+        try:
+            cf = await self.get_cash_flow_oe_inputs(company_id)
+            if cf:
+                cf_snap = {
+                    "fiscal_year":                    cf.get("fiscal_year"),
+                    "cash_from_operating_activities": _round2(cf.get("cash_from_operating_activities")),
+                    "capital_expenditures":           _round2(cf.get("capital_expenditures")),
+                    "depreciation_amortization":      _round2(cf.get("depreciation_amortization")),
+                    "change_in_working_capital":      _round2(cf.get("change_in_working_capital")),
+                }
+        except Exception as exc:
+            logger.warning("get_oe_dependency_values: CF failed: %s", exc)
+        is_snap: dict = {}
+        try:
+            is_row = await self.get_income_statement_latest(company_id)
+            if is_row:
+                is_snap = {
+                    "fiscal_year":          is_row.get("fiscal_year"),
+                    "net_income":           _round2(is_row.get("net_income")),
+                    "net_income_to_common": _round2(is_row.get("net_income_to_common")),
+                }
+        except Exception as exc:
+            logger.warning("get_oe_dependency_values: IS latest failed: %s", exc)
+        bs_snap: dict = {}
+        try:
+            bs = await self.get_balance_sheet_latest(company_id)
+            if bs:
+                bs_snap = {
+                    "fiscal_year":               bs.get("fiscal_year"),
+                    "total_debt":                _round2(bs.get("total_debt")),
+                    "cash_and_cash_equivalents": _round2(bs.get("cash_and_cash_equivalents")),
+                    "shareholders_equity":       _round2(bs.get("shareholders_equity")),
+                }
+        except Exception as exc:
+            logger.warning("get_oe_dependency_values: BS latest failed: %s", exc)
+        shares: Optional[float] = None
+        shares_source: Optional[str] = None
+        try:
+            rows = await self.get_shares_history(company_id)
+            if rows:
+                sh = _safe_float_repo(rows[-1].get("shares_outstanding_diluted"))
+                if sh and sh > 0:
+                    shares        = _round2(sh)
+                    shares_source = "income_statements"
+        except Exception as exc:
+            logger.warning("get_oe_dependency_values: shares history failed: %s", exc)
+        if shares is None:
+            try:
+                summary = await self.get_company_summary_latest(company_id)
+                if summary:
+                    sh = _safe_float_repo(summary.get("shares_outstanding"))
+                    if sh and sh > 0:
+                        shares        = _round2(sh)
+                        shares_source = "company_summary"
+            except Exception as exc:
+                logger.warning("get_oe_dependency_values: shares summary failed: %s", exc)
+        params_hash: Optional[str] = None
+        try:
+            md = (
+                supabase.table("valuation_method_defaults")
+                .select("method, params")
+                .in_("method", ["owner_earnings"])
+                .execute()
+            )
+            params_hash = _hash_params(md.data or [])
+        except Exception as exc:
+            logger.warning("get_oe_dependency_values: params failed: %s", exc)
+        return {
+            "cash_flow_latest":   cf_snap,
+            "income_stmt_latest": is_snap,
+            "balance_sheet":      bs_snap,
+            "shares":             shares,
+            "shares_source":      shares_source,
+            "params_version":     params_hash,
+        }
+
+    async def get_ri_dependency_values(self, company_id: int) -> Dict[str, Any]:
+        bs_snap: dict = {}
+        try:
+            bs = await self.get_balance_sheet_latest(company_id)
+            if bs:
+                bs_snap = {
+                    "fiscal_year":         bs.get("fiscal_year"),
+                    "shareholders_equity": _round2(bs.get("shareholders_equity")),
+                }
+        except Exception as exc:
+            logger.warning("get_ri_dependency_values: BS latest failed: %s", exc)
+        is_snap: dict = {}
+        try:
+            is_row = await self.get_income_statement_latest(company_id)
+            if is_row:
+                is_snap = {
+                    "fiscal_year":                is_row.get("fiscal_year"),
+                    "net_income":                 _round2(is_row.get("net_income")),
+                    "net_income_to_common":       _round2(is_row.get("net_income_to_common")),
+                    "shares_outstanding_diluted": _round2(is_row.get("shares_outstanding_diluted")),
+                }
+        except Exception as exc:
+            logger.warning("get_ri_dependency_values: IS latest failed: %s", exc)
+        cs_snap: dict = {}
+        try:
+            cs = (
+                supabase.table("company_summary")
+                .select("shares_outstanding, beta")
+                .eq("company_id", company_id)
+                .order("snapshot_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            cs_row = _first(cs.data)
+            if cs_row:
+                cs_snap = {
+                    "shares_outstanding": _round2(cs_row.get("shares_outstanding")),
+                    "beta":               _round6(cs_row.get("beta")),
+                }
+        except Exception as exc:
+            logger.warning("get_ri_dependency_values: company_summary failed: %s", exc)
+        eps_series: list = []
+        try:
+            eps_rows = await self.get_eps_yearly_series(company_id)
+            pairs = sorted(
+                [(r["fiscal_year"], r["eps"]) for r in eps_rows
+                 if r.get("fiscal_year") and r.get("eps") is not None],
+                key=lambda t: t[0],
+            )[-7:]
+            eps_series = [
+                {"year": y, "eps": _round6(float(v))}
+                for y, v in pairs if v is not None
+            ]
+        except Exception as exc:
+            logger.warning("get_ri_dependency_values: EPS series failed: %s", exc)
+        params_hash: Optional[str] = None
+        try:
+            md = (
+                supabase.table("valuation_method_defaults")
+                .select("method, params")
+                .in_("method", ["residual_income"])
+                .execute()
+            )
+            params_hash = _hash_params(md.data or [])
+        except Exception as exc:
+            logger.warning("get_ri_dependency_values: params failed: %s", exc)
+        return {
+            "balance_sheet":      bs_snap,
+            "income_stmt_latest": is_snap,
+            "company_summary":    cs_snap,
+            "eps_series":         eps_series,
+            "params_version":     params_hash,
+        }
+
+    # ── Company summary ────────────────────────────────────────────────────────
+
     async def get_company_summary_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Latest company_summary row.
-        Used as shares_outstanding fallback in DCF when
-        income_statements.shares_outstanding_diluted is not populated.
-        """
         try:
             resp = (
                 supabase.table("company_summary")
@@ -961,14 +1352,14 @@ class ValuationRepository:
             method = "rule1"
         try:
             rec = {
-                "company_id": company_id,
-                "method": method,
-                "run_by_user_id": run.get("run_by_user_id"),
-                "input_snapshot": run["input_snapshot"],
+                "company_id":         company_id,
+                "method":             method,
+                "run_by_user_id":     run.get("run_by_user_id"),
+                "input_snapshot":     run["input_snapshot"],
                 "assumption_snapshot": run["assumption_snapshot"],
-                "output_snapshot": run["output_snapshot"],
-                "data_version_tag": run.get("data_version_tag"),
-                "notes": run.get("notes"),
+                "output_snapshot":    run["output_snapshot"],
+                "data_version_tag":   run.get("data_version_tag"),
+                "notes":              run.get("notes"),
             }
             supabase.table("valuation_runs").insert(rec).execute()
         except Exception as e:
@@ -978,13 +1369,13 @@ class ValuationRepository:
     async def upsert_intrinsic_value_analysis(self, company_id: int, payload: Dict[str, Any]) -> None:
         try:
             data = {
-                "company_id": company_id,
-                "growth_rate": payload["growth_rate"],
-                "current_eps": payload["current_eps"],
-                "future_pe": payload["future_pe"],
+                "company_id":   company_id,
+                "growth_rate":  payload["growth_rate"],
+                "current_eps":  payload["current_eps"],
+                "future_pe":    payload["future_pe"],
                 "future_price": payload["future_price"],
                 "sticker_price": payload["sticker_price"],
-                "mos_price": payload["mos_price"],
+                "mos_price":    payload["mos_price"],
             }
             supabase.table("intrinsic_value_analysis").upsert(data, on_conflict="company_id").execute()
         except Exception as e:
@@ -1221,12 +1612,6 @@ class ValuationRepository:
             return None
 
     async def get_income_statement_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Most recent annual income statement row.
-        Used by ddm_suitability for raw IS values: ebit, ebitda, interest_expense.
-        These are source-of-truth P&L figures — they live only in income_statements
-        and are never duplicated into derived_financial_metrics.
-        """
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1249,10 +1634,6 @@ class ValuationRepository:
             return None
 
     async def get_income_statements_annual(self, company_id: int, limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        N most recent annual income statement rows (newest first).
-        Used for multi-year trend analysis.
-        """
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1296,17 +1677,6 @@ class ValuationRepository:
     # ── Derived metrics ────────────────────────────────────────────────────────
 
     async def get_derived_metrics_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Most recent annual financial ratios row.
-
-        Phase 2: reads from financial_ratios (consolidated table).
-        All ratios stored as fractions (0.15 = 15%).
-
-        Used by:
-          - ddm_suitability: dividend_payout_ratio, fcf_dividend_payout_ratio
-          - dcf_suitability: roic, roe, roa, debt_to_equity, interest_coverage
-          - rule1_suitability: roic, roe, debt_to_equity
-        """
         try:
             resp = (
                 supabase.table("financial_ratios")
@@ -1339,10 +1709,6 @@ class ValuationRepository:
             return None
 
     async def get_roic_history(self, company_id: int) -> List[Dict[str, Any]]:
-        """
-        Annual ROIC history.
-        Phase 2: reads from financial_ratios only. statistics table has been dropped.
-        """
         try:
             resp = (
                 supabase.table("financial_ratios")
@@ -1357,15 +1723,7 @@ class ValuationRepository:
             logger.error("get_roic_history failed: %s", e)
             return []
 
-
     async def get_shares_history(self, company_id: int) -> List[Dict[str, Any]]:
-        """
-        Diluted shares history from income_statements.
-
-        Phase 2: statistics table dropped. income_statements is now the sole
-        canonical source for shares_outstanding_diluted (written by defeat_beta_provider
-        via the 'Diluted Average Shares' row alias).
-        """
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1384,14 +1742,6 @@ class ValuationRepository:
     # ── DCF suitability helpers ────────────────────────────────────────────────
 
     async def get_fcf_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
-        """
-        Annual FCF history used by DCF suitability.
-
-        FIX (BUG-01 variant): Previous implementation used ocf_f - capex_f
-        which produces the wrong sign when capex is stored as a negative outflow
-        (e.g. BN 2024: capex = -11,172M → 7,569 - (-11,172) = +18,741M WRONG).
-        Now delegates to _compute_fcf() which handles both sign conventions.
-        """
         try:
             resp = (
                 supabase.table("cash_flow_statements")
@@ -1407,17 +1757,9 @@ class ValuationRepository:
                 y = r.get("fiscal_year")
                 if y is None:
                     continue
-                ocf_raw = r.get("cash_from_operating_activities")
-                capex_raw = r.get("capital_expenditures")
-                try:
-                    ocf_f = float(ocf_raw) if ocf_raw is not None else None
-                except Exception:
-                    ocf_f = None
-                try:
-                    capex_f = float(capex_raw) if capex_raw is not None else None
-                except Exception:
-                    capex_f = None
-                fcf = _compute_fcf(ocf_f, capex_f)
+                ocf_f   = _safe_float_repo(r.get("cash_from_operating_activities"))
+                capex_f = _safe_float_repo(r.get("capital_expenditures"))
+                fcf     = _compute_fcf(ocf_f, capex_f)
                 out.append({"fiscal_year": int(y), "fcf": fcf, "ocf": ocf_f, "capex": capex_f})
             out = sorted(out, key=lambda x: x.get("fiscal_year", 0))
             return out[-years:] if years and len(out) > years else out
@@ -1446,23 +1788,13 @@ class ValuationRepository:
             capex_by_year: Dict[int, Optional[float]] = {}
             for r in (cf.data or []):
                 y = r.get("fiscal_year")
-                if y is None:
-                    continue
-                v = r.get("capital_expenditures")
-                try:
-                    capex_by_year[int(y)] = float(v) if v is not None else None
-                except Exception:
-                    capex_by_year[int(y)] = None
+                if y is not None:
+                    capex_by_year[int(y)] = _safe_float_repo(r.get("capital_expenditures"))
             rev_by_year: Dict[int, Optional[float]] = {}
             for r in (is_.data or []):
                 y = r.get("fiscal_year")
-                if y is None:
-                    continue
-                v = r.get("revenue")
-                try:
-                    rev_by_year[int(y)] = float(v) if v is not None else None
-                except Exception:
-                    rev_by_year[int(y)] = None
+                if y is not None:
+                    rev_by_year[int(y)] = _safe_float_repo(r.get("revenue"))
             years_all = sorted(set(capex_by_year.keys()) | set(rev_by_year.keys()))
             merged = [{"fiscal_year": y, "capex": capex_by_year.get(y), "revenue": rev_by_year.get(y)} for y in years_all]
             return merged[-years:] if years and len(merged) > years else merged
@@ -1557,14 +1889,6 @@ class ValuationRepository:
         return [{"year": y, "dps": per_year.get(y)} for y in last]
 
     async def get_dividend_metrics_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Dividend-specific metrics: growth rates, years paid, retention ratio, annual DPS.
-
-        Phase 2: dividend_payout_ratio, fcf_dividend_payout_ratio, dividend_coverage_fcf
-        removed from SELECT — these columns are dropped from dividend_metrics in Phase 2b
-        (003_phase2b_cleanup.sql). They are now the sole responsibility of financial_ratios
-        and accessed via get_derived_metrics_latest().
-        """
         try:
             resp = (
                 supabase.table("dividend_metrics")
@@ -1611,13 +1935,6 @@ class ValuationRepository:
             return None
 
     async def get_sustainable_dividend_growth(self, company_id: int) -> Optional[float]:
-        """
-        Sustainable growth rate = ROE × retention_ratio.
-
-        Phase 2: ROE read from financial_ratios.roe (stored as fraction, e.g. 0.15).
-        statistics table has been dropped.
-        retention_ratio still read from dividend_metrics (dividend-specific table).
-        """
         try:
             fr = (
                 supabase.table("financial_ratios")
@@ -1633,8 +1950,6 @@ class ValuationRepository:
             retention = dm.get("retention_ratio") if dm else None
             if roe is None or retention is None:
                 return None
-            # financial_ratios.roe is already a fraction — no _pct_to_frac() needed.
-            # retention_ratio from dividend_metrics may be stored as pct — apply conversion.
             roe_f = float(roe)
             ret_f = _pct_to_frac(float(retention))
             g = roe_f * ret_f
@@ -1660,22 +1975,21 @@ class ValuationRepository:
                 .limit(limit)
                 .execute()
             )
-            rows = resp.data or []
             items = []
-            for r in rows:
+            for r in (resp.data or []):
                 run_at = _normalize_datetime(r.get("run_at"))
                 snap = r.get("output_snapshot") or {}
                 valuation = snap.get("valuation") or {}
                 applicability = snap.get("applicability") or {}
                 items.append({
-                    "runAt": run_at.isoformat() if run_at else None,
+                    "runAt":        run_at.isoformat() if run_at else None,
                     "stickerPrice": valuation.get("stickerPrice"),
-                    "mosPrice": valuation.get("mosPrice"),
-                    "futurePrice": valuation.get("futurePrice"),
-                    "growth": valuation.get("growth"),
-                    "futurePE": valuation.get("futurePE"),
-                    "score": applicability.get("score"),
-                    "category": applicability.get("category"),
+                    "mosPrice":     valuation.get("mosPrice"),
+                    "futurePrice":  valuation.get("futurePrice"),
+                    "growth":       valuation.get("growth"),
+                    "futurePE":     valuation.get("futurePE"),
+                    "score":        applicability.get("score"),
+                    "category":     applicability.get("category"),
                 })
             return items
         except Exception as e:
@@ -1697,21 +2011,20 @@ class ValuationRepository:
                 .limit(limit)
                 .execute()
             )
-            rows = resp.data or []
             items = []
-            for r in rows:
+            for r in (resp.data or []):
                 run_at = _normalize_datetime(r.get("run_at"))
                 snap = r.get("output_snapshot") or {}
                 valuation = snap.get("valuation") or {}
                 applicability = snap.get("applicability") or {}
                 items.append({
-                    "runAt": run_at.isoformat() if run_at else None,
-                    "method": valuation.get("method"),
-                    "intrinsicValue": valuation.get("intrinsicValue"),
+                    "runAt":              run_at.isoformat() if run_at else None,
+                    "method":             valuation.get("method"),
+                    "intrinsicValue":     valuation.get("intrinsicValue"),
                     "dividendGrowthRate": valuation.get("dividendGrowthRate"),
-                    "requiredReturn": valuation.get("requiredReturn"),
-                    "score": applicability.get("score"),
-                    "category": applicability.get("category"),
+                    "requiredReturn":     valuation.get("requiredReturn"),
+                    "score":              applicability.get("score"),
+                    "category":           applicability.get("category"),
                 })
             return items
         except Exception as e:
@@ -1735,29 +2048,28 @@ class ValuationRepository:
                 .limit(limit)
                 .execute()
             )
-            rows = resp.data or []
             items = []
-            for r in rows:
+            for r in (resp.data or []):
                 run_at = _normalize_datetime(r.get("run_at"))
                 snap = r.get("output_snapshot") or {}
                 valuation = snap.get("valuation") or {}
                 applicability = snap.get("applicability") or {}
                 items.append({
-                    "runAt": run_at.isoformat() if run_at else None,
-                    "terminalMethod": valuation.get("terminalMethod"),
+                    "runAt":                  run_at.isoformat() if run_at else None,
+                    "terminalMethod":         valuation.get("terminalMethod"),
                     "intrinsicValuePerShare": valuation.get("intrinsicValuePerShare"),
-                    "waccUsed": valuation.get("waccUsed"),
-                    "terminalValue": valuation.get("terminalValue"),
-                    "enterpriseValue": valuation.get("enterpriseValue"),
-                    "score": applicability.get("score"),
-                    "category": applicability.get("category"),
+                    "waccUsed":               valuation.get("waccUsed"),
+                    "terminalValue":          valuation.get("terminalValue"),
+                    "enterpriseValue":        valuation.get("enterpriseValue"),
+                    "score":                  applicability.get("score"),
+                    "category":               applicability.get("category"),
                 })
             return items
         except Exception as e:
             logger.error("get_dcf_history failed for %s: %s", symbol, e)
             return []
 
-    # ── Earnings events (event data only, not for fundamentals) ───────────────
+    # ── Earnings events ────────────────────────────────────────────────────────
 
     async def get_earnings_events(self, company_id: int) -> List[Dict[str, Any]]:
         resp = (
