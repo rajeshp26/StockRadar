@@ -3,9 +3,15 @@
  * Analysis service:
  * - Uses same-origin fetch with `credentials: "include"` so the proxy sees the __session cookie.
  * - Aligns strictly to backend contract.
+ *
+ * FETCH PATTERN (two functions per method):
+ *   fetch*Cached  → GET  — pure cache read, ~50ms, used as React Query queryFn
+ *   fetch*Outcome → POST — gate logic + optional recompute, used only for Recompute button
+ *
+ * The GET functions return 404 when no valuation has been computed yet.
+ * Callers should handle 404 by showing a "Run computation" CTA, not an error state.
  */
 import { api } from "@/lib/api";
-
 import type {
   Rule1Response,
   Rule1History,
@@ -21,7 +27,6 @@ import type {
 } from "../types/analysis.types";
 
 type Json = Record<string, any>;
-
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 function apiPath(path: string) {
@@ -35,7 +40,6 @@ async function doFetch(
 ): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
     return await fetch(input, {
       credentials: "include",
@@ -69,158 +73,216 @@ export type Rule1Outcome =
   | { status: "ok"; payload: Rule1Response }
   | { status: "error"; message: string; httpStatus?: number };
 
+/**
+ * GET — Pure cache read. Used as React Query queryFn.
+ * Returns { status: "not_computed" } when backend returns 404.
+ * Never triggers recomputation.
+ */
+export type Rule1CachedOutcome =
+  | { status: "ok"; payload: Rule1Response }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+export async function fetchRule1Cached(ticker: string): Promise<Rule1CachedOutcome> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/rule1`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) {
+    return { status: "not_computed" };
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<Rule1Response>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return { status: "error", message: "Invalid response from server.", httpStatus: 502 };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message: (errorBody?.detail as string) || `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/**
+ * POST — Gate logic + optional recompute. Used only by Recompute button.
+ */
 export async function fetchRule1Outcome(ticker: string): Promise<Rule1Outcome> {
   const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/rule1`);
-
   let res: Response;
   try {
     res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
   } catch (err: any) {
-    return {
-      status: "error",
-      message: err?.message || "Network error while computing valuation.",
-    };
+    return { status: "error", message: err?.message || "Network error while computing valuation." };
   }
-
   if (res.ok) {
     const body = await readJsonSafe<Rule1Response>(res);
     if (!body || typeof body !== "object" || !body.valuation) {
-      return {
-        status: "error",
-        message: "Invalid response from server (missing valuation payload).",
-        httpStatus: 502,
-      };
+      return { status: "error", message: "Invalid response from server (missing valuation payload).", httpStatus: 502 };
     }
     return { status: "ok", payload: body };
   }
-
   const errorBody = (await readJsonSafe<Json>(res)) || {};
   const message =
     (errorBody?.detail as string) ||
     (errorBody?.message as string) ||
     `Request failed with status ${res.status}`;
-
   return { status: "error", message, httpStatus: res.status };
 }
 
 export async function fetchRule1History(ticker: string): Promise<Rule1History> {
   const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/rule1/history`);
-
   let res: Response;
   try {
     res = await doFetch(url, { method: "GET" });
   } catch {
     return { symbol: ticker.toUpperCase(), items: [] };
   }
-
   if (res.ok) {
     const body = await readJsonSafe<Rule1History>(res);
-    if (body && typeof body === "object" && Array.isArray(body.items)) {
-      return body;
-    }
+    if (body && typeof body === "object" && Array.isArray(body.items)) return body;
   }
   return { symbol: ticker.toUpperCase(), items: [] };
 }
 
 /* -------------------------------------------------------------------------- */
-/* DDM                                                                          */
+/* DDM                                                                         */
 /* -------------------------------------------------------------------------- */
 
 export type DdmOutcome =
   | { status: "ok"; payload: DdmResponse }
   | { status: "error"; message: string; httpStatus?: number };
 
+export type DdmCachedOutcome =
+  | { status: "ok"; payload: DdmResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/** GET — Pure cache read. */
+export async function fetchDdmCached(
+  ticker: string,
+  variant: DdmVariant = "gordon"
+): Promise<DdmCachedOutcome> {
+  const url = apiPath(
+    `/valuations/${encodeURIComponent(ticker)}/ddm?variant=${encodeURIComponent(variant)}`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<DdmResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return { status: "error", message: "Invalid response from server.", httpStatus: 502 };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message: (errorBody?.detail as string) || `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/** POST — Gate logic + optional recompute. */
 export async function fetchDdmOutcome(
   ticker: string,
   variant: DdmVariant = "gordon"
 ): Promise<DdmOutcome> {
   const url = apiPath(
-    `/valuations/${encodeURIComponent(ticker)}/ddm?variant=${encodeURIComponent(
-      variant
-    )}`
+    `/valuations/${encodeURIComponent(ticker)}/ddm?variant=${encodeURIComponent(variant)}`
   );
-
   let res: Response;
   try {
     res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
   } catch (err: any) {
-    return {
-      status: "error",
-      message: err?.message || "Network error while computing DDM.",
-    };
+    return { status: "error", message: err?.message || "Network error while computing DDM." };
   }
-
   if (res.ok) {
     const body = await readJsonSafe<DdmResponse>(res);
     if (!body || typeof body !== "object" || !body.valuation) {
-      return {
-        status: "error",
-        message: "Invalid response from server (missing DDM payload).",
-        httpStatus: 502,
-      };
+      return { status: "error", message: "Invalid response from server (missing DDM payload).", httpStatus: 502 };
     }
     return { status: "ok", payload: body };
   }
-
   const errorBody = (await readJsonSafe<Json>(res)) || {};
   const message =
     (errorBody?.detail as string) ||
     (errorBody?.message as string) ||
     `Request failed with status ${res.status}`;
-
   return { status: "error", message, httpStatus: res.status };
 }
 
-/**
- * DDM History pattern:
- * - Must NEVER break the Analysis page.
- * - If endpoint is missing or returns non-200, return empty list.
- *
- * Expected backend endpoint (recommended):
- *   GET /valuations/:symbol/ddm/history?variant=gordon|two_stage
- */
 export async function fetchDdmHistory(
   ticker: string,
   variant: DdmVariant = "gordon"
 ): Promise<DdmHistory> {
   const url = apiPath(
-    `/valuations/${encodeURIComponent(ticker)}/ddm/history?variant=${encodeURIComponent(
-      variant
-    )}`
+    `/valuations/${encodeURIComponent(ticker)}/ddm/history?variant=${encodeURIComponent(variant)}`
   );
-
   let res: Response;
   try {
     res = await doFetch(url, { method: "GET" });
   } catch {
     return { symbol: ticker.toUpperCase(), items: [] };
   }
-
   if (res.ok) {
     const body = await readJsonSafe<DdmHistory>(res);
-    if (body && typeof body === "object" && Array.isArray(body.items)) {
-      return body;
-    }
-    return { symbol: ticker.toUpperCase(), items: [] };
+    if (body && typeof body === "object" && Array.isArray(body.items)) return body;
   }
-
   return { symbol: ticker.toUpperCase(), items: [] };
 }
 
-// ---------------------------
-// DCF (FIXED: return AxiosResponse.data, not AxiosResponse)
-// ---------------------------
+/* -------------------------------------------------------------------------- */
+/* DCF                                                                         */
+/* -------------------------------------------------------------------------- */
 
+export type DcfCachedOutcome =
+  | { status: "ok"; payload: DcfResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/** GET — Pure cache read. */
+export async function fetchDcfCached(symbol: string): Promise<DcfCachedOutcome> {
+  const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/dcf`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<DcfResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return { status: "error", message: "Invalid response from server.", httpStatus: 502 };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message: (errorBody?.detail as string) || `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/** POST — Gate logic + optional recompute. */
 export async function fetchDcfValuation(
   symbol: string,
-  options?: {
-    force?: boolean;
-    overrides?: Record<string, unknown>;
-  }
+  options?: { force?: boolean; overrides?: Record<string, unknown> }
 ): Promise<DcfResponse> {
-  const qs = options?.force ? "?force=true" : "";
+  const qs  = options?.force ? "?force=true" : "";
   const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/dcf${qs}`);
-
   let res: Response;
   try {
     res = await doFetch(url, {
@@ -230,7 +292,6 @@ export async function fetchDcfValuation(
   } catch (err: any) {
     throw new Error(err?.message || "Network error while computing DCF.");
   }
-
   if (res.ok) {
     const body = await readJsonSafe<DcfResponse>(res);
     if (!body || typeof body !== "object" || !body.valuation) {
@@ -238,38 +299,26 @@ export async function fetchDcfValuation(
     }
     return body;
   }
-
   const errorBody = (await readJsonSafe<Json>(res)) || {};
-  const message =
+  throw new Error(
     (errorBody?.detail as string) ||
     (errorBody?.message as string) ||
-    `Request failed with status ${res.status}`;
-
-  throw new Error(message);
+    `Request failed with status ${res.status}`
+  );
 }
 
-/**
- * DCF History pattern:
- * - Must NEVER break the Analysis page.
- * - If endpoint is missing or returns non-200, return empty list.
- */
 export async function fetchDcfHistory(symbol: string): Promise<DcfHistory> {
   const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/dcf/history`);
-
   let res: Response;
   try {
     res = await doFetch(url, { method: "GET" });
   } catch {
     return { symbol: symbol.toUpperCase(), items: [] };
   }
-
   if (res.ok) {
     const body = await readJsonSafe<DcfHistory>(res);
-    if (body && typeof body === "object" && Array.isArray(body.items)) {
-      return body;
-    }
+    if (body && typeof body === "object" && Array.isArray(body.items)) return body;
   }
-
   return { symbol: symbol.toUpperCase(), items: [] };
 }
 
@@ -281,6 +330,39 @@ export type OwnerEarningsOutcome =
   | { status: "ok"; payload: OwnerEarningsResponse }
   | { status: "error"; message: string; httpStatus?: number };
 
+export type OwnerEarningsCachedOutcome =
+  | { status: "ok"; payload: OwnerEarningsResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/** GET — Pure cache read. */
+export async function fetchOwnerEarningsCached(
+  ticker: string
+): Promise<OwnerEarningsCachedOutcome> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/owner_earnings`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<OwnerEarningsResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return { status: "error", message: "Invalid response from server.", httpStatus: 502 };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message: (errorBody?.detail as string) || `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/** POST — Gate logic + optional recompute. */
 export async function fetchOwnerEarningsOutcome(
   ticker: string
 ): Promise<OwnerEarningsOutcome> {
@@ -289,19 +371,12 @@ export async function fetchOwnerEarningsOutcome(
   try {
     res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
   } catch (err: any) {
-    return {
-      status: "error",
-      message: err?.message || "Network error while computing Owner Earnings.",
-    };
+    return { status: "error", message: err?.message || "Network error while computing Owner Earnings." };
   }
   if (res.ok) {
     const body = await readJsonSafe<OwnerEarningsResponse>(res);
     if (!body || typeof body !== "object" || !body.valuation) {
-      return {
-        status: "error",
-        message: "Invalid response from server (missing Owner Earnings payload).",
-        httpStatus: 502,
-      };
+      return { status: "error", message: "Invalid response from server (missing Owner Earnings payload).", httpStatus: 502 };
     }
     return { status: "ok", payload: body };
   }
@@ -313,16 +388,8 @@ export async function fetchOwnerEarningsOutcome(
   return { status: "error", message, httpStatus: res.status };
 }
 
-/**
- * OE History — never throws; returns empty list on any failure.
- * GET /valuations/:symbol/owner_earnings/history
- */
-export async function fetchOwnerEarningsHistory(
-  ticker: string
-): Promise<OwnerEarningsHistory> {
-  const url = apiPath(
-    `/valuations/${encodeURIComponent(ticker)}/owner_earnings/history`
-  );
+export async function fetchOwnerEarningsHistory(ticker: string): Promise<OwnerEarningsHistory> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/owner_earnings/history`);
   let res: Response;
   try {
     res = await doFetch(url, { method: "GET" });
@@ -331,9 +398,7 @@ export async function fetchOwnerEarningsHistory(
   }
   if (res.ok) {
     const body = await readJsonSafe<OwnerEarningsHistory>(res);
-    if (body && typeof body === "object" && Array.isArray(body.items)) {
-      return body;
-    }
+    if (body && typeof body === "object" && Array.isArray(body.items)) return body;
   }
   return { symbol: ticker.toUpperCase(), items: [] };
 }
@@ -346,6 +411,39 @@ export type ResidualIncomeOutcome =
   | { status: "ok"; payload: ResidualIncomeResponse }
   | { status: "error"; message: string; httpStatus?: number };
 
+export type ResidualIncomeCachedOutcome =
+  | { status: "ok"; payload: ResidualIncomeResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/** GET — Pure cache read. */
+export async function fetchResidualIncomeCached(
+  ticker: string
+): Promise<ResidualIncomeCachedOutcome> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/residual_income`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<ResidualIncomeResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return { status: "error", message: "Invalid response from server.", httpStatus: 502 };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message: (errorBody?.detail as string) || `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/** POST — Gate logic + optional recompute. */
 export async function fetchResidualIncomeOutcome(
   ticker: string
 ): Promise<ResidualIncomeOutcome> {
@@ -354,19 +452,12 @@ export async function fetchResidualIncomeOutcome(
   try {
     res = await doFetch(url, { method: "POST", body: JSON.stringify({}) });
   } catch (err: any) {
-    return {
-      status: "error",
-      message: err?.message || "Network error while computing Residual Income.",
-    };
+    return { status: "error", message: err?.message || "Network error while computing Residual Income." };
   }
   if (res.ok) {
     const body = await readJsonSafe<ResidualIncomeResponse>(res);
     if (!body || typeof body !== "object" || !body.valuation) {
-      return {
-        status: "error",
-        message: "Invalid response from server (missing Residual Income payload).",
-        httpStatus: 502,
-      };
+      return { status: "error", message: "Invalid response from server (missing Residual Income payload).", httpStatus: 502 };
     }
     return { status: "ok", payload: body };
   }
@@ -378,16 +469,8 @@ export async function fetchResidualIncomeOutcome(
   return { status: "error", message, httpStatus: res.status };
 }
 
-/**
- * RI History — never throws; returns empty list on any failure.
- * GET /valuations/:symbol/residual_income/history
- */
-export async function fetchResidualIncomeHistory(
-  ticker: string
-): Promise<ResidualIncomeHistory> {
-  const url = apiPath(
-    `/valuations/${encodeURIComponent(ticker)}/residual_income/history`
-  );
+export async function fetchResidualIncomeHistory(ticker: string): Promise<ResidualIncomeHistory> {
+  const url = apiPath(`/valuations/${encodeURIComponent(ticker)}/residual_income/history`);
   let res: Response;
   try {
     res = await doFetch(url, { method: "GET" });
@@ -396,9 +479,7 @@ export async function fetchResidualIncomeHistory(
   }
   if (res.ok) {
     const body = await readJsonSafe<ResidualIncomeHistory>(res);
-    if (body && typeof body === "object" && Array.isArray(body.items)) {
-      return body;
-    }
+    if (body && typeof body === "object" && Array.isArray(body.items)) return body;
   }
   return { symbol: ticker.toUpperCase(), items: [] };
 }

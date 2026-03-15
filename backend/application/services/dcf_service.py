@@ -192,6 +192,56 @@ class DcfService:
             dependency_fingerprint=fingerprint,
         )
 
+    async def get_cached(self, symbol: str) -> Optional[DcfResponse]:
+        """
+        Pure cache read — no gate logic, no recompute, no DB writes.
+        Returns None if no prior valuation exists.
+        Used by GET /valuations/{symbol}/dcf for instant tab loads.
+        """
+        ctx = await self.repo.get_company_context(symbol)
+        if not ctx:
+            return None
+        company_id = int(ctx["company_id"])
+ 
+        snap = await self.repo.get_last_output_snapshot(company_id=company_id, method="dcf")
+        if not snap:
+            return None
+ 
+        valuation_payload     = snap.get("valuation")     or {}
+        applicability_payload = snap.get("applicability") or {}
+        dq_payload            = snap.get("dataQuality")   or {}
+        last_computed = (
+            (dq_payload.get("freshnessDays") or {}).get("lastComputedAt")
+            or snap.get("lastComputedAt")
+        )
+ 
+        # Refresh currentPrice and upside at read time
+        current_price = await self.repo.get_current_market_price(company_id)
+        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        upside        = None
+        if (current_price is not None and float(current_price) > 0
+                and intrinsic_ps is not None and intrinsic_ps > 0):
+            upside = (float(intrinsic_ps) - float(current_price)) / float(current_price)
+        valuation_payload["currentPrice"]      = current_price
+        valuation_payload["upsideDownsidePct"] = upside
+ 
+        if not applicability_payload:
+            applicability_payload = {
+                "score": 0, "category": "Caution",
+                "flags": [{"code": "DCF-NO-AUDIT", "severity": "info",
+                           "message": "No prior DCF valuation run found; run Recompute once."}],
+            }
+        if not dq_payload:
+            dq_payload = {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
+        if isinstance(dq_payload.get("freshnessDays"), dict) and last_computed:
+            dq_payload["freshnessDays"]["lastComputedAt"] = last_computed
+ 
+        return DcfResponse(
+            valuation=DcfValuation(**valuation_payload),
+            applicability=Applicability(**applicability_payload),
+            dataQuality=DataQuality(**dq_payload),
+        )
+ 
     # ── Cached path ────────────────────────────────────────────────────────────
 
     async def _serve_cached(

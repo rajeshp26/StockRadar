@@ -5,10 +5,12 @@
 //   3. "Others" coming-soon panel no longer lists "Residual Income" (it ships now)
 // Everything else is IDENTICAL to the existing file.
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
+import { prefetchAllValuations } from "@/features/analysis/utils/prefetch-valuations";
 import {
   MethodSelector,
   type IntrinsicMethod,
@@ -88,12 +90,20 @@ export default function AnalysisPage() {
   const router      = useRouter();
   const { symbol }  = useParams<{ symbol: string }>();
   const upperSymbol = symbol?.toString().toUpperCase() ?? "";
+  const queryClient = useQueryClient();
 
   const [method, setMethod] = useState<IntrinsicMethod>("overview");
   const [tab, setTab]       = useState<TopTab>("intrinsic");
 
   const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
 
+  // ── Prefetch all valuation methods on page load ──────────────────────────
+  // Fires 5 parallel GET requests the moment this page mounts.
+  // By the time the user clicks any method tab, data is already in cache.
+  // prefetchAllValuations is a no-op for methods already cached within staleTime.
+  useEffect(() => {
+    prefetchAllValuations(upperSymbol, queryClient);
+  }, [upperSymbol, queryClient]);  
   const priceDisplay  = price != null ? `$${price.toFixed(2)}` : "—";
   const changeDisplay =
     change != null

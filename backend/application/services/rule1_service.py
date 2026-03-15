@@ -505,6 +505,78 @@ class Rule1Service:
             dataQuality=DataQuality(**output_snapshot["dataQuality"]),
         )
 
+    async def get_cached(self, symbol: str) -> Optional[Rule1Response]:
+        """
+        Pure cache read — no gate logic, no recompute, no DB writes.
+        Returns None if no prior valuation exists.
+        Used by GET /valuations/{symbol}/rule1 for instant tab loads.
+        """
+        ctx = await self.repo.get_company_context(symbol)
+        if not ctx:
+            return None
+        company_id = int(ctx["company_id"])
+        currency   = ctx.get("currency") or "USD"
+ 
+        cached = await self.repo.get_cached_intrinsic_value(company_id)
+        if not cached:
+            return None
+ 
+        diagnostics_resp = await self.repo.get_last_method_diagnostics(
+            company_id, method="rule1"
+        )
+ 
+        valuation = Rule1Valuation(
+            symbol=symbol.upper(),
+            companyId=company_id,
+            currency=currency,
+            eps0=float(cached.get("current_eps") or 0.0),
+            growth=float(cached.get("growth_rate") or 0.0),
+            futurePE=float(cached.get("future_pe") or 0.0),
+            futureEPS=0.0,
+            futurePrice=float(cached.get("future_price") or 0.0),
+            discountRate=float(
+                diagnostics_resp.get("assumptions", {}).get("discountRate", 0.15)
+            ),
+            horizonYears=int(
+                diagnostics_resp.get("assumptions", {}).get("horizonYears", 10)
+            ),
+            mos=float(diagnostics_resp.get("assumptions", {}).get("mos", 0.50)),
+            stickerPrice=float(cached.get("sticker_price") or 0.0),
+            mosPrice=float(cached.get("mos_price") or 0.0),
+        )
+ 
+        last_computed = cached.get("last_updated")
+ 
+        if not diagnostics_resp.get("applicability"):
+            applicability_payload: Dict[str, Any] = {
+                "score": 0, "category": "Caution",
+                "flags": [{
+                    "code": "R1-NO-AUDIT", "severity": "info",
+                    "message": "Cached result; run Recompute for full scorecard.",
+                }],
+            }
+            data_quality_payload: Dict[str, Any] = {
+                "freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {},
+            }
+        else:
+            applicability_payload = (
+                diagnostics_resp.get("applicability")
+                or {"score": 0, "category": "Caution", "flags": []}
+            )
+            data_quality_payload = (
+                diagnostics_resp.get("dataQuality")
+                or {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
+            )
+ 
+        if isinstance(data_quality_payload.get("freshnessDays"), dict) and last_computed:
+            data_quality_payload["freshnessDays"]["lastComputedAt"] = last_computed
+ 
+        return Rule1Response(
+            valuation=valuation,
+            applicability=Applicability(**applicability_payload),
+            dataQuality=DataQuality(**data_quality_payload),
+        )
+
     # ── Cached path ────────────────────────────────────────────────────────────
 
     async def _serve_rule1_cached(

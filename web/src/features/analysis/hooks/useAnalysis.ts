@@ -9,12 +9,15 @@ import type {
   Applicability as UiApplicability,
   FreshnessInfo,
 } from "../types/analysis.types";
-import { fetchRule1Outcome } from "@/features/analysis/services/analysis.service";
+import {
+  fetchRule1Cached,
+  fetchRule1Outcome,
+} from "@/features/analysis/services/analysis.service";
 import { QK } from "@/lib/query-keys";
 import { STALE, GC } from "@/lib/query-client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Internal helpers (unchanged from original)
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function toFreshnessInfoFromDataQuality(dq?: UiDataQuality): FreshnessInfo | undefined {
@@ -33,53 +36,69 @@ type Rule1Data = {
   applicability: UiApplicability;
   dataQuality:   UiDataQuality;
   freshness?:    FreshnessInfo;
+  notComputed?:  boolean;  // true when backend returns 404 (never run)
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// queryFn — exported so the analysis page can use the same function for
+// prefetchQuery without duplicating the transformation logic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function rule1QueryFn(symbol: string): Promise<Rule1Data> {
+  const outcome = await fetchRule1Cached(symbol);
+
+  if (outcome.status === "not_computed") {
+    // Return a sentinel value rather than throwing.
+    // The component renders a "Run Computation" CTA instead of an error state.
+    return {
+      valuation:    {} as CamelValuation,
+      applicability: {} as UiApplicability,
+      dataQuality:  {} as UiDataQuality,
+      notComputed:  true,
+    };
+  }
+
+  if (outcome.status === "ok") {
+    const { payload } = outcome;
+    const valuation    = payload.valuation     as unknown as CamelValuation;
+    const applicability = payload.applicability as unknown as UiApplicability;
+    const dataQuality  = payload.dataQuality   as unknown as UiDataQuality;
+    return {
+      valuation,
+      applicability,
+      dataQuality,
+      freshness: toFreshnessInfoFromDataQuality(dataQuality),
+    };
+  }
+
+  throw new Error(outcome.message || "Failed to load valuation.");
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook
 //
-// Return contract is IDENTICAL to the original — no callers need changes.
+// Behaviour:
+//   queryFn   → GET (pure cache read, ~50ms)
+//   recompute → POST (full gate logic, only on explicit user action)
 //
-// Caching behaviour:
-//   • First visit to a symbol  → fetches, shows loading state
-//   • Tab switch (overview→rule1→dcf) → instant (cache hit per symbol+method)
-//   • Navigate away and back   → instant (gcTime keeps data in memory 30 min)
-//   • recompute()              → forces fresh fetch regardless of stale time
+// First tab click: instant if prefetchAllValuations() already ran on page load.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useAnalysis(
   symbol: string,
   opts: { analytics?: any } = {},
 ): AnalysisState & {
-  reload:    () => Promise<void>;
-  recompute: () => Promise<void>;
+  reload:      () => Promise<void>;
+  recompute:   () => Promise<void>;
+  notComputed: boolean;
 } {
-  const { analytics }   = opts;
-  const currentSymbol   = (symbol ?? "").toUpperCase();
-  const queryClient     = useQueryClient();
+  const { analytics }  = opts;
+  const currentSymbol  = (symbol ?? "").toUpperCase();
+  const queryClient    = useQueryClient();
 
-  const { data, isPending, error, refetch } = useQuery<Rule1Data, Error>({
+  const { data, isPending, error } = useQuery<Rule1Data, Error>({
     queryKey:  QK.rule1(currentSymbol),
-    queryFn:   async () => {
-      const outcome = await fetchRule1Outcome(currentSymbol);
-
-      if (outcome.status === "ok") {
-        const { payload } = outcome;
-        const valuation    = payload.valuation     as unknown as CamelValuation;
-        const applicability = payload.applicability as unknown as UiApplicability;
-        const dataQuality  = payload.dataQuality   as unknown as UiDataQuality;
-        return {
-          valuation,
-          applicability,
-          dataQuality,
-          freshness: toFreshnessInfoFromDataQuality(dataQuality),
-        };
-      }
-
-      const msg = outcome.message || "Failed to compute valuation.";
-      analytics?.onError?.(currentSymbol, msg);
-      throw new Error(msg);
-    },
+    queryFn:   () => rule1QueryFn(currentSymbol),
     enabled:   !!currentSymbol,
     staleTime: STALE.VALUATION,
     gcTime:    GC.VALUATION,
@@ -87,26 +106,42 @@ export function useAnalysis(
   });
 
   /**
-   * recompute / reload
-   * Invalidates the cache entry (marks stale) then immediately refetches.
-   * Used by "Recalculate" buttons in the analysis panels.
+   * recompute
+   * Sends POST to backend (runs gate logic, triggers recompute if stale),
+   * then writes the fresh payload directly into the React Query cache.
+   * The component re-renders with new data without an extra round-trip.
    */
   const recompute = useCallback(async (): Promise<void> => {
     if (!currentSymbol) return;
-    await queryClient.invalidateQueries({ queryKey: QK.rule1(currentSymbol) });
-    await refetch();
-  }, [currentSymbol, queryClient, refetch]);
+    const outcome = await fetchRule1Outcome(currentSymbol);
+    if (outcome.status === "ok") {
+      const { payload } = outcome;
+      const valuation    = payload.valuation     as unknown as CamelValuation;
+      const applicability = payload.applicability as unknown as UiApplicability;
+      const dataQuality  = payload.dataQuality   as unknown as UiDataQuality;
+      queryClient.setQueryData<Rule1Data>(QK.rule1(currentSymbol), {
+        valuation,
+        applicability,
+        dataQuality,
+        freshness: toFreshnessInfoFromDataQuality(dataQuality),
+        notComputed: false,
+      });
+    } else {
+      analytics?.onError?.(currentSymbol, outcome.message);
+      throw new Error(outcome.message);
+    }
+  }, [currentSymbol, queryClient, analytics]);
 
-  // ── Return shape matches original exactly ────────────────────────────────
   return {
     loading:        isPending,
-    loadingHistory: false,          // history is a separate hook; always false here
+    loadingHistory: false,
     error:          error?.message,
     valuation:      data?.valuation,
     applicability:  data?.applicability,
     dataQuality:    data?.dataQuality,
     history:        undefined,
     freshness:      data?.freshness,
+    notComputed:    data?.notComputed ?? false,
     reload:         recompute,
     recompute,
   };

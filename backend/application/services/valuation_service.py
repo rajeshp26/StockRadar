@@ -72,6 +72,10 @@ class ValuationService:
             symbol=symbol, user_id=user_id, overrides=overrides, force=force
         )
 
+    async def get_rule1_cached(self, symbol: str) -> Optional[Rule1Response]:
+        """Return last Rule #1 result instantly. None if never computed."""
+        return await self.rule1.get_cached(symbol)
+
     async def compute_rule1_with_diagnostics(
         self,
         symbol:                 str,
@@ -107,6 +111,12 @@ class ValuationService:
             overrides=overrides, force=force,
         )
 
+    async def get_ddm_cached(
+        self, symbol: str, variant: str = "gordon"
+    ) -> Optional[DdmResponse]:
+        """Return last DDM result instantly. None if never computed."""
+        return await self.ddm.get_cached(symbol, variant=variant)
+
     # ── DCF ───────────────────────────────────────────────────────────────────
 
     async def compute_dcf_if_stale(
@@ -119,6 +129,10 @@ class ValuationService:
         return await self.dcf.compute_dcf_if_stale(
             symbol=symbol, user_id=user_id, overrides=overrides, force=force
         )
+
+    async def get_dcf_cached(self, symbol: str) -> Optional[DcfResponse]:
+        """Return last DCF result instantly. None if never computed."""
+        return await self.dcf.get_cached(symbol)
 
     # ── Owner Earnings ────────────────────────────────────────────────────────
 
@@ -133,6 +147,12 @@ class ValuationService:
             symbol=symbol, user_id=user_id, overrides=overrides, force=force
         )
 
+    async def get_owner_earnings_cached(
+        self, symbol: str
+    ) -> Optional[OwnerEarningsResponse]:
+        """Return last Owner Earnings result instantly. None if never computed."""
+        return await self.owner_earnings.get_cached(symbol)
+
     # ── Residual Income ───────────────────────────────────────────────────────
 
     async def compute_residual_income_if_stale(
@@ -145,3 +165,9 @@ class ValuationService:
         return await self.residual_income.compute_residual_income_if_stale(
             symbol=symbol, user_id=user_id, overrides=overrides, force=force
         )
+
+    async def get_residual_income_cached(
+        self, symbol: str
+    ) -> Optional[ResidualIncomeResponse]:
+        """Return last Residual Income result instantly. None if never computed."""
+        return await self.residual_income.get_cached(symbol)
