@@ -26,6 +26,8 @@ import type {
   ResidualIncomeHistory,
 } from "../types/analysis.types";
 
+import type { OverviewRecommendation } from "../hooks/useValuationOverview";
+
 type Json = Record<string, any>;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -483,3 +485,28 @@ export async function fetchResidualIncomeHistory(ticker: string): Promise<Residu
   }
   return { symbol: ticker.toUpperCase(), items: [] };
 }
+
+/**
+ * GET — Fetches cross-method overview with AI recommendation.
+ * Returns null if no methods have been computed yet (backend returns empty data).
+ * Never throws — returns null on any failure so the overview renders without it.
+ */
+export async function fetchOverviewSummary(
+  symbol: string
+): Promise<OverviewRecommendation | null> {
+  const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/overview`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  try {
+    const body = await res.json();
+    return (body?.recommendation as OverviewRecommendation) ?? null;
+  } catch {
+    return null;
+  }
+}
+ 

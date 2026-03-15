@@ -19,11 +19,16 @@ AI summary: called AFTER intrinsic, upside, and g (g2 for two-stage) are finalis
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, Optional, Tuple
+ 
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+    pct_or_frac_to_frac,
+    safe_float,
+)
 
 from application.services.ai_service import generate_suitability_summary
 from application.services.recompute_guard import RecomputeGuard
@@ -33,29 +38,6 @@ from domain.models.valuation_rule1 import Applicability, DataQuality, Diagnostic
 from infrastructure.repositories.valuation_repository import ValuationRepository
 
 logger = logging.getLogger(__name__)
-
-
-# ── Module-level helpers ───────────────────────────────────────────────────────
-
-def _clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
-
-
-def _pct_or_frac_to_frac(x: float) -> float:
-    return x / 100.0 if x > 1.0 else x
-
-
-def _build_fingerprint(dep_values: Dict[str, Any]) -> str:
-    """
-    Compute a deterministic 32-hex-char (128-bit) SHA-256 fingerprint of the
-    DDM dependency values dict returned by ValuationRepository.get_ddm_dependency_values().
-
-    All values in dep_values are pre-rounded and pre-sorted by that method to
-    guarantee hash stability across floating-point representation differences
-    and list ordering non-determinism.
-    """
-    raw = json.dumps(dep_values, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:32]
 
 
 # ── Service ────────────────────────────────────────────────────────────────────
@@ -93,7 +75,7 @@ class DdmService:
                 method, company_id, symbol,
             )
             dep_values  = await self.repo.get_ddm_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, method, overrides,
                 dependency_fingerprint=fingerprint,
@@ -122,7 +104,7 @@ class DdmService:
         # Nothing stored to compare fingerprint or resolved inputs against.
         if gate1.reason == "no_prior_valuation":
             dep_values  = await self.repo.get_ddm_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, method, overrides,
                 dependency_fingerprint=fingerprint,
@@ -138,7 +120,7 @@ class DdmService:
                 method, symbol,
             )
             dep_values  = await self.repo.get_ddm_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, method, overrides,
                 dependency_fingerprint=fingerprint,
@@ -146,7 +128,7 @@ class DdmService:
 
         # ── Gate 2: Fingerprint ────────────────────────────────────────────────
         dep_values  = await self.repo.get_ddm_dependency_values(company_id)
-        fingerprint = _build_fingerprint(dep_values)
+        fingerprint = build_fingerprint(dep_values)
 
         gate2 = await self.guard.check_fingerprint(company_id, method, fingerprint)
         if not gate2.should_recompute:
@@ -237,7 +219,7 @@ class DdmService:
  
         # Refresh currentPrice and upside at read time
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic     = _safe_float(valuation_payload.get("intrinsicValue"))
+        intrinsic     = safe_float(valuation_payload.get("intrinsicValue"))
         upside        = None
         if (current_price is not None and float(current_price) > 0
                 and intrinsic is not None and intrinsic > 0):
@@ -289,7 +271,7 @@ class DdmService:
                 method, symbol,
             )
             dep_values  = await self.repo.get_ddm_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, method, overrides,
                 dependency_fingerprint=fingerprint,
@@ -634,14 +616,14 @@ class DdmService:
                 if overrides.highGrowthRate is not None
                 else min(g, g1_cap)
             )
-            g1 = _clamp(g1, 0.0, g1_cap)
+            g1 = clamp(g1, 0.0, g1_cap)
 
             g2 = (
                 float(overrides.stableGrowthRate)
                 if overrides.stableGrowthRate is not None
                 else g2_def
             )
-            g2 = _pct_or_frac_to_frac(g2)
+            g2 = pct_or_frac_to_frac(g2)
             if g2 >= k:
                 g2 = max(0.0, k - gap)
                 flags.append(DiagnosticFlag(
@@ -802,7 +784,7 @@ class DdmService:
 
         if overrides.requiredReturn is not None:
             k_raw   = float(overrides.requiredReturn)
-            k_final = _clamp(k_raw, k_floor, k_cap)
+            k_final = clamp(k_raw, k_floor, k_cap)
             return k_final, {
                 "source": "override.requiredReturn",
                 "kRaw": k_raw, "kFinal": k_final,
@@ -818,7 +800,7 @@ class DdmService:
 
         if beta is None:
             k_raw   = k_default
-            k_final = _clamp(k_raw, k_floor, k_cap)
+            k_final = clamp(k_raw, k_floor, k_cap)
             return k_final, {
                 "source": "default.kdefault (beta missing)",
                 "beta": None, "rf": rf, "erp": erp,
@@ -828,7 +810,7 @@ class DdmService:
             }
 
         k_raw   = rf + float(beta) * erp
-        k_final = _clamp(k_raw, k_floor, k_cap)
+        k_final = clamp(k_raw, k_floor, k_cap)
         return k_final, {
             "source": "capm-ish",
             "beta": float(beta), "rf": rf, "erp": erp,
@@ -850,9 +832,9 @@ class DdmService:
         g_default = float(defaults.get("g2default", 0.04))
 
         if overrides.dividendGrowthRate is not None:
-            g_raw    = _pct_or_frac_to_frac(float(overrides.dividendGrowthRate))
+            g_raw    = pct_or_frac_to_frac(float(overrides.dividendGrowthRate))
             g_stable = min(g_raw, max(0.0, k - gap_to_k))
-            g_final  = _clamp(g_stable, g_floor, g_cap)
+            g_final  = clamp(g_stable, g_floor, g_cap)
             return g_final, {
                 "source": "override.dividendGrowthRate",
                 "gRaw": g_raw, "gAfterStability": g_stable, "gFinal": g_final,
@@ -875,7 +857,7 @@ class DdmService:
             )
 
         g_stable = min(g_raw, max(0.0, k - gap_to_k))
-        g_final  = _clamp(g_stable, g_floor, g_cap)
+        g_final  = clamp(g_stable, g_floor, g_cap)
         return g_final, {
             "source": source,
             "gHist": g_hist, "gSgr": g_sgr,

@@ -19,11 +19,15 @@ Bypass rules:
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
+ 
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+    safe_float,
+)
 
 from application.services.ai_service import generate_suitability_summary
 from application.services.recompute_guard import RecomputeGuard
@@ -57,13 +61,6 @@ def _as_date(d: Any) -> Optional[date]:
             return None
     return None
 
-
-def _build_fingerprint(dep_values: dict) -> str:
-    """Stable 32-hex SHA-256 fingerprint of dependency value dict."""
-    raw = json.dumps(dep_values, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:32]
-
-
 # ── Service ────────────────────────────────────────────────────────────────────
 
 class Rule1Service:
@@ -94,7 +91,7 @@ class Rule1Service:
         # ── Force: bypass all gates ────────────────────────────────────────
         if force:
             dep_values  = await self.repo.get_rule1_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             logger.info("[VALUATION][R1] forced recompute: %s", symbol)
             return await self.compute_rule1_with_diagnostics(
                 symbol, user_id, overrides, dependency_fingerprint=fingerprint
@@ -122,7 +119,7 @@ class Rule1Service:
         # ── No prior valuation: skip Gate 2 ───────────────────────────────
         if decision.reason == "no_prior_valuation":
             dep_values  = await self.repo.get_rule1_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self.compute_rule1_with_diagnostics(
                 symbol, user_id, overrides, dependency_fingerprint=fingerprint
             )
@@ -130,7 +127,7 @@ class Rule1Service:
         # ── Override present: bypass Gate 2 ───────────────────────────────
         if self._has_rule1_overrides(overrides):
             dep_values  = await self.repo.get_rule1_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             logger.info("[VALUATION][R1] Override present → bypass Gate 2: %s", symbol)
             return await self.compute_rule1_with_diagnostics(
                 symbol, user_id, overrides, dependency_fingerprint=fingerprint
@@ -138,7 +135,7 @@ class Rule1Service:
 
         # ── Gate 2: Fingerprint ────────────────────────────────────────────
         dep_values  = await self.repo.get_rule1_dependency_values(company_id)
-        fingerprint = _build_fingerprint(dep_values)
+        fingerprint = build_fingerprint(dep_values)
 
         gate2 = await self.guard.check_fingerprint(company_id, method, fingerprint)
         if not gate2.should_recompute:
@@ -281,7 +278,7 @@ class Rule1Service:
         g_min      = float(params.get("growth_clamp_min", 0.02))
         g_max      = float(params.get("growth_clamp_max", 0.25))
         growth_raw = growth
-        growth     = self._clamp(float(growth or 0.0), g_min, g_max)
+        growth = clamp(float(growth or 0.0), g_min, g_max)
 
         if growth_raw is not None and growth_raw > growth:
             extra_flags.append(DiagnosticFlag(
@@ -669,10 +666,6 @@ class Rule1Service:
             overrides.horizonYears   is not None,
             overrides.marginOfSafety is not None,
         ])
-
-    @staticmethod
-    def _clamp(val: float, lo: float, hi: float) -> float:
-        return max(lo, min(hi, val))
 
     @staticmethod
     def _cagr(v0: float, vN: float, years: int) -> Optional[float]:

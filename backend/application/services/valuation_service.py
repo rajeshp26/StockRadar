@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
-
+from application.services.ai_service import generate_overview_summary
 from application.services.ddm_service import DdmService
 from application.services.dcf_service import DcfService
 from application.services.owner_earnings_service import OwnerEarningsService
@@ -171,3 +171,108 @@ class ValuationService:
     ) -> Optional[ResidualIncomeResponse]:
         """Return last Residual Income result instantly. None if never computed."""
         return await self.residual_income.get_cached(symbol)
+
+    async def get_valuation_overview(self, symbol: str) -> dict:
+        """
+        Reads the last cached snapshot for all 5 valuation methods and
+        generates a cross-method AI recommendation.
+ 
+        Each method entry contains:
+          - status:        "computed" | "not_computed"
+          - intrinsicValue: the primary per-share value (None if not computed)
+          - upsideDownside: fraction vs current price (None if not computed)
+          - score:         suitability score 0-100 (None if not computed)
+          - category:      "Good" | "Caution" | "Poor" (None if not computed)
+          - lastComputedAt: ISO timestamp (None if not computed)
+ 
+        The AI recommendation is generated from whichever methods have data.
+        If no methods have been computed yet, recommendation is None.
+        """
+        import asyncio
+ 
+        ctx = await self.repo.get_company_context(symbol)
+        if not ctx:
+            raise ValueError(f"Symbol '{symbol}' not found.")
+        company_id = int(ctx["company_id"])
+        currency   = ctx.get("currency") or "USD"
+        sector     = ctx.get("sector")
+ 
+        # ── Read all 5 snapshots in parallel ──────────────────────────────────
+        (
+            rule1_snap,
+            dcf_snap,
+            ddm_gordon_snap,
+            oe_snap,
+            ri_snap,
+        ) = await asyncio.gather(
+            self.repo.get_last_output_snapshot(company_id, method="rule1"),
+            self.repo.get_last_output_snapshot(company_id, method="dcf"),
+            self.repo.get_last_output_snapshot(company_id, method="ddm_gordon"),
+            self.repo.get_last_output_snapshot(company_id, method="owner_earnings"),
+            self.repo.get_last_output_snapshot(company_id, method="residual_income"),
+        )
+ 
+        current_price = await self.repo.get_current_market_price(company_id)
+ 
+        def _extract(snap, iv_field: str) -> dict:
+            if not snap:
+                return {"status": "not_computed"}
+            val = snap.get("valuation") or {}
+            app = snap.get("applicability") or {}
+            dq  = snap.get("dataQuality") or {}
+            iv  = val.get(iv_field)
+            iv_f = float(iv) if iv is not None else None
+            upside = None
+            if (iv_f and iv_f > 0
+                    and current_price is not None and float(current_price) > 0):
+                upside = (iv_f - float(current_price)) / float(current_price)
+            last_computed = (
+                (dq.get("freshnessDays") or {}).get("lastComputedAt")
+                or snap.get("lastComputedAt")
+            )
+            return {
+                "status":         "computed",
+                "intrinsicValue": iv_f,
+                "upsideDownside": upside,
+                "score":          app.get("score"),
+                "category":       app.get("category"),
+                "lastComputedAt": last_computed,
+                "currency":       currency,
+            }
+ 
+        methods = {
+            "rule1":          _extract(rule1_snap,      "stickerPrice"),
+            "dcf":            _extract(dcf_snap,        "intrinsicValuePerShare"),
+            "ddm_gordon":     _extract(ddm_gordon_snap, "intrinsicValue"),
+            "owner_earnings": _extract(oe_snap,         "intrinsicValuePerShare"),
+            "residual_income": _extract(ri_snap,        "intrinsicValuePerShare"),
+        }
+ 
+        # ── AI cross-method recommendation ─────────────────────────────────────
+        # Only generate if at least one method has been computed.
+        computed_methods = {k: v for k, v in methods.items() if v["status"] == "computed"}
+        recommendation = None
+        if computed_methods:
+            try:
+                from application.services.ai_service import generate_overview_summary
+                recommendation = await generate_overview_summary(
+                    symbol=symbol,
+                    sector=sector,
+                    currency=currency,
+                    current_price=current_price,
+                    methods=computed_methods,
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "generate_overview_summary failed for %s: %s", symbol, exc
+                )
+ 
+        return {
+            "symbol":          symbol.upper(),
+            "currentPrice":    current_price,
+            "currency":        currency,
+            "methods":         methods,
+            "recommendation":  recommendation,
+        }
+ 

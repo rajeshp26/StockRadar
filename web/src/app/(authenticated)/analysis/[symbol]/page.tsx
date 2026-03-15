@@ -196,7 +196,12 @@ export default function AnalysisPage() {
         {tab === "intrinsic" && (
           <div className="space-y-6 animate-fade-up">
             <MethodSelector method={method} onChange={setMethod} />
-            {method === "overview"       && <ValuationOverview />}
+            {method === "overview" && (
+                <ValuationOverview
+                symbol={upperSymbol}
+                onSelectMethod={setMethod}
+                />
+            )}
             {method === "rule1"          && <IntrinsicPanel        symbol={upperSymbol} />}
             {method === "dcf"            && <DcfPanel              symbol={upperSymbol} />}
             {method === "ddm"            && <DdmPanel              symbol={upperSymbol} />}

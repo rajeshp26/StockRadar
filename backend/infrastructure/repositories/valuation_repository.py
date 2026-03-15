@@ -1,12 +1,15 @@
 # infrastructure/repositories/valuation_repository.py
 from __future__ import annotations
-import hashlib
-import json
 import logging
 import math
 from datetime import datetime, date, time, timedelta
 from typing import Any, Dict, List, Optional
+ 
 from database import supabase
+from shared.finance_math import safe_float
+
+import hashlib
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -107,14 +110,8 @@ def _hash_params(params_rows: list) -> str:
 
 
 def _safe_float_repo(x: Any) -> Optional[float]:
-    """Local safe float for repo helpers — avoids importing from service layer."""
-    try:
-        if x is None:
-            return None
-        f = float(x)
-        return f if f == f else None
-    except Exception:
-        return None
+    """Alias for shared.finance_math.safe_float — kept for call-site compatibility."""
+    return safe_float(x)
 
 
 def _round2(x: Any) -> Optional[float]:

@@ -10,12 +10,15 @@ import type {
   FreshnessInfo,
   DdmVariant,
 } from "../types/analysis.types";
-import { fetchDdmOutcome } from "@/features/analysis/services/analysis.service";
-import { QK } from "@/lib/query-keys";
+import {
+  fetchDdmCached,
+  fetchDdmOutcome,
+} from "@/features/analysis/services/analysis.service";
+import { QK }    from "@/lib/query-keys";
 import { STALE, GC } from "@/lib/query-client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Internal helper (unchanged from original)
+// Helper
 // ─────────────────────────────────────────────────────────────────────────────
 
 function toFreshnessInfoFromDataQuality(dq?: DataQuality): FreshnessInfo | undefined {
@@ -29,73 +32,105 @@ function toFreshnessInfoFromDataQuality(dq?: DataQuality): FreshnessInfo | undef
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal data shape (includes notComputed sentinel)
+// ─────────────────────────────────────────────────────────────────────────────
+
 type DdmData = {
-  valuation:     DdmValuation;
-  applicability: Applicability;
-  dataQuality:   DataQuality;
-  freshness?:    FreshnessInfo;
+  valuation?:     DdmValuation;
+  applicability?: Applicability;
+  dataQuality?:   DataQuality;
+  freshness?:     FreshnessInfo;
+  notComputed?:   boolean;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// queryFn — exported so prefetch-valuations.ts and useValuationOverview share it
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function ddmQueryFn(
+  symbol:  string,
+  variant: DdmVariant,
+): Promise<DdmData> {
+  const outcome = await fetchDdmCached(symbol, variant);
+
+  if (outcome.status === "not_computed") {
+    return { notComputed: true };
+  }
+
+  if (outcome.status === "ok") {
+    const { payload } = outcome;
+    const valuation    = payload.valuation     as unknown as DdmValuation;
+    const applicability = payload.applicability as unknown as Applicability;
+    const dataQuality  = payload.dataQuality   as unknown as DataQuality;
+    return {
+      valuation,
+      applicability,
+      dataQuality,
+      freshness:    toFreshnessInfoFromDataQuality(dataQuality),
+      notComputed:  false,
+    };
+  }
+
+  throw new Error(outcome.message || "Failed to load DDM valuation.");
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook
 //
+// queryFn  → GET (pure cache read, ~50ms)
+// recompute → POST (gate logic, only on explicit user action)
+//
 // Return contract is IDENTICAL to the original — no callers need changes.
-//
-// The original had a manual cacheRef + inflightRef to deduplicate concurrent
-// requests and persist results across variant switches. React Query replaces
-// all of that: each (symbol, variant) pair has its own cache entry with
-// automatic request deduplication built in.
-//
-// Caching behaviour:
-//   • First visit of a variant  → fetches, shows loading
-//   • Switching variants        → instant if previously visited
-//   • Navigate away+back        → instant (gcTime 30 min)
-//   • recompute()               → force-invalidates and refetches current variant
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useDdmAnalysis(
   symbol:  string,
   variant: DdmVariant = "gordon",
 ): DdmState & {
-  reload:    () => Promise<void>;
-  recompute: () => Promise<void>;
+  reload:      () => Promise<void>;
+  recompute:   () => Promise<void>;
+  notComputed: boolean;
 } {
   const currentSymbol = (symbol ?? "").toUpperCase();
   const queryClient   = useQueryClient();
 
-  const { data, isPending, error, refetch } = useQuery<DdmData, Error>({
+  const { data, isPending, error } = useQuery<DdmData, Error>({
     queryKey:  QK.ddm(currentSymbol, variant),
-    queryFn:   async () => {
-      const outcome = await fetchDdmOutcome(currentSymbol, variant);
-
-      if (outcome.status === "ok") {
-        const { payload } = outcome;
-        const valuation    = payload.valuation     as unknown as DdmValuation;
-        const applicability = payload.applicability as unknown as Applicability;
-        const dataQuality  = payload.dataQuality   as unknown as DataQuality;
-        return {
-          valuation,
-          applicability,
-          dataQuality,
-          freshness: toFreshnessInfoFromDataQuality(dataQuality),
-        };
-      }
-
-      throw new Error(outcome.message || "Failed to compute DDM.");
-    },
+    queryFn:   () => ddmQueryFn(currentSymbol, variant),
     enabled:   !!currentSymbol,
     staleTime: STALE.VALUATION,
     gcTime:    GC.VALUATION,
     retry:     1,
   });
 
+  /**
+   * recompute
+   * POST → gate logic + potential recompute → write fresh payload into cache.
+   * Does not trigger an extra refetch round-trip.
+   */
   const recompute = useCallback(async (): Promise<void> => {
     if (!currentSymbol) return;
-    await queryClient.invalidateQueries({ queryKey: QK.ddm(currentSymbol, variant) });
-    await refetch();
-  }, [currentSymbol, variant, queryClient, refetch]);
+    const outcome = await fetchDdmOutcome(currentSymbol, variant);
+    if (outcome.status === "ok") {
+      const { payload } = outcome;
+      const valuation    = payload.valuation     as unknown as DdmValuation;
+      const applicability = payload.applicability as unknown as Applicability;
+      const dataQuality  = payload.dataQuality   as unknown as DataQuality;
+      queryClient.setQueryData<DdmData>(QK.ddm(currentSymbol, variant), {
+        valuation,
+        applicability,
+        dataQuality,
+        freshness:   toFreshnessInfoFromDataQuality(dataQuality),
+        notComputed: false,
+      });
+      // Invalidate overview so AI recommendation regenerates with fresh data
+      queryClient.invalidateQueries({ queryKey: QK.overview(currentSymbol) });
+    } else {
+      throw new Error(outcome.message || "Failed to compute DDM.");
+    }
+  }, [currentSymbol, variant, queryClient]);
 
-  // useMemo preserved from original to maintain referential stability
   return useMemo(
     () => ({
       loading:        isPending,
@@ -106,6 +141,7 @@ export function useDdmAnalysis(
       dataQuality:    data?.dataQuality,
       history:        undefined,
       freshness:      data?.freshness,
+      notComputed:    data?.notComputed ?? false,
       reload:         recompute,
       recompute,
     }),

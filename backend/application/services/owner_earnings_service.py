@@ -8,11 +8,16 @@ That dead-code block is removed; _build_empty_response handles early aborts corr
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
+ 
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+    pct_or_frac_to_frac,
+    safe_float,
+)
 
 from application.services.ai_service import generate_suitability_summary
 from application.services.owner_earnings_suitability import evaluate_owner_earnings_suitability
@@ -30,24 +35,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
-
-
-def _pct_or_frac_to_frac(x: float) -> float:
-    return x / 100.0 if x > 1.0 else x
-
-
-def _safe_float(x: Any) -> Optional[float]:
-    try:
-        if x is None:
-            return None
-        f = float(x)
-        return f if f == f else None
-    except Exception:
-        return None
-
 
 def _compute_oe(
     net_income: Optional[float],
@@ -68,12 +55,6 @@ def _compute_oe(
     if include_wc and wc_change is not None:
         oe -= wc_change
     return oe
-
-
-def _build_fingerprint(dep_values: Dict[str, Any]) -> str:
-    raw = json.dumps(dep_values, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:32]
-
 
 # ── Service ────────────────────────────────────────────────────────────────────
 
@@ -106,7 +87,7 @@ class OwnerEarningsService:
         # ── Force: bypass all gates ────────────────────────────────────────
         if force:
             dep_values  = await self.repo.get_oe_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = (dep_values)
             logger.info("[VALUATION][OE] forced recompute: %s", symbol)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
@@ -129,7 +110,7 @@ class OwnerEarningsService:
         # ── No prior valuation ─────────────────────────────────────────────
         if gate1.reason == "no_prior_valuation":
             dep_values  = await self.repo.get_oe_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
                 dependency_fingerprint=fingerprint,
@@ -138,7 +119,7 @@ class OwnerEarningsService:
         # ── Override present: bypass Gates 2 & 3 ──────────────────────────
         if self._has_overrides(overrides):
             dep_values  = await self.repo.get_oe_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             logger.info("[VALUATION][OE] Override present → bypass Gates 2&3: %s", symbol)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
@@ -147,7 +128,7 @@ class OwnerEarningsService:
 
         # ── Gate 2: Fingerprint ────────────────────────────────────────────
         dep_values  = await self.repo.get_oe_dependency_values(company_id)
-        fingerprint = _build_fingerprint(dep_values)
+        fingerprint = build_fingerprint(dep_values)
 
         gate2 = await self.guard.check_fingerprint(company_id, method, fingerprint)
         if not gate2.should_recompute:
@@ -216,7 +197,7 @@ class OwnerEarningsService:
  
         # Refresh currentPrice and upside at read time
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
         upside        = None
         if (current_price is not None and float(current_price) > 0
                 and intrinsic_ps is not None and intrinsic_ps > 0):
@@ -260,7 +241,7 @@ class OwnerEarningsService:
         if not snap:
             logger.info("[VALUATION][OE] Cached path: snapshot missing, recomputing: %s", symbol)
             dep_values  = await self.repo.get_oe_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
                 dependency_fingerprint=fingerprint,
@@ -275,7 +256,7 @@ class OwnerEarningsService:
         )
 
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
         upside        = None
         if current_price is not None and float(current_price) > 0 and intrinsic_ps and intrinsic_ps > 0:
             upside = (intrinsic_ps - float(current_price)) / float(current_price)
@@ -333,20 +314,20 @@ class OwnerEarningsService:
 
         # ── Base OE ───────────────────────────────────────────────────────
         base_oe_data = await self._resolve_base_oe(company_id, mc_ratio, include_wc)
-        base_oe      = _safe_float(base_oe_data.get("value"))
+        base_oe      = safe_float(base_oe_data.get("value"))
 
         # ── OE growth rate ────────────────────────────────────────────────
         g_oe_source = "override.oeGrowthRate"
         if overrides.oeGrowthRate is not None:
             g_oe_raw = float(overrides.oeGrowthRate)
         else:
-            g_oe_raw    = _safe_float(defaults.get("oe_growth_rate"))
+            g_oe_raw    = safe_float(defaults.get("oe_growth_rate"))
             g_oe_source = "defaults.oe_growth_rate"
 
         g_oe: Optional[float] = None
         if g_oe_raw is not None:
-            g_oe = _clamp(
-                _pct_or_frac_to_frac(float(g_oe_raw)),
+            g_oe = clamp(
+                pct_or_frac_to_frac(float(g_oe_raw)),
                 float(defaults.get("oe_growth_floor", 0.00)),
                 float(defaults.get("oe_growth_cap",   0.15)),
             )
@@ -356,13 +337,13 @@ class OwnerEarningsService:
         if overrides.discountRate is not None:
             r_raw = float(overrides.discountRate)
         else:
-            r_raw    = _safe_float(defaults.get("discount_rate_default"))
+            r_raw    = safe_float(defaults.get("discount_rate_default"))
             r_source = "defaults.discount_rate_default"
 
         r: Optional[float] = None
         if r_raw is not None:
-            r = _clamp(
-                _pct_or_frac_to_frac(float(r_raw)),
+            r = clamp(
+                pct_or_frac_to_frac(float(r_raw)),
                 float(defaults.get("discount_rate_floor", 0.07)),
                 float(defaults.get("discount_rate_cap",   0.15)),
             )
@@ -370,11 +351,11 @@ class OwnerEarningsService:
         # ── Terminal growth ────────────────────────────────────────────────
         tg: Optional[float] = None
         if overrides.terminalGrowthRate is not None:
-            tg = _pct_or_frac_to_frac(float(overrides.terminalGrowthRate))
+            tg = pct_or_frac_to_frac(float(overrides.terminalGrowthRate))
         else:
-            tg_raw = _safe_float(defaults.get("terminal_growth_default"))
+            tg_raw = safe_float(defaults.get("terminal_growth_default"))
             if tg_raw is not None:
-                tg = _pct_or_frac_to_frac(float(tg_raw))
+                tg = pct_or_frac_to_frac(float(tg_raw))
 
         # ── Net debt ──────────────────────────────────────────────────────
         net_debt: Optional[float] = None
@@ -382,8 +363,8 @@ class OwnerEarningsService:
             net_debt = float(overrides.netDebt)
         else:
             bs   = await self.repo.get_balance_sheet_latest(company_id)
-            debt = _safe_float(bs.get("total_debt"))               if bs else None
-            cash = _safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
+            debt = safe_float(bs.get("total_debt"))               if bs else None
+            cash = safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
             if debt is not None and cash is not None:
                 net_debt = float(debt) - float(cash)
 
@@ -394,13 +375,13 @@ class OwnerEarningsService:
         else:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
-                sh = _safe_float(rows[-1].get("shares_outstanding_diluted"))
+                sh = safe_float(rows[-1].get("shares_outstanding_diluted"))
                 if sh and sh > 0:
                     shares = sh
             if shares is None:
                 summary = await self.repo.get_company_summary_latest(company_id)
                 if summary:
-                    sh = _safe_float(summary.get("shares_outstanding"))
+                    sh = safe_float(summary.get("shares_outstanding"))
                     if sh and sh > 0:
                         shares = sh
 
@@ -447,7 +428,7 @@ class OwnerEarningsService:
             n = n_default
             input_decisions["oe"]["forecastYears"] = {"source": "defaults.forecast_years_default", "value": n}
             fallbacks_used = True
-        n = int(_clamp(float(n), 1, 20))
+        n = int(clamp(float(n), 1, 20))
 
         # ── Maintenance capex ratio ────────────────────────────────────────
         if overrides.maintenanceCapexRatio is not None:
@@ -466,7 +447,7 @@ class OwnerEarningsService:
 
         # ── Base OE ────────────────────────────────────────────────────────
         base_oe_data = await self._resolve_base_oe(company_id, mc_ratio, include_wc)
-        base_oe      = _safe_float(base_oe_data.get("value"))
+        base_oe      = safe_float(base_oe_data.get("value"))
         base_oe_fy   = base_oe_data.get("evidence", {}).get("asOfFiscalYear")
         input_decisions["oe"]["baseOe"] = base_oe_data.get("evidence")
 
@@ -496,7 +477,7 @@ class OwnerEarningsService:
             g_oe_raw    = float(overrides.oeGrowthRate)
             g_oe_source = "override.oeGrowthRate"
         else:
-            g_oe_raw    = _safe_float(defaults.get("oe_growth_rate"))
+            g_oe_raw    = safe_float(defaults.get("oe_growth_rate"))
             g_oe_source = "defaults.oe_growth_rate"
             if g_oe_raw is not None:
                 fallbacks_used = True
@@ -513,10 +494,10 @@ class OwnerEarningsService:
                 current_price, user_id=user_id,
             )
 
-        g_oe_frac    = _pct_or_frac_to_frac(float(g_oe_raw))
+        g_oe_frac    = pct_or_frac_to_frac(float(g_oe_raw))
         g_oe_floor   = float(defaults.get("oe_growth_floor", 0.00))
         g_oe_cap     = float(defaults.get("oe_growth_cap",   0.15))
-        g_oe_clamped = _clamp(g_oe_frac, g_oe_floor, g_oe_cap)
+        g_oe_clamped = clamp(g_oe_frac, g_oe_floor, g_oe_cap)
         input_decisions["oe"]["oeGrowthRate"] = {
             "source": g_oe_source, "valueRaw": g_oe_raw,
             "valueFrac": g_oe_frac, "valueFinal": g_oe_clamped,
@@ -538,7 +519,7 @@ class OwnerEarningsService:
             r_raw    = float(overrides.discountRate)
             r_source = "override.discountRate"
         else:
-            r_raw    = _safe_float(defaults.get("discount_rate_default"))
+            r_raw    = safe_float(defaults.get("discount_rate_default"))
             r_source = "defaults.discount_rate_default"
             if r_raw is not None:
                 fallbacks_used = True
@@ -551,10 +532,10 @@ class OwnerEarningsService:
             ))
             r = 0.0
         else:
-            r_frac  = _pct_or_frac_to_frac(float(r_raw))
+            r_frac  = pct_or_frac_to_frac(float(r_raw))
             r_floor = float(defaults.get("discount_rate_floor", 0.07))
             r_cap   = float(defaults.get("discount_rate_cap",   0.15))
-            r       = _clamp(r_frac, r_floor, r_cap)
+            r       = clamp(r_frac, r_floor, r_cap)
             input_decisions["oe"]["discountRate"] = {
                 "source": r_source, "valueRaw": r_raw,
                 "valueFrac": r_frac, "valueFinal": r,
@@ -599,7 +580,7 @@ class OwnerEarningsService:
                 tg_raw    = float(overrides.terminalGrowthRate)
                 tg_source = "override.terminalGrowthRate"
             else:
-                tg_raw    = _safe_float(defaults.get("terminal_growth_default"))
+                tg_raw    = safe_float(defaults.get("terminal_growth_default"))
                 tg_source = "defaults.terminal_growth_default"
                 if tg_raw is not None:
                     fallbacks_used = True
@@ -611,7 +592,7 @@ class OwnerEarningsService:
                     recommendation="Provide terminalGrowthRate override or set terminal_growth_default in method defaults.",
                 ))
             else:
-                tg             = _pct_or_frac_to_frac(float(tg_raw))
+                tg             = pct_or_frac_to_frac(float(tg_raw))
                 terminal_g_used = tg
                 if tg >= r:
                     flags.append(DiagnosticFlag(
@@ -646,8 +627,8 @@ class OwnerEarningsService:
             net_debt_source = "override.netDebt"
         else:
             bs   = await self.repo.get_balance_sheet_latest(company_id)
-            debt = _safe_float(bs.get("total_debt"))               if bs else None
-            cash = _safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
+            debt = safe_float(bs.get("total_debt"))               if bs else None
+            cash = safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
             if debt is not None and cash is not None:
                 net_debt        = float(debt) - float(cash)
                 net_debt_source = "balance_sheets.total_debt - cash_and_cash_equivalents"
@@ -666,7 +647,7 @@ class OwnerEarningsService:
         else:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
-                sh = _safe_float(rows[-1].get("shares_outstanding_diluted"))
+                sh = safe_float(rows[-1].get("shares_outstanding_diluted"))
                 if sh and sh > 0:
                     shares        = float(sh)
                     shares_source = "income_statements.shares_outstanding_diluted(latest)"
@@ -674,7 +655,7 @@ class OwnerEarningsService:
         if shares is None:
             summary = await self.repo.get_company_summary_latest(company_id)
             if summary:
-                sh = _safe_float(summary.get("shares_outstanding"))
+                sh = safe_float(summary.get("shares_outstanding"))
                 if sh and sh > 0:
                     shares        = float(sh)
                     shares_source = "company_summary.shares_outstanding"
@@ -926,12 +907,12 @@ class OwnerEarningsService:
         except Exception:
             pass
 
-        net_income = _safe_float(
+        net_income = safe_float(
             (is_row or {}).get("net_income_to_common") or (is_row or {}).get("net_income")
         )
-        da         = _safe_float(cf.get("depreciation_amortization")) if cf else None
-        capex_raw  = _safe_float(cf.get("capital_expenditures"))      if cf else None
-        wc_change  = _safe_float(cf.get("change_in_working_capital")) if cf else None
+        da         = safe_float(cf.get("depreciation_amortization")) if cf else None
+        capex_raw  = safe_float(cf.get("capital_expenditures"))      if cf else None
+        wc_change  = safe_float(cf.get("change_in_working_capital")) if cf else None
         fiscal_year = (cf or {}).get("fiscal_year") or (is_row or {}).get("fiscal_year")
 
         value = _compute_oe(net_income, da, capex_raw, wc_change, maintenance_capex_ratio, include_wc)

@@ -1,10 +1,15 @@
 # application/services/residual_income_service.py
 from __future__ import annotations
 import logging
-import hashlib
-import json
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
+ 
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+    pct_or_frac_to_frac,
+    safe_float,
+)
 
 from application.services.ai_service import generate_suitability_summary
 from application.services.residual_income_suitability import evaluate_residual_income_suitability
@@ -18,30 +23,6 @@ from domain.models.valuation_rule1 import Applicability, DataQuality, Diagnostic
 from infrastructure.repositories.valuation_repository import ValuationRepository
 
 logger = logging.getLogger(__name__)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
-
-
-def _pct_or_frac_to_frac(x: float) -> float:
-    return x / 100.0 if x > 1.0 else x
-
-
-def _safe_float(x: Any) -> Optional[float]:
-    try:
-        if x is None:
-            return None
-        f = float(x)
-        return f if f == f else None
-    except Exception:
-        return None
-
-def _build_fingerprint(dep_values: Dict[str, Any]) -> str:
-    raw = json.dumps(dep_values, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:32]
 
 # ── Service ───────────────────────────────────────────────────────────────────
 
@@ -83,7 +64,7 @@ class ResidualIncomeService:
         # ── Force: bypass all gates ────────────────────────────────────────
         if force:
             dep_values  = await self.repo.get_ri_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             logger.info("[VALUATION][RI] forced recompute: %s", symbol)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
@@ -106,7 +87,7 @@ class ResidualIncomeService:
         # ── No prior valuation ─────────────────────────────────────────────
         if gate1.reason == "no_prior_valuation":
             dep_values  = await self.repo.get_ri_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
                 dependency_fingerprint=fingerprint,
@@ -115,7 +96,7 @@ class ResidualIncomeService:
         # ── Override present: bypass Gates 2 & 3 ──────────────────────────
         if self._has_overrides(overrides):
             dep_values  = await self.repo.get_ri_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             logger.info("[VALUATION][RI] Override present → bypass Gates 2&3: %s", symbol)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
@@ -124,7 +105,7 @@ class ResidualIncomeService:
  
         # ── Gate 2: Fingerprint ────────────────────────────────────────────
         dep_values  = await self.repo.get_ri_dependency_values(company_id)
-        fingerprint = _build_fingerprint(dep_values)
+        fingerprint = build_fingerprint(dep_values)
  
         gate2 = await self.guard.check_fingerprint(company_id, method, fingerprint)
         if not gate2.should_recompute:
@@ -193,7 +174,7 @@ class ResidualIncomeService:
  
         # Refresh currentPrice and upside at read time
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
         upside        = None
         if (current_price is not None and float(current_price) > 0
                 and intrinsic_ps is not None and intrinsic_ps is not None):
@@ -239,7 +220,7 @@ class ResidualIncomeService:
         snap = await self.repo.get_last_output_snapshot(company_id=company_id, method=method)
         if not snap:
             dep_values  = await self.repo.get_ri_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
                 dependency_fingerprint=fingerprint,
@@ -254,7 +235,7 @@ class ResidualIncomeService:
         )
  
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
         upside        = None
         if current_price is not None and float(current_price) > 0 and intrinsic_ps is not None:
             upside = (intrinsic_ps - float(current_price)) / float(current_price)
@@ -309,7 +290,7 @@ class ResidualIncomeService:
         try:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
-                sh = _safe_float(rows[-1].get("shares_outstanding_diluted"))
+                sh = safe_float(rows[-1].get("shares_outstanding_diluted"))
                 if sh and sh > 0:
                     shares = float(sh)
         except Exception:
@@ -318,7 +299,7 @@ class ResidualIncomeService:
             try:
                 summary = await self.repo.get_company_summary_latest(company_id)
                 if summary:
-                    sh = _safe_float(summary.get("shares_outstanding")
+                    sh = safe_float(summary.get("shares_outstanding")
                                      or summary.get("implied_shares_outstanding"))
                     if sh and sh > 0:
                         shares = float(sh)
@@ -330,7 +311,7 @@ class ResidualIncomeService:
         eps0:         Optional[float] = None
         try:
             bs_row = await self.repo.get_balance_sheet_latest(company_id)
-            equity = _safe_float(bs_row.get("shareholders_equity")) if bs_row else None
+            equity = safe_float(bs_row.get("shareholders_equity")) if bs_row else None
             if equity is not None and shares and float(shares) > 0:
                 bv_per_share = float(equity) / float(shares)
         except Exception:
@@ -338,7 +319,7 @@ class ResidualIncomeService:
  
         try:
             is_row = await self.repo.get_income_statement_latest(company_id)
-            net_income = _safe_float(
+            net_income = safe_float(
                 (is_row or {}).get("net_income_to_common") or (is_row or {}).get("net_income")
             )
             if net_income is not None and shares and float(shares) > 0:
@@ -355,11 +336,11 @@ class ResidualIncomeService:
         # ── Terminal growth ────────────────────────────────────────────────
         tg_used: Optional[float] = None
         if overrides.terminalGrowthRate is not None:
-            tg_used = _pct_or_frac_to_frac(float(overrides.terminalGrowthRate))
+            tg_used = pct_or_frac_to_frac(float(overrides.terminalGrowthRate))
         else:
-            tg_raw = _safe_float(defaults.get("terminal_growth_default"))
+            tg_raw = safe_float(defaults.get("terminal_growth_default"))
             if tg_raw is not None:
-                tg_used = _pct_or_frac_to_frac(float(tg_raw))
+                tg_used = pct_or_frac_to_frac(float(tg_raw))
  
         n = int(overrides.forecastYears) if overrides.forecastYears is not None else int(defaults.get("forecast_years_default", 5))
  
@@ -495,8 +476,8 @@ class ResidualIncomeService:
                 ),
             )
 
-        equity = _safe_float(bs_row.get("shareholders_equity")) if bs_row else None
-        net_income = _safe_float(
+        equity = safe_float(bs_row.get("shareholders_equity")) if bs_row else None
+        net_income = safe_float(
             (is_row or {}).get("net_income_to_common") or (is_row or {}).get("net_income")
         )
         bv_fy = (bs_row or {}).get("fiscal_year")
@@ -547,7 +528,7 @@ class ResidualIncomeService:
 
         n_default = int(defaults.get("forecast_years_default", 5))
         if overrides.forecastYears is not None:
-            n = int(_clamp(float(overrides.forecastYears), 1, 20))
+            n = int(clamp(float(overrides.forecastYears), 1, 20))
             input_decisions["ri"]["forecastYears"] = {"source": "override.forecastYears", "value": n}
         else:
             n = n_default
@@ -619,13 +600,13 @@ class ResidualIncomeService:
             tg_raw = float(overrides.terminalGrowthRate)
             tg_source = "override.terminalGrowthRate"
         else:
-            tg_raw = _safe_float(defaults.get("terminal_growth_default"))
+            tg_raw = safe_float(defaults.get("terminal_growth_default"))
             tg_source = "defaults.terminal_growth_default"
             if tg_raw is not None:
                 fallbacks_used = True
 
         if tg_raw is not None:
-            tg_used = _pct_or_frac_to_frac(float(tg_raw))
+            tg_used = pct_or_frac_to_frac(float(tg_raw))
 
         input_decisions["ri"]["terminalGrowthRate"] = {"source": tg_source, "value": tg_used}
 
@@ -818,8 +799,8 @@ class ResidualIncomeService:
         erp_default = float(defaults.get("erp_default", 0.055))
 
         if overrides.requiredReturn is not None:
-            k_raw = _pct_or_frac_to_frac(float(overrides.requiredReturn))
-            k_final = _clamp(k_raw, k_floor, k_cap)
+            k_raw = pct_or_frac_to_frac(float(overrides.requiredReturn))
+            k_final = clamp(k_raw, k_floor, k_cap)
             return k_final, {
                 "source": "override.requiredReturn",
                 "kRaw": k_raw, "kFinal": k_final,
@@ -831,12 +812,12 @@ class ResidualIncomeService:
         if beta is None:
             beta = await self.repo.get_beta_latest(company_id)
 
-        rf = _pct_or_frac_to_frac(float(overrides.riskFreeRate)) if overrides.riskFreeRate is not None else rf_default
-        erp = _pct_or_frac_to_frac(float(overrides.equityRiskPremium)) if overrides.equityRiskPremium is not None else erp_default
+        rf = pct_or_frac_to_frac(float(overrides.riskFreeRate)) if overrides.riskFreeRate is not None else rf_default
+        erp = pct_or_frac_to_frac(float(overrides.equityRiskPremium)) if overrides.equityRiskPremium is not None else erp_default
 
         if beta is None:
             k_raw = k_default
-            k_final = _clamp(k_raw, k_floor, k_cap)
+            k_final = clamp(k_raw, k_floor, k_cap)
             return k_final, {
                 "source": "default.k_default (beta missing)",
                 "beta": None, "rf": rf, "erp": erp,
@@ -846,7 +827,7 @@ class ResidualIncomeService:
             }
 
         k_raw = rf + float(beta) * erp
-        k_final = _clamp(k_raw, k_floor, k_cap)
+        k_final = clamp(k_raw, k_floor, k_cap)
         return k_final, {
             "source": "capm",
             "beta": float(beta), "rf": rf, "erp": erp,
@@ -878,9 +859,9 @@ class ResidualIncomeService:
         gap_to_k = float(defaults.get("g_gap_to_k", 0.01))
 
         if overrides.riGrowthRate is not None:
-            g_raw = _pct_or_frac_to_frac(float(overrides.riGrowthRate))
+            g_raw = pct_or_frac_to_frac(float(overrides.riGrowthRate))
             g_stable = min(g_raw, max(g_floor, k_e - gap_to_k))
-            g_final = _clamp(g_stable, g_floor, g_cap)
+            g_final = clamp(g_stable, g_floor, g_cap)
             return g_final, {
                 "source": "override.riGrowthRate",
                 "gRaw": g_raw, "gStable": g_stable, "gFinal": g_final,
@@ -914,7 +895,7 @@ class ResidualIncomeService:
             source = "default.g_default"
 
         g_stable = min(g_raw, max(g_floor, k_e - gap_to_k))
-        g_final = _clamp(g_stable, g_floor, g_cap)
+        g_final = clamp(g_stable, g_floor, g_cap)
         return g_final, {
             "source": source,
             "gHistEps": g_hist,

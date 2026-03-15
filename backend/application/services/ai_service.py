@@ -1044,3 +1044,301 @@ Key flags:
 
 Output only the paragraph. No bullet points. No preamble.
 Explain WHY suitability is {category}, reference the most important flags with their values, and state how much an investor should trust this valuation."""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# generate_overview_summary
+# Called by ValuationService.get_valuation_overview() to produce the
+# cross-method AI recommendation shown in the Valuation Overview panel.
+#
+# Follows the EXACT same Gemini REST pattern as generate_suitability_summary:
+#   - httpx.AsyncClient with configurable timeout
+#   - thinkingBudget: 0 INSIDE generationConfig
+#   - system_instruction as a separate field
+#   - Returns None (never raises) on any failure
+#
+# Unlike generate_suitability_summary (returns str), this returns a dict
+# because the frontend maps specific fields (bestMethod, consensus, etc.)
+# to UI components.
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+_METHOD_LABELS = {
+    "rule1":           "Rule #1 (Phil Town)",
+    "dcf":             "Discounted Cash Flow",
+    "ddm_gordon":      "Dividend Discount Model",
+    "owner_earnings":  "Owner Earnings",
+    "residual_income": "Residual Income",
+}
+ 
+_METHOD_BEST_FOR = {
+    "rule1":           "stable earnings compounders with predictable EPS growth and low debt",
+    "dcf":             "companies with consistent positive free cash flow but no dividends",
+    "ddm_gordon":      "dividend-paying companies with a long, stable dividend growth history",
+    "owner_earnings":  "capital-intensive businesses where Buffett-style maintenance capex adjustment matters",
+    "residual_income": "financial firms or asset-heavy companies where book value anchors intrinsic value",
+}
+ 
+_OVERVIEW_FALLBACK = {
+    "bestMethod":      "rule1",
+    "bestMethodLabel": "Rule #1 (Phil Town)",
+    "reasoning":       "Multiple valuation methods have been computed for this company.",
+    "consensus":       "Mixed",
+    "confidenceNote":  "Review individual method diagnostics for full context.",
+}
+ 
+ 
+def _build_overview_prompt(
+    symbol:        str,
+    sector:        Optional[str],
+    currency:      str,
+    current_price: Optional[float],
+    methods:       Dict[str, Any],
+) -> str:
+    """
+    Build the cross-method overview prompt.
+ 
+    Only includes methods that have been computed (status="computed").
+    Filters out N/A fields so the model cannot hallucinate missing values.
+    """
+    sector_str = sector or "Unknown"
+    price_str  = f"{currency}{current_price:,.2f}" if current_price else "N/A"
+ 
+    # ── Per-method summary lines (available values only) ──────────────────
+    method_lines = []
+    for method_id, data in methods.items():
+        label   = _METHOD_LABELS.get(method_id, method_id)
+        best_for = _METHOD_BEST_FOR.get(method_id, "general use")
+ 
+        parts = [f"**{label}** (best for: {best_for})"]
+ 
+        iv      = data.get("intrinsicValue")
+        upside  = data.get("upsideDownside")
+        score   = data.get("score")
+        cat     = data.get("category")
+ 
+        if iv      is not None: parts.append(f"intrinsic={currency}{iv:,.2f}")
+        if upside  is not None: parts.append(f"upside={upside*100:+.1f}%")
+        if score   is not None: parts.append(f"suitability={score}/100 ({cat})")
+ 
+        method_lines.append("  - " + ", ".join(parts))
+ 
+    methods_block = "\n".join(method_lines)
+ 
+    # ── Convergence note ──────────────────────────────────────────────────
+    computed_ivs = [
+        float(v["intrinsicValue"])
+        for v in methods.values()
+        if v.get("intrinsicValue") is not None
+    ]
+    convergence_note = ""
+    if len(computed_ivs) >= 2:
+        lo, hi = min(computed_ivs), max(computed_ivs)
+        spread_pct = (hi - lo) / lo * 100 if lo > 0 else None
+        if spread_pct is not None:
+            if spread_pct < 20:
+                convergence_note = f"The methods show strong convergence (range {currency}{lo:,.2f}–{currency}{hi:,.2f}, spread {spread_pct:.0f}%), which increases confidence."
+            elif spread_pct < 60:
+                convergence_note = f"The methods show moderate divergence (range {currency}{lo:,.2f}–{currency}{hi:,.2f}, spread {spread_pct:.0f}%), which is normal given different assumptions."
+            else:
+                convergence_note = f"The methods diverge significantly (range {currency}{lo:,.2f}–{currency}{hi:,.2f}, spread {spread_pct:.0f}%), indicating high sensitivity to assumptions — use multiple methods and apply a margin of safety."
+ 
+    # ── Example output ────────────────────────────────────────────────────
+    example = (
+        '{\n'
+        '  "bestMethod": "dcf",\n'
+        '  "bestMethodLabel": "Discounted Cash Flow",\n'
+        '  "reasoning": "Discounted Cash Flow is the most appropriate method for MSFT because '
+        'it generates substantial free cash flow ($72B in the latest year) with FCF positive '
+        'in all 5 of the last 5 years and low volatility (18%), which is exactly the stable '
+        'cash generation profile DCF requires. Rule #1 and Owner Earnings both agree that '
+        'the stock appears undervalued — DCF at $412/share, Rule #1 at $390/share — '
+        'providing useful cross-model confirmation. DDM is less reliable here because '
+        'dividends are only a small portion of total shareholder returns.",\n'
+        '  "consensus": "Undervalued",\n'
+        '  "confidenceNote": "The main sensitivity is the 12% FCF growth assumption; '
+        'if growth slows to 7% the intrinsic value would compress by roughly 25%."\n'
+        '}'
+    )
+ 
+    return f"""You are a professional equity analyst. Analyse these valuation results for {symbol} and produce a cross-method recommendation.
+ 
+Company: {symbol}
+Sector: {sector_str}
+Current Price: {price_str}
+ 
+Computed Valuation Results:
+{methods_block}
+ 
+{f"Convergence note: {convergence_note}" if convergence_note else ""}
+ 
+Method selection guidance:
+- Rule #1: Most reliable for stable earnings compounders with 5+ years of consistent EPS growth.
+- DCF: Most reliable when FCF is positive and predictable over 5+ years.
+- DDM: Only reliable if dividends are consistently paid and growing; unreliable for non-dividend payers.
+- Owner Earnings: Best when capital expenditure is a material part of the value story (manufacturing, infrastructure, retail).
+- Residual Income: Best for banks, insurers, or asset-heavy firms where book value is the primary anchor.
+ 
+Rules you MUST follow:
+1. Only reference intrinsic values, upside %, and suitability scores that are explicitly provided above.
+2. Your "reasoning" must explain WHY the chosen method fits this company's profile — not just which method wins.
+3. If multiple methods agree on direction (all show upside or all show downside), note the convergence.
+4. "consensus" must be exactly one of: Undervalued, Fairly Valued, Overvalued, Mixed.
+5. "bestMethod" must be exactly one of: rule1, dcf, ddm_gordon, owner_earnings, residual_income.
+6. Complete every sentence. Never use bullet points or labels inside the reasoning string.
+ 
+=== EXAMPLE OUTPUT (replace all values with {symbol} data) ===
+{example}
+ 
+=== NOW WRITE THE RECOMMENDATION FOR {symbol} ===
+Respond with ONLY valid JSON. No markdown fences. No text before or after the JSON object."""
+ 
+ 
+async def generate_overview_summary(
+    symbol:        str,
+    sector:        Optional[str],
+    currency:      str,
+    current_price: Optional[float],
+    methods:       Dict[str, Any],
+    timeout:       float = 10.0,
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate a cross-method valuation overview recommendation via Gemini REST.
+ 
+    Returns a dict with keys:
+      bestMethod, bestMethodLabel, reasoning, consensus, confidenceNote
+ 
+    Returns None (never raises) if key missing, call fails, times out, or
+    JSON parsing fails. Callers should treat None as "no recommendation available".
+    """
+    import json as _json
+ 
+    key = os.environ.get("GEMINI_API_KEY") or ""
+    if not key:
+        logger.info("[AI] GEMINI_API_KEY not set — overview summaries disabled")
+        return None
+ 
+    if not methods:
+        return None
+ 
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    url   = _GEMINI_URL.format(model=model, key=key)
+ 
+    prompt = _build_overview_prompt(
+        symbol=symbol,
+        sector=sector,
+        currency=currency,
+        current_price=current_price,
+        methods=methods,
+    )
+ 
+    logger.info(
+        "[AI] Sending overview prompt for %s (%d chars):\n--- PROMPT START ---\n%s\n--- PROMPT END ---",
+        symbol, len(prompt), prompt,
+    )
+ 
+    system_instruction = (
+        "You are a financial analysis assistant writing cross-method valuation recommendations "
+        "for retail investors. You always respond with valid JSON only — no markdown, no preamble. "
+        "You only reference metric values that are explicitly provided — never invent numbers. "
+        "You complete every sentence in the reasoning field."
+    )
+ 
+    body = {
+        "system_instruction": {
+            "parts": [{"text": system_instruction}]
+        },
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": 700,
+            "temperature":     0.1,
+            "topP":            0.85,
+            # thinkingConfig MUST be inside generationConfig for gemini-2.5-flash.
+            "thinkingConfig": {
+                "thinkingBudget": 0,
+            },
+        },
+    }
+ 
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=body)
+            if not resp.is_success:
+                logger.warning(
+                    "[AI] Gemini %s for overview/%s | body: %s",
+                    resp.status_code, symbol, resp.text[:500],
+                )
+                return None
+ 
+            data      = resp.json()
+            candidate = data.get("candidates", [{}])[0]
+            finish    = candidate.get("finishReason", "UNKNOWN")
+            usage     = data.get("usageMetadata", {})
+            raw = (
+                candidate
+                    .get("content", {})
+                    .get("parts", [{}])[0]
+                    .get("text", "")
+                    .strip()
+            )
+ 
+            logger.info(
+                "[AI] overview/%s: %d chars | finishReason=%s | prompt=%s out=%s thinking=%s\n"
+                "--- AI OUTPUT START ---\n%s\n--- AI OUTPUT END ---",
+                symbol, len(raw), finish,
+                usage.get("promptTokenCount"),
+                usage.get("candidatesTokenCount"),
+                usage.get("thoughtsTokenCount"),
+                raw,
+            )
+ 
+            if not raw:
+                logger.warning("[AI] Empty overview response for %s | finishReason=%s", symbol, finish)
+                return None
+ 
+            # Strip markdown fences if model adds them despite instruction
+            clean = raw.strip()
+            if clean.startswith("```"):
+                clean = clean.split("\n", 1)[-1]
+                if "```" in clean:
+                    clean = clean.rsplit("```", 1)[0]
+            clean = clean.strip()
+ 
+            try:
+                result = _json.loads(clean)
+            except _json.JSONDecodeError as je:
+                logger.warning(
+                    "[AI] overview/%s: JSON parse failed (%s) | raw=%s",
+                    symbol, je, raw[:300],
+                )
+                return None
+ 
+            # Validate required keys
+            required = {"bestMethod", "bestMethodLabel", "reasoning", "consensus", "confidenceNote"}
+            if not required.issubset(result.keys()):
+                missing = required - result.keys()
+                logger.warning(
+                    "[AI] overview/%s: missing keys %s in response", symbol, missing
+                )
+                # Return what we have rather than nothing — partial is better than None
+                for k in missing:
+                    result[k] = _OVERVIEW_FALLBACK.get(k, "")
+ 
+            # Normalise bestMethod to a known value
+            if result.get("bestMethod") not in _METHOD_LABELS:
+                logger.warning(
+                    "[AI] overview/%s: unknown bestMethod=%s, falling back",
+                    symbol, result.get("bestMethod"),
+                )
+                # Pick the computed method with the highest suitability score as fallback
+                best = max(methods.items(), key=lambda kv: kv[1].get("score") or 0)
+                result["bestMethod"]      = best[0]
+                result["bestMethodLabel"] = _METHOD_LABELS.get(best[0], best[0])
+ 
+            return result
+ 
+    except httpx.TimeoutException:
+        logger.warning("[AI] Overview summary timed out for %s", symbol)
+        return None
+    except Exception as exc:
+        logger.warning("[AI] Overview summary failed for %s: %s", symbol, exc)
+        return None
+ 

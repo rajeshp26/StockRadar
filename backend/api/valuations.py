@@ -27,6 +27,30 @@ router = APIRouter(prefix="/valuations", tags=["Valuations"])
 _SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 
 
+@router.get(
+    "/{symbol}/overview",
+    summary="Cross-method valuation overview with AI recommendation.",
+)
+@limiter.limit("30/minute")
+async def get_valuation_overview(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+    valuation_service: ValuationService = Depends(get_valuation_service),
+) -> dict:
+    try:
+        sym = _normalize_symbol(symbol)
+        result = await valuation_service.get_valuation_overview(sym)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("get_valuation_overview failed for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Overview fetch failed.",
+        )
+        
 def _extract_auth_id(user_payload: dict) -> Optional[str]:
     if not isinstance(user_payload, dict):
         return None

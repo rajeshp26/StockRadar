@@ -31,6 +31,9 @@ export const QK = {
     ["valuation", "residualIncome", symbol.toUpperCase()]                     as const,
   residualIncomeHistory: (symbol: string) =>
     ["valuation", "residualIncome", "history", symbol.toUpperCase()]          as const,
+  // ── Valuation overview (cross-method AI recommendation) ──────────────────
+  overview: (symbol: string) =>
+    ["valuation", "overview", symbol.toUpperCase()]                           as const,
   // ── Live price ───────────────────────────────────────────────────────────
   price: (symbol: string) =>
     ["price", symbol.toUpperCase()]                                           as const,

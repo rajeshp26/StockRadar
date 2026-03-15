@@ -15,13 +15,11 @@ Terminal value methods: perpetuity_growth | exit_multiple
 Price policy: intrinsic is cached; currentPrice + upside computed at read-time only.
 """
 from __future__ import annotations
-
-import hashlib
-import json
+ 
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
-
+ 
 from application.services.ai_service import generate_suitability_summary
 from application.services.dcf_suitability import evaluate_dcf_suitability
 from application.services.recompute_guard import RecomputeGuard
@@ -34,30 +32,16 @@ from domain.models.valuation_dcf import (
 )
 from domain.models.valuation_rule1 import Applicability, DataQuality, DiagnosticFlag
 from infrastructure.repositories.valuation_repository import ValuationRepository
-from shared.finance_math import compute_fcf
-
-logger = logging.getLogger(__name__)
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+    compute_fcf,
+    pct_or_frac_to_frac,
+    safe_float,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
-
-
-def _pct_or_frac_to_frac(x: float) -> float:
-    return x / 100.0 if x > 1.0 else x
-
-
-def _safe_float(x: Any) -> Optional[float]:
-    try:
-        if x is None:
-            return None
-        f = float(x)
-        return f if f == f else None
-    except Exception:
-        return None
-
 
 def _assert_length_invariant(name, arr, expected_len, flags):
     if len(arr) != expected_len:
@@ -69,12 +53,6 @@ def _assert_length_invariant(name, arr, expected_len, flags):
         ))
         return False
     return True
-
-
-def _build_fingerprint(dep_values: Dict[str, Any]) -> str:
-    raw = json.dumps(dep_values, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:32]
-
 
 # ── Service ────────────────────────────────────────────────────────────────────
 
@@ -107,7 +85,7 @@ class DcfService:
         # ── Force: bypass all gates ────────────────────────────────────────
         if force:
             dep_values  = await self.repo.get_dcf_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             logger.info("[VALUATION][DCF] forced recompute: %s", symbol)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
@@ -130,7 +108,7 @@ class DcfService:
         # ── No prior valuation ─────────────────────────────────────────────
         if gate1.reason == "no_prior_valuation":
             dep_values  = await self.repo.get_dcf_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
                 dependency_fingerprint=fingerprint,
@@ -139,7 +117,7 @@ class DcfService:
         # ── Override present: bypass Gates 2 & 3 ──────────────────────────
         if self._has_overrides(overrides):
             dep_values  = await self.repo.get_dcf_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             logger.info("[VALUATION][DCF] Override present → bypass Gates 2&3: %s", symbol)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
@@ -148,7 +126,7 @@ class DcfService:
 
         # ── Gate 2: Fingerprint ────────────────────────────────────────────
         dep_values  = await self.repo.get_dcf_dependency_values(company_id)
-        fingerprint = _build_fingerprint(dep_values)
+        fingerprint = build_fingerprint(dep_values)
 
         gate2 = await self.guard.check_fingerprint(company_id, method, fingerprint)
         if not gate2.should_recompute:
@@ -217,7 +195,7 @@ class DcfService:
  
         # Refresh currentPrice and upside at read time
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
         upside        = None
         if (current_price is not None and float(current_price) > 0
                 and intrinsic_ps is not None and intrinsic_ps > 0):
@@ -258,7 +236,7 @@ class DcfService:
         if not snap:
             logger.info("[VALUATION][DCF] Cached path: snapshot missing, recomputing: %s", symbol)
             dep_values  = await self.repo.get_dcf_dependency_values(company_id)
-            fingerprint = _build_fingerprint(dep_values)
+            fingerprint = build_fingerprint(dep_values)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,
                 dependency_fingerprint=fingerprint,
@@ -273,7 +251,7 @@ class DcfService:
         )
 
         current_price = await self.repo.get_current_market_price(company_id)
-        intrinsic_ps  = _safe_float(valuation_payload.get("intrinsicValuePerShare"))
+        intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
         upside        = None
         if (current_price is not None and float(current_price) > 0
                 and intrinsic_ps is not None and intrinsic_ps > 0):
@@ -340,11 +318,11 @@ class DcfService:
         base_fcf: Optional[float] = None
         base_fcf_source = "cash_flow_statements"
         if overrides.forecastFcf is not None:
-            base_fcf        = _safe_float(overrides.forecastFcf[0]) if overrides.forecastFcf else None
+            base_fcf        = safe_float(overrides.forecastFcf[0]) if overrides.forecastFcf else None
             base_fcf_source = "override.forecastFcf[0]"
         elif overrides.fcfGrowthRate is None:
             cf_data    = await self._resolve_base_fcf(company_id)
-            base_fcf   = _safe_float(cf_data.get("value"))
+            base_fcf   = safe_float(cf_data.get("value"))
 
         # ── WACC ──────────────────────────────────────────────────────────
         wacc: Optional[float] = None
@@ -353,11 +331,11 @@ class DcfService:
             wacc_raw   = float(overrides.wacc)
             wacc_source = "override.wacc"
         else:
-            wacc_raw   = _safe_float(defaults.get("wacc_default"))
+            wacc_raw   = safe_float(defaults.get("wacc_default"))
             wacc_source = "defaults.wacc_default"
         if wacc_raw is not None:
-            wacc = _clamp(
-                _pct_or_frac_to_frac(float(wacc_raw)),
+            wacc = clamp(
+                pct_or_frac_to_frac(float(wacc_raw)),
                 float(defaults.get("wacc_floor", 0.06)),
                 float(defaults.get("wacc_cap",   0.18)),
             )
@@ -375,10 +353,10 @@ class DcfService:
                 tg_raw         = float(overrides.terminalGrowthRate)
                 terminal_g_source = "override.terminalGrowthRate"
             else:
-                tg_raw         = _safe_float(defaults.get("terminal_growth_default"))
+                tg_raw         = safe_float(defaults.get("terminal_growth_default"))
                 terminal_g_source = "defaults.terminal_growth_default"
             if tg_raw is not None:
-                terminal_g = _pct_or_frac_to_frac(float(tg_raw))
+                terminal_g = pct_or_frac_to_frac(float(tg_raw))
         else:
             terminal_g_source = "exit_multiple"
 
@@ -388,8 +366,8 @@ class DcfService:
             net_debt = float(overrides.netDebt)
         else:
             bs   = await self.repo.get_balance_sheet_latest(company_id)
-            debt = _safe_float(bs.get("total_debt"))   if bs else None
-            cash = _safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
+            debt = safe_float(bs.get("total_debt"))   if bs else None
+            cash = safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
             if debt is not None and cash is not None:
                 net_debt = float(debt) - float(cash)
 
@@ -400,13 +378,13 @@ class DcfService:
         else:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
-                sh = _safe_float(rows[-1].get("shares_outstanding_diluted"))
+                sh = safe_float(rows[-1].get("shares_outstanding_diluted"))
                 if sh and sh > 0:
                     shares = sh
             if shares is None:
                 summary = await self.repo.get_company_summary_latest(company_id)
                 if summary:
-                    sh = _safe_float(summary.get("shares_outstanding"))
+                    sh = safe_float(summary.get("shares_outstanding"))
                     if sh and sh > 0:
                         shares = sh
 
@@ -454,7 +432,7 @@ class DcfService:
             n = n_default
             input_decisions["dcf"]["forecastYears"] = {"source": "defaults.forecast_years_default", "value": n}
             fallbacks_used = True
-        n = int(_clamp(float(n), 1, 20))
+        n = int(clamp(float(n), 1, 20))
 
         series:          Optional[List[float]] = overrides.forecastFcf
         base_fcf_value:  Optional[float]       = None
@@ -467,7 +445,7 @@ class DcfService:
             input_decisions["dcf"]["forecastFcf"] = {"source": "override.forecastFcf", "years": n}
         else:
             base_cf        = await self._resolve_base_fcf(company_id)
-            base_fcf_value = _safe_float(base_cf.get("value"))
+            base_fcf_value = safe_float(base_cf.get("value"))
             base_fcf_fy    = base_cf.get("evidence", {}).get("asOfFiscalYear")
             input_decisions["dcf"]["baseFcf"] = base_cf.get("evidence")
 
@@ -507,8 +485,8 @@ class DcfService:
                     ),
                 )
 
-            g_fcf = _clamp(
-                _pct_or_frac_to_frac(float(fcf_growth)),
+            g_fcf = clamp(
+                pct_or_frac_to_frac(float(fcf_growth)),
                 float(defaults.get("fcf_growth_floor", 0.00)),
                 float(defaults.get("fcf_growth_cap",   0.20)),
             )
@@ -516,7 +494,7 @@ class DcfService:
                 **(input_decisions["dcf"].get("fcfGrowthRate") or {}),
                 "valueFinal": g_fcf,
             }
-            if _pct_or_frac_to_frac(float(fcf_growth)) != g_fcf:
+            if pct_or_frac_to_frac(float(fcf_growth)) != g_fcf:
                 flags.append(DiagnosticFlag(
                     code="DCF-GROWTH-CLAMP", severity="info",
                     message="FCF growth rate was clamped to safety bounds.",
@@ -537,7 +515,7 @@ class DcfService:
             wacc_raw    = float(overrides.wacc)
             wacc_source = "override.wacc"
         else:
-            wacc_raw    = _safe_float(defaults.get("wacc_default"))
+            wacc_raw    = safe_float(defaults.get("wacc_default"))
             wacc_source = "defaults.wacc_default"
             fallbacks_used = True
 
@@ -551,11 +529,11 @@ class DcfService:
         else:
             wacc_floor = float(defaults.get("wacc_floor", 0.06))
             wacc_cap   = float(defaults.get("wacc_cap",   0.18))
-            wacc       = _clamp(_pct_or_frac_to_frac(float(wacc_raw)), wacc_floor, wacc_cap)
+            wacc       = clamp(pct_or_frac_to_frac(float(wacc_raw)), wacc_floor, wacc_cap)
             input_decisions["dcf"]["wacc"] = {
                 "source": wacc_source, "valueRaw": float(wacc_raw),
                 "valueFinal": float(wacc), "waccFloor": wacc_floor, "waccCap": wacc_cap,
-                "clamped": _pct_or_frac_to_frac(float(wacc_raw)) != float(wacc),
+                "clamped": pct_or_frac_to_frac(float(wacc_raw)) != float(wacc),
             }
             if input_decisions["dcf"]["wacc"]["clamped"]:
                 flags.append(DiagnosticFlag(
@@ -615,7 +593,7 @@ class DcfService:
                     g_raw    = float(overrides.terminalGrowthRate)
                     g_source = "override.terminalGrowthRate"
                 else:
-                    g_raw    = _safe_float(defaults.get("terminal_growth_default"))
+                    g_raw    = safe_float(defaults.get("terminal_growth_default"))
                     g_source = "defaults.terminal_growth_default"
                     if g_raw is not None:
                         fallbacks_used = True
@@ -629,7 +607,7 @@ class DcfService:
                         recommendation="Provide terminalGrowthRate override or set terminal_growth_default in method defaults.",
                     ))
                 else:
-                    g = _pct_or_frac_to_frac(float(g_raw))
+                    g = pct_or_frac_to_frac(float(g_raw))
                     terminal_g_used = g
                     if g >= wacc:
                         flags.append(DiagnosticFlag(
@@ -654,7 +632,7 @@ class DcfService:
             elif terminal_method == "exit_multiple":
                 g_source_for_resolved = "exit_multiple"
                 mult = float(overrides.exitMultiple) if overrides.exitMultiple is not None else (
-                    _safe_float(defaults.get("exit_multiple_default")) or 0.0
+                    safe_float(defaults.get("exit_multiple_default")) or 0.0
                 )
                 mult_source  = "override.exitMultiple" if overrides.exitMultiple is not None else "defaults.exit_multiple_default"
                 metric       = overrides.terminalMetric or defaults.get("terminal_metric_default") or "ebitda"
@@ -691,8 +669,8 @@ class DcfService:
             net_debt_source = "override.netDebt"
         else:
             bs   = await self.repo.get_balance_sheet_latest(company_id)
-            debt = _safe_float(bs.get("total_debt"))               if bs else None
-            cash = _safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
+            debt = safe_float(bs.get("total_debt"))               if bs else None
+            cash = safe_float(bs.get("cash_and_cash_equivalents")) if bs else None
             if debt is not None and cash is not None:
                 net_debt        = float(debt) - float(cash)
                 net_debt_source = "balance_sheets.total_debt - cash_and_cash_equivalents"
@@ -711,7 +689,7 @@ class DcfService:
         else:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
-                sh = _safe_float(rows[-1].get("shares_outstanding_diluted"))
+                sh = safe_float(rows[-1].get("shares_outstanding_diluted"))
                 if sh and sh > 0:
                     shares        = float(sh)
                     shares_source = "income_statements.shares_outstanding_diluted(latest)"
@@ -719,7 +697,7 @@ class DcfService:
         if shares is None:
             summary = await self.repo.get_company_summary_latest(company_id)
             if summary:
-                sh = _safe_float(summary.get("shares_outstanding"))
+                sh = safe_float(summary.get("shares_outstanding"))
                 if sh and sh > 0:
                     shares        = float(sh)
                     shares_source = "company_summary.shares_outstanding"
@@ -857,7 +835,7 @@ class DcfService:
                 "revenue_growth_rate":         None,
                 "terminal_growth_rate":        float(terminal_g_used) if terminal_g_used is not None else None,
                 "wacc_used":                   float(wacc) if wacc is not None else None,
-                "fcf_margin_assumption":       _pct_or_frac_to_frac(float(overrides.fcfMarginAssumption)) if overrides.fcfMarginAssumption is not None else None,
+                "fcf_margin_assumption":       pct_or_frac_to_frac(float(overrides.fcfMarginAssumption)) if overrides.fcfMarginAssumption is not None else None,
                 "total_pv_fcf":                float(total_pv),
                 "terminal_value":              float(tv) if tv is not None else None,
                 "pv_terminal_value":           float(pv_tv) if pv_tv is not None else None,
@@ -941,8 +919,8 @@ class DcfService:
 
     async def _resolve_base_fcf(self, company_id: int) -> Dict[str, Any]:
         cf    = await self.repo.get_cash_flow_latest(company_id)
-        ocf   = _safe_float(cf.get("cash_from_operating_activities")) if cf else None
-        capex = _safe_float(cf.get("capital_expenditures"))           if cf else None
+        ocf   = safe_float(cf.get("cash_from_operating_activities")) if cf else None
+        capex = safe_float(cf.get("capital_expenditures"))           if cf else None
         value = compute_fcf(ocf, capex)
         return {
             "value": value,
