@@ -60,7 +60,10 @@ class DatabaseSerializer:
             elif isinstance(value, date):
                 result[key] = value.isoformat()
             elif isinstance(value, Decimal):
-                result[key] = float(value)
+                if value == value.to_integral_value():
+                    result[key] = int(value)
+                else:
+                    result[key] = float(value)
             else:
                 result[key] = value
         return result

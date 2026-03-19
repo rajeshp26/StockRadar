@@ -40,6 +40,7 @@ from shared.finance_math import (
     safe_float,
 )
 
+logger = logging.getLogger(__name__)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

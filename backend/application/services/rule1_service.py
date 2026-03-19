@@ -1,28 +1,45 @@
 # application/services/rule1_service.py
-"""
-Rule #1 Valuation Service (Phil Town method).
+#
+# CHANGES IN THIS VERSION
+# ─────────────────────────────────────────────────────────────────────────────
+# Option B — Unified valuation_runs read path:
+#
+#   Previously Rule 1 had two divergent read paths:
+#     - get_cached() and _serve_rule1_cached() read from intrinsic_value_analysis
+#       via get_cached_intrinsic_value() + get_last_method_diagnostics()
+#     - All other methods (DCF, DDM, OE, RI) read from valuation_runs via
+#       get_last_output_snapshot()
+#
+#   This asymmetry meant Rule 1 had a safety-net write path that others lacked,
+#   making cross-method reasoning and maintenance harder.
+#
+#   Under Option B:
+#     - get_cached() reads from get_last_output_snapshot("rule1") — identical
+#       pattern to DCF/DDM/OE/RI get_cached() methods.
+#     - _serve_rule1_cached() reads from get_last_output_snapshot("rule1").
+#     - compute_rule1_with_diagnostics() keeps upsert_intrinsic_value_analysis()
+#       as a dual-write for backward compatibility. The table is not removed in
+#       this pass; it can be retired in a future cleanup once confirmed unused.
+#     - Gate 1 now reads run_at from valuation_runs for rule1 (repo Change 1b).
+#       The timestamp source is the same moment — both were written together —
+#       so Gate 1 behaviour is identical.
+#     - cached_or_recompute() replaced with should_recompute() to align Rule 1
+#       with DCF/DDM/OE/RI. Both call identical logic when force=False; this is
+#       a maintenance consistency change with no behavioural difference.
+#
+#   One-time migration note:
+#     Companies that have an intrinsic_value_analysis row but no valuation_runs
+#     row (pre-audit-trail era) will see Gate 1 return "no_prior_valuation" and
+#     trigger a single recompute. After that one run they are on the unified path
+#     and all subsequent requests are served from cache as normal.
+# ─────────────────────────────────────────────────────────────────────────────
 
-Extracted from ValuationService to match the DDM / DCF / OE / RI pattern.
-ValuationService keeps thin wrappers for backward compatibility.
-
-Three-gate caching:
-  Gate 1 — Timestamp:   Are dependency tables newer than the last valuation run?
-  Gate 2 — Fingerprint: Have source data VALUES actually changed?
-  Gate 3 — Not applicable: Rule1 scorecard metrics are categorical (EPS CAGR
-            pass/fail). No numeric significance thresholds are defined.
-            Fingerprint mismatch (Gate 2) always triggers recompute.
-
-Bypass rules:
-  force=True                → skip all gates
-  no_prior_valuation        → skip Gate 2 (nothing to compare)
-  any override field set    → skip Gate 2 (explicit user inputs)
-"""
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
- 
+
 from shared.finance_math import (
     build_fingerprint,
     clamp,
@@ -61,6 +78,7 @@ def _as_date(d: Any) -> Optional[date]:
             return None
     return None
 
+
 # ── Service ────────────────────────────────────────────────────────────────────
 
 class Rule1Service:
@@ -98,8 +116,11 @@ class Rule1Service:
             )
 
         # ── Gate 1: Timestamp ──────────────────────────────────────────────
-        decision = await self.guard.cached_or_recompute(
-            company_id=company_id, method=method, force=False
+        # Option B: now uses should_recompute() consistently with all other
+        # services. Previously used cached_or_recompute() — identical behaviour
+        # when force=False, unified here for maintenance consistency.
+        decision = await self.guard.should_recompute(
+            company_id=company_id, method=method
         )
 
         if not decision.should_recompute:
@@ -220,7 +241,7 @@ class Rule1Service:
         elif eps0 <= 0.05:
             extra_flags.append(DiagnosticFlag(
                 code="R1-NEGEPS", severity="critical",
-                message="Negative or near-zero EPS—Rule #1 valuation is not meaningful.",
+                message="Negative or near-zero EPS — Rule #1 valuation is not meaningful.",
             ))
 
         input_decisions["eps0"] = {
@@ -278,7 +299,7 @@ class Rule1Service:
         g_min      = float(params.get("growth_clamp_min", 0.02))
         g_max      = float(params.get("growth_clamp_max", 0.25))
         growth_raw = growth
-        growth = clamp(float(growth or 0.0), g_min, g_max)
+        growth     = clamp(float(growth or 0.0), g_min, g_max)
 
         if growth_raw is not None and growth_raw > growth:
             extra_flags.append(DiagnosticFlag(
@@ -318,8 +339,8 @@ class Rule1Service:
                             code="R1-PERULE", severity="info",
                             message="Used industry median PE for conservatism.",
                             evidence={
-                                "industryMedianPE":   industry_pe,
-                                "twoXGrowthRulePE":   rule_pe,
+                                "industryMedianPE": industry_pe,
+                                "twoXGrowthRulePE": rule_pe,
                             },
                         ))
                     else:
@@ -332,8 +353,8 @@ class Rule1Service:
         input_decisions["futurePE"] = {"selected": future_pe, "rule": pe_source}
 
         # ── Intrinsic value math ───────────────────────────────────────────
-        eps0_safe   = float(eps0 or 0.0)
-        future_eps  = eps0_safe * ((1.0 + growth) ** horizon_years) if eps0_safe > 0 else 0.0
+        eps0_safe    = float(eps0 or 0.0)
+        future_eps   = eps0_safe * ((1.0 + growth) ** horizon_years) if eps0_safe > 0 else 0.0
         future_price = future_eps * float(future_pe)
         denominator  = (1.0 + discount_rate) ** horizon_years
         sticker_price = future_price / denominator if denominator > 0 else 0.0
@@ -343,7 +364,7 @@ class Rule1Service:
         if sector in SECTOR_CYCL:
             extra_flags.append(DiagnosticFlag(
                 code="R1-SECTOR-CYCL", severity="medium",
-                message="Cyclical sector—earnings can swing materially across cycles.",
+                message="Cyclical sector — earnings can swing materially across cycles.",
                 recommendation=(
                     "Use conservative growth and a wider MOS; "
                     "review drawdown metric carefully."
@@ -357,10 +378,10 @@ class Rule1Service:
             if split_cnt > 0:
                 extra_flags.append(DiagnosticFlag(
                     code="R1-SPLIT", severity="medium",
-                    message="Recent split after EPS snapshot—EPS may be unadjusted.",
+                    message="Recent split after EPS snapshot — EPS may be unadjusted.",
                     evidence={
-                        "splitCount":       split_cnt,
-                        "epsSnapshotDate":  eps_snapshot_date.isoformat(),
+                        "splitCount":      split_cnt,
+                        "epsSnapshotDate": eps_snapshot_date.isoformat(),
                     },
                 ))
 
@@ -406,26 +427,24 @@ class Rule1Service:
             },
         )
 
-        # ── Persist: intrinsic_value_analysis (Rule1-specific table) ──────
+        # ── Dual-write: intrinsic_value_analysis (kept for backward compat) ─
+        # Option B keeps this write so any external consumers of the table
+        # continue to work. This table can be retired in a future cleanup pass.
         await self.repo.upsert_intrinsic_value_analysis(
             company_id,
             {
-                "growth_rate":  growth,
-                "current_eps":  eps0_safe,
-                "future_pe":    future_pe,
-                "future_price": future_price,
+                "growth_rate":   growth,
+                "current_eps":   eps0_safe,
+                "future_pe":     future_pe,
+                "future_price":  future_price,
                 "sticker_price": sticker_price,
-                "mos_price":    mos_price,
+                "mos_price":     mos_price,
             },
         )
 
         now_iso = datetime.utcnow().isoformat() + "Z"
         dq_freshness["lastComputedAt"] = now_iso
 
-        # ── Build resolved inputs for audit trail ──────────────────────────
-        # Rule1 has no Gate 3 numeric thresholds today, but storing resolved
-        # inputs here makes future Gate 3 adoption trivial and gives a clear
-        # per-run audit record of what was actually computed.
         resolved_inputs: Dict[str, Any] = {
             "eps0":          eps0_safe,
             "growth":        float(growth),
@@ -437,9 +456,12 @@ class Rule1Service:
             "discount_rate": float(discount_rate),
             "horizon_years": int(horizon_years),
             "mos":           float(mos),
-            "resolved_at":   datetime.utcnow().isoformat() + "Z",
+            "resolved_at":   now_iso,
         }
 
+        # ── Build output snapshot ──────────────────────────────────────────
+        # Option B: output_snapshot is the primary cache source for Rule 1,
+        # matching the pattern used by DCF, DDM, OE, and RI.
         output_snapshot: Dict[str, Any] = {
             "valuation": {
                 "symbol":       symbol.upper(),
@@ -478,7 +500,7 @@ class Rule1Service:
             "lastComputedAt":      now_iso,
         }
 
-        # ── Persist: valuation_runs (audited record) ───────────────────────
+        # ── Persist: valuation_runs (primary cache + audit record) ─────────
         await self.repo.insert_valuation_run(
             company_id=company_id,
             method="rule1",
@@ -502,79 +524,57 @@ class Rule1Service:
             dataQuality=DataQuality(**output_snapshot["dataQuality"]),
         )
 
+    # ── Pure cache read ────────────────────────────────────────────────────────
+
     async def get_cached(self, symbol: str) -> Optional[Rule1Response]:
         """
         Pure cache read — no gate logic, no recompute, no DB writes.
         Returns None if no prior valuation exists.
-        Used by GET /valuations/{symbol}/rule1 for instant tab loads.
+
+        Option B: reads from valuation_runs.output_snapshot via
+        get_last_output_snapshot(), identical to DCF/DDM/OE/RI get_cached().
+        Previously read from intrinsic_value_analysis + get_last_method_diagnostics
+        which required reassembling the response from two separate queries.
         """
         ctx = await self.repo.get_company_context(symbol)
         if not ctx:
             return None
         company_id = int(ctx["company_id"])
-        currency   = ctx.get("currency") or "USD"
- 
-        cached = await self.repo.get_cached_intrinsic_value(company_id)
-        if not cached:
+
+        snap = await self.repo.get_last_output_snapshot(
+            company_id=company_id, method="rule1"
+        )
+        if not snap:
             return None
- 
-        diagnostics_resp = await self.repo.get_last_method_diagnostics(
-            company_id, method="rule1"
+
+        valuation_payload     = snap.get("valuation")     or {}
+        applicability_payload = snap.get("applicability") or {}
+        dq_payload            = snap.get("dataQuality")   or {}
+        last_computed = (
+            (dq_payload.get("freshnessDays") or {}).get("lastComputedAt")
+            or snap.get("lastComputedAt")
         )
- 
-        valuation = Rule1Valuation(
-            symbol=symbol.upper(),
-            companyId=company_id,
-            currency=currency,
-            eps0=float(cached.get("current_eps") or 0.0),
-            growth=float(cached.get("growth_rate") or 0.0),
-            futurePE=float(cached.get("future_pe") or 0.0),
-            futureEPS=0.0,
-            futurePrice=float(cached.get("future_price") or 0.0),
-            discountRate=float(
-                diagnostics_resp.get("assumptions", {}).get("discountRate", 0.15)
-            ),
-            horizonYears=int(
-                diagnostics_resp.get("assumptions", {}).get("horizonYears", 10)
-            ),
-            mos=float(diagnostics_resp.get("assumptions", {}).get("mos", 0.50)),
-            stickerPrice=float(cached.get("sticker_price") or 0.0),
-            mosPrice=float(cached.get("mos_price") or 0.0),
-        )
- 
-        last_computed = cached.get("last_updated")
- 
-        if not diagnostics_resp.get("applicability"):
-            applicability_payload: Dict[str, Any] = {
+
+        if not applicability_payload:
+            applicability_payload = {
                 "score": 0, "category": "Caution",
                 "flags": [{
                     "code": "R1-NO-AUDIT", "severity": "info",
                     "message": "Cached result; run Recompute for full scorecard.",
                 }],
             }
-            data_quality_payload: Dict[str, Any] = {
-                "freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {},
-            }
-        else:
-            applicability_payload = (
-                diagnostics_resp.get("applicability")
-                or {"score": 0, "category": "Caution", "flags": []}
-            )
-            data_quality_payload = (
-                diagnostics_resp.get("dataQuality")
-                or {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
-            )
- 
-        if isinstance(data_quality_payload.get("freshnessDays"), dict) and last_computed:
-            data_quality_payload["freshnessDays"]["lastComputedAt"] = last_computed
- 
+        if not dq_payload:
+            dq_payload = {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
+        if isinstance(dq_payload.get("freshnessDays"), dict) and last_computed:
+            dq_payload["freshnessDays"]["lastComputedAt"] = last_computed
+
         return Rule1Response(
-            valuation=valuation,
+            valuation=Rule1Valuation(**valuation_payload),
             applicability=Applicability(**applicability_payload),
-            dataQuality=DataQuality(**data_quality_payload),
+            dataQuality=DataQuality(**dq_payload),
         )
 
-    # ── Cached path ────────────────────────────────────────────────────────────
+    # ── Cached path (gate bypass → serve last run) ─────────────────────────────
 
     async def _serve_rule1_cached(
         self,
@@ -583,44 +583,31 @@ class Rule1Service:
         currency:   str,
     ) -> Rule1Response:
         """
-        Hydrate and return the last persisted Rule1 output.
+        Hydrate and return the last persisted Rule 1 output.
         Falls back to full recompute if no cached snapshot exists.
+
+        Option B: reads from valuation_runs.output_snapshot consistently
+        with all other methods. Previously read from intrinsic_value_analysis.
         """
-        cached = await self.repo.get_cached_intrinsic_value(company_id)
-        if not cached:
+        snap = await self.repo.get_last_output_snapshot(
+            company_id=company_id, method="rule1"
+        )
+        if not snap:
             logger.info(
-                "[VALUATION][R1] cached path missing IVA; recomputing for %s", symbol
+                "[VALUATION][R1] cached path missing snapshot; recomputing for %s", symbol
             )
             return await self.compute_rule1_with_diagnostics(symbol, None, None)
 
-        diagnostics_resp = await self.repo.get_last_method_diagnostics(
-            company_id, method="rule1"
+        valuation_payload     = snap.get("valuation")     or {}
+        applicability_payload = snap.get("applicability") or {}
+        dq_payload            = snap.get("dataQuality")   or {}
+        last_computed = (
+            (dq_payload.get("freshnessDays") or {}).get("lastComputedAt")
+            or snap.get("lastComputedAt")
         )
 
-        valuation = Rule1Valuation(
-            symbol=symbol.upper(),
-            companyId=company_id,
-            currency=currency,
-            eps0=float(cached.get("current_eps") or 0.0),
-            growth=float(cached.get("growth_rate") or 0.0),
-            futurePE=float(cached.get("future_pe") or 0.0),
-            futureEPS=0.0,
-            futurePrice=float(cached.get("future_price") or 0.0),
-            discountRate=float(
-                diagnostics_resp.get("assumptions", {}).get("discountRate", 0.15)
-            ),
-            horizonYears=int(
-                diagnostics_resp.get("assumptions", {}).get("horizonYears", 10)
-            ),
-            mos=float(diagnostics_resp.get("assumptions", {}).get("mos", 0.50)),
-            stickerPrice=float(cached.get("sticker_price") or 0.0),
-            mosPrice=float(cached.get("mos_price") or 0.0),
-        )
-
-        last_computed = cached.get("last_updated")
-
-        if not diagnostics_resp.get("applicability"):
-            applicability_payload: Dict[str, Any] = {
+        if not applicability_payload:
+            applicability_payload = {
                 "score":    0,
                 "category": "Caution",
                 "flags": [{
@@ -633,26 +620,15 @@ class Rule1Service:
                     "recommendation": "Run Recompute once to generate an audited scorecard.",
                 }],
             }
-            data_quality_payload: Dict[str, Any] = {
-                "freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {},
-            }
-        else:
-            applicability_payload = (
-                diagnostics_resp.get("applicability")
-                or {"score": 0, "category": "Caution", "flags": []}
-            )
-            data_quality_payload = (
-                diagnostics_resp.get("dataQuality")
-                or {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
-            )
-
-        if isinstance(data_quality_payload.get("freshnessDays"), dict) and last_computed:
-            data_quality_payload["freshnessDays"]["lastComputedAt"] = last_computed
+        if not dq_payload:
+            dq_payload = {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
+        if isinstance(dq_payload.get("freshnessDays"), dict) and last_computed:
+            dq_payload["freshnessDays"]["lastComputedAt"] = last_computed
 
         return Rule1Response(
-            valuation=valuation,
+            valuation=Rule1Valuation(**valuation_payload),
             applicability=Applicability(**applicability_payload),
-            dataQuality=DataQuality(**data_quality_payload),
+            dataQuality=DataQuality(**dq_payload),
         )
 
     # ── Helpers ────────────────────────────────────────────────────────────────
@@ -695,8 +671,8 @@ class Rule1Service:
         if len(vals) < 2 or len(years) < 2:
             return None
 
-        v0, vN   = vals[0], vals[-1]
-        n_years  = years[-1] - years[0]
+        v0, vN  = vals[0], vals[-1]
+        n_years = years[-1] - years[0]
         if n_years < 3:
             return None
 

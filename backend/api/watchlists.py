@@ -255,6 +255,7 @@ async def broadcast_stock_update(symbol: str, price: float, change: float, chang
         return
     now_iso = datetime.now().isoformat()
     payload = {
+        "type":          "price_update",
         "symbol":        symbol,
         "price":         float(price),
         "change":        float(change),
@@ -265,6 +266,30 @@ async def broadcast_stock_update(symbol: str, price: float, change: float, chang
         for queue in user_queues.get(uid, []):
             await queue.put(payload)
 
+async def broadcast_valuation_ready(symbol: str, method: str, company_id: int) -> None:
+    """
+    Push a valuation_ready event to all users who have this symbol in their
+    watchlist. The frontend invalidates the React Query cache for the specific
+    method, triggering a refetch that renders the newly computed result.
+
+    Uses the same symbol_subscribers registry as broadcast_stock_update so no
+    additional subscription tracking is needed.
+
+    Called by watchlist_service._fetch_and_store_financials_optimized() after
+    each valuation method completes for a new company load.
+    """
+    uids = symbol_subscribers.get(symbol, set())
+    if not uids:
+        return
+    payload = {
+        "type":      "valuation_ready",
+        "symbol":    symbol,
+        "method":    method,
+        "companyId": company_id,
+    }
+    for uid in uids:
+        for queue in user_queues.get(uid, []):
+            await queue.put(payload)
 
 # =============================================================================
 # NEW ENDPOINTS — Multi-Watchlist

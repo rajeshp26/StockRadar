@@ -87,7 +87,11 @@ class OwnerEarningsService:
         # ── Force: bypass all gates ────────────────────────────────────────
         if force:
             dep_values  = await self.repo.get_oe_dependency_values(company_id)
-            fingerprint = (dep_values)
+            fingerprint = build_fingerprint(dep_values)
+            # Bug 2 fix: was (dep_values) — parentheses are a no-op in Python,
+            # so the raw dict was stored as the fingerprint. build_fingerprint()
+            # was already imported; this aligns the force path with every other
+            # service and with the no_prior_valuation / override paths below.
             logger.info("[VALUATION][OE] forced recompute: %s", symbol)
             return await self._compute_and_persist(
                 symbol, company_id, currency, sector, user_id, overrides,

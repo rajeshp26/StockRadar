@@ -168,7 +168,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
 
     cf_by_year = _best_row(cf_rows, [
        "cash_from_operating_activities", "capital_expenditures",
-       "depreciation_amortization", "change_in_working_capital",
+       "dividends_paid",
     ], pk_field="cf_id")
 
     years = sorted(set(is_by_year) | set(bs_by_year) | set(cf_by_year))

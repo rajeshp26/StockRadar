@@ -32,6 +32,8 @@ import {
   ArrowLeft,
 } from "lucide-react";
 
+import { useValuationStream } from "@/features/analysis/hooks/useValuationStream";
+
 /* ── Tab definitions ──────────────────────────────────────────── */
 const TOP_TABS = [
   { id: "intrinsic", label: "Intrinsic Value",  icon: TrendingUp     },
@@ -103,7 +105,8 @@ export default function AnalysisPage() {
   // prefetchAllValuations is a no-op for methods already cached within staleTime.
   useEffect(() => {
     prefetchAllValuations(upperSymbol, queryClient);
-  }, [upperSymbol, queryClient]);  
+  }, [upperSymbol, queryClient]); 
+  useValuationStream({ symbol: upperSymbol }); 
   const priceDisplay  = price != null ? `$${price.toFixed(2)}` : "—";
   const changeDisplay =
     change != null

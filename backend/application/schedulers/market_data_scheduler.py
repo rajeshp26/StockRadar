@@ -46,9 +46,7 @@ from providers.yfinance_provider import YFinanceProvider  # YF fallback injectio
 from database import supabase  # used for lightweight existence checks
 
 # NEW: Valuation imports
-from infrastructure.repositories.valuation_repository import ValuationRepository
-from application.services.recompute_guard import RecomputeGuard
-from application.services.valuation_service import ValuationService
+
 from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
 
 logger = logging.getLogger(__name__)
@@ -279,70 +277,87 @@ class MarketDataRefreshScheduler:
         summary = await self.defeat_beta_provider.get_company_summary_optimized(symbol, company_id)
         if summary:
             await self.financial_repo.upsert_company_summary(summary)
-
-        # 5b) Derived financial metrics (ratios) — version-gated, non-blocking.
+        
+        # 5c) Bootstrap IS/BS/CF for companies that have never been synced.
         #
-        #  The job now returns rows_changed so we know whether IS/BS/CF source data
-        #  actually changed. When rows_changed == 0, computed_at is NOT advanced in
-        #  financial_ratios, and Rule #1 below is skipped entirely.
-        ratios_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
+        # The earnings scheduler only runs for companies in the ±N day earnings
+        # window. A newly added company outside that window will have empty
+        # IS/BS/CF tables. When derived metrics (step 5b) runs against empty
+        # tables, it correctly returns count:0 — but then ROIC/ROE/payout are
+        # never populated and all suitability scores degrade to 9/100 silently.
+        #
+        # Fix: check whether annual income_statements rows exist. If not,
+        # trigger a full financial sync so derived metrics has data to compute.
         try:
-            ratios_result = await compute_and_upsert_derived_financial_metrics(
-                company_id=company_id
-            )
-            logger.debug(
-                "[RATIOS] market-data refresh for %s: %d/%d rows changed",
-                symbol,
-                ratios_result.get("rows_changed", 0),
-                ratios_result.get("count", 0),
-            )
-        except Exception as me:
+            has_financials = await self._has_any_financials(company_id)
+            if not has_financials:
+                logger.info(
+                    "[BOOTSTRAP] %s (company_id=%s) has no IS/BS/CF rows — "
+                    "triggering full financial sync",
+                    symbol, company_id,
+                )
+                refresh_info = await self.financial_repo.get_company_refresh_info(
+                    company_id=company_id
+                )
+                if refresh_info:
+                    financials = await self.defeat_beta_provider.get_all_financials_optimized(
+                        symbol=symbol,
+                        company_id=company_id,
+                        last_refreshed_fiscal_year=None,
+                        last_refreshed_fiscal_quarter=None,
+                        force_full_history=True,
+                    )
+                    await self.financial_repo.upsert_all_financials(financials)
+                    await self.financial_repo.update_company_refresh_metadata(
+                        company_id=company_id,
+                        last_fiscal_year=financials.income_statements.rows[-1].fiscal_year
+                        if financials.income_statements.rows else 2024,
+                        last_fiscal_quarter=None,
+                        is_first_load=True,
+                        next_earnings_date=financials.next_earnings_date,
+                    )
+                    logger.info(
+                        "[BOOTSTRAP] %s IS/BS/CF bootstrap complete — "
+                        "IS:%d BS:%d CF:%d",
+                        symbol,
+                        len(financials.income_statements.rows),
+                        len(financials.balance_sheets.rows),
+                        len(financials.cash_flows.rows),
+                    )
+        except Exception as bootstrap_exc:
             logger.error(
-                "[RATIOS] compute failed during market-data refresh for %s: %s", symbol, me
+                "[BOOTSTRAP] Financial bootstrap failed for %s: %s",
+                symbol, bootstrap_exc,
             )
-
-        # 6) Rule #1 evaluation — only when derived metrics were actually written.
-        #
-        #  Rationale: financial_ratios is the primary dependency timestamp for Rule #1.
-        #  If rows_changed == 0, the ratios job was a no-op, computed_at did not advance,
-        #  and Rule #1's Gate 1 timestamp check will correctly return "up_to_date".
-        #  Running the evaluation anyway would be wasted work — skip it explicitly here
-        #  so we don't even pay for the two DB queries in Gate 1.
-        ratios_changed = ratios_result.get("rows_changed", 0) > 0
-        if ratios_changed:
+            # Non-fatal — proceed to derived metrics even if bootstrap failed.
+            # If IS/BS/CF are still empty, derived metrics will return count:0
+            # and log appropriately.
             try:
-                val_repo = ValuationRepository()
-                guard = RecomputeGuard(val_repo)
-                valuation_service = ValuationService(val_repo, guard)
-                await valuation_service.compute_rule1_if_stale(
-                    symbol=symbol,
-                    user_id=None,
-                    overrides=None,
-                    force=False,
+                ratios_result = await compute_and_upsert_derived_financial_metrics(
+                    company_id=company_id
                 )
                 logger.info(
-                    "[VALUATION][R1] evaluated after market-data refresh for %s", symbol
+                    "[BOOTSTRAP] %s derived metrics computed: "
+                    "%d/%d ratio rows written",
+                    symbol,
+                    ratios_result.get("rows_changed", 0),
+                    ratios_result.get("count", 0),
                 )
-            except Exception as ve:
+            except Exception as ratios_exc:
                 logger.error(
-                    "[VALUATION] Rule #1 auto-evaluation failed for %s: %s",
-                    symbol, ve, exc_info=True,
+                    "[BOOTSTRAP] derived metrics failed for %s: %s",
+                    symbol, ratios_exc,
                 )
-        else:
-            logger.debug(
-                "[VALUATION][R1] skipped for %s: derived metrics unchanged (rows_changed=0)",
-                symbol,
-            )
-
+                # Non-fatal — IS/BS/CF are written. Ratios will be
+                # computed on the next earnings_scheduler cycle.
+                
         return {
-            "price_history_monthly": price_rows_written,
-            "splits":                len(split_rows or []),
-            "revenue_forecast":      len(rev_fcst_rows or []),
-            "earnings_forecast":     len(eps_fcst_rows or []),
-            "company_summary":       1 if summary else 0,
-            "ratios_computed":       True,
-            "ratios_changed":        ratios_changed,   # NEW: observable by tests/logging
-        }
+         "price_history_monthly": price_rows_written,
+         "splits":                len(split_rows or []),
+         "revenue_forecast":      len(rev_fcst_rows or []),
+         "earnings_forecast":     len(eps_fcst_rows or []),
+         "company_summary":       1 if summary else 0,
+     }
 
     # ----------------------------------------------------------------------
     # Price History helpers (with rolling retention)
@@ -411,6 +426,29 @@ class MarketDataRefreshScheduler:
             # If the check fails, be conservative and return False (bootstrap path)
             logger.debug("price_history existence check failed for company_id=%s", company_id)
             return False
+
+    async def _has_any_financials(self, company_id: int) -> bool:
+        """
+        Returns True if at least one annual income_statement row exists.
+        Used to decide whether to bootstrap IS/BS/CF before running derived metrics.
+        A lightweight single-row check — no repo method needed.
+        """
+        try:
+            resp = (
+                supabase.table("income_statements")
+                .select("fiscal_year")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", None)
+                .limit(1)
+                .execute()
+            )
+            return bool(resp.data)
+        except Exception:
+            # If the check fails, assume data exists to avoid spurious bootstraps.
+            logger.debug(
+                "income_statements existence check failed for company_id=%s", company_id
+            )
+            return True 
 
     @staticmethod
     def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

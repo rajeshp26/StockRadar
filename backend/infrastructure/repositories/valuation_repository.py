@@ -169,21 +169,6 @@ class ValuationRepository:
     async def get_last_valuation_ts(self, company_id: int, method: str = "rule1") -> Optional[datetime]:
         if method not in ALLOWED_METHODS:
             method = "rule1"
-        if method == "rule1":
-            try:
-                iva = (
-                    supabase.table("intrinsic_value_analysis")
-                    .select("last_updated")
-                    .eq("company_id", company_id)
-                    .limit(1)
-                    .execute()
-                )
-                row = _first(iva.data)
-                ts = _normalize_datetime(row.get("last_updated")) if row else None
-                if ts:
-                    return ts
-            except Exception:
-                pass
         try:
             runs = (
                 supabase.table("valuation_runs")
@@ -1593,7 +1578,7 @@ class ValuationRepository:
             resp = (
                 supabase.table("balance_sheets")
                 .select(
-                    "fiscal_year, fiscal_quarter, total_debt, shareholders_equity, "
+                    "fiscal_year, fiscal_quarter, total_assets, total_debt, shareholders_equity, "
                     "cash_and_cash_equivalents, updated_at, confidence_score"
                 )
                 .eq("company_id", company_id)

@@ -278,30 +278,46 @@ class EarningsRefreshScheduler:
                 next_earnings_date=financials.next_earnings_date,
             )
 
-            # NEW: Derived metrics compute after scheduler fundamentals refresh (non-blocking)
-            try:
-                await compute_and_upsert_derived_financial_metrics(company_id=company_id)
-                logger.info("[DERIVED] metrics computed after earnings refresh for %s", symbol)
-            except Exception as de:
-                logger.error("[DERIVED] compute failed after earnings refresh for %s: %s", symbol, de, exc_info=True)
-
-            # PHASE 8: Data quality audit (non-blocking)
-            try:
-                await audit_company_data_quality(company_id=company_id)
-                logger.info("[DQ] audit complete after earnings refresh for %s", symbol)
-            except Exception as qe:
-                logger.error("[DQ] audit failed after earnings refresh for %s: %s", symbol, qe, exc_info=True)
-
-            total_rows = sum(upsert_results.values())
-            logger.info(
-                f"✅ Refreshed {symbol}: "
-                f"{total_rows} rows upserted "
-                f"(Income: {upsert_results['income_statements']}, "
-                f"Balance: {upsert_results['balance_sheets']}, "
-                f"Cash: {upsert_results['cash_flows']}, "
-                f"Earnings: {upsert_results['earnings']}, "
-                f"Div: {upsert_results['dividends']})"
+            statement_rows_written = (
+                upsert_results.get("income_statements", 0)
+                + upsert_results.get("balance_sheets", 0)
+                + upsert_results.get("cash_flows", 0)
             )
+ 
+            if statement_rows_written > 0:
+                logger.info(
+                    "[DERIVED] %s: %d new statement rows → computing derived metrics",
+                    symbol, statement_rows_written,
+                )
+                try:
+                    ratios_result = await compute_and_upsert_derived_financial_metrics(
+                        company_id=company_id
+                    )
+                    logger.info(
+                        "[DERIVED] %s: %d/%d ratio rows changed (version-gate)",
+                        symbol,
+                        ratios_result.get("rows_changed", 0),
+                        ratios_result.get("count", 0),
+                    )
+                except Exception as de:
+                    logger.error(
+                        "[DERIVED] compute failed for %s: %s", symbol, de,
+                        exc_info=True,
+                    )
+ 
+                # Data quality audit — only meaningful when data was written.
+                try:
+                    await audit_company_data_quality(company_id=company_id)
+                except Exception as qe:
+                    logger.error(
+                        "[DQ] audit failed for %s: %s", symbol, qe
+                    )
+            else:
+                logger.debug(
+                    "[DERIVED] %s: no new statement rows → skipping derived metrics",
+                    symbol,
+                )
+ 
 
             return {
                 'company_id': company_id,

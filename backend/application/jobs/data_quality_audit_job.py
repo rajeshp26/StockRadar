@@ -1,4 +1,18 @@
-# backend/application/jobs/data_quality_audit_job.py
+# application/jobs/data_quality_audit_job.py
+#
+# CHANGES IN THIS VERSION
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug 3 fix: the file previously defined audit_company_data_quality twice.
+#   Python silently discards the first definition and uses the second. The
+#   second definition referenced DataQualityAuditJob — a class that does not
+#   exist anywhere in the codebase — causing every call to this function to
+#   raise a NameError, breaking the post-sync audit pipeline for all companies.
+#
+#   Fix: the working first implementation (procedural, correct) is kept
+#   exactly as written. The broken second definition is removed entirely.
+#   No logic changes to the working code.
+# ─────────────────────────────────────────────────────────────────────────────
+
 from __future__ import annotations
 
 import logging
@@ -16,14 +30,21 @@ def _as_int(x: Any) -> Optional[int]:
         return None
 
 
-def _log_event(company_id: int, scope: str, metric: str, severity: str, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+def _log_event(
+    company_id: int,
+    scope: str,
+    metric: str,
+    severity: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
     payload = {
         "company_id": company_id,
-        "scope": scope,
-        "metric": metric,
-        "severity": severity,
-        "message": message,
-        "details": details or None,
+        "scope":      scope,
+        "metric":     metric,
+        "severity":   severity,
+        "message":    message,
+        "details":    details or None,
     }
     supabase.table("data_quality_events").insert(payload).execute()
 
@@ -33,7 +54,7 @@ def _detect_year_gaps(years: List[int]) -> List[Dict[str, Any]]:
     ys = sorted(set([y for y in years if isinstance(y, int)]))
     for i in range(1, len(ys)):
         prev_y = ys[i - 1]
-        cur_y = ys[i]
+        cur_y  = ys[i]
         if cur_y - prev_y > 1:
             gaps.append({"prev_year": prev_y, "year": cur_y, "gap": cur_y - prev_y})
     return gaps
@@ -46,25 +67,28 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
       - year gaps in annual fiscal series
       - fallback usage detection (presence of yfinance rows)
       - derived metrics presence
+
     Writes data_quality_events rows; returns summary counts.
+    Called by the earnings scheduler after each company financial refresh.
     """
 
     summary = {"events_written": 0}
 
-    # -------------------------
-    # Income statements: annual EPS inputs
-    # -------------------------
+    # ── Income statements: annual EPS inputs ──────────────────────────────────
     is_resp = (
         supabase.table("income_statements")
-        .select("fiscal_year, fiscal_quarter, revenue, net_income, net_income_to_common, shares_outstanding_diluted, data_source")
+        .select(
+            "fiscal_year, fiscal_quarter, revenue, net_income, "
+            "net_income_to_common, shares_outstanding_diluted, data_source"
+        )
         .eq("company_id", company_id)
         .is_("fiscal_quarter", None)
         .order("fiscal_year", desc=False)
         .execute()
     )
     is_rows = is_resp.data or []
-    years = [_as_int(r.get("fiscal_year")) for r in is_rows if r.get("fiscal_year") is not None]
-    gaps = _detect_year_gaps([y for y in years if y is not None])
+    years   = [_as_int(r.get("fiscal_year")) for r in is_rows if r.get("fiscal_year") is not None]
+    gaps    = _detect_year_gaps([y for y in years if y is not None])
 
     if gaps:
         _log_event(
@@ -77,7 +101,6 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         )
         summary["events_written"] += 1
 
-    # Depth checks (min years for stable suitability)
     annual_count = len(is_rows)
     if annual_count < 5:
         _log_event(
@@ -90,9 +113,8 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         )
         summary["events_written"] += 1
 
-    # Missing shares/revenue checks
     missing_rev = sum(1 for r in is_rows if r.get("revenue") is None)
-    missing_sh = sum(1 for r in is_rows if r.get("shares_outstanding_diluted") is None)
+    missing_sh  = sum(1 for r in is_rows if r.get("shares_outstanding_diluted") is None)
 
     if missing_rev > 0:
         _log_event(
@@ -116,7 +138,6 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         )
         summary["events_written"] += 1
 
-    # Fallback usage (statement-level)
     yf_rows = sum(1 for r in is_rows if (r.get("data_source") or "").lower() == "yfinance")
     if yf_rows > 0:
         _log_event(
@@ -129,18 +150,19 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         )
         summary["events_written"] += 1
 
-    # -------------------------
-    # Cash flow statements: annual CFO/CapEx presence (DCF suitability)
-    # -------------------------
+    # ── Cash flow statements: annual CFO/CapEx presence ───────────────────────
     cf_resp = (
         supabase.table("cash_flow_statements")
-        .select("fiscal_year, fiscal_quarter, cash_from_operating_activities, capital_expenditures, data_source")
+        .select(
+            "fiscal_year, fiscal_quarter, "
+            "cash_from_operating_activities, capital_expenditures, data_source"
+        )
         .eq("company_id", company_id)
         .is_("fiscal_quarter", None)
         .order("fiscal_year", desc=False)
         .execute()
     )
-    cf_rows = cf_resp.data or []
+    cf_rows  = cf_resp.data or []
     cf_annual = len(cf_rows)
 
     if cf_annual < 5:
@@ -154,7 +176,7 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         )
         summary["events_written"] += 1
 
-    missing_cfo = sum(1 for r in cf_rows if r.get("cash_from_operating_activities") is None)
+    missing_cfo   = sum(1 for r in cf_rows if r.get("cash_from_operating_activities") is None)
     missing_capex = sum(1 for r in cf_rows if r.get("capital_expenditures") is None)
 
     if missing_cfo > 0 or missing_capex > 0:
@@ -164,7 +186,11 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
             metric="fcf_inputs",
             severity="low",
             message="Missing CFO and/or CapEx in one or more annual cash_flow_statements rows.",
-            details={"missing_cfo_rows": missing_cfo, "missing_capex_rows": missing_capex, "annual_years": cf_annual},
+            details={
+                "missing_cfo_rows":   missing_cfo,
+                "missing_capex_rows": missing_capex,
+                "annual_years":       cf_annual,
+            },
         )
         summary["events_written"] += 1
 
@@ -180,9 +206,7 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         )
         summary["events_written"] += 1
 
-    # -------------------------
-    # Derived metrics presence
-    # -------------------------
+    # ── Derived metrics presence ───────────────────────────────────────────────
     dfm = (
         supabase.table("derived_financial_metrics")
         .select("fiscal_year, computed_at")

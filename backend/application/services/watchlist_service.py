@@ -396,21 +396,52 @@ class WatchlistService:
             except Exception as qe:
                 logger.error("[DQ] audit failed after on-demand refresh for %s: %s", symbol, qe)
 
-            # NEW: Auto-compute Rule #1 after on-demand refresh (definitely changed inputs)
+            # ── Auto-compute all valuation methods after on-demand refresh ─────────
+            # On-demand refresh means the user explicitly requested fresh data.
+            # Fundamentals have changed → force recompute all methods unconditionally.
+            val_repo = ValuationRepository()
+            guard    = RecomputeGuard(val_repo)
+            vs       = ValuationService(val_repo, guard)
+    
             try:
-                val_repo = ValuationRepository()
-                guard = RecomputeGuard(val_repo)
-                valuation_service = ValuationService(val_repo, guard)
-
-                await valuation_service.compute_rule1_if_stale(
-                    symbol=symbol,
-                    user_id=None,
-                    overrides=None,
-                    force=True  # on-demand refresh changed fundamentals
+                await vs.compute_rule1_if_stale(
+                    symbol=symbol, user_id=None, overrides=None, force=True
                 )
                 logger.info("[VALUATION] Rule #1 computed after on-demand refresh for %s", symbol)
             except Exception as ve:
                 logger.error("[VALUATION] Rule #1 auto-compute (on-demand) failed for %s: %s", symbol, ve)
+    
+            try:
+                await vs.compute_dcf_if_stale(
+                    symbol=symbol, user_id=None, overrides=None, force=True
+                )
+                logger.info("[VALUATION] DCF computed after on-demand refresh for %s", symbol)
+            except Exception as ve:
+                logger.error("[VALUATION] DCF auto-compute (on-demand) failed for %s: %s", symbol, ve)
+    
+            try:
+                await vs.compute_owner_earnings_if_stale(
+                    symbol=symbol, user_id=None, overrides=None, force=True
+                )
+                logger.info("[VALUATION] OE computed after on-demand refresh for %s", symbol)
+            except Exception as ve:
+                logger.error("[VALUATION] OE auto-compute (on-demand) failed for %s: %s", symbol, ve)
+    
+            try:
+                await vs.compute_ddm_if_stale(
+                    symbol=symbol, user_id=None, variant="gordon", overrides=None, force=True
+                )
+                logger.info("[VALUATION] DDM computed after on-demand refresh for %s", symbol)
+            except Exception as ve:
+                logger.error("[VALUATION] DDM auto-compute (on-demand) failed for %s: %s", symbol, ve)
+    
+            try:
+                await vs.compute_residual_income_if_stale(
+                    symbol=symbol, user_id=None, overrides=None, force=True
+                )
+                logger.info("[VALUATION] RI computed after on-demand refresh for %s", symbol)
+            except Exception as ve:
+                logger.error("[VALUATION] RI auto-compute (on-demand) failed for %s: %s", symbol, ve)
 
             return {
                 "symbol": symbol,
@@ -611,21 +642,91 @@ class WatchlistService:
                 logger.info("[DQ] audit complete after fundamentals ingestion for %s", symbol)
             except Exception as qe:
                 logger.error("[DQ] audit failed after fundamentals ingestion for %s: %s", symbol, qe)  
-            # NEW: Auto-compute Rule #1 after fundamentals ingestion (Trigger A)
-            try:
+            # ── Auto-compute all valuation methods (new company only) ──────────────
+            # Runs only when is_new_company=True. If the stock already existed in the
+            # companies table, Gate 1 will serve the cached results from a prior run —
+            # no computation needed and this block is never reached for existing stocks.
+            if is_new_company:
                 val_repo = ValuationRepository()
-                guard = RecomputeGuard(val_repo)
-                valuation_service = ValuationService(val_repo, guard)
-
-                await valuation_service.compute_rule1_if_stale(
-                    symbol=symbol,
-                    user_id=None,
-                    overrides=None,
-                    force=True  # fundamentals changed -> recompute unconditionally
+                guard    = RecomputeGuard(val_repo)
+                vs       = ValuationService(val_repo, guard)
+                # Lazy import to avoid circular dependency with api.watchlists
+                from api.watchlists import broadcast_valuation_ready
+    
+                # Priority 1: Rule #1 — fastest, EPS-only, user sees something first
+                try:
+                    await vs.compute_rule1_if_stale(
+                        symbol=symbol, user_id=None, overrides=None, force=True
+                    )
+                    logger.info("[VALUATION] Rule #1 computed after fundamentals ingestion for %s", symbol)
+                    try:
+                        await broadcast_valuation_ready(symbol, "rule1", company_id)
+                    except Exception as be:
+                        logger.debug("[SSE] broadcast_valuation_ready(rule1) failed (non-fatal): %s", be)
+                except Exception as ve:
+                    logger.error("[VALUATION] Rule #1 auto-compute failed for %s: %s", symbol, ve)
+    
+                # Priority 2: DCF — most universally applicable
+                try:
+                    await vs.compute_dcf_if_stale(
+                        symbol=symbol, user_id=None, overrides=None, force=True
+                    )
+                    logger.info("[VALUATION] DCF computed after fundamentals ingestion for %s", symbol)
+                    try:
+                        await broadcast_valuation_ready(symbol, "dcf", company_id)
+                    except Exception as be:
+                        logger.debug("[SSE] broadcast_valuation_ready(dcf) failed (non-fatal): %s", be)
+                except Exception as ve:
+                    logger.error("[VALUATION] DCF auto-compute failed for %s: %s", symbol, ve)
+    
+                # Priority 3: Owner Earnings — shares CF inputs with DCF
+                try:
+                    await vs.compute_owner_earnings_if_stale(
+                        symbol=symbol, user_id=None, overrides=None, force=True
+                    )
+                    logger.info("[VALUATION] Owner Earnings computed after fundamentals ingestion for %s", symbol)
+                    try:
+                        await broadcast_valuation_ready(symbol, "owner_earnings", company_id)
+                    except Exception as be:
+                        logger.debug("[SSE] broadcast_valuation_ready(owner_earnings) failed (non-fatal): %s", be)
+                except Exception as ve:
+                    logger.error("[VALUATION] OE auto-compute failed for %s: %s", symbol, ve)
+    
+                # Priority 4: DDM — only meaningful if dividends exist, but run anyway
+                # so the UI shows a proper "not applicable" result rather than NOT RUN
+                try:
+                    await vs.compute_ddm_if_stale(
+                        symbol=symbol, user_id=None, variant="gordon", overrides=None, force=True
+                    )
+                    logger.info("[VALUATION] DDM computed after fundamentals ingestion for %s", symbol)
+                    try:
+                        await broadcast_valuation_ready(symbol, "ddm_gordon", company_id)
+                    except Exception as be:
+                        logger.debug("[SSE] broadcast_valuation_ready(ddm_gordon) failed (non-fatal): %s", be)
+                except Exception as ve:
+                    logger.error("[VALUATION] DDM auto-compute failed for %s: %s", symbol, ve)
+    
+                # Priority 5: Residual Income — most data-intensive, runs last
+                try:
+                    await vs.compute_residual_income_if_stale(
+                        symbol=symbol, user_id=None, overrides=None, force=True
+                    )
+                    logger.info("[VALUATION] Residual Income computed after fundamentals ingestion for %s", symbol)
+                    try:
+                        await broadcast_valuation_ready(symbol, "residual_income", company_id)
+                    except Exception as be:
+                        logger.debug("[SSE] broadcast_valuation_ready(residual_income) failed (non-fatal): %s", be)
+                except Exception as ve:
+                    logger.error("[VALUATION] RI auto-compute failed for %s: %s", symbol, ve)
+    
+            else:
+                # Existing company — financial data may have been refreshed incrementally.
+                # Gate 1/2/3 will determine on next user request whether recompute is needed.
+                # No forced recompute here to avoid unnecessary work.
+                logger.debug(
+                    "[VALUATION] Skipping auto-compute for %s — existing company, gates will handle staleness",
+                    symbol,
                 )
-                logger.info("[VALUATION] Rule #1 computed after fundamentals ingestion for %s", symbol)
-            except Exception as ve:
-                logger.error("[VALUATION] Rule #1 auto-compute (ingestion) failed for %s: %s", symbol, ve)
 
         except Exception as e:
             logger.error("Background financial load failed for %s: %s", symbol, str(e))

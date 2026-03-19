@@ -36,6 +36,7 @@ Bypass rules
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
@@ -310,7 +311,9 @@ class RecomputeGuard:
         return await self.should_recompute(company_id=company_id, method="rule1")
 
     # ── Gate 2: Fingerprint ────────────────────────────────────────────────────
-
+# Valid fingerprint: 16-character lowercase hex string produced by
+# shared.finance_math.build_fingerprint (SHA-256 truncated to 16 chars).
+    _VALID_FINGERPRINT_RE = re.compile(r'^[0-9a-f]{16}$')
     async def check_fingerprint(
         self,
         company_id:          int,
@@ -340,6 +343,16 @@ class RecomputeGuard:
         snap               = await self.repo.get_last_input_snapshot(company_id, method=method)
         stored_fingerprint = (snap or {}).get("dependency_fingerprint")
 
+        if stored_fingerprint is not None:
+            if not isinstance(stored_fingerprint, str) or not _VALID_FINGERPRINT_RE.match(stored_fingerprint):
+                logger.warning(
+                    "[GATE2][%s][%s] Stored fingerprint is malformed (type=%s value=%.40r) "
+                    "— treating as absent; one-time recompute will restore valid fingerprint.",
+                    company_id, method,
+                    type(stored_fingerprint).__name__,
+                    stored_fingerprint,
+                )
+                stored_fingerprint = None
         if not stored_fingerprint:
             logger.debug(
                 "[GATE2][%s][%s] No stored fingerprint → one-time recompute to populate",
