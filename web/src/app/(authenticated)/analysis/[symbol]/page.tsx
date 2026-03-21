@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
+import { formatTimestamp } from "@/lib/time";
 import { prefetchAllValuations } from "@/features/analysis/utils/prefetch-valuations";
 import {
   MethodSelector,
@@ -117,12 +118,7 @@ export default function AnalysisPage() {
     changePercent != null
       ? `${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%`
       : null;
-  const updatedDisplay = lastUpdated
-    ? new Date(lastUpdated).toLocaleTimeString([], {
-        hour:   "2-digit",
-        minute: "2-digit",
-      })
-    : null;
+  const updatedDisplay = formatTimestamp(lastUpdated, "relative");
   const isPositiveChange = (change ?? 0) >= 0;
 
   return (

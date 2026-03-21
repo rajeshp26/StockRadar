@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { cn } from "@/lib/utils";
+import { useQueries } from "@tanstack/react-query";
 import { useWatchlist } from "@/features/watchlists/hooks/useWatchlist";
 import type { WatchlistWithStocks, StockPriceInfo } from "@/features/watchlists/types/watchlist.types";
 import { WATCHLIST_LIMITS } from "@/features/watchlists/types/watchlist.types";
@@ -10,7 +11,9 @@ import { StockListRow } from "./stock-list-row";
 import { StockTargetDialog } from "./add-stock-dialog";
 import { WatchlistSwitcher } from "./watchlist-switcher";
 import { WatchlistToolbar, type SortKey, type ViewMode } from "./watchlist-toolbar";
-import {
+import { QK } from "@/lib/query-keys";
+import { GC } from "@/lib/query-client";
+import type { CachedPrice } from "@/providers/GlobalSSEProvider";import {
   Plus, RefreshCw, Pencil, Check, X,
   BarChart2, AlertTriangle,
 } from "lucide-react";
@@ -141,6 +144,43 @@ function FullCapNotice({ onClose }: { onClose: () => void }) {
 export function Watchlist({ initialWatchlist }: WatchlistProps) {
   const wl = useWatchlist({ initialWatchlist });
 
+  // ── Reactive price subscriptions for all stocks ───────────────────────────
+  //
+  // useQueries subscribes to every QK.price(symbol) cache entry.
+  // When GlobalSSEProvider writes a new price via setQueryData, React Query
+  // notifies these subscribers → Watchlist re-renders with fresh prices.
+  //
+  // enabled: false — no HTTP fetching from here, read-only cache subscriber.
+  // Per-card display uses usePriceData in StockCard/StockListRow directly.
+  // This block gives the PARENT access to prices for alert counts + sorting.
+  const priceQueries = useQueries({
+    queries: wl.stocks.map((s) => ({
+      queryKey:        QK.price(s.symbol),
+      queryFn:         () => Promise.resolve(null as CachedPrice | null),
+      enabled:         false,
+      staleTime:       Infinity,
+      gcTime:          GC.PRICE,
+      placeholderData: null as CachedPrice | null,
+    })),
+  });
+
+  // Merge structure + cached prices into a single enriched list.
+  // Falls back gracefully to whatever price the structure returned (usually null).
+  const stocksWithPrices: StockPriceInfo[] = useMemo(
+    () =>
+      wl.stocks.map((s, i) => {
+        const cached = priceQueries[i]?.data;
+        return {
+          ...s,
+          price:         cached?.price         ?? s.price         ?? null,
+          change:        cached?.change        ?? s.change        ?? null,
+          changePercent: cached?.changePercent ?? s.changePercent ?? null,
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wl.stocks, priceQueries],
+  );
+
   // ── Session-persistent view state ─────────────────────────────────────────
   // Survives navigation back/forward within the tab session.
   // typeof window guard makes initialiser safe for SSR / hydration.
@@ -184,17 +224,17 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
 
   // Alert counts (full list, not filtered — so summary cards are always accurate)
   const buyAlertCount = useMemo(
-    () => wl.stocks.filter((s) => s.targetBuy  != null && s.price != null && s.price <= s.targetBuy).length,
-    [wl.stocks],
+    () => stocksWithPrices.filter((s) => s.targetBuy != null && s.price != null && s.price <= s.targetBuy).length,
+    [stocksWithPrices],
   );
   const sellAlertCount = useMemo(
-    () => wl.stocks.filter((s) => s.targetSell != null && s.price != null && s.price >= s.targetSell).length,
-    [wl.stocks],
+    () => stocksWithPrices.filter((s) => s.targetSell != null && s.price != null && s.price >= s.targetSell).length,
+    [stocksWithPrices],
   );
 
   // Three-stage pipeline: alert filter → search → sort
   const processedStocks = useMemo(() => {
-    let list = wl.stocks;
+    let list = stocksWithPrices;
 
     if (alertFilter === "buy")
       list = list.filter((s) => s.targetBuy  != null && s.price != null && s.price <= s.targetBuy);
@@ -224,7 +264,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
         break;
     }
     return list;
-  }, [wl.stocks, alertFilter, debouncedSearch, sortKey]);
+  }, [stocksWithPrices, alertFilter, debouncedSearch, sortKey]);
 
   const hasActiveFilters = alertFilter !== "all" || debouncedSearch.trim() !== "";
   const clearFilters = useCallback(() => { setAlertFilter("all"); setSearchQuery(""); }, []);
@@ -282,6 +322,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
     <div className="space-y-5 animate-fade-up">
 
       {/* ── Header panel ──────────────────────────────────────────────────── */}
+      
       <div className="glass-panel p-6 space-y-5">
 
         {/* Row: switcher + name + rename + add */}
@@ -342,7 +383,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
 
         {/* Summary cards */}
         <div className="flex gap-3">
-          <SummaryCard label="All Stocks"  count={wl.stocks.length} accent="default" active={alertFilter === "all"}  onClick={() => setAlertFilter("all")} />
+          <SummaryCard label="All Stocks"  count={stocksWithPrices.length} accent="default" active={alertFilter === "all"}  onClick={() => setAlertFilter("all")} />
           <SummaryCard label="Buy Alerts"  count={buyAlertCount}    accent="buy"     active={alertFilter === "buy"}  onClick={() => setAlertFilter("buy")} />
           <SummaryCard label="Sell Alerts" count={sellAlertCount}   accent="sell"    active={alertFilter === "sell"} onClick={() => setAlertFilter("sell")} />
         </div>
@@ -360,7 +401,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           visibleCount={processedStocks.length}
-          totalCount={wl.stocks.length}
+          totalCount={stocksWithPrices.length}
           stockCount={wl.stockCount}
           isWatchlistFull={wl.isWatchlistFull}
           hasActiveFilters={hasActiveFilters}
@@ -422,7 +463,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
             <StockListRow
               key={stock.id}
               stock={stock}
-              onEdit={setEditStock}
+              onEdit={(s) => setEditStock(s)}
               onRemove={(id) => wl.removeStock(id)}
             />
           ))}

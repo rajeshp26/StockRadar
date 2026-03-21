@@ -3,12 +3,12 @@
 import type { Stock } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown, X, Pencil, Target as TargetIcon, Clock, ArrowRight } from 'lucide-react';
-import { format, isToday, isYesterday } from 'date-fns';
 import { useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePriceData } from '@/hooks/usePriceData';
 import { prefetchAllValuations } from '@/features/analysis/utils/prefetch-valuations';
+import { formatTimestamp } from '@/lib/time';
 
 interface StockCardProps {
   stock: Stock;
@@ -52,18 +52,7 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
   };
   const buyVariance = getBuyVariance();
 
-  const formatLastUpdated = (isoString?: string) => {
-    if (!isoString) return null;
-    try {
-      const date = new Date(isoString);
-      if (isToday(date))     return format(date, 'h:mm a');
-      if (isYesterday(date)) return `Yesterday, ${format(date, 'h:mm a')}`;
-      return format(date, 'MMM d, h:mm a');
-    } catch {
-      return null;
-    }
-  };
-  const lastUpdatedTime = formatLastUpdated(priceData?.lastUpdated ?? undefined);
+  const lastUpdatedTime = formatTimestamp(priceData?.lastUpdated ?? null, "relative");
   const sellHit = stock.targetSell != null && price != null && price >= stock.targetSell;
 
   /* ── Letter avatar color (deterministic by ticker) ─────── */

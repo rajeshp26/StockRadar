@@ -2,6 +2,7 @@
 "use client";
 import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatTimestamp } from "@/lib/time";
 import type {
   AnalysisState,
   Rule1Valuation as CamelValuation,
@@ -23,11 +24,15 @@ import { STALE, GC } from "@/lib/query-client";
 function toFreshnessInfoFromDataQuality(dq?: UiDataQuality): FreshnessInfo | undefined {
   const lastComputedAt = (dq?.freshnessDays as any)?.lastComputedAt;
   if (!lastComputedAt || typeof lastComputedAt !== "string") return undefined;
-  const d = new Date(lastComputedAt);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return {
+  // Validate the string is parseable before committing to it
+  const probe = new Date(lastComputedAt.endsWith("Z") ? lastComputedAt : lastComputedAt + "Z");
+  if (Number.isNaN(probe.getTime())) return undefined;
+   return {
     lastEvaluatedIso:     lastComputedAt,
-    lastEvaluatedDisplay: d.toLocaleString(),
+    // "absolute" strategy: always shows a specific date+time in the user's
+    // local timezone — never a relative "ago" string — so the user can
+    // reason about how fresh the valuation data is.
+    lastEvaluatedDisplay: formatTimestamp(lastComputedAt, "absolute") ?? lastComputedAt,
   };
 }
 
