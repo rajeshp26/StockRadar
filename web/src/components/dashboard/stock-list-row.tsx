@@ -1,10 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { ArrowRight, Edit2, Trash2 } from "lucide-react";
 import type { StockPriceInfo } from "@/features/watchlists/types/watchlist.types";
+import { useQueryClient } from '@tanstack/react-query';
+import { usePriceData } from "@/hooks/usePriceData";
+import { prefetchAllValuations } from '@/features/analysis/utils/prefetch-valuations';
 
 interface StockListRowProps {
   stock:        StockPriceInfo;
@@ -23,24 +26,40 @@ const AVATAR_COLORS = [
 
 export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   const avatarColor = AVATAR_COLORS[stock.symbol.charCodeAt(0) % AVATAR_COLORS.length];
 
-  const isPositive = (stock.change ?? 0) >= 0;
+  /* ── Live price from shared cache (written by GlobalSSEProvider) ────────── */
+  const priceData  = usePriceData(stock.symbol);
+  const isPositive = (priceData?.change ?? 0) >= 0;
   const changeColor = isPositive ? "text-emerald-400" : "text-rose-400";
 
-  // Buy/sell variance logic (mirrors StockCard exactly)
+  /* ── Hover prefetch ────────────────────────────────────────────────────── */
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlePointerEnter = useCallback(() => {
+    prefetchTimer.current = setTimeout(() => {
+      prefetchAllValuations(stock.symbol, queryClient);
+    }, 150);
+  }, [stock.symbol, queryClient]);
+  const handlePointerLeave = useCallback(() => {
+    if (prefetchTimer.current) {
+      clearTimeout(prefetchTimer.current);
+      prefetchTimer.current = null;
+    }
+  }, []);
+
   const buyVariance = useMemo(() => {
-    if (stock.targetBuy == null || stock.price == null) return null;
-    const gap = ((stock.price - stock.targetBuy) / stock.targetBuy) * 100;
-    return { gap, isTargetHit: stock.price <= stock.targetBuy };
-  }, [stock.price, stock.targetBuy]);
+    if (stock.targetBuy == null || priceData?.price == null) return null;
+    const gap = ((priceData.price - stock.targetBuy) / stock.targetBuy) * 100;
+    return { gap, isTargetHit: priceData.price <= stock.targetBuy };
+  }, [priceData?.price, stock.targetBuy]);
 
   const sellVariance = useMemo(() => {
-    if (stock.targetSell == null || stock.price == null) return null;
-    const gap = ((stock.price - stock.targetSell) / stock.targetSell) * 100;
-    return { gap, isTargetHit: stock.price >= stock.targetSell };
-  }, [stock.price, stock.targetSell]);
+    if (stock.targetSell == null || priceData?.price == null) return null;
+    const gap = ((priceData.price - stock.targetSell) / stock.targetSell) * 100;
+    return { gap, isTargetHit: priceData.price >= stock.targetSell };
+  }, [priceData?.price, stock.targetSell]);
 
   const hasBuyAlert  = buyVariance?.isTargetHit;
   const hasSellAlert = sellVariance?.isTargetHit;
@@ -53,6 +72,8 @@ export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
         hasBuyAlert  && "border-emerald-500/30 shadow-[0_0_12px_rgba(52,211,153,0.12)]",
         hasSellAlert && "border-rose-500/30    shadow-[0_0_12px_rgba(251,113,133,0.12)]",
       )}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
     >
       {/* Avatar */}
       <div className={cn(
@@ -72,15 +93,15 @@ export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
       {/* Price */}
       <div className="w-24 flex-shrink-0 text-right hidden sm:block">
         <p className="text-sm font-black text-white tabular-nums">
-          {stock.price != null ? `$${stock.price.toFixed(2)}` : "—"}
+          {priceData?.price != null ? `$${priceData.price.toFixed(2)}` : "—"}
         </p>
       </div>
 
       {/* Change */}
       <div className="w-24 flex-shrink-0 text-right hidden md:block">
-        {stock.changePercent != null ? (
+        {priceData?.changePercent != null ? (
           <span className={cn("text-xs font-bold tabular-nums", changeColor)}>
-            {isPositive ? "+" : ""}{stock.changePercent.toFixed(2)}%
+            {isPositive ? "+" : ""}{priceData.changePercent.toFixed(2)}%
           </span>
         ) : (
           <span className="text-xs text-white/20">—</span>

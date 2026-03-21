@@ -37,41 +37,36 @@ External Systems (Supabase, DefeatBeta, YFinance)
 
 Here’s a breakdown of the key files and their responsibilities within the `backend/` directory:
 '''
-backend/
-├── api/
-│   ├── __pycache__/
+backend
+├── api
 │   ├── users.py
 │   ├── valuations.py
 │   ├── watchlist_items.py
 │   └── watchlists.py
-├── application/
+├── application
 │   ├── __init__.py
-│   ├── jobs/
+│   ├── jobs
 │   │   ├── data_quality_audit_job.py
-│   │   ├── derived_financial_metrics_job.py
-│   │   └── __pycache__/
-│   ├── normalizers/
-│   │   ├── __pycache__/
+│   │   └── derived_financial_metrics_job.py
+│   ├── normalizers
 │   │   └── statement_normalizer.py
-│   ├── __pycache__/
-│   ├── schedulers/
-│   │   ├── earnings_scheduler.py
+│   ├── schedulers
 │   │   ├── __init__.py
-│   │   ├── market_data_scheduler.py
-│   │   └── __pycache__/
-│   └── services/
+│   │   ├── earnings_scheduler.py
+│   │   └── market_data_scheduler.py
+│   └── services
+│       ├── __init__.py
 │       ├── ai_service.py
 │       ├── dcf_service.py
 │       ├── dcf_suitability.py
 │       ├── ddm_service.py
 │       ├── ddm_suitability.py
-│       ├── __init__.py
 │       ├── owner_earnings_service.py
 │       ├── owner_earnings_suitability.py
-│       ├── __pycache__/
 │       ├── recompute_guard.py
 │       ├── residual_income_service.py
 │       ├── residual_income_suitability.py
+│       ├── rule1_service.py
 │       ├── rule1_suitability.py
 │       ├── valuation_service.py
 │       └── watchlist_service.py
@@ -79,70 +74,54 @@ backend/
 ├── config.py
 ├── database.py
 ├── dependencies.py
-├── domain/
-│   ├── entities/
+├── domain
+│   ├── __init__.py
+│   ├── entities
 │   │   ├── __init__.py
-│   │   ├── __pycache__/
 │   │   └── watchlist.py
 │   ├── exceptions.py
-│   ├── __init__.py
-│   ├── interfaces/
+│   ├── interfaces
 │   │   ├── __init__.py
-│   │   ├── __pycache__/
 │   │   ├── repository.py
 │   │   └── stock_provider.py
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── __pycache__/
-│   │   ├── valuation_dcf.py
-│   │   ├── valuation_ddm.py
-│   │   ├── valuation_owner_earnings.py
-│   │   ├── valuation_residual_income.py
-│   │   └── valuation_rule1.py
 │   ├── model_types.py
-│   └── __pycache__/
-├── google_credentials.json
-├── infrastructure/
-│   ├── __init__.py
-│   ├── __pycache__/
-│   └── repositories/
-│       ├── financial_repository.py
+│   └── models
 │       ├── __init__.py
-│       ├── __pycache__/
+│       ├── valuation_dcf.py
+│       ├── valuation_ddm.py
+│       ├── valuation_owner_earnings.py
+│       ├── valuation_residual_income.py
+│       └── valuation_rule1.py
+├── google_credentials.json
+├── infrastructure
+│   ├── __init__.py
+│   └── repositories
+│       ├── __init__.py
+│       ├── financial_repository.py
 │       ├── supabase_repository.py
 │       └── valuation_repository.py
-├── logs/
-│   └── backend.log
 ├── main.py
-├── providers/
+├── providers
+│   ├── __init__.py
 │   ├── base.py
 │   ├── defeat_beta_provider.py
-│   ├── __init__.py
-│   ├── __pycache__/
 │   └── yfinance_provider.py
-├── __pycache__/
 ├── requirements.txt
 ├── schemas.py
+├── scripts
+│   └── backfill_derived_metrics.py
 ├── service-account.json
-├── services/
-│   ├── __pycache__/
-│   └── sync_service.py
-├── shared/
-│   ├── constants.py
-│   ├── exceptions/
-│   │   ├── base.py
-│   │   ├── __init__.py
-│   │   └── __pycache__/
-│   ├── finance_math.py
+├── shared
 │   ├── __init__.py
-│   └── __pycache__/
+│   ├── constants.py
+│   ├── exceptions
+│   │   ├── __init__.py
+│   │   └── base.py
+│   └── finance_math.py
 ├── start-prod.sh
 ├── start.sh
 ├── status.sh
-├── stop.sh
-└── venv/
-    └── (virtual environment files)
-
+└── stop.sh
 
 ```
 

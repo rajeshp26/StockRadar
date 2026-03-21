@@ -4,7 +4,11 @@ import type { Stock } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown, X, Pencil, Target as TargetIcon, Clock, ArrowRight } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
+import { useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
+import { usePriceData } from '@/hooks/usePriceData';
+import { prefetchAllValuations } from '@/features/analysis/utils/prefetch-valuations';
 
 interface StockCardProps {
   stock: Stock;
@@ -14,21 +18,30 @@ interface StockCardProps {
 
 export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  /* ── Price / change derivations (logic unchanged) ─────── */
-  const hasPrice =
-    typeof (stock as any).price === 'number' &&
-    Number.isFinite((stock as any).price);
-  const price = hasPrice ? ((stock as any).price as number) : null;
-
-  const hasChange =
-    typeof (stock as any).change === 'number' &&
-    Number.isFinite((stock as any).change) &&
-    typeof (stock as any).changePercent === 'number' &&
-    Number.isFinite((stock as any).changePercent);
-  const change        = hasChange ? ((stock as any).change as number)        : null;
-  const changePercent = hasChange ? ((stock as any).changePercent as number) : null;
+  /* ── Live price from shared cache (written by GlobalSSEProvider) ────────── */
+  const priceData        = usePriceData(stock.symbol);
+  const price            = priceData?.price         ?? null;
+  const change           = priceData?.change        ?? null;
+  const changePercent    = priceData?.changePercent ?? null;
   const isPositiveChange = (change ?? 0) >= 0;
+
+  /* ── Hover prefetch — warms analysis cache 150 ms before click ─────────── */
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlePointerEnter = useCallback(() => {
+    prefetchTimer.current = setTimeout(() => {
+      prefetchAllValuations(stock.symbol, queryClient);
+    }, 150);
+  }, [stock.symbol, queryClient]);
+  const handlePointerLeave = useCallback(() => {
+    if (prefetchTimer.current) {
+      clearTimeout(prefetchTimer.current);
+      prefetchTimer.current = null;
+    }
+  }, []);
+
+  
 
   const getBuyVariance = () => {
     if (!stock.targetBuy || price == null) return null;
@@ -50,7 +63,7 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
       return null;
     }
   };
-  const lastUpdatedTime = formatLastUpdated((stock as any).lastUpdated);
+  const lastUpdatedTime = formatLastUpdated(priceData?.lastUpdated ?? undefined);
   const sellHit = stock.targetSell != null && price != null && price >= stock.targetSell;
 
   /* ── Letter avatar color (deterministic by ticker) ─────── */
@@ -76,6 +89,8 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
         sellHit                   && 'glow-rose    border-rose-500/25',
       )}
       onClick={() => router.push(`/analysis/${stock.symbol}`)}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && router.push(`/analysis/${stock.symbol}`)}
@@ -145,7 +160,7 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
         </div>
 
         <div className="mt-1 flex items-center justify-between gap-2 flex-wrap">
-          {hasChange && change != null && changePercent != null ? (
+          {change != null && changePercent != null ? (
             <div
               className={cn(
                 'flex items-center gap-1 text-xs font-bold',

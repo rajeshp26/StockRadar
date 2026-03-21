@@ -21,6 +21,7 @@ import { DcfPanel }              from "@/features/analysis/components/dcf-panel"
 import { DdmPanel }              from "@/features/analysis/components/ddm-panel";
 import { OwnerEarningsPanel }    from "@/features/analysis/components/owner-earnings-panel";   // ← NEW
 import { ResidualIncomePanel }   from "@/features/analysis/components/residual-income-panel"; // ← NEW
+
 import {
   TrendingUp,
   Heart,
@@ -32,7 +33,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 
-import { useValuationStream } from "@/features/analysis/hooks/useValuationStream";
+
 
 /* ── Tab definitions ──────────────────────────────────────────── */
 const TOP_TABS = [
@@ -106,7 +107,7 @@ export default function AnalysisPage() {
   useEffect(() => {
     prefetchAllValuations(upperSymbol, queryClient);
   }, [upperSymbol, queryClient]); 
-  useValuationStream({ symbol: upperSymbol }); 
+  
   const priceDisplay  = price != null ? `$${price.toFixed(2)}` : "—";
   const changeDisplay =
     change != null

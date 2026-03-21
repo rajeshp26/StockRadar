@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useCallback, useRef, useEffect } from "react";
+import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useWatchlist } from "@/features/watchlists/hooks/useWatchlist";
 import type { WatchlistWithStocks, StockPriceInfo } from "@/features/watchlists/types/watchlist.types";
@@ -141,10 +141,34 @@ function FullCapNotice({ onClose }: { onClose: () => void }) {
 export function Watchlist({ initialWatchlist }: WatchlistProps) {
   const wl = useWatchlist({ initialWatchlist });
 
-  const [alertFilter,   setAlertFilter]   = useState<"all" | "buy" | "sell">("all");
-  const [searchQuery,   setSearchQuery]   = useState("");
-  const [sortKey,       setSortKey]       = useState<SortKey>("default");
-  const [viewMode,      setViewMode]      = useState<ViewMode>("grid");
+  // ── Session-persistent view state ─────────────────────────────────────────
+  // Survives navigation back/forward within the tab session.
+  // typeof window guard makes initialiser safe for SSR / hydration.
+  const ss = typeof window !== "undefined" ? sessionStorage : null;
+
+  const [alertFilter, setAlertFilter] = useState<"all" | "buy" | "sell">(
+    () => (ss?.getItem("wl:alertFilter") as "all" | "buy" | "sell" | null) ?? "all",
+  );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortKey,     setSortKey]     = useState<SortKey>(
+    () => (ss?.getItem("wl:sortKey") as SortKey | null) ?? "default",
+  );
+  const [viewMode,    setViewMode]    = useState<ViewMode>(
+    () => (ss?.getItem("wl:viewMode") as ViewMode | null) ?? "grid",
+  );
+
+  // Persist on every change. useLayoutEffect avoids a flash if StrictMode
+  // double-invokes effects, since layout effects run synchronously.
+  useLayoutEffect(() => {
+    ss?.setItem("wl:alertFilter", alertFilter);
+  }, [alertFilter, ss]);
+  useLayoutEffect(() => {
+    ss?.setItem("wl:sortKey", sortKey);
+  }, [sortKey, ss]);
+  useLayoutEffect(() => {
+    ss?.setItem("wl:viewMode", viewMode);
+  }, [viewMode, ss]);
+
   const [sortOpen,      setSortOpen]      = useState(false);
   const [renamingUI,    setRenamingUI]    = useState(false);
   const [addOpen,       setAddOpen]       = useState(false);

@@ -1,7 +1,5 @@
 'use client';
-
 import { SignupForm } from '@/components/auth/signup-form';
-import { AuthProvider } from '@/providers/auth-provider';
 
 export default function SignupPage() {
   return (
@@ -13,9 +11,7 @@ export default function SignupPage() {
       >
         <div className="h-[600px] w-[600px] rounded-full bg-indigo-600/10 blur-[120px]" />
       </div>
-      <AuthProvider>
-        <SignupForm />
-      </AuthProvider>
+      <SignupForm />
     </main>
   );
 }

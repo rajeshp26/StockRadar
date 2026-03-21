@@ -1,5 +1,19 @@
 // web/src/features/analysis/hooks/useValuationStream.ts
 //
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPRECATED — do not add new call sites.
+//
+// Responsibilities moved to GlobalSSEProvider (src/providers/GlobalSSEProvider.tsx):
+//   • valuation_ready events  → queryClient.invalidateQueries(QK.<method>)
+//   • price_update events     → queryClient.setQueryData(QK.price(symbol))
+//
+// GlobalSSEProvider opens ONE connection for the entire authenticated session.
+// This hook was opening a SECOND concurrent connection to the same endpoint.
+//
+// Existing call site removed: src/app/(authenticated)/analysis/[symbol]/page.tsx
+// Safe to delete this file once no remaining imports exist.
+//
+//
 // Listens to the existing /watchlists/stream SSE connection and invalidates
 // React Query cache entries when the backend signals a valuation is ready.
 //

@@ -4,6 +4,7 @@ import { useAuth } from "@/providers/auth-provider";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Header } from "@/components/header";
+import { GlobalSSEProvider } from "@/providers/GlobalSSEProvider";
 
 /* ── Full-page glass loading spinner ───────────────────────── */
 function FullPageSpinner() {
@@ -52,6 +53,7 @@ export default function AuthenticatedLayout({
         - main gets top padding to clear the header
         - max-w-screen-2xl centers content on very wide displays
       */
+      <GlobalSSEProvider>
       <div className="relative flex min-h-screen flex-col">
         <Header />
         <main className="flex-1 px-4 pb-12 pt-6 md:px-8 md:pt-8">
@@ -60,6 +62,7 @@ export default function AuthenticatedLayout({
           </div>
         </main>
       </div>
+      </GlobalSSEProvider>
     );
   }
 
