@@ -92,6 +92,44 @@ class DeleteItemRequest(BaseModel):
     item_id: int
 
 # ============================================================================
+# GET /stocks/search — Symbol Typeahead
+# ============================================================================
+@router.get("/stocks/search")
+@limiter.limit("30/minute")
+async def search_stocks(
+    request: Request,
+    q: str,
+    user_token: dict = Depends(get_current_user_dep),
+) -> dict:
+    """
+    Typeahead search for ticker symbols.
+    Uses yfinance.Search — same data universe as defeatbeta.
+    Returns max 8 results with symbol, name, exchange, type.
+    """
+    q = q.strip()
+    if len(q) < 1:
+        return {"results": []}
+    try:
+        import yfinance as yf
+        search = yf.Search(q, max_results=8, enable_fuzzy_query=False)
+        quotes = search.quotes or []
+        results = [
+            {
+                "symbol":   r.get("symbol", ""),
+                "name":     r.get("shortname") or r.get("longname") or r.get("symbol", ""),
+                "exchange": r.get("exchDisp") or r.get("exchange") or "",
+                "type":     (r.get("typeDisp") or r.get("quoteType") or "").lower(),
+            }
+            for r in quotes
+            if r.get("symbol")
+        ]
+        return {"results": results}
+    except Exception as e:
+        logger.warning(f"Stock search failed for query '{q}': {e}")
+        return {"results": []}
+
+
+# ============================================================================
 # POST /watchlist-items — Add Stock
 # ============================================================================
 

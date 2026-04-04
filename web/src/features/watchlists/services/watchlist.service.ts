@@ -8,6 +8,14 @@ import type {
   RenameWatchlistInput,
 } from "../types/watchlist.types";
 
+// Add near top with other interfaces
+export interface StockSearchResult {
+  symbol:   string;
+  name:     string;
+  exchange: string;
+  type:     string;
+}
+
 // ── Existing input types (unchanged) ───────────────────────────────────────
 export interface AddStockInput {
   watchlist_id: number;
@@ -90,6 +98,15 @@ export class WatchlistService {
   async createWatchlist(input: CreateWatchlistInput): Promise<WatchlistMeta> {
     const res = await this.api.post<WatchlistMeta>("/watchlists", { name: input.name });
     return res.data;
+  }
+
+  // Add inside WatchlistService class
+  async searchStocks(query: string): Promise<StockSearchResult[]> {
+    if (!query.trim()) return [];
+    const res = await this.api.get<{ results: StockSearchResult[] }>(
+        `/stocks/search?q=${encodeURIComponent(query.trim())}`,
+    );
+    return res.data.results ?? [];
   }
 
   /**
