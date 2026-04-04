@@ -78,7 +78,10 @@ def normalize_income_row(row: IncomeStatementRow) -> IncomeStatementRow:
         "eps_diluted": _safe_decimal(row.eps_diluted),
         "shares_outstanding_basic": _safe_int(row.shares_outstanding_basic),
         "shares_outstanding_diluted": _safe_int(row.shares_outstanding_diluted),
-
+        "interest_income": _safe_decimal(row.interest_income),
+        "effective_tax_rate": _safe_decimal(row.effective_tax_rate),
+        "total_unusual_items": _safe_decimal(row.total_unusual_items),
+        "special_charges": _safe_decimal(row.special_charges),
         "currency": (row.currency or "USD"),
     })
 
@@ -113,6 +116,16 @@ def normalize_balance_row(row: BalanceSheetRow) -> BalanceSheetRow:
         "other_current_liabilities":    _safe_decimal(row.other_current_liabilities),
         "minority_interest":            _safe_decimal(row.minority_interest),
         "total_liabilities_and_equity": _safe_decimal(row.total_liabilities_and_equity),
+        "shares_outstanding":           _safe_int(row.shares_outstanding),
+        "invested_capital":             _safe_decimal(row.invested_capital),
+        # Phase 5 additions
+        "capital_lease_obligations":    _safe_decimal(row.capital_lease_obligations),
+        "total_non_current_liabilities": _safe_decimal(row.total_non_current_liabilities),
+        "total_non_current_assets":     _safe_decimal(row.total_non_current_assets),
+        "tangible_book_value":          _safe_decimal(row.tangible_book_value),
+        "deferred_revenue_current":     _safe_decimal(row.deferred_revenue_current),
+        "deferred_revenue_non_current": _safe_decimal(row.deferred_revenue_non_current),
+        "other_current_assets":         _safe_decimal(row.other_current_assets),
     })
 
 
@@ -140,4 +153,12 @@ def normalize_cashflow_row(row: CashFlowRow) -> CashFlowRow:
         "dividends_paid":                 _safe_decimal(row.dividends_paid),
         "share_repurchases":              _safe_decimal(row.share_repurchases),
         "share_issuance":                 _safe_decimal(row.share_issuance),
+        # Phase 5 additions
+        "net_change_in_cash":         _safe_decimal(row.net_change_in_cash),
+        "effect_of_fx_on_cash":       _safe_decimal(row.effect_of_fx_on_cash),
+        "beginning_cash":             _safe_decimal(row.beginning_cash),
+        "ending_cash":                _safe_decimal(row.ending_cash),
+        "short_term_debt_net_change": _safe_decimal(row.short_term_debt_net_change),
+        "asset_impairment_charge":    _safe_decimal(row.asset_impairment_charge),
+        "free_cash_flow":             _safe_decimal(row.free_cash_flow),
     })

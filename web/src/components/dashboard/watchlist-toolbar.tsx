@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { Search, X, ArrowUpDown, LayoutGrid, List, ChevronDown } from "lucide-react";
+import { Search, X, ArrowUpDown, LayoutGrid, List, Layers, ChevronDown } from "lucide-react";
 import { WATCHLIST_LIMITS } from "@/features/watchlists/types/watchlist.types";
 
 export type SortKey =
@@ -15,7 +15,7 @@ export type SortKey =
   | "change_asc"
   | "buy_gap_asc";
 
-export type ViewMode = "grid" | "list";
+export type ViewMode = "grid" | "list" | "sector";
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "default",     label: "Date Added"          },
@@ -194,6 +194,19 @@ export function WatchlistToolbar({
             aria-pressed={viewMode === "list"}
           >
             <List className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => onViewModeChange("sector")}
+            className={cn(
+              "h-7 w-7 flex items-center justify-center rounded-lg transition-all",
+              viewMode === "sector"
+                ? "bg-white/15 text-white"
+                : "text-white/25 hover:text-white/60",
+            )}
+            aria-label="Sector view"
+            aria-pressed={viewMode === "sector"}
+          >
+            <Layers className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>

@@ -6,6 +6,8 @@ class Company(BaseModel):
     company_id: int
     ticker_symbol: str
     company_name: str
+    sector:   Optional[str] = None
+    industry: Optional[str] = None
 
 class WatchlistItem(BaseModel):
     watchlist_item_id: int
@@ -17,6 +19,8 @@ class StockPriceInfo(BaseModel):
     id: int
     symbol: str
     name: str
+    sector:   Optional[str] = None
+    industry: Optional[str] = None
     price: float
     change: float
     changePercent: float

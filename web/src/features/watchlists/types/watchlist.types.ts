@@ -11,6 +11,8 @@ export interface StockPriceInfo {
   id:            number;
   symbol:        string;
   name:          string;
+  sector:        string | null;
+  industry:      string | null;
   price:         number;
   change:        number;
   changePercent: number;

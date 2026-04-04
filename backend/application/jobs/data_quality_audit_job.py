@@ -11,6 +11,13 @@
 #   Fix: the working first implementation (procedural, correct) is kept
 #   exactly as written. The broken second definition is removed entirely.
 #   No logic changes to the working code.
+#
+# Phase 6 additions:
+#   1. CF reconciliation check — verifies OCF + ICF + financing_cf + fx_effect
+#      equals net_change_in_cash within a tolerance threshold. Flags multinationals
+#      where FX distorts the cash bridge.
+#   2. Deprecated table reference fixed: derived_financial_metrics → financial_ratios.
+#   3. balance_sheets.shares_outstanding population check added.
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -67,7 +74,8 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
       - year gaps in annual fiscal series
       - fallback usage detection (presence of yfinance rows)
       - derived metrics presence
-
+      - CF statement reconciliation (Phase 6)
+      - balance_sheets.shares_outstanding population (Phase 6)
     Writes data_quality_events rows; returns summary counts.
     Called by the earnings scheduler after each company financial refresh.
     """
@@ -206,9 +214,89 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         )
         summary["events_written"] += 1
 
+    # ── Phase 6: CF reconciliation check ─────────────────────────────────────
+    # Verify: OCF + ICF + financing_cf + fx_effect ≈ net_change_in_cash
+    # Only check rows where all four inputs are populated.
+    # Threshold: 1% of max(|OCF|, |net_change|) — tight enough to catch data
+    # errors, loose enough not to flag rounding differences.
+    cf_recon_resp = (
+        supabase.table("cash_flow_statements")
+        .select(
+            "fiscal_year, cash_from_operating_activities, cash_from_investing_activities, "
+            "cash_from_financing_activities, effect_of_fx_on_cash, net_change_in_cash"
+        )
+        .eq("company_id", company_id)
+        .is_("fiscal_quarter", None)
+        .not_.is_("net_change_in_cash", None)
+        .order("fiscal_year", desc=False)
+        .execute()
+    )
+    recon_failures: List[Dict[str, Any]] = []
+    for row in (cf_recon_resp.data or []):
+        ocf      = row.get("cash_from_operating_activities")
+        icf      = row.get("cash_from_investing_activities")
+        fcf_flow = row.get("cash_from_financing_activities")
+        fx       = row.get("effect_of_fx_on_cash") or 0.0
+        net      = row.get("net_change_in_cash")
+        if any(v is None for v in (ocf, icf, fcf_flow, net)):
+            continue
+        computed = float(ocf) + float(icf) + float(fcf_flow) + float(fx)
+        actual   = float(net)
+        denom    = max(abs(computed), abs(actual), 1.0)
+        pct_err  = abs(computed - actual) / denom
+        if pct_err > 0.01:
+            recon_failures.append({
+                "fiscal_year":  row.get("fiscal_year"),
+                "computed_sum": round(computed, 2),
+                "reported_net": round(actual, 2),
+                "pct_error":    round(pct_err * 100, 2),
+            })
+    if recon_failures:
+        _log_event(
+            company_id,
+            scope="cash_flow_statements",
+            metric="reconciliation_failure",
+            severity="high",
+            message=(
+                f"CF statement does not reconcile in {len(recon_failures)} annual row(s): "
+                "OCF + ICF + financing_cf + fx_effect ≠ net_change_in_cash (>1% deviation)."
+            ),
+            details={"failures": recon_failures},
+        )
+        summary["events_written"] += 1
+
+    # ── Phase 6: balance_sheets.shares_outstanding population check ───────────
+    bs_shares_resp = (
+        supabase.table("balance_sheets")
+        .select("fiscal_year, shares_outstanding")
+        .eq("company_id", company_id)
+        .is_("fiscal_quarter", None)
+        .order("fiscal_year", desc=False)
+        .execute()
+    )
+    bs_share_rows = bs_shares_resp.data or []
+    missing_bs_shares = sum(1 for r in bs_share_rows if r.get("shares_outstanding") is None)
+    if missing_bs_shares > 0 and bs_share_rows:
+        _log_event(
+            company_id,
+            scope="balance_sheets",
+            metric="shares_outstanding_missing",
+            severity="medium",
+            message=(
+                f"balance_sheets.shares_outstanding is NULL in {missing_bs_shares}/"
+                f"{len(bs_share_rows)} annual rows. "
+                "BV/share calculations will fall back to IS weighted-average shares."
+            ),
+            details={
+                "missing_rows": missing_bs_shares,
+                "total_rows": len(bs_share_rows),
+            },
+        )
+        summary["events_written"] += 1
+
     # ── Derived metrics presence ───────────────────────────────────────────────
     dfm = (
-        supabase.table("derived_financial_metrics")
+        supabase.table("financial_ratios")
         .select("fiscal_year, computed_at")
         .eq("company_id", company_id)
         .order("fiscal_year", desc=True)
@@ -219,10 +307,10 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
     if not dfm_row:
         _log_event(
             company_id,
-            scope="derived_financial_metrics",
+            scope="financial_ratios",
             metric="missing",
             severity="low",
-            message="No derived_financial_metrics rows found; derived metrics not computed yet.",
+            message="No financial_ratios rows found; derived metrics not computed yet.",
             details=None,
         )
         summary["events_written"] += 1

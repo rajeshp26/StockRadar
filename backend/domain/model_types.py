@@ -52,6 +52,12 @@ class IncomeStatementRow(BaseModel):
     eps_diluted: Optional[Decimal] = None
     shares_outstanding_basic: Optional[int] = None
     shares_outstanding_diluted: Optional[int] = None
+    # Phase 3 — Tier 1 new columns
+    interest_income: Optional[Decimal] = None
+    effective_tax_rate: Optional[Decimal] = None
+    # Phase 5 — Tier 2 new columns
+    total_unusual_items: Optional[Decimal] = None
+    special_charges: Optional[Decimal] = None
 
     # Metadata
     data_source: str = "defeat_beta"
@@ -105,7 +111,17 @@ class BalanceSheetRow(BaseModel):
     minority_interest: Optional[Decimal] = None                 # NEW
     total_liabilities_and_equity: Optional[Decimal] = None      # NEW
     last_validated_at: Optional[datetime] = None                # NEW
-
+    # Phase 3 — Tier 1 new columns
+    shares_outstanding: Optional[int] = None
+    invested_capital: Optional[Decimal] = None
+    # Phase 5 — Tier 2 new columns
+    capital_lease_obligations: Optional[Decimal] = None
+    total_non_current_liabilities: Optional[Decimal] = None
+    total_non_current_assets: Optional[Decimal] = None
+    tangible_book_value: Optional[Decimal] = None
+    deferred_revenue_current: Optional[Decimal] = None
+    deferred_revenue_non_current: Optional[Decimal] = None
+    other_current_assets: Optional[Decimal] = None
     # Metadata
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -151,7 +167,14 @@ class CashFlowRow(BaseModel):
     share_repurchases: Optional[Decimal] = None                # NEW
     share_issuance: Optional[Decimal] = None                   # NEW
     last_validated_at: Optional[datetime] = None               # NEW
-
+    # Phase 5 — Tier 2 new columns
+    net_change_in_cash: Optional[Decimal] = None
+    effect_of_fx_on_cash: Optional[Decimal] = None
+    beginning_cash: Optional[Decimal] = None
+    ending_cash: Optional[Decimal] = None
+    short_term_debt_net_change: Optional[Decimal] = None
+    asset_impairment_charge: Optional[Decimal] = None
+    free_cash_flow: Optional[Decimal] = None
     # Metadata
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)

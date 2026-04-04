@@ -155,6 +155,8 @@ class WatchlistService:
                 id=item['watchlist_item_id'],
                 symbol=ticker_symbol,
                 name=company['company_name'],
+                sector=company.get('sector'),
+                industry=company.get('industry'),
                 price=current_price,
                 change=change,
                 changePercent=change_percent,
@@ -213,6 +215,8 @@ class WatchlistService:
                     "id": item["watchlist_item_id"],
                     "symbol": company["ticker_symbol"],
                     "name": company["company_name"],
+                    "sector": company.get("sector"),
+                    "industry": company.get("industry"),
                     "targetBuy": item.get("target_buy"),
                     "targetSell": item.get("target_sell"),
                     # Explicitly present but null; FE will hydrate via SSE

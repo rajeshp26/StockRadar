@@ -111,24 +111,35 @@ class DefeatBetaProvider(StockDataProvider):
     DB_INCOME_ALIASES: Dict[str, List[str]] = {
         # Core P&L
         'revenue': ['Total Revenue', 'Operating Revenue'],
-        'cost_of_goods_sold': ['Cost of Revenue', 'Reconciled Cost of Revenue'],
+        # --- Phase 3 additions ---
+        'interest_income': ['Non-Operating Interest Income'],
+        'effective_tax_rate': ['Tax Rate for Calcs'],
+        # Phase 5 — Tier 2 additions
+        'total_unusual_items': ['Total Unusual Items'],
+        'special_charges': ['Special Income Charges', 'Restructuring & Mergers Acquisition', 'Write Off'],
+        # -------------------------
+        'cost_of_goods_sold': ['Cost of Revenue'],
         'gross_profit': ['Gross Profit'],
 
         # Opex + components
-        'operating_expenses': ['Operating Expense', 'Total Operating Expenses'],
+        'operating_expenses': ['Operating Expense'],
         'rd_expenses': ['Research & Development'],
         'sga_expenses': ['Selling General and Administrative'],
 
         # Operating result
-        'operating_income': ['Operating Income', 'Total Operating Income as Reported'],
+        'operating_income': ['Operating Income'],
 
         # Non-operating and interest
-        'non_operating_income_expense': ['Other Income Expense', 'Other Non Operating Income Expenses'],
+        'non_operating_income_expense': [
+            'Other Income Expense',
+            'Other Non Operating Income Expenses',
+            'Gain on Sale of Security',
+        ],
         'interest_expense': ['Non-Operating Interest Expense', 'Interest Expense'],
 
         # Taxes / before tax
-        'pretax_income': ['Pretax Income', 'Income Before Tax', 'Earnings Before Tax'],
-        'tax_expense': ['Tax Provision', 'Income Tax Expense'],
+        'pretax_income': ['Pretax Income'],
+        'tax_expense': ['Tax Provision'],
 
         # Income lines
         'net_income': [
@@ -142,7 +153,7 @@ class DefeatBetaProvider(StockDataProvider):
         'discontinued_operations': ['Discontinued Operations'],
         'equity_in_earnings': ['Equity in Earnings'],
         'minority_interest': ['Minority Interests'],
-        'preferred_dividends': ['Otherunder Preferred Stock Dividend'],
+        'preferred_dividends': ['Preferred Stock Dividends', 'Preferred Dividends'],
         'net_income_to_common': ['Net Income Common Stockholders'],
 
         # EBIT/EBITDA
@@ -165,63 +176,86 @@ class DefeatBetaProvider(StockDataProvider):
     DB_BALANCE_ALIASES: Dict[str, List[str]] = {
         # Assets
         'total_assets': ['Total Assets'],
+        # Phase 5 — Tier 2 additions
+        'capital_lease_obligations': ['Capital Lease Obligations', 'Long Term Capital Lease Obligation'],
+        'total_non_current_liabilities': ['Total Non Current Liabilities'],
+        'total_non_current_assets': ['Total non-current assets'],
+        'tangible_book_value': ['Net Tangible Assets', 'Tangible Book Value'],
+        'deferred_revenue_current': ['Current Deferred Revenue'],
+        'deferred_revenue_non_current': ['Non Current Deferred Revenue'],
+        'other_current_assets': ['Other Current Assets'],
+        # --- Phase 3 additions ---
+        'shares_outstanding': ['Ordinary Shares Number', 'Share Issued'],
+        'invested_capital': ['Invested Capital'],
+        # -------------------------
         'current_assets': ['Total Current Assets'],
         'cash_and_cash_equivalents': ['Cash And Cash Equivalents'],
-        'accounts_receivable': ['Accounts receivable', 'Accounts Receivable'],
+        'accounts_receivable': ['Accounts receivable', 'Receivables'],
         'inventory': ['Inventory'],
-        'property_plant_equipment_net': ['Net PPE', 'Property Plant And Equipment Net', 'Property, Plant & Equipment Net'],
-        'intangible_assets': ['Other Intangible Assets', 'Intangible Assets'],
+        'property_plant_equipment_net': ['Net PPE'],
+        'intangible_assets': ['Other Intangible Assets'],
         'goodwill': ['Goodwill'],
 
         # Liabilities
         'total_liabilities': ['Total Liabilities'],
         'current_liabilities': ['Total Current Liabilities'],
-        'accounts_payable': ['Accounts Payable', 'Payables'],
+        'accounts_payable': ['Accounts Payable', 'Payables', 'Payables And Accrued Expenses'],
         'short_term_debt': ['Current Debt', 'Current Debt And Capital Lease Obligation'],
         'long_term_debt': ['Long Term Debt'],
         'total_debt': ['Total Debt'],
 
         # Equity
-        'shareholders_equity': ["Stockholders' Equity", 'Common Stock Equity', 'Total Stockholder Equity'],
+        'shareholders_equity': ["Stockholders' Equity", 'Common Stock Equity', 'Total Equity'],
         'retained_earnings': ['Retained Earnings'],
         'common_stock': ['Common Stock', 'Capital Stock'],
 
         # Extended
-        'long_term_investments': ['Long Term Investments'],
+        'long_term_investments': [
+            'Long Term Equity Investment',
+            'Investment in Financial Assets',
+            'Available for Sale Securities',
+        ],
         'other_non_current_assets': ['Other Non Current Assets'],
         'other_current_liabilities': ['Other Current Liabilities'],
         'minority_interest': ['Minority Interest'],
-        'total_liabilities_and_equity': ['Total Liabilities & Stockholders Equity', 'Total Assets'],  # sanity equality
-        # Sometimes DBeta provides a roll-up variant for financing cash flow
-        "cash_from_financing_activities": [
-            "Cash Flow from Continuing Financing Activities",
-            "Financing Cash Flow",
-            "Cash from Financing Activities",
-        ],
+        'total_liabilities_and_equity': ['Total Assets'],
     }
 
     # Cash Flow aliases
     DB_CASHFLOW_ALIASES = {
         # Operating
         'cash_from_operating_activities': ['Operating Cash Flow', 'Cash Flow from Continuing Operating Activities'],
+         # Phase 5 — Tier 2 additions
+        'net_change_in_cash': ['Changes in Cash'],
+        'effect_of_fx_on_cash': ['Effect of Exchange Rate Changes'],
+        'beginning_cash': ['Beginning Cash Position'],
+        'ending_cash': ['End Cash Position'],
+        'short_term_debt_net_change': ['Net Short Term Debt Issuance'],
+        'asset_impairment_charge': ['Asset Impairment Charge'],
+        'free_cash_flow': ['Free Cash Flow'],
+        # --------------------------
         'net_income': ['Net Income from Continuing Operations'],
-        'depreciation_amortization': ['Depreciation & Amortization', 'Depreciation Amortization Depletion', 'Depreciation'],
+        'depreciation_amortization': ['Depreciation & Amortization', 'Depreciation Amortization Depletion'],
         'change_in_working_capital': ['Change In Working Capital'],
         'deferred_taxes': ['Deferred Income Tax', 'Deferred Tax'],
         'stock_based_compensation': ['Stock Based Compensation'],
 
         # Investing
-        'capital_expenditures': ['Capital Expenditure (CapEx)', 'Capital Expenditure Reported（CapEx）'],
+        'capital_expenditures': ['Capital Expenditure (CapEx)', 'Purchase of PPE'],
         'acquisitions': ['Purchase of Business'],
-        'asset_sales': ['Sale of PPE', 'Sale of Property Plant Equipment'],
-        'investment_purchases': ['Purchase of Investment', 'Investments'],
-        'cash_from_investing_activities': ['Cash Flow from Continuing Investing Activities'],
+        'asset_sales': ['Sale of Investment', 'Net PPE Purchase And Sale'],
+        'investment_purchases': ['Purchase of Investment'],
+        'cash_from_investing_activities': ['Cash Flow from Continuing Investing Activities', 'Investing Cash Flow'],
 
         # Financing
+        'cash_from_financing_activities': [
+            'Cash Flow from Continuing Financing Activities',
+            'Financing Cash Flow',
+        ],
         'debt_issued': ['Long Term Debt Issuance', 'Issuance of Debt'],
         'debt_repayment': ['Long Term Debt Payments', 'Repayment of Debt'],
-        'dividends_paid': ['Cash Dividends Paid', 'Dividends Paid'],
-        'share_repurchases': ['Sale Purchase Of Stock', 'Repurchase Of Capital Stock'],
+        'dividends_paid': ['Cash Dividends Paid', 'Common Stock Dividend Paid'],
+        'share_repurchases': ['Common Stock Payments', 'Repurchase of Capital Stock'],
         'share_issuance': ['Issuance of Capital Stock', 'Common Stock Issuance'],
     }
 
@@ -1194,7 +1228,11 @@ class DefeatBetaProvider(StockDataProvider):
                 eps_diluted=self._safe_decimal(self._db_val(df, a.get('eps_diluted', []), col)),
                 shares_outstanding_basic=self._safe_decimal(self._db_val(df, a.get('shares_outstanding_basic', []), col)),
                 shares_outstanding_diluted=self._safe_decimal(self._db_val(df, a.get('shares_outstanding_diluted', []), col)),
-
+                interest_income=self._safe_decimal(self._db_val(df, a.get('interest_income', []), col)),
+                effective_tax_rate=self._safe_decimal(self._db_val(df, a.get('effective_tax_rate', []), col)),
+                # Phase 5 additions
+                total_unusual_items=self._safe_decimal(self._db_val(df, a.get('total_unusual_items', []), col)),
+                special_charges=self._safe_decimal(self._db_val(df, a.get('special_charges', []), col)),
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
             )
@@ -1263,6 +1301,16 @@ class DefeatBetaProvider(StockDataProvider):
 
                 company_id=company_id,
                 fiscal_year=fy,
+                shares_outstanding=self._safe_int_field(self._db_val(df, a.get('shares_outstanding', []), col)),
+                invested_capital=self._safe_decimal(self._db_val(df, a.get('invested_capital', []), col)),
+                # Phase 5 additions
+                capital_lease_obligations=self._safe_decimal(self._db_val(df, a.get('capital_lease_obligations', []), col)),
+                total_non_current_liabilities=self._safe_decimal(self._db_val(df, a.get('total_non_current_liabilities', []), col)),
+                total_non_current_assets=self._safe_decimal(self._db_val(df, a.get('total_non_current_assets', []), col)),
+                tangible_book_value=self._safe_decimal(self._db_val(df, a.get('tangible_book_value', []), col)),
+                deferred_revenue_current=self._safe_decimal(self._db_val(df, a.get('deferred_revenue_current', []), col)),
+                deferred_revenue_non_current=self._safe_decimal(self._db_val(df, a.get('deferred_revenue_non_current', []), col)),
+                other_current_assets=self._safe_decimal(self._db_val(df, a.get('other_current_assets', []), col)),
                 fiscal_quarter=fq,
                 period_end_date=period_end,
 
@@ -1322,6 +1370,14 @@ class DefeatBetaProvider(StockDataProvider):
                 cash_from_investing_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_investing_activities', []), col)),
                 cash_from_financing_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_financing_activities', []), col)),
                 dividends_paid=self._safe_decimal(self._db_val(df, a.get('dividends_paid', []), col)),
+                # Phase 5 additions
+                net_change_in_cash=self._safe_decimal(self._db_val(df, a.get('net_change_in_cash', []), col)),
+                effect_of_fx_on_cash=self._safe_decimal(self._db_val(df, a.get('effect_of_fx_on_cash', []), col)),
+                beginning_cash=self._safe_decimal(self._db_val(df, a.get('beginning_cash', []), col)),
+                ending_cash=self._safe_decimal(self._db_val(df, a.get('ending_cash', []), col)),
+                short_term_debt_net_change=self._safe_decimal(self._db_val(df, a.get('short_term_debt_net_change', []), col)),
+                asset_impairment_charge=self._safe_decimal(self._db_val(df, a.get('asset_impairment_charge', []), col)),
+                free_cash_flow=self._safe_decimal(self._db_val(df, a.get('free_cash_flow', []), col)),
                 currency="USD",
 
                 change_in_working_capital=self._safe_decimal(self._db_val(df, a.get('change_in_working_capital', []), col)),
@@ -1399,6 +1455,7 @@ class DefeatBetaProvider(StockDataProvider):
                 frequency=freq,
                 last_validated_at=None,
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE if provider == 'dbeta' else self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
+                data_source="defeat_beta" if provider == 'dbeta' else "yfinance",
                 validation_notes=None,
             ))
         return rows
@@ -1469,6 +1526,7 @@ class DefeatBetaProvider(StockDataProvider):
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
+                data_source="yfinance",
                 validation_notes=None,
             ))
         return rows
@@ -1533,6 +1591,7 @@ class DefeatBetaProvider(StockDataProvider):
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
+                data_source="yfinance",
                 validation_notes=None,
             ))
         return rows
@@ -1590,6 +1649,7 @@ class DefeatBetaProvider(StockDataProvider):
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
+                data_source="yfinance",
                 validation_notes=None,
             ))
         return rows
@@ -1638,6 +1698,7 @@ class DefeatBetaProvider(StockDataProvider):
 
                     currency="USD",
                     confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
+                    data_source="yfinance",
                     last_validated_at=None,
                     validation_notes=None,
                 ))
@@ -1719,6 +1780,15 @@ class DefeatBetaProvider(StockDataProvider):
         try:
             return Decimal(str(val))
         except (InvalidOperation, ValueError, TypeError):
+            return None
+
+    def _safe_int_field(self, val: Any) -> Optional[int]:
+        """Convert a raw numeric value (float/Decimal/str) to int for bigint columns."""
+        if val is None:
+            return None
+        try:
+            return int(float(val))
+        except (ValueError, TypeError):
             return None
 
     def _log_debug_once(self, msg: str):

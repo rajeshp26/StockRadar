@@ -313,9 +313,14 @@ class ResidualIncomeService:
         try:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
-                sh = safe_float(rows[-1].get("shares_outstanding_diluted"))
+                latest = rows[-1]
+                sh = safe_float(latest.get("shares_outstanding_diluted"))
                 if sh and sh > 0:
                     shares = float(sh)
+                    logger.debug(
+                        "[RI][%s] Gate3 shares=%.0f from %s",
+                        symbol, shares, latest.get("_source", "unknown"),
+                    )
         except Exception:
             pass
         if shares is None:
@@ -407,13 +412,21 @@ class ResidualIncomeService:
         shares: Optional[float] = None
 
         if shares_history:
-            shares = float(shares_history[-1]["shares_outstanding_diluted"])
-            logger.debug("[RI][%s] shares from income_statements: %s", symbol, shares)
+            latest = shares_history[-1]
+            raw = latest.get("shares_outstanding_diluted")
+            source = latest.get("_source", "unknown")
+            if raw is not None:
+                shares = float(raw)
+                logger.debug(
+                    "[RI][%s] shares=%.0f from %s (fiscal_year=%s)",
+                    symbol, shares, source, latest.get("fiscal_year"),
+                )
         else:
             logger.warning(
-                "[RI][%s] shares_outstanding_diluted null in all income_statement rows, "
-                "falling back to company_summary",
-                symbol,
+                "[RI][%s] get_shares_history returned empty (balance_sheets and "
+                "income_statements both have no annual share rows), "
+                "falling back to company_summary.shares_outstanding",
+                 symbol,
             )
             try:
                 summary = await self.repo.get_company_summary_latest(company_id)

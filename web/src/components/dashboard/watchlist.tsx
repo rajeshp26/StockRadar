@@ -11,6 +11,7 @@ import { StockListRow } from "./stock-list-row";
 import { StockTargetDialog } from "./add-stock-dialog";
 import { WatchlistSwitcher } from "./watchlist-switcher";
 import { WatchlistToolbar, type SortKey, type ViewMode } from "./watchlist-toolbar";
+import { WatchlistSectorView } from "./watchlist-sector-view";
 import { QK } from "@/lib/query-keys";
 import { GC } from "@/lib/query-client";
 import type { CachedPrice } from "@/providers/GlobalSSEProvider";import {
@@ -448,6 +449,12 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
             />
           ))}
         </div>
+      ) : viewMode === "sector" ? (
+        <WatchlistSectorView
+          stocks={processedStocks}
+          onEdit={(stock) => setEditStock(stock)}
+          onRemove={(id) => wl.removeStock(id)}
+        />
       ) : (
         <div className="space-y-1.5">
           {/* Column headers */}

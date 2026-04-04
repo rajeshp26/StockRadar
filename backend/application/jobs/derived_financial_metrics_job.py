@@ -110,7 +110,8 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         .select(
             "bs_id, fiscal_year, period_end_date, total_assets, current_assets, current_liabilities, "
             "total_debt, long_term_debt, shareholders_equity, cash_and_cash_equivalents, "
-            "intangible_assets, goodwill, inventory"
+            "intangible_assets, goodwill, inventory, "
+            "shares_outstanding, invested_capital"
         )
         .eq("company_id", company_id)
         .is_("fiscal_quarter", None)
@@ -164,6 +165,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     bs_by_year = _best_row(bs_rows, [
        "total_assets", "shareholders_equity", "total_debt",
        "intangible_assets", "goodwill",
+       "shares_outstanding", "invested_capital",
     ], pk_field="bs_id")
 
     cf_by_year = _best_row(cf_rows, [
@@ -190,7 +192,16 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         pretax       = _f(isr.get("pretax_income"))
         tax          = _f(isr.get("tax_expense"))
         interest_exp = _f(isr.get("interest_expense"))
-        shares       = _f(isr.get("shares_outstanding_diluted"))
+        # Phase 6: prefer period-end shares from balance_sheets (correct BV/share denominator).
+        # Fall back to weighted-average diluted shares from income_statements if not yet populated.
+        shares = (
+            _f(bsr.get("shares_outstanding"))
+            or _f(isr.get("shares_outstanding_diluted"))
+        )
+        if shares is not None:
+            _shares_source = "balance_sheets" if _f(bsr.get("shares_outstanding")) else "income_statements"
+        else:
+            _shares_source = "none"
 
         total_assets      = _f(bsr.get("total_assets"))
         current_assets    = _f(bsr.get("current_assets"))
@@ -210,8 +221,9 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
 
         fcf = _fcf(cfo, capex)
 
-        invested_capital = None
-        if total_debt is not None and equity is not None:
+        # Phase 6: prefer defeatbeta pre-computed value; fall back to manual formula.
+        invested_capital = _f(bsr.get("invested_capital"))
+        if invested_capital is None and total_debt is not None and equity is not None:
             invested_capital = total_debt + equity - (cash or 0.0)
 
         tax_rate = None
@@ -346,6 +358,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
                 "total_assets", "current_assets", "current_liabilities",
                 "total_debt", "long_term_debt", "shareholders_equity",
                 "cash_and_cash_equivalents", "intangible_assets", "goodwill", "inventory",
+                "shares_outstanding", "invested_capital",
             ]},
             "cf": {k: cfr.get(k) for k in [
                 "cash_from_operating_activities", "capital_expenditures", "dividends_paid",
@@ -360,6 +373,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         out.append({
             "company_id":   company_id,
             "fiscal_year":  int(y),
+            "fiscal_quarter": None,
             "period_end_date": period_end,
 
             "roic":  roic,
@@ -435,6 +449,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             .select("fiscal_year, source_version_tag")
             .eq("company_id", company_id)
             .in_("fiscal_year", fiscal_years)
+            .is_("fiscal_quarter", None)
             .execute()
         )
         for r in (tags_resp.data or []):
@@ -464,7 +479,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         return {"count": len(out), "rows_changed": 0, "upserted": False}
 
     supabase.table("financial_ratios").upsert(
-        changed_rows, on_conflict="company_id,fiscal_year"
+        changed_rows, on_conflict="company_id,fiscal_year,fiscal_quarter"
     ).execute()
 
     logger.info(

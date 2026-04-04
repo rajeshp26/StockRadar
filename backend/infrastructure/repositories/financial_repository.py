@@ -908,13 +908,13 @@ class SupabaseFinancialRepository:
                 'first_financial_data_loaded_at, last_financial_refresh_at, '
                 'last_refreshed_fiscal_year, last_refreshed_fiscal_quarter, '
                 'data_completeness_status, next_earnings_date'
-            ).eq('company_id', company_id).single().execute()
+            ).eq('company_id', company_id).limit(1).execute()
 
             if not response.data:
                 logger.warning(f"Company {company_id} not found")
                 return None
 
-            data = response.data
+            data = response.data[0]
             return CompanyRefreshInfo(
                 company_id=data['company_id'],
                 ticker_symbol=data['ticker_symbol'],
@@ -1014,10 +1014,10 @@ class SupabaseFinancialRepository:
                 self.client.table('companies')
                 .select('company_id')
                 .eq('company_id', company_id)
-                .single()
+                .limit(1)
                 .execute()
             )
-            return response.data is not None
+            return bool(response.data)
         except Exception:
             return False
 
@@ -1028,15 +1028,15 @@ class SupabaseFinancialRepository:
                 self.client.table('companies')
                 .select('*')
                 .eq('company_id', company_id)
-                .single()
+                .limit(1)
                 .execute()
             )
-            return response.data
+            return response.data[0] if response.data else None
         except Exception:
             return None
 
     async def get_company_by_symbol(
-        self, symbol: str, exchange: str = 'NASDAQ'
+        self, symbol: str
     ) -> Optional[Dict[str, Any]]:
         """Get company by ticker symbol."""
         try:
@@ -1044,38 +1044,89 @@ class SupabaseFinancialRepository:
                 self.client.table('companies')
                 .select('*')
                 .eq('ticker_symbol', symbol)
-                .eq('exchange', exchange)
-                .single()
+                .limit(1)
                 .execute()
             )
-            return response.data
-        except Exception:
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error("[get_company_by_symbol] symbol=%s error=%s", symbol, e)
             return None
 
     async def get_shares_history(
         self, company_id: int
     ) -> List[Dict[str, Any]]:
         """
-        Return annual income_statement rows that have shares_outstanding_diluted populated,
-        ordered oldest-to-newest. Used by valuation services to get a per-year shares series.
+        Return annual share count rows, oldest-to-newest.
 
-        Returns [] if no rows have shares_outstanding_diluted (non-null).
-        Callers should fall back to get_company_summary_latest() in that case.
+        Priority order:
+          1. balance_sheets.shares_outstanding   — period-end count; correct BV/share denominator
+          2. income_statements.shares_outstanding_diluted — weighted avg; acceptable fallback
+
+        Always returns dicts with keys:
+          fiscal_year, shares_outstanding_diluted, shares_outstanding_basic, _source
+        so all callers remain unchanged regardless of which table provided the data.
         """
+        # 1. Period-end shares from balance sheet (preferred for BV/share)
+        try:
+            resp = (
+                self.client.table("balance_sheets")
+                .select("fiscal_year, shares_outstanding")
+                .eq("company_id", company_id)
+                .is_("fiscal_quarter", "null")
+                .not_.is_("shares_outstanding", "null")
+                .order("fiscal_year", desc=False)
+                .execute()
+            )
+            if resp.data:
+                logger.debug(
+                    "[SHARES] company_id=%s: %d annual rows from balance_sheets (period-end)",
+                    company_id, len(resp.data),
+                )
+                return [
+                    {
+                        "fiscal_year": r["fiscal_year"],
+                        "shares_outstanding_diluted": r["shares_outstanding"],
+                        "shares_outstanding_basic": r["shares_outstanding"],
+                        "_source": "balance_sheets",
+                    }
+                    for r in resp.data
+                ]
+            logger.debug(
+                "[SHARES] company_id=%s: balance_sheets.shares_outstanding empty, "
+                "falling back to income_statements",
+                company_id,
+            )
+        except Exception as e:
+            logger.error(
+                "[SHARES] company_id=%s: balance_sheets query failed (%s), "
+                "falling back to income_statements",
+                company_id, e,
+            )
+
+        # 2. Weighted-average shares from income statement (fallback)
         try:
             resp = (
                 self.client.table("income_statements")
                 .select("fiscal_year, shares_outstanding_diluted, shares_outstanding_basic")
                 .eq("company_id", company_id)
-                .is_("fiscal_quarter", "null")          # annual rows only
+                .is_("fiscal_quarter", "null")
                 .not_.is_("shares_outstanding_diluted", "null")
                 .order("fiscal_year", desc=False)
                 .execute()
             )
-            return resp.data or []
+            rows = resp.data or []
+            for r in rows:
+                r.setdefault("_source", "income_statements")
+            if rows:
+                logger.debug(
+                    "[SHARES] company_id=%s: %d annual rows from income_statements (weighted avg)",
+                    company_id, len(rows),
+                )
+            return rows
         except Exception as e:
             logger.error(
-                "Failed to get shares history for company_id=%s: %s", company_id, e
+                "[SHARES] company_id=%s: income_statements query also failed: %s",
+                company_id, e,
             )
             return []
 
