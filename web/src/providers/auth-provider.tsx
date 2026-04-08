@@ -175,7 +175,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (firebaseUser) {
         try {
           // Mark perf point if you use it elsewhere
-          try { perf.mark?.('auth-token-received'); } catch {}
+          try { perf.mark?.('auth-token-received'); } catch { }
 
           // Get current token (non-forced here; change to true if you prefer)
           const token = await firebaseUser.getIdToken();
@@ -200,7 +200,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               perf.mark?.('auth-end');
               // Only measure if 'login-start' was previously marked
               perf.measure?.('User Authentication', 'login-start', 'auth-end');
-            } catch {}
+            } catch { }
 
             setAuthState((prev) => ({
               ...prev,
@@ -243,7 +243,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
 
     return () => {
-      try { perf.clear?.(); } catch {}
+      try { perf.clear?.(); } catch { }
       unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

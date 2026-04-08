@@ -9,9 +9,9 @@ export interface DiagnosticFlag {
   recommendation?: string;
 }
 export interface Applicability {
-  score:               number;
-  category:            SuitabilityCategory;
-  flags:               DiagnosticFlag[];
+  score: number;
+  category: SuitabilityCategory;
+  flags: DiagnosticFlag[];
   suitabilitySummary?: string | null;  // ← AI-generated plain-English explanation
 }
 export interface DataQuality {
@@ -221,73 +221,73 @@ export interface DcfHistory {
 /* ====================================================================== */
 
 export interface OwnerEarningsValuation {
-  symbol:                    string;
-  companyId:                 number;
-  currency:                  string;
+  symbol: string;
+  companyId: number;
+  currency: string;
   // Forecast parameters
-  forecastYears:             number;
-  discountRateUsed:          number;        // NOT "discountRate"
-  oeGrowthRateUsed?:         number | null; // NOT "growthRate"
-  terminalGrowthRateUsed?:   number | null; // NOT "terminalGrowthRate"
+  forecastYears: number;
+  discountRateUsed: number;        // NOT "discountRate"
+  oeGrowthRateUsed?: number | null; // NOT "growthRate"
+  terminalGrowthRateUsed?: number | null; // NOT "terminalGrowthRate"
   maintenanceCapexRatioUsed?: number | null;
   // Base OE decomposition (waterfall transparency)
-  baseOe?:                   number | null; // computed OE — NOT "ownerEarnings"
-  baseOeFiscalYear?:         number | null;
-  netIncomeUsed?:            number | null; // NOT "netIncome"
-  daUsed?:                   number | null; // D&A — NOT "depreciation"
-  capexUsed?:                number | null; // sign-normalised negative — NOT "capex"
-  wcChangeUsed?:             number | null; // NOT "workingCapitalChange"
+  baseOe?: number | null; // computed OE — NOT "ownerEarnings"
+  baseOeFiscalYear?: number | null;
+  netIncomeUsed?: number | null; // NOT "netIncome"
+  daUsed?: number | null; // D&A — NOT "depreciation"
+  capexUsed?: number | null; // sign-normalised negative — NOT "capex"
+  wcChangeUsed?: number | null; // NOT "workingCapitalChange"
   // Forecast stream
-  forecastOe:                number[];
-  pvOe:                      number[];
-  discountFactors?:          number[] | null;
-  totalPvOe:                 number;        // NOT "pvForecastOe"
+  forecastOe: number[];
+  pvOe: number[];
+  discountFactors?: number[] | null;
+  totalPvOe: number;        // NOT "pvForecastOe"
   // Terminal value
-  terminalValue?:            number | null;
-  pvTerminalValue?:          number | null; // NOT "pvTerminal"
-  oeNPlus1?:                 number | null;
+  terminalValue?: number | null;
+  pvTerminalValue?: number | null; // NOT "pvTerminal"
+  oeNPlus1?: number | null;
   // Equity bridge
-  enterpriseValue?:          number | null;
-  netDebtUsed?:              number | null;
-  equityValue?:              number | null;
-  sharesOutstanding?:        number | null;
-  intrinsicValuePerShare?:   number | null;
+  enterpriseValue?: number | null;
+  netDebtUsed?: number | null;
+  equityValue?: number | null;
+  sharesOutstanding?: number | null;
+  intrinsicValuePerShare?: number | null;
   // Market comparison (read-time)
-  currentPrice?:             number | null;
-  upsideDownsidePct?:        number | null;
+  currentPrice?: number | null;
+  upsideDownsidePct?: number | null;
 }
 
 export interface OwnerEarningsResponse {
-  valuation:    OwnerEarningsValuation;
+  valuation: OwnerEarningsValuation;
   applicability: Applicability;
-  dataQuality:  DataQuality;
+  dataQuality: DataQuality;
 }
 
 export interface OwnerEarningsHistoryEntry {
-  runAt:                   string;
-  baseOe?:                 number; // NOT "ownerEarnings"
+  runAt: string;
+  baseOe?: number; // NOT "ownerEarnings"
   intrinsicValuePerShare?: number;
-  oeGrowthRateUsed?:       number; // NOT "growthRate"
-  discountRateUsed?:       number; // NOT "discountRate"
-  enterpriseValue?:        number;
-  score?:                  number;
-  category?:               SuitabilityCategory;
+  oeGrowthRateUsed?: number; // NOT "growthRate"
+  discountRateUsed?: number; // NOT "discountRate"
+  enterpriseValue?: number;
+  score?: number;
+  category?: SuitabilityCategory;
 }
 
 export interface OwnerEarningsHistory {
   symbol: string;
-  items:  OwnerEarningsHistoryEntry[];
+  items: OwnerEarningsHistoryEntry[];
 }
 
 export interface OwnerEarningsState {
-  loading:        boolean;
+  loading: boolean;
   loadingHistory: boolean;
-  error?:         string;
-  valuation?:     OwnerEarningsValuation;
+  error?: string;
+  valuation?: OwnerEarningsValuation;
   applicability?: Applicability;
-  dataQuality?:   DataQuality;
-  history?:       OwnerEarningsHistory;
-  freshness?:     FreshnessInfo;
+  dataQuality?: DataQuality;
+  history?: OwnerEarningsHistory;
+  freshness?: FreshnessInfo;
 }
 
 /* ====================================================================== */
@@ -296,67 +296,172 @@ export interface OwnerEarningsState {
 /* ====================================================================== */
 
 export interface ResidualIncomeValuation {
-  symbol:                  string;
-  companyId:               number;
-  currency:                string;
+  symbol: string;
+  companyId: number;
+  currency: string;
   // Inputs used
-  forecastYears:           number;
-  costOfEquityUsed:        number;          // NOT "costOfEquity"
-  betaUsed?:               number | null;
-  rfUsed?:                 number | null;
-  erpUsed?:                number | null;
-  riGrowthRateUsed?:       number | null;
+  forecastYears: number;
+  costOfEquityUsed: number;          // NOT "costOfEquity"
+  betaUsed?: number | null;
+  rfUsed?: number | null;
+  erpUsed?: number | null;
+  riGrowthRateUsed?: number | null;
   terminalGrowthRateUsed?: number | null;
   // Base values
-  eps0?:                   number | null;   // NOT "eps"
-  bvPerShare?:             number | null;   // NOT "bookValuePerShare"
-  roe0?:                   number | null;   // NOT "roe"
-  ri0PerShare?:            number | null;   // NOT "residualIncomePerShare"
-  bvFiscalYear?:           number | null;
+  eps0?: number | null;   // NOT "eps"
+  bvPerShare?: number | null;   // NOT "bookValuePerShare"
+  roe0?: number | null;   // NOT "roe"
+  ri0PerShare?: number | null;   // NOT "residualIncomePerShare"
+  bvFiscalYear?: number | null;
   // Forecast stream
-  forecastRiPerShare:      number[];
-  pvRiPerShare:            number[];
-  discountFactors?:        number[] | null;
-  totalPvRiPerShare:       number;          // NOT "pvForecastRi"
+  forecastRiPerShare: number[];
+  pvRiPerShare: number[];
+  discountFactors?: number[] | null;
+  totalPvRiPerShare: number;          // NOT "pvForecastRi"
   // Terminal value
-  terminalRiPerShare?:     number | null;
-  terminalValueRi?:        number | null;
-  pvTerminalRiPerShare?:   number | null;   // NOT "pvTerminal"
+  terminalRiPerShare?: number | null;
+  terminalValueRi?: number | null;
+  pvTerminalRiPerShare?: number | null;   // NOT "pvTerminal"
   // Intrinsic (equity-native — no EV bridge)
   intrinsicValuePerShare?: number | null;
   // Market comparison (read-time)
-  currentPrice?:           number | null;
-  upsideDownsidePct?:      number | null;
+  currentPrice?: number | null;
+  upsideDownsidePct?: number | null;
 }
 
 export interface ResidualIncomeResponse {
-  valuation:    ResidualIncomeValuation;
+  valuation: ResidualIncomeValuation;
   applicability: Applicability;
-  dataQuality:  DataQuality;
+  dataQuality: DataQuality;
 }
 
 export interface ResidualIncomeHistoryEntry {
-  runAt:                   string;
+  runAt: string;
   intrinsicValuePerShare?: number;
-  roe0?:                   number;  // NOT "roe"
-  costOfEquityUsed?:       number;  // NOT "costOfEquity"
-  ri0PerShare?:            number;  // NOT "residualIncomePerShare"
-  score?:                  number;
-  category?:               SuitabilityCategory;
+  roe0?: number;  // NOT "roe"
+  costOfEquityUsed?: number;  // NOT "costOfEquity"
+  ri0PerShare?: number;  // NOT "residualIncomePerShare"
+  score?: number;
+  category?: SuitabilityCategory;
 }
 
 export interface ResidualIncomeHistory {
   symbol: string;
-  items:  ResidualIncomeHistoryEntry[];
+  items: ResidualIncomeHistoryEntry[];
 }
 
 export interface ResidualIncomeState {
-  loading:        boolean;
+  loading: boolean;
   loadingHistory: boolean;
-  error?:         string;
-  valuation?:     ResidualIncomeValuation;
+  error?: string;
+  valuation?: ResidualIncomeValuation;
   applicability?: Applicability;
-  dataQuality?:   DataQuality;
-  history?:       ResidualIncomeHistory;
-  freshness?:     FreshnessInfo;
+  dataQuality?: DataQuality;
+  history?: ResidualIncomeHistory;
+  freshness?: FreshnessInfo;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIVIDEND ANALYSIS TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type DividendStatus = "stable" | "growing" | "declining" | "no_dividend";
+export type DividendRating = "safe" | "moderate" | "borderline" | "risk" | "info";
+
+export interface DividendSparkPoint {
+  date: string;
+  amount: number;
+}
+
+export interface DividendOverviewData {
+  annual_dividend: number | null;
+  per_period_amount: number | null;
+  dividend_yield: number | null;
+  payout_ratio_adj_eps: number | null;
+  payout_ratio_gaap: number | null;
+  payout_ratio_fcf: number | null;
+  gaap_negative_eps: boolean;
+  frequency: string;
+  frequency_multiplier: number;
+  ex_dividend_date: string | null;
+  payment_date: string | null;
+  last_increase_date: string | null;
+  status: DividendStatus;
+  sparkline: DividendSparkPoint[];
+  current_price: number | null;
+}
+
+export interface DividendSafetyMetric {
+  name: string;
+  benchmark: string;
+  value: number | null;
+  formatted: string;
+  rating: DividendRating;
+  info_note?: string | null;
+}
+
+export interface DividendPolicy {
+  growth_trend: string;
+  cut_history: string;
+  has_cut: boolean;
+  cut_year: number | null;
+  retention_rate: number | null;
+}
+
+export interface DividendSafetyData {
+  composite_score: number;
+  composite_category: SuitabilityCategory;
+  metrics: DividendSafetyMetric[];
+  earnings_stability: string;
+  dividend_policy: DividendPolicy;
+  strengths: string[];
+  key_risks: string[];
+}
+
+export interface DividendGrowthChange {
+  date: string;
+  amount: number;
+  change_pct: number;
+  label: string;
+  direction: "increase" | "decrease" | "flat";
+}
+
+export interface DividendGrowthData {
+  growth_score: number;
+  growth_category: SuitabilityCategory;
+  cagr_1y: number | null;
+  cagr_3y: number | null;
+  cagr_5y: number | null;
+  cagr_10y: number | null;
+  consecutive_increases: number;
+  annual_totals: Record<string, number>;
+  recent_changes: DividendGrowthChange[];
+}
+
+export interface DividendYieldHistoryPoint {
+  date: string;
+  yield: number;
+  price: number;
+  ttm_dividend: number;
+}
+
+export interface DividendYieldData {
+  current_yield: number | null;
+  avg_yield_5y: number | null;
+  yield_min_5y: number | null;
+  yield_max_5y: number | null;
+  yield_percentile_5y: number | null;
+  yield_vs_sector: number | null;
+  yield_vs_market: number | null;
+  theory_signal: string | null;
+  yield_history: DividendYieldHistoryPoint[];
+}
+
+export interface DividendAnalysis {
+  symbol: string;
+  pays_dividend: boolean;
+  overview: DividendOverviewData | null;
+  safety: DividendSafetyData | null;
+  growth: DividendGrowthData | null;
+  yield_analysis: DividendYieldData | null;
 }

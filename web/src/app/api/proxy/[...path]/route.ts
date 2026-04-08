@@ -63,9 +63,9 @@ function extractTokenFromHeaders(req: NextRequest): string | null {
   return null;
 }
 
-function extractTokenFromCookies(): string | null {
+async function extractTokenFromCookies(): Promise<string | null> {
   try {
-    const jar = cookies();
+    const jar = await cookies();
     // Primary cookie
     const c = jar.get(PROXY_IDTOKEN_COOKIE)?.value;
     if (c) return normalizeBearer(c);
@@ -123,7 +123,7 @@ function buildUpstreamHeaders(
   if (bearer) headers.set("Authorization", bearer);
 
   // Useful proxy headers
-  const ip = req.headers.get("x-forwarded-for") ?? req.ip ?? "";
+  const ip = req.headers.get("x-forwarded-for") ?? "";
   if (ip) headers.set("X-Forwarded-For", ip);
   headers.set("X-Forwarded-Proto", req.nextUrl.protocol.replace(":", ""));
   headers.set("X-Forwarded-Host", req.headers.get("host") ?? "localhost");
@@ -137,7 +137,7 @@ async function proxy(request: NextRequest, method: string, pathParts: string[]) 
 
   // Token resolution — cookie/headers only (no query token)
   const tokenFromHeaders = extractTokenFromHeaders(request);
-  const tokenFromCookies = extractTokenFromCookies();
+  const tokenFromCookies = await extractTokenFromCookies();
   const bearer = tokenFromHeaders ?? tokenFromCookies ?? null;
 
   const targetUrl = resolveTargetUrl(request, pathParts);
@@ -157,12 +157,20 @@ async function proxy(request: NextRequest, method: string, pathParts: string[]) 
   const hasBody = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
   const upstreamHeaders = buildUpstreamHeaders(request, bearer, isSSE, hasBody);
 
+  // Buffer entire body to avoid Node.js ReadableStream / duplex issues with fetch
+  let bodyBuffer: ArrayBuffer | undefined;
+  if (hasBody) {
+    try {
+      bodyBuffer = await request.arrayBuffer();
+    } catch (e) {
+      console.error("[PROXY] Failed to read request body", e);
+    }
+  }
+
   const upstreamInit: RequestInit = {
     method,
     headers: upstreamHeaders,
-    body: hasBody ? (request.body as unknown as ReadableStream | null) : undefined,
-    // @ts-expect-error Node fetch hint for streaming request body
-    duplex: hasBody ? "half" : undefined,
+    body: hasBody ? bodyBuffer : undefined,
     cache: "no-store",
   };
 

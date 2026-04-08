@@ -145,15 +145,17 @@ const NETWORK_ERROR_CODES = new Set([
 ]);
 
 api.interceptors.response.use(undefined, async (error: any) => {
-  const cfg = error?.config as InternalAxiosRequestConfig & {
+  const rawErr = error?.raw || error;
+  const cfg = rawErr?.config as InternalAxiosRequestConfig & {
     __retryCount?: number;
   };
   const methodName = method(cfg);
   const isSafeMethod = methodName === "GET" || methodName === "HEAD";
 
   if (
+    cfg &&
     isSafeMethod &&
-    NETWORK_ERROR_CODES.has(error?.code) &&
+    NETWORK_ERROR_CODES.has(rawErr?.code || error?.code) &&
     (cfg.__retryCount || 0) < 2 // up to 2 retries
   ) {
     cfg.__retryCount = (cfg.__retryCount || 0) + 1;

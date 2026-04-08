@@ -16,12 +16,13 @@ import {
   MethodSelector,
   type IntrinsicMethod,
 } from "@/features/analysis/components/method-selector";
-import { ValuationOverview }     from "@/features/analysis/components/valuation-overview";
-import { IntrinsicPanel }        from "@/features/analysis/components/intrinsic-panel";
-import { DcfPanel }              from "@/features/analysis/components/dcf-panel";
-import { DdmPanel }              from "@/features/analysis/components/ddm-panel";
-import { OwnerEarningsPanel }    from "@/features/analysis/components/owner-earnings-panel";   // ← NEW
-import { ResidualIncomePanel }   from "@/features/analysis/components/residual-income-panel"; // ← NEW
+import { ValuationOverview } from "@/features/analysis/components/valuation-overview";
+import { IntrinsicPanel } from "@/features/analysis/components/intrinsic-panel";
+import { DcfPanel } from "@/features/analysis/components/dcf-panel";
+import { DdmPanel } from "@/features/analysis/components/ddm-panel";
+import { OwnerEarningsPanel } from "@/features/analysis/components/owner-earnings-panel";   // ← NEW
+import { ResidualIncomePanel } from "@/features/analysis/components/residual-income-panel"; // ← NEW
+import { DividendPanel } from "@/features/analysis/components/dividend-panel";
 
 import {
   TrendingUp,
@@ -38,13 +39,13 @@ import {
 
 /* ── Tab definitions ──────────────────────────────────────────── */
 const TOP_TABS = [
-  { id: "intrinsic", label: "Intrinsic Value",  icon: TrendingUp     },
-  { id: "health",    label: "Financial Health", icon: Heart          },
-  { id: "moat",      label: "Moat",             icon: Shield         },
-  { id: "dividend",  label: "Dividend",         icon: TrendingDown   },
-  { id: "technical", label: "Technical",        icon: BarChart2      },
-  { id: "investors", label: "Super Investors",  icon: Users          },
-  { id: "others",    label: "Others",           icon: MoreHorizontal },
+  { id: "intrinsic", label: "Intrinsic Value", icon: TrendingUp },
+  { id: "health", label: "Financial Health", icon: Heart },
+  { id: "moat", label: "Moat", icon: Shield },
+  { id: "dividend", label: "Dividend", icon: TrendingDown },
+  { id: "technical", label: "Technical", icon: BarChart2 },
+  { id: "investors", label: "Super Investors", icon: Users },
+  { id: "others", label: "Others", icon: MoreHorizontal },
 ] as const;
 
 type TopTab = (typeof TOP_TABS)[number]["id"];
@@ -56,10 +57,10 @@ function ComingSoonPanel({
   items,
   icon: Icon,
 }: {
-  title:       string;
+  title: string;
   description: string;
-  items:       string[];
-  icon:        React.ElementType;
+  items: string[];
+  icon: React.ElementType;
 }) {
   return (
     <div className="glass-panel p-12 flex flex-col items-center text-center space-y-6 animate-fade-up">
@@ -91,13 +92,13 @@ function ComingSoonPanel({
 
 /* ── Main Page ────────────────────────────────────────────────── */
 export default function AnalysisPage() {
-  const router      = useRouter();
-  const { symbol }  = useParams<{ symbol: string }>();
+  const router = useRouter();
+  const { symbol } = useParams<{ symbol: string }>();
   const upperSymbol = symbol?.toString().toUpperCase() ?? "";
   const queryClient = useQueryClient();
 
   const [method, setMethod] = useState<IntrinsicMethod>("overview");
-  const [tab, setTab]       = useState<TopTab>("intrinsic");
+  const [tab, setTab] = useState<TopTab>("intrinsic");
 
   const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
 
@@ -107,9 +108,9 @@ export default function AnalysisPage() {
   // prefetchAllValuations is a no-op for methods already cached within staleTime.
   useEffect(() => {
     prefetchAllValuations(upperSymbol, queryClient);
-  }, [upperSymbol, queryClient]); 
-  
-  const priceDisplay  = price != null ? `$${price.toFixed(2)}` : "—";
+  }, [upperSymbol, queryClient]);
+
+  const priceDisplay = price != null ? `$${price.toFixed(2)}` : "—";
   const changeDisplay =
     change != null
       ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
@@ -197,16 +198,16 @@ export default function AnalysisPage() {
           <div className="space-y-6 animate-fade-up">
             <MethodSelector method={method} onChange={setMethod} />
             {method === "overview" && (
-                <ValuationOverview
+              <ValuationOverview
                 symbol={upperSymbol}
                 onSelectMethod={setMethod}
-                />
+              />
             )}
-            {method === "rule1"          && <IntrinsicPanel        symbol={upperSymbol} />}
-            {method === "dcf"            && <DcfPanel              symbol={upperSymbol} />}
-            {method === "ddm"            && <DdmPanel              symbol={upperSymbol} />}
-            {method === "ownerEarnings"  && <OwnerEarningsPanel    symbol={upperSymbol} />} {/* ← NEW */}
-            {method === "residualIncome" && <ResidualIncomePanel   symbol={upperSymbol} />} {/* ← NEW */}
+            {method === "rule1" && <IntrinsicPanel symbol={upperSymbol} />}
+            {method === "dcf" && <DcfPanel symbol={upperSymbol} />}
+            {method === "ddm" && <DdmPanel symbol={upperSymbol} />}
+            {method === "ownerEarnings" && <OwnerEarningsPanel symbol={upperSymbol} />} {/* ← NEW */}
+            {method === "residualIncome" && <ResidualIncomePanel symbol={upperSymbol} />} {/* ← NEW */}
           </div>
         )}
 
@@ -227,12 +228,9 @@ export default function AnalysisPage() {
           />
         )}
         {tab === "dividend" && (
-          <ComingSoonPanel
-            title="Dividend Safety"
-            description="Dividend payout stability, coverage ratios, and consistency."
-            items={["Payout Ratio", "Dividend CAGR", "Cash Flow Coverage", "Stability Profile"]}
-            icon={TrendingDown}
-          />
+          <div className="animate-fade-up">
+            <DividendPanel symbol={upperSymbol} />
+          </div>
         )}
         {tab === "technical" && (
           <ComingSoonPanel

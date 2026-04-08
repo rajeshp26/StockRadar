@@ -1,8 +1,8 @@
-// web/src/app/api/auth/session/route.ts
+﻿// web/src/app/api/auth/session/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
 const COOKIE_NAME = process.env.PROXY_IDTOKEN_COOKIE ?? "__session";
-// Align with your refresh cadence; 55–60 minutes is typical for Firebase ID tokens
+// Align with your refresh cadence; 55-60 minutes is typical for Firebase ID tokens
 const COOKIE_MAX_AGE = 60 * 60; // seconds
 
 export async function POST(req: NextRequest) {
