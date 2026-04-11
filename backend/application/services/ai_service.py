@@ -18,10 +18,11 @@ Fixes applied (2026-03-05):
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +51,12 @@ async def generate_suitability_summary(
     Generate a plain-English suitability summary via Gemini REST.
     Returns None (never raises) if key missing, call fails, or times out.
     """
-    key = os.environ.get("GEMINI_API_KEY") or ""
+    key = settings.GEMINI_API_KEY or ""
     if not key:
         logger.info("[AI] GEMINI_API_KEY not set — suitability summaries disabled")
         return None
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = settings.GEMINI_MODEL
     url   = _GEMINI_URL.format(model=model, key=key)
 
     prompt = _build_prompt(
@@ -1211,7 +1212,7 @@ async def generate_overview_summary(
     """
     import json as _json
  
-    key = os.environ.get("GEMINI_API_KEY") or ""
+    key = settings.GEMINI_API_KEY or ""
     if not key:
         logger.info("[AI] GEMINI_API_KEY not set — overview summaries disabled")
         return None
@@ -1219,7 +1220,7 @@ async def generate_overview_summary(
     if not methods:
         return None
  
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = settings.GEMINI_MODEL
     url   = _GEMINI_URL.format(model=model, key=key)
  
     prompt = _build_overview_prompt(
