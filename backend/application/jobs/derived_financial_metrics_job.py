@@ -486,4 +486,191 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         "[RATIOS] Upserted %d/%d changed rows into financial_ratios for company_id=%s",
         len(changed_rows), len(out), company_id,
     )
+    
     return {"count": len(out), "rows_changed": len(changed_rows), "upserted": True}
+
+
+async def compute_and_upsert_dividend_metrics(company_id: int) -> Dict[str, Any]:
+    """
+    Computes dividend-specific metrics from raw statement tables and writes to
+    dividend_metrics (on_conflict: company_id, fiscal_year).
+
+    Sources (read-only):
+      dividend_history       — ex_dividend_date, dividend_amount (per-share amounts)
+      income_statements      — net_income, net_income_to_common (annual, no quarter)
+      cash_flow_statements   — dividends_paid, cash_from_operating_activities,
+                               capital_expenditures (annual, no quarter)
+
+    Writes to: dividend_metrics
+
+    Computed metrics per fiscal year:
+      annual_dps                — sum of per-share dividend payments in that calendar year
+      dividend_growth_rate_3yr  — CAGR of annual_dps over 3 years ending this year
+      dividend_growth_rate_5yr  — CAGR of annual_dps over 5 years ending this year
+      dividend_growth_rate_10yr — CAGR of annual_dps over 10 years ending this year
+      consecutive_years_paid    — streak of years with YoY increase in annual_dps
+      cash_dividend_payout_ratio — abs(dividends_paid) / net_income (GAAP basis)
+      retention_ratio            — 1 − cash_dividend_payout_ratio
+      fcfe_coverage_ratio        — fcf / abs(dividends_paid)
+
+    Caller: call this after compute_and_upsert_derived_financial_metrics() in the
+    market_data_scheduler refresh cycle for dividend-paying companies.
+    """
+    # ── 1. Fetch dividend history ──────────────────────────────────────────────
+    dh_resp = (
+        supabase.table("dividend_history")
+        .select("ex_dividend_date, dividend_amount")
+        .eq("company_id", company_id)
+        .not_.is_("ex_dividend_date", None)
+        .not_.is_("dividend_amount", None)
+        .order("ex_dividend_date", desc=False)
+        .execute()
+    )
+    dh_rows = dh_resp.data or []
+
+    if not dh_rows:
+        logger.info("[DIV_METRICS] No dividend history for company_id=%s — skipping", company_id)
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    # ── 2. Aggregate per-share DPS totals by calendar year ────────────────────
+    # dividend_history.dividend_amount is already a per-share amount per payment.
+    # Summing within a year gives annual DPS (per share) — no shares division needed.
+    annual_dps: Dict[int, float] = {}
+    for row in dh_rows:
+        raw_date = row.get("ex_dividend_date", "")
+        amt = _f(row.get("dividend_amount"))
+        if not raw_date or amt is None:
+            continue
+        try:
+            year = int(str(raw_date)[:4])
+        except (ValueError, TypeError):
+            continue
+        annual_dps[year] = annual_dps.get(year, 0.0) + amt
+
+    if not annual_dps:
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    years_sorted = sorted(annual_dps.keys())
+
+    # ── 3. Fetch income statements (annual) ───────────────────────────────────
+    is_resp = (
+        supabase.table("income_statements")
+        .select("fiscal_year, net_income, net_income_to_common")
+        .eq("company_id", company_id)
+        .is_("fiscal_quarter", None)
+        .order("fiscal_year", desc=False)
+        .execute()
+    )
+    is_by_year: Dict[int, Dict] = {}
+    for r in (is_resp.data or []):
+        fy = r.get("fiscal_year")
+        if fy is not None:
+            is_by_year[int(fy)] = r
+
+    # ── 4. Fetch cash flow statements (annual) ────────────────────────────────
+    cf_resp = (
+        supabase.table("cash_flow_statements")
+        .select("fiscal_year, dividends_paid, cash_from_operating_activities, capital_expenditures")
+        .eq("company_id", company_id)
+        .is_("fiscal_quarter", None)
+        .order("fiscal_year", desc=False)
+        .execute()
+    )
+    cf_by_year: Dict[int, Dict] = {}
+    for r in (cf_resp.data or []):
+        fy = r.get("fiscal_year")
+        if fy is not None:
+            cf_by_year[int(fy)] = r
+
+    # ── 5. Helpers ────────────────────────────────────────────────────────────
+    def _cagr_between(start_year: int, end_year: int) -> Optional[float]:
+        """CAGR of annual_dps from start_year to end_year."""
+        v0 = annual_dps.get(start_year)
+        vn = annual_dps.get(end_year)
+        n  = end_year - start_year
+        if v0 is None or vn is None or v0 <= 0 or vn <= 0 or n <= 0:
+            return None
+        try:
+            return (vn / v0) ** (1.0 / n) - 1.0
+        except Exception:
+            return None
+
+    def _consecutive_increases() -> int:
+        """Count of trailing years where annual_dps increased YoY (>0.1% threshold)."""
+        if len(years_sorted) < 2:
+            return 0
+        count = 0
+        for i in range(len(years_sorted) - 1, 0, -1):
+            curr = annual_dps.get(years_sorted[i], 0.0)
+            prev = annual_dps.get(years_sorted[i - 1], 0.0)
+            if prev > 0 and curr > prev * 1.001:
+                count += 1
+            else:
+                break
+        return count
+
+    consec = _consecutive_increases()
+
+    # ── 6. Compute one row per fiscal year ────────────────────────────────────
+    out: List[Dict[str, Any]] = []
+
+    for fiscal_year in years_sorted:
+        dps = annual_dps[fiscal_year]
+        isr = is_by_year.get(fiscal_year) or {}
+        cfr = cf_by_year.get(fiscal_year) or {}
+
+        # CAGRs relative to this year
+        cagr_3y  = _cagr_between(fiscal_year - 3,  fiscal_year)
+        cagr_5y  = _cagr_between(fiscal_year - 5,  fiscal_year)
+        cagr_10y = _cagr_between(fiscal_year - 10, fiscal_year)
+
+        # Payout and coverage from cash flow
+        divs_paid_raw = _f(cfr.get("dividends_paid"))
+        divs_paid_abs = abs(divs_paid_raw) if divs_paid_raw is not None else None
+
+        net_income = _f(isr.get("net_income_to_common")) or _f(isr.get("net_income"))
+        cash_payout = _safe_div(divs_paid_abs, net_income) if (
+            divs_paid_abs is not None and net_income and net_income > 0
+        ) else None
+        retention = (1.0 - cash_payout) if cash_payout is not None else None
+
+        ocf   = _f(cfr.get("cash_from_operating_activities"))
+        capex = _f(cfr.get("capital_expenditures"))
+        fcf   = _fcf(ocf, capex) if (ocf is not None and capex is not None) else None
+        fcf_cov = _safe_div(fcf, divs_paid_abs) if (
+            fcf is not None and divs_paid_abs and divs_paid_abs > 0
+        ) else None
+
+        out.append({
+            "company_id":                 company_id,
+            "fiscal_year":                int(fiscal_year),
+            "annual_dps":                 round(dps, 4),
+            "dividend_growth_rate_3yr":   round(cagr_3y,  4) if cagr_3y  is not None else None,
+            "dividend_growth_rate_5yr":   round(cagr_5y,  4) if cagr_5y  is not None else None,
+            "dividend_growth_rate_10yr":  round(cagr_10y, 4) if cagr_10y is not None else None,
+            "consecutive_years_paid":     consec,
+            "cash_dividend_payout_ratio": round(cash_payout, 4) if cash_payout is not None else None,
+            "retention_ratio":            round(retention,   4) if retention   is not None else None,
+            "fcfe_coverage_ratio":        round(fcf_cov,     2) if fcf_cov     is not None else None,
+        })
+
+    if not out:
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    # ── 7. Upsert — unique on (company_id, fiscal_year) ───────────────────────
+    # created_at is intentionally omitted: DB DEFAULT handles insert,
+    # and we do not want to overwrite it on conflict updates.
+    try:
+        supabase.table("dividend_metrics").upsert(
+            out, on_conflict="company_id,fiscal_year"
+        ).execute()
+        logger.info(
+            "[DIV_METRICS] Upserted %d rows into dividend_metrics for company_id=%s",
+            len(out), company_id,
+        )
+        return {"count": len(out), "rows_changed": len(out), "upserted": True}
+    except Exception as exc:
+        logger.error(
+            "[DIV_METRICS] Upsert failed for company_id=%s: %s", company_id, exc
+        )
+        return {"count": len(out), "rows_changed": 0, "upserted": False}

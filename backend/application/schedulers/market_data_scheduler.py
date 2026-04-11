@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Market Data Refresh Scheduler
-
 Responsibilities
 ---------------
 - Runs every N hours (default: 24) to refresh market-derived datasets:
@@ -10,14 +9,11 @@ Responsibilities
   * Revenue forecasts
   * Earnings forecasts
   * Company summary snapshot
-
 - One-time bootstrap per company:
   * If no price_history exists -> fetch FULL daily series (limited by rolling retention),
     compress to monthly, upsert
-
 - Incremental thereafter:
   * Fetch last ~lookback_days daily bars, recompute EOM for months in that window, upsert
-
 Resilience & Ops
 ----------------
 - Per-company distributed locks (Supabase `scheduler_locks`) → safe for multi-replica
@@ -25,12 +21,12 @@ Resilience & Ops
 - Concurrency-limited workers
 - Rolling 10-year retention window for price history fetch (configurable)
 - Optional pruning hook present but disabled by default (commented out)
-
 NEW
 ---
 - After company processing, evaluate Rule #1 ONLY if dependencies changed (freshness gate).
+- Derived financial ratios computed unconditionally each cycle (version-gated internally).
+- Dividend metrics computed unconditionally each cycle (exits early if no dividend history).
 """
-
 import asyncio
 import logging
 import uuid
@@ -42,12 +38,14 @@ import pandas as pd
 from config import settings
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 from providers.defeat_beta_provider import DefeatBetaProvider
-from providers.yfinance_provider import YFinanceProvider  # YF fallback injection
-from database import supabase  # used for lightweight existence checks
+from providers.yfinance_provider import YFinanceProvider
+from database import supabase
 
-# NEW: Valuation imports
-
-from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
+# Derived metrics jobs
+from application.jobs.derived_financial_metrics_job import (
+    compute_and_upsert_derived_financial_metrics,
+    compute_and_upsert_dividend_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +53,9 @@ logger = logging.getLogger(__name__)
 class MarketDataRefreshScheduler:
     """
     Periodic market data scheduler (separate from Earnings scheduler).
-
     Public API:
       - start(), stop()
       - trigger_immediate_run()
-
     Introspection for /status:
       - is_running (property)
       - last_run_at, next_run_at, last_result
@@ -72,8 +68,6 @@ class MarketDataRefreshScheduler:
     ):
         # Repos & Providers
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
-
-        # Always inject yfinance fallback provider
         yf_provider = YFinanceProvider()
         self.defeat_beta_provider = defeat_beta_provider or DefeatBetaProvider(
             yfinance_provider=yf_provider
@@ -81,18 +75,15 @@ class MarketDataRefreshScheduler:
 
         # Config (with safe defaults)
         self.interval_hours: int = int(getattr(settings, "MARKET_DATA_REFRESH_INTERVAL_HOURS", 24))
-        self.lookback_days: int = int(getattr(settings, "MARKET_DATA_PRICE_LOOKBACK_DAYS", 45))  # incremental fetch window
+        self.lookback_days: int = int(getattr(settings, "MARKET_DATA_PRICE_LOOKBACK_DAYS", 45))
         self.max_concurrency: int = int(getattr(settings, "MARKET_DATA_MAX_CONCURRENCY", 5))
         self.company_statuses: List[str] = getattr(
             settings,
             "MARKET_DATA_COMPANY_STATUSES",
             ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"],
         )
-        # Rolling retention window for price history fetches (years)
         self.retention_years: int = int(getattr(settings, "PRICE_HISTORY_RETENTION_YEARS", 10))
-
-        # Per-company lock TTL (seconds); market-data cycle work is typically shorter than earnings
-        self.lock_ttl_seconds: int = int(getattr(settings, "SCHEDULER_COMPANY_LOCK_TTL_SECONDS", 1800))  # 30 min
+        self.lock_ttl_seconds: int = int(getattr(settings, "SCHEDULER_COMPANY_LOCK_TTL_SECONDS", 1800))
 
         # Runtime
         self._is_running: bool = False
@@ -103,12 +94,12 @@ class MarketDataRefreshScheduler:
         self.next_run_at: Optional[datetime] = None
         self.last_result: Optional[Dict[str, Any]] = None
 
-        # This scheduler instance's unique owner ID (stored in scheduler_locks.lock_id)
         self.owner_lock_id: str = f"market_data:{uuid.uuid4()}"
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Lifecycle
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
     @property
     def is_running(self) -> bool:
         return self._is_running
@@ -131,22 +122,20 @@ class MarketDataRefreshScheduler:
                 pass
         logger.info("⏹️  Market Data Scheduler stopped")
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Public manual trigger
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
     async def trigger_immediate_run(self) -> Dict[str, Any]:
-        """
-        Public manual trigger for one full refresh cycle (dev/admin/testing).
-        """
+        """Public manual trigger for one full refresh cycle (dev/admin/testing)."""
         logger.info("🔄 Manual trigger: Market Data refresh cycle")
-        # Run a single cycle without disturbing the main loop scheduling
         result = await self._refresh_cycle()
-        # Do not adjust next_run_at here (keep loop schedule intact)
         return result
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Main Loop
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
     async def _run_loop(self) -> None:
         while self._is_running:
             cycle_started_at = datetime.utcnow()
@@ -155,9 +144,7 @@ class MarketDataRefreshScheduler:
                 self.last_result = await self._refresh_cycle()
             except Exception as e:
                 logger.error("Market data cycle failed: %s", e, exc_info=True)
-                # Keep last_result as-is on failure
             finally:
-                # Compute next_run_at only after cycle ends
                 sleep_seconds = max(1, int(self.interval_hours * 3600))
                 self.next_run_at = datetime.utcnow() + timedelta(seconds=sleep_seconds)
                 logger.debug(
@@ -168,16 +155,15 @@ class MarketDataRefreshScheduler:
                 try:
                     await asyncio.sleep(sleep_seconds)
                 except asyncio.CancelledError:
-                    # shutdown
                     break
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Single Cycle
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
     async def _refresh_cycle(self) -> Dict[str, Any]:
         logger.info("📊 Market data refresh cycle started")
 
-        # Pull target companies (active statuses by default)
         companies = await self.financial_repo.get_companies_for_market_data(self.company_statuses)
         total = len(companies or [])
         if total == 0:
@@ -186,21 +172,19 @@ class MarketDataRefreshScheduler:
 
         logger.info("Found %d companies for market-data refresh", total)
 
-        # Concurrency control
         sem = asyncio.Semaphore(self.max_concurrency)
-        results = {
+        results: Dict[str, Any] = {
             "companies_found": total,
             "companies_succeeded": 0,
             "companies_failed": 0,
             "detail": [],
         }
 
-        async def _worker(company: Dict[str, Any]):
+        async def _worker(company: Dict[str, Any]) -> None:
             async with sem:
                 cid = company["company_id"]
                 sym = company["ticker_symbol"]
 
-                # Per-company distributed lock (multi-replica safety)
                 acquired = await self.financial_repo.acquire_company_lock(
                     company_id=cid,
                     owner_id=self.owner_lock_id,
@@ -221,17 +205,13 @@ class MarketDataRefreshScheduler:
                     results["companies_failed"] += 1
                     results["detail"].append({"symbol": sym, "ok": False, "error": str(e)})
                 finally:
-                    # Release lock regardless of outcome
                     await self.financial_repo.release_company_lock(cid, self.owner_lock_id)
 
         await asyncio.gather(*[_worker(c) for c in companies])
 
         # ------------------------------------------------------------------
         # Optional: pruning (disabled by default)
-        # Uncomment after you add SupabaseFinancialRepository.prune_price_history()
-        # await self.financial_repo.prune_price_history(
-        #     retention_years=self.retention_years
-        # )
+        # await self.financial_repo.prune_price_history(retention_years=self.retention_years)
         # ------------------------------------------------------------------
 
         logger.info(
@@ -241,9 +221,10 @@ class MarketDataRefreshScheduler:
         )
         return results
 
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # Per-Company Process
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
     async def _process_company(self, symbol: str, company_id: int) -> Dict[str, Any]:
         """
         Steps:
@@ -252,9 +233,11 @@ class MarketDataRefreshScheduler:
           3) Revenue forecast
           4) Earnings forecast
           5) Company summary snapshot
-          5b) Derived financial metrics (version-gated — only writes when data changed)
-          6) Rule #1 evaluation (only triggered when derived metrics actually changed)
+          5c) IS/BS/CF bootstrap for companies never synced via earnings scheduler
+          6) Derived financial ratios (version-gated — only writes when source data changed)
+          7) Dividend metrics (exits early with no writes if no dividend history exists)
         """
+
         # 1) PRICE HISTORY
         price_rows_written = await self._upsert_monthly_price_history(symbol, company_id)
 
@@ -277,17 +260,17 @@ class MarketDataRefreshScheduler:
         summary = await self.defeat_beta_provider.get_company_summary_optimized(symbol, company_id)
         if summary:
             await self.financial_repo.upsert_company_summary(summary)
-        
+
         # 5c) Bootstrap IS/BS/CF for companies that have never been synced.
         #
         # The earnings scheduler only runs for companies in the ±N day earnings
         # window. A newly added company outside that window will have empty
-        # IS/BS/CF tables. When derived metrics (step 5b) runs against empty
-        # tables, it correctly returns count:0 — but then ROIC/ROE/payout are
-        # never populated and all suitability scores degrade to 9/100 silently.
+        # IS/BS/CF tables. When derived metrics (step 6) runs against empty
+        # tables it correctly returns count:0 — but ROIC/ROE/payout are never
+        # populated and all suitability scores silently degrade to 9/100.
         #
-        # Fix: check whether annual income_statements rows exist. If not,
-        # trigger a full financial sync so derived metrics has data to compute.
+        # Fix: check for at least one annual income_statement row. If absent,
+        # trigger a full financial sync so derived metrics has data to work with.
         try:
             has_financials = await self._has_any_financials(company_id)
             if not has_financials:
@@ -310,15 +293,16 @@ class MarketDataRefreshScheduler:
                     await self.financial_repo.upsert_all_financials(financials)
                     await self.financial_repo.update_company_refresh_metadata(
                         company_id=company_id,
-                        last_fiscal_year=financials.income_statements.rows[-1].fiscal_year
-                        if financials.income_statements.rows else 2024,
+                        last_fiscal_year=(
+                            financials.income_statements.rows[-1].fiscal_year
+                            if financials.income_statements.rows else 2024
+                        ),
                         last_fiscal_quarter=None,
                         is_first_load=True,
                         next_earnings_date=financials.next_earnings_date,
                     )
                     logger.info(
-                        "[BOOTSTRAP] %s IS/BS/CF bootstrap complete — "
-                        "IS:%d BS:%d CF:%d",
+                        "[BOOTSTRAP] %s IS/BS/CF bootstrap complete — IS:%d BS:%d CF:%d",
                         symbol,
                         len(financials.income_statements.rows),
                         len(financials.balance_sheets.rows),
@@ -329,53 +313,68 @@ class MarketDataRefreshScheduler:
                 "[BOOTSTRAP] Financial bootstrap failed for %s: %s",
                 symbol, bootstrap_exc,
             )
-            # Non-fatal — proceed to derived metrics even if bootstrap failed.
-            # If IS/BS/CF are still empty, derived metrics will return count:0
-            # and log appropriately.
-            try:
-                ratios_result = await compute_and_upsert_derived_financial_metrics(
-                    company_id=company_id
-                )
-                logger.info(
-                    "[BOOTSTRAP] %s derived metrics computed: "
-                    "%d/%d ratio rows written",
-                    symbol,
-                    ratios_result.get("rows_changed", 0),
-                    ratios_result.get("count", 0),
-                )
-            except Exception as ratios_exc:
-                logger.error(
-                    "[BOOTSTRAP] derived metrics failed for %s: %s",
-                    symbol, ratios_exc,
-                )
-                # Non-fatal — IS/BS/CF are written. Ratios will be
-                # computed on the next earnings_scheduler cycle.
-                
-        return {
-         "price_history_monthly": price_rows_written,
-         "splits":                len(split_rows or []),
-         "revenue_forecast":      len(rev_fcst_rows or []),
-         "earnings_forecast":     len(eps_fcst_rows or []),
-         "company_summary":       1 if summary else 0,
-     }
+            # Non-fatal — steps 6 & 7 still run. If IS/BS/CF are empty, derived
+            # metrics will return count:0 and log appropriately.
 
-    # ----------------------------------------------------------------------
+        # 6) DERIVED FINANCIAL RATIOS
+        # Version-gated internally: only writes rows whose source data changed.
+        # Safe to call unconditionally every cycle.
+        ratios_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
+        try:
+            ratios_result = await compute_and_upsert_derived_financial_metrics(
+                company_id=company_id
+            )
+            logger.info(
+                "[RATIOS] %s: %d/%d rows written",
+                symbol,
+                ratios_result.get("rows_changed", 0),
+                ratios_result.get("count", 0),
+            )
+        except Exception as exc:
+            logger.error("[RATIOS] %s failed: %s", symbol, exc)
+
+        # 7) DIVIDEND METRICS
+        # Exits early with no DB writes if no dividend_history rows exist.
+        # Safe to call unconditionally for every company.
+        div_result: Dict[str, Any] = {"rows_changed": 0, "upserted": False}
+        try:
+            div_result = await compute_and_upsert_dividend_metrics(company_id=company_id)
+            if div_result.get("upserted"):
+                logger.info(
+                    "[DIV_METRICS] %s: %d rows written",
+                    symbol,
+                    div_result.get("rows_changed", 0),
+                )
+        except Exception as exc:
+            logger.error("[DIV_METRICS] %s failed: %s", symbol, exc)
+
+        return {
+            "price_history_monthly": price_rows_written,
+            "splits":                len(split_rows or []),
+            "revenue_forecast":      len(rev_fcst_rows or []),
+            "earnings_forecast":     len(eps_fcst_rows or []),
+            "company_summary":       1 if summary else 0,
+            "ratios_changed":        ratios_result.get("rows_changed", 0),
+            "dividend_metrics":      div_result.get("rows_changed", 0),
+        }
+
+    # -------------------------------------------------------------------------
     # Price History helpers (with rolling retention)
-    # ----------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+
     async def _upsert_monthly_price_history(self, symbol: str, company_id: int) -> int:
         """
-        - If company has NO price_history rows: FULL fetch (limited by rolling retention window)
-          -> monthly EOM compress -> upsert all
-        - Else: incremental fetch (last ~lookback_days), monthly EOM compress, upsert newest month(s)
-        Returns the number of monthly rows attempted for upsert (dedupe happens in repo).
+        Bootstrap path  — no existing rows: fetch full daily history, compress to
+                          monthly EOM, upsert all (respects retention window).
+        Incremental path — rows exist: fetch last ~lookback_days, recompute EOM
+                          for any months in that window, upsert.
+        Returns the number of monthly rows attempted for upsert.
         """
         has_any = await self._has_any_price_history(company_id)
         retention_cutoff = self._years_ago(date.today(), self.retention_years)
 
         if not has_any:
-            # One-time bootstrap: full daily -> monthly compress (respect retention)
             daily_rows = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id)
-            # Client-side filter to rolling retention window
             daily_rows = [
                 r for r in (daily_rows or [])
                 if r.get("price_date") and r["price_date"] >= retention_cutoff
@@ -386,19 +385,14 @@ class MarketDataRefreshScheduler:
                 logger.info("[PH][%s] Bootstrap monthly rows (>= %s): %d", symbol, retention_cutoff, len(monthly_rows))
             return len(monthly_rows or [])
 
-        # Incremental: pull recent daily, recompute EOM for any months in window
-        lookback = max(self.lookback_days, 40)  # safety floor
+        lookback = max(self.lookback_days, 40)
         window_cutoff = date.today() - timedelta(days=lookback)
-
         daily_rows_recent = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id)
-        # Client-side filter to max(retention_cutoff, window_cutoff)
         effective_cutoff = max(retention_cutoff, window_cutoff)
         daily_rows_recent = [
             r for r in (daily_rows_recent or [])
             if r.get("price_date") and r["price_date"] >= effective_cutoff
         ]
-
-        # Recompute monthly bars for any months present in the window
         monthly_recent = self._compress_daily_to_monthly_eom(daily_rows_recent)
         if monthly_recent:
             await self.financial_repo.upsert_price_history(monthly_recent)
@@ -406,10 +400,6 @@ class MarketDataRefreshScheduler:
         return len(monthly_recent or [])
 
     async def _has_any_price_history(self, company_id: int) -> bool:
-        """
-        Returns True if any price_history row exists for the company.
-        (Small targeted query to avoid additional repo plumbing.)
-        """
         try:
             resp = (
                 supabase.table("price_history")
@@ -418,21 +408,14 @@ class MarketDataRefreshScheduler:
                 .limit(1)
                 .execute()
             )
-            # Prefer Supabase exact count when available
             if hasattr(resp, "count") and resp.count is not None:
                 return resp.count > 0
             return bool(resp.data)
         except Exception:
-            # If the check fails, be conservative and return False (bootstrap path)
             logger.debug("price_history existence check failed for company_id=%s", company_id)
             return False
 
     async def _has_any_financials(self, company_id: int) -> bool:
-        """
-        Returns True if at least one annual income_statement row exists.
-        Used to decide whether to bootstrap IS/BS/CF before running derived metrics.
-        A lightweight single-row check — no repo method needed.
-        """
         try:
             resp = (
                 supabase.table("income_statements")
@@ -444,58 +427,44 @@ class MarketDataRefreshScheduler:
             )
             return bool(resp.data)
         except Exception:
-            # If the check fails, assume data exists to avoid spurious bootstraps.
             logger.debug(
                 "income_statements existence check failed for company_id=%s", company_id
             )
-            return True 
+            return True
 
     @staticmethod
     def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Convert daily rows (dicts with 'price_date' and 'close_price') to monthly EOM rows:
-         - Group by (year, month)
-         - Pick the row with the latest price_date (last trading day of that month)
-         - Preserve OHLCV when available (close is most important)
-         - Keep 'data_source' if present, default 'defeatbeta'
-
-        Output rows keep the original 'price_date' (the last trading day date) as the monthly bar date.
+        Convert daily OHLCV rows to monthly EOM rows:
+          - Group by (year, month)
+          - Pick the row with the latest price_date (last trading day of the month)
+          - Preserve all OHLCV fields; default data_source to 'defeatbeta'
         """
         if not daily_rows:
             return []
-
         df = pd.DataFrame(daily_rows)
         if df.empty or "price_date" not in df.columns:
             return []
-
-        # Ensure datetime for price_date
         df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
         df = df.dropna(subset=["price_date"])
         if df.empty:
             return []
-
-        # Extract (year, month)
         df["year"] = df["price_date"].dt.year
         df["month"] = df["price_date"].dt.month
-
-        # For each (year, month), pick the row with max(price_date) -> last trading day
         idx = df.groupby(["year", "month"])["price_date"].idxmax()
         last_trading_rows = df.loc[idx].copy()
-
         out: List[Dict[str, Any]] = []
         for _, r in last_trading_rows.iterrows():
             out.append({
-                "company_id": int(r.get("company_id")),
-                "price_date": r["price_date"].date(),
-                "open_price": MarketDataRefreshScheduler._safe_num(r.get("open_price")),
+                "company_id":  int(r.get("company_id")),
+                "price_date":  r["price_date"].date(),
+                "open_price":  MarketDataRefreshScheduler._safe_num(r.get("open_price")),
                 "close_price": MarketDataRefreshScheduler._safe_num(r.get("close_price")),
-                "high_price": MarketDataRefreshScheduler._safe_num(r.get("high_price")),
-                "low_price": MarketDataRefreshScheduler._safe_num(r.get("low_price")),
-                "volume": int(r.get("volume")) if pd.notna(r.get("volume")) else None,
+                "high_price":  MarketDataRefreshScheduler._safe_num(r.get("high_price")),
+                "low_price":   MarketDataRefreshScheduler._safe_num(r.get("low_price")),
+                "volume":      int(r.get("volume")) if pd.notna(r.get("volume")) else None,
                 "data_source": str(r.get("data_source") or "defeatbeta"),
             })
-
-        # Sort by date for consistency
         out.sort(key=lambda x: x["price_date"])
         return out
 
@@ -505,22 +474,15 @@ class MarketDataRefreshScheduler:
             return None
         try:
             f = float(v)
-            # NaN check: NaN != NaN in Python
-            return f if f == f else None
+            return f if f == f else None  # NaN guard
         except (ValueError, TypeError):
             return None
 
     @staticmethod
     def _years_ago(from_date: date, years: int) -> date:
-        """
-        Compute a date 'years' years before 'from_date', handling leap years safely.
-        Example: Feb 29 -> Feb 28 in non-leap target year.
-        """
+        """Return a date `years` years before `from_date`, handling Feb 29 safely."""
         try:
             return from_date.replace(year=from_date.year - years)
         except ValueError:
-            # Handle Feb 29 -> Feb 28 (or similar end-of-month anomalies)
-            # Move to the last valid day of February in the target year
             target_year = from_date.year - years
-            march_first = date(target_year, 3, 1)
-            return march_first - timedelta(days=1)
+            return date(target_year, 3, 1) - timedelta(days=1)

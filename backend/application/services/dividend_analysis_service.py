@@ -304,31 +304,41 @@ class DividendAnalysisService:
         cash       = safe_float((bs_latest or {}).get("cash_and_cash_equivalents"))
         net_debt   = (total_debt - cash) if (total_debt is not None and cash is not None) else None
 
-        # Ratios — prefer pre-computed from dividend_metrics
-        payout_adj  = safe_float(dm.get("cash_dividend_payout_ratio"))
-        fcf_cov     = safe_float(dm.get("fcfe_coverage_ratio"))
+        # ── Payout ratios ──────────────────────────────────────────────────────
+        # EPS-based payout — annual_dps (per share) / eps_diluted (per share).
+        # Prefer pre-computed annual_dps from dividend_metrics; fall back to
+        # latest dividend × inferred frequency when the table is not yet populated.
+        annual_dps = safe_float(dm.get("annual_dps"))
+        if annual_dps is None:
+            _freq_label, _freq_mult = _infer_frequency(sorted_desc)
+            _latest_amt = safe_float(
+                (sorted_desc[0] if sorted_desc else {}).get("dividend_amount")
+            )
+            if _latest_amt and _freq_mult:
+                annual_dps = _latest_amt * _freq_mult
+        eps = safe_float(income_latest.get("eps_diluted"))
+        payout_eps = (annual_dps / eps) if (annual_dps and eps and eps > 0) else None
 
-        # Computed ratios (no pre-computed equivalent)
-        nd_ebitda   = (net_debt / ebitda)               if (net_debt is not None and ebitda and ebitda > 0) else None
-        int_cov     = (ebit / abs(interest_exp))         if (ebit and interest_exp and interest_exp != 0) else None
-        cash_payout = (divs_paid / ocf)                  if (divs_paid and ocf and ocf > 0) else None
-        fcf_payout  = (divs_paid / fcf)                  if (divs_paid and fcf and fcf > 0) else None
+        # GAAP payout — total cash dividends paid / net income
+        payout_gaap = (divs_paid / net_income) if (divs_paid and net_income and net_income > 0) else None
 
-        # Fall back if pre-computed not available
-        if payout_adj is None:
-            annual_div = safe_float(dm.get("annual_dps"))
-            eps        = safe_float(income_latest.get("eps_diluted"))
-            if annual_div and eps and eps > 0:
-                payout_adj = annual_div / eps
+        # FCF coverage — prefer pre-computed, fall back to fcf / divs_paid
+        fcf_cov = safe_float(dm.get("fcfe_coverage_ratio"))
         if fcf_cov is None and fcf and divs_paid and divs_paid > 0:
             fcf_cov = fcf / divs_paid
 
+        # OCF payout, FCF payout, leverage, interest coverage
+        cash_payout = (divs_paid / ocf)           if (divs_paid and ocf and ocf > 0)                      else None
+        fcf_payout  = (divs_paid / fcf)           if (divs_paid and fcf and fcf > 0)                      else None
+        nd_ebitda   = (net_debt / ebitda)         if (net_debt is not None and ebitda and ebitda > 0)      else None
+        int_cov     = (ebit / abs(interest_exp))  if (ebit and interest_exp and interest_exp != 0)         else None
+
         has_cut, cut_year = self._check_cut_history(sorted_desc)
-        score    = self._score_safety(payout_adj, fcf_cov, cash_payout, nd_ebitda, int_cov, has_cut, cut_year)
+        score    = self._score_safety(payout_eps, fcf_cov, cash_payout, nd_ebitda, int_cov, has_cut, cut_year)
         category = "Good" if score >= 70 else "Caution" if score >= 45 else "Poor"
 
         metrics = self._build_safety_metrics(
-            payout_adj, None, cash_payout, fcf_payout,
+            payout_eps, payout_gaap, cash_payout, fcf_payout,
             fcf_cov, nd_ebitda, int_cov, net_income,
         )
 
@@ -350,7 +360,7 @@ class DividendAnalysisService:
         }
 
         strengths, key_risks = self._strengths_risks(
-            payout_adj, fcf_cov, nd_ebitda, int_cov, has_cut, category
+            payout_eps, fcf_cov, nd_ebitda, int_cov, has_cut, category
         )
 
         return {
@@ -487,6 +497,11 @@ class DividendAnalysisService:
         cagr_5y  = safe_float(dm.get("dividend_growth_rate_5yr"))
         cagr_10y = safe_float(dm.get("dividend_growth_rate_10yr"))
         cagr_1y  = self._compute_1y_cagr(sorted_desc)
+        if cagr_3y is None:
+            cagr_3y = self._compute_cagr_from_history(sorted_desc, 3)
+        if cagr_5y is None:
+            cagr_5y = self._compute_cagr_from_history(sorted_desc, 5)
+        # cagr_10y: no computed fallback — history is capped at 5 years
 
         consecutive_increases = self._count_consecutive_increases(sorted_desc)
 
@@ -540,6 +555,39 @@ class DividendAnalysisService:
         if curr and prev and prev > 0:
             return (curr - prev) / prev
         return None
+    
+    def _compute_cagr_from_history(self, sorted_desc: List[Dict], years: int) -> Optional[float]:
+        """
+        Computes CAGR by aggregating dividend payments into annual totals per
+        calendar year, then comparing the most recent full year against `years`
+        years prior.  Used as a fallback when dividend_metrics is not yet
+        populated by the ingestion job.
+        """
+        annual: Dict[int, float] = {}
+        for d in sorted_desc:
+            raw = d.get("ex_dividend_date", "")
+            try:
+                year = int(str(raw)[:4])
+            except (ValueError, TypeError):
+                continue
+            amt = safe_float(d.get("dividend_amount"))
+            if amt:
+                annual[year] = annual.get(year, 0.0) + amt
+        if len(annual) < 2:
+            return None
+        years_list   = sorted(annual.keys(), reverse=True)
+        recent_year  = years_list[0]
+        target_year  = recent_year - years
+        if target_year not in annual:
+            return None
+        v0 = annual[target_year]
+        vn = annual[recent_year]
+        if v0 <= 0 or vn <= 0:
+            return None
+        try:
+            return (vn / v0) ** (1.0 / years) - 1.0
+        except Exception:
+            return None
 
     def _count_consecutive_increases(self, sorted_desc: List[Dict]) -> int:
         annual: Dict[int, float] = {}
@@ -625,7 +673,7 @@ class DividendAnalysisService:
             key=lambda x: x[0],
         )
         results = []
-        for row in price_history[::20] or price_history:
+        for row in price_history:
             price_date = str(row.get("price_date") or "")
             close      = safe_float(row.get("close_price"))
             if not close or close <= 0 or not price_date: continue

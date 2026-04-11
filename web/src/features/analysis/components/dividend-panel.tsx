@@ -190,57 +190,85 @@ function SafetyRow({ m }: { m: { name: string; formatted: string; benchmark: str
     );
 }
 
-/** Dividend sparkline SVG — maps amounts to a simple polyline */
-function DividendSparkline({
-    data,
-}: {
-    data: { date: string; amount: number }[];
-}) {
+/** Dividend sparkline SVG — polyline with y-axis labels and multi-year x-axis */
+function DividendSparkline({ data }: { data: { date: string; amount: number }[] }) {
     if (!data.length) return null;
 
-    const W = 220, H = 52, PADDING = 8;
+    // Layout constants
+    const LW = 42;            // left margin reserved for y-axis labels
+    const TW = 256;           // total SVG width
+    const CW = TW - LW;      // chart area width
+    const CH = 52;            // chart area height
+    const XH = 14;            // x-axis label row height below chart
+    const TH = CH + XH;      // total SVG height
+    const PAD = 6;             // inner padding within chart area
+
     const amounts = data.map((d) => d.amount);
     const minA = Math.min(...amounts);
     const maxA = Math.max(...amounts);
     const range = maxA - minA || 1;
 
-    const points = data.map((d, i) => {
-        const x = PADDING + (i / Math.max(data.length - 1, 1)) * (W - PADDING * 2);
-        const y = (H - PADDING) - ((d.amount - minA) / range) * (H - PADDING * 2);
-        return `${x},${y}`;
-    });
+    const toX = (i: number) =>
+        LW + PAD + (i / Math.max(data.length - 1, 1)) * (CW - PAD * 2);
+    const toY = (amt: number) =>
+        PAD + ((maxA - amt) / range) * (CH - PAD * 2);
 
-    // Find cuts (significant drops)
-    const hasCut = data.some((d, i) => {
-        if (i === 0) return false;
-        return d.amount < data[i - 1].amount * 0.90;
-    });
-
-    const stroke = hasCut ? "rgba(248,113,113,0.7)" : "rgba(99,102,241,0.7)";
-    const fillGrad = hasCut ? "rgba(248,113,113,0.08)" : "rgba(99,102,241,0.08)";
-
-    // Closed fill path
-    const firstPt = points[0];
+    const points = data.map((_, i) => `${toX(i).toFixed(1)},${toY(data[i].amount).toFixed(1)}`);
+    const firstX = parseFloat(points[0].split(",")[0]);
     const lastPt = points[points.length - 1];
     const lastX = parseFloat(lastPt.split(",")[0]);
-    const fillPath = `M ${firstPt.split(",")[0]},${H - PADDING} L ${points.join(" L ")} L ${lastX},${H - PADDING} Z`;
+    const fillPath = `M ${firstX},${CH - PAD} L ${points.join(" L ")} L ${lastX},${CH - PAD} Z`;
+
+    const hasCut = data.some((d, i) => i > 0 && d.amount < data[i - 1].amount * 0.9);
+    const stroke = hasCut ? "rgba(248,113,113,0.75)" : "rgba(99,102,241,0.75)";
+    const fillCol = hasCut ? "rgba(248,113,113,0.08)" : "rgba(99,102,241,0.08)";
+
+    // Y-axis label formatter — adapts decimal places to magnitude
+    const fmtAmt = (v: number) =>
+        v < 0.1 ? `$${v.toFixed(4)}` : v < 1 ? `$${v.toFixed(3)}` : `$${v.toFixed(2)}`;
+
+    // X-axis: unique years sampled to ≤5 labels so they don't collide
+    const uniqueYears = [...new Set(data.map((d) => d.date?.slice(0, 4) ?? ""))].sort();
+    const step = Math.max(1, Math.ceil(uniqueYears.length / 5));
+    const xLabels = uniqueYears
+        .filter((_, i) => i % step === 0 || i === uniqueYears.length - 1)
+        .map((yr) => {
+            const idx = data.findIndex((d) => d.date?.startsWith(yr));
+            return idx >= 0 ? { yr, x: toX(idx) } : null;
+        })
+        .filter((v): v is { yr: string; x: number } => v !== null);
+
+    const [lx, ly] = lastPt.split(",").map(Number);
 
     return (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" aria-hidden="true">
-            <path d={fillPath} fill={fillGrad} />
-            <polyline
-                points={points.join(" ")}
-                fill="none"
-                stroke={stroke}
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-            />
+        <svg viewBox={`0 0 ${TW} ${TH}`} className="w-full" aria-hidden="true">
+            {/* Y-axis: max and min labels */}
+            <text x={LW - 4} y={toY(maxA) + 4} textAnchor="end" fontSize="7.5"
+                fill="rgba(255,255,255,0.28)">{fmtAmt(maxA)}</text>
+            <text x={LW - 4} y={toY(minA) + 4} textAnchor="end" fontSize="7.5"
+                fill="rgba(255,255,255,0.28)">{fmtAmt(minA)}</text>
+
+            {/* Horizontal guide lines */}
+            <line x1={LW} y1={toY(maxA)} x2={TW - PAD} y2={toY(maxA)}
+                stroke="rgba(255,255,255,0.05)" strokeWidth="0.5" strokeDasharray="3 3" />
+            <line x1={LW} y1={toY(minA)} x2={TW - PAD} y2={toY(minA)}
+                stroke="rgba(255,255,255,0.05)" strokeWidth="0.5" strokeDasharray="3 3" />
+
+            {/* Area fill */}
+            <path d={fillPath} fill={fillCol} />
+
+            {/* Sparkline */}
+            <polyline points={points.join(" ")} fill="none" stroke={stroke}
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+
             {/* Terminal dot */}
-            {points.length > 0 && (() => {
-                const [lx, ly] = lastPt.split(",").map(Number);
-                return <circle cx={lx} cy={ly} r="3" fill={stroke} />;
-            })()}
+            <circle cx={lx} cy={ly} r="3" fill={stroke} />
+
+            {/* X-axis year labels */}
+            {xLabels.map(({ yr, x }) => (
+                <text key={yr} x={x} y={TH - 2} textAnchor="middle" fontSize="7.5"
+                    fill="rgba(255,255,255,0.25)">{yr}</text>
+            ))}
         </svg>
     );
 }
@@ -388,11 +416,10 @@ function OverviewPanel({ data, loading }: { data: DividendOverviewData | null; l
                 <div className="grid md:grid-cols-[1.6fr_1fr] gap-6">
                     <div>
                         <p className="glass-overline mb-4">Dividend Schedule</p>
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="grid grid-cols-2 gap-3">
                             {[
                                 { label: "Last Increase", value: fmtDate(data?.last_increase_date) },
-                                { label: "Ex-Dividend", value: fmtDate(data?.ex_dividend_date) },
-                                { label: "Payment Date", value: fmtDate(data?.payment_date) },
+                                { label: "Ex-Dividend Date", value: fmtDate(data?.ex_dividend_date) },
                             ].map(({ label, value }) => (
                                 <div
                                     key={label}
@@ -433,13 +460,7 @@ function OverviewPanel({ data, loading }: { data: DividendOverviewData | null; l
                     <div className="bg-white/4 border border-white/7 rounded-xl p-4">
                         <p className="glass-overline text-[9px] mb-3">Dividend History</p>
                         {data?.sparkline?.length ? (
-                            <>
-                                <DividendSparkline data={data.sparkline} />
-                                <div className="flex justify-between text-[9px] text-white/25 mt-2">
-                                    <span>{data.sparkline[0]?.date?.slice(0, 4) ?? ""}</span>
-                                    <span>{data.sparkline[data.sparkline.length - 1]?.date?.slice(0, 4) ?? ""}</span>
-                                </div>
-                            </>
+                            <DividendSparkline data={data.sparkline} />
                         ) : (
                             <p className="text-xs text-white/20 italic">No history data</p>
                         )}

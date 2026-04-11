@@ -22,7 +22,7 @@ function Stop-ProcessOnPort {
 }
 
 function Stop-FrontendProcess {
-    $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*next*" }
+    $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
     if ($nodeProcesses) {
         foreach ($proc in $nodeProcesses) {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
@@ -58,17 +58,22 @@ Write-Host ""
 Write-Host "Waiting for frontend to initialize..." -ForegroundColor Cyan
 Start-Sleep -Seconds 3
 
-# Start backend in current terminal (blocking - all logs visible)
+# ── Backend — runs in WSL (Linux) so DefeatBeta works ────────────────────────
 Write-Host ""
-Write-Host "Starting Backend on port 8001..." -ForegroundColor Green
+Write-Host "Starting Backend on port 8001 (via WSL)..." -ForegroundColor Green
 Write-Host ("-" * 50)
 Write-Host ""
 
-$venvPython = Join-Path $BackendDir "venv\Scripts\python.exe"
-$env:PYTHONPATH = "$ProjectRoot;$BackendDir"
+# Convert Windows path to WSL path reliably
+# C:\Project\StockerPro\StockerPro\backend -> /mnt/c/Project/StockerPro/StockerPro/backend
+$DriveLetter = $BackendDir.Substring(0, 1).ToLower()
+$PathWithoutDrive = $BackendDir.Substring(2).Replace("\", "/")
+$WslBackendDir = "/mnt/$DriveLetter$PathWithoutDrive"
 
-# Run backend in current terminal (blocking)
-& $venvPython -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+$WslCommand = "source ~/venv_stockerpro/bin/activate && cd '$WslBackendDir' && export PYTHONPATH='$WslBackendDir/..:$WslBackendDir' && uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
+
+# Run backend in current terminal via WSL (blocking — all logs visible here)
+wsl bash -c $WslCommand
 
 # If we reach here, backend exited
 Write-Host ""

@@ -1821,7 +1821,7 @@ class ValuationRepository:
         try:
             resp = (
                 supabase.table("dividend_history")
-                .select("ex_dividend_date, dividend_amount, currency, updated_at")
+                .select("ex_dividend_date, payment_date, record_date, frequency, dividend_amount, currency, updated_at")
                 .eq("company_id", company_id)
                 .order("ex_dividend_date", desc=True)
                 .limit(limit)
