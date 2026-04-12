@@ -12,6 +12,7 @@
  * Callers should handle 404 by showing a "Run computation" CTA, not an error state.
  */
 import { api } from "@/lib/api";
+
 import type {
   Rule1Response,
   Rule1History,
@@ -24,6 +25,9 @@ import type {
   OwnerEarningsHistory,
   ResidualIncomeResponse,
   ResidualIncomeHistory,
+  MagicFormulaResponse,
+  CANSlimResponse,
+  MurphyAnalysisResponse,
 } from "../types/analysis.types";
 
 import type { OverviewRecommendation } from "../hooks/useValuationOverview";
@@ -283,7 +287,7 @@ export async function fetchDcfValuation(
   symbol: string,
   options?: { force?: boolean; overrides?: Record<string, unknown> }
 ): Promise<DcfResponse> {
-  const qs  = options?.force ? "?force=true" : "";
+  const qs = options?.force ? "?force=true" : "";
   const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/dcf${qs}`);
   let res: Response;
   try {
@@ -509,4 +513,186 @@ export async function fetchOverviewSummary(
     return null;
   }
 }
- 
+
+/* -------------------------------------------------------------------------- */
+/* MAGIC FORMULA                                                               */
+/* -------------------------------------------------------------------------- */
+export type MagicFormulaCachedOutcome =
+  | { status: "ok"; payload: MagicFormulaResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/** GET — Pure cache read. Returns not_computed when backend has no cached run. */
+export async function fetchMagicFormulaCached(
+  symbol: string
+): Promise<MagicFormulaCachedOutcome> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/magic-formula`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<MagicFormulaResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return {
+        status: "error",
+        message: "Invalid response from server.",
+        httpStatus: 502,
+      };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message:
+      (errorBody?.detail as string) ||
+      `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/** GET with force=true — triggers recompute, used only by Recompute button. */
+export async function fetchMagicFormulaValuation(
+  symbol: string,
+  options?: { force?: boolean }
+): Promise<MagicFormulaResponse> {
+  const qs = options?.force ? "?force=true" : "";
+  const url = apiPath(
+    `/analysis/${encodeURIComponent(symbol)}/magic-formula${qs}`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    throw new Error(
+      err?.message || "Network error while computing Magic Formula."
+    );
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<MagicFormulaResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      throw new Error("Invalid response from server (missing Magic Formula payload).");
+    }
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error(
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* CANSLIM                                                                     */
+/* -------------------------------------------------------------------------- */
+
+export type CANSlimCachedOutcome =
+  | { status: "ok"; payload: CANSlimResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/** GET — Pure cache read. */
+export async function fetchCANSlimCached(
+  symbol: string
+): Promise<CANSlimCachedOutcome> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/canslim`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<CANSlimResponse>(res);
+    if (!body || typeof body !== "object" || !body.letters) {
+      return {
+        status: "error",
+        message: "Invalid response from server.",
+        httpStatus: 502,
+      };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message:
+      (errorBody?.detail as string) ||
+      `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/** GET with force=true — triggers recompute, used only by Recompute button. */
+export async function fetchCANSlimValuation(
+  symbol: string,
+  options?: { force?: boolean }
+): Promise<CANSlimResponse> {
+  const qs = options?.force ? "?force=true" : "";
+  const url = apiPath(
+    `/analysis/${encodeURIComponent(symbol)}/canslim${qs}`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    throw new Error(err?.message || "Network error while computing CANSlim.");
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<CANSlimResponse>(res);
+    if (!body || typeof body !== "object" || !body.letters) {
+      throw new Error("Invalid response from server (missing CANSlim payload).");
+    }
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error(
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* MURPHY TECHNICAL                                                            */
+/* Stateless — always computed fresh from live daily OHLCV.                   */
+/* No not_computed state, no force param, no cache read variant.              */
+/* -------------------------------------------------------------------------- */
+
+/** GET — always fresh. Throws on any failure (no fallback empty state). */
+export async function fetchMurphyTechnical(
+  symbol: string
+): Promise<MurphyAnalysisResponse> {
+  const url = apiPath(
+    `/analysis/${encodeURIComponent(symbol)}/technical/murphy`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" }, 20_000); // 20s — live price fetch
+  } catch (err: any) {
+    throw new Error(
+      err?.message || "Network error fetching technical analysis."
+    );
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<MurphyAnalysisResponse>(res);
+    if (!body || typeof body !== "object" || !body.synthesis) {
+      throw new Error(
+        "Invalid response from server (missing Murphy analysis payload)."
+      );
+    }
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error(
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`
+  );
+}

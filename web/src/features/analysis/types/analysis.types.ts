@@ -465,3 +465,298 @@ export interface DividendAnalysis {
   growth: DividendGrowthData | null;
   yield_analysis: DividendYieldData | null;
 }
+
+// ── Magic Formula ─────────────────────────────────────────────────────────────
+
+export interface MFDiagnosticFlag {
+  code: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  message: string;
+  recommendation?: string | null;
+  evidence?: Record<string, unknown> | null;
+}
+
+export interface MFInputs {
+  ttm_ebit: number | null;
+  ttm_ebit_source: string;
+  ttm_quarters_used: number;
+  enterprise_value: number | null;
+  current_assets: number | null;
+  cash_and_equivalents: number | null;
+  current_liabilities: number | null;
+  short_term_debt: number | null;
+  ppe_net: number | null;
+  goodwill_excluded: number | null;
+  intangibles_excluded: number | null;
+  fiscal_year_bs: number | null;
+}
+
+export interface MFValuation {
+  earnings_yield: number | null;
+  return_on_capital: number | null;
+  net_working_capital: number | null;
+  net_fixed_assets: number | null;
+  invested_capital_mf: number | null;
+  roic_from_ratios: number | null;
+  roic_delta_note: string | null;
+  earnings_yield_pct: number | null;
+  return_on_capital_pct: number | null;
+}
+
+export interface MFIndustryContext {
+  sector: string | null;
+  industry: string | null;
+  avg_ev_ebitda: number | null;
+  implied_industry_earnings_yield: number | null;
+  earnings_yield_vs_industry: "above" | "below" | "inline" | null;
+  earnings_yield_premium_pct: number | null;
+  avg_eps_growth: number | null;
+  sample_size: number | null;
+  calculation_date: string | null;
+  context_note: string;
+}
+
+export interface MFApplicability {
+  score: number;
+  category: "Applicable" | "Caution" | "Not Applicable";
+  excluded: boolean;
+  exclusion_reason: string | null;
+  flags: MFDiagnosticFlag[];
+  suitability_summary: string | null;
+}
+
+export interface MFDataQuality {
+  ttm_coverage: string;
+  ev_source: string;
+  bs_fiscal_year: number | null;
+  days_since_bs_update: number | null;
+  days_since_ev_snapshot: number | null;
+  fallbacks_used: boolean;
+  last_computed_at: string;
+}
+
+export interface MagicFormulaResponse {
+  symbol: string;
+  company_id: number;
+  currency: string;
+  inputs: MFInputs;
+  valuation: MFValuation;
+  industry_context: MFIndustryContext;
+  applicability: MFApplicability;
+  data_quality: MFDataQuality;
+}
+
+// ── CANSlim ───────────────────────────────────────────────────────────────────
+
+export interface LetterEvidence {
+  metrics: Record<string, unknown>;
+  data_source: "database" | "live_fetch" | "unavailable";
+  as_of_date: string | null;
+}
+
+export interface LetterScore {
+  letter: string;
+  name: string;
+  score: number;
+  weight: number;
+  available: boolean;
+  signal: "bullish" | "bearish" | "neutral" | "unavailable";
+  headline: string;
+  evidence: LetterEvidence;
+  flags: string[];
+}
+
+export interface CANSlimLetters {
+  C: LetterScore;
+  A: LetterScore;
+  N: LetterScore;
+  S: LetterScore;
+  L: LetterScore;
+  I: LetterScore;
+  M: LetterScore;
+}
+
+export interface CANSlimMarketCondition {
+  condition:
+  | "confirmed_uptrend"
+  | "uptrend_pressure"
+  | "distribution"
+  | "downtrend"
+  | "unknown";
+  spy_price: number | null;
+  spy_sma50: number | null;
+  spy_sma200: number | null;
+  sma50_vs_200: string;
+  sma200_slope: string;
+  description: string;
+}
+
+export interface CANSlimFlag {
+  code: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  message: string;
+  recommendation?: string | null;
+}
+
+export interface CANSlimDataQuality {
+  letters_fully_scored: number;
+  letters_unavailable: string[];
+  benchmark_role: string;
+  benchmark_symbol: string;
+  confidence_adjustment: number;
+  confidence_note: string | null;
+  last_computed_at: string;
+}
+
+export interface CANSlimResponse {
+  symbol: string;
+  company_id: number;
+  currency: string;
+  letters: CANSlimLetters;
+  composite_score: number;
+  composite_category: "Strong" | "Moderate" | "Weak";
+  market_condition: CANSlimMarketCondition;
+  flags: CANSlimFlag[];
+  data_quality: CANSlimDataQuality;
+}
+
+// ── Murphy Technical Analysis ──────────────────────────────────────────────────
+
+export interface PriceLevel {
+  price: number;
+  level_type: "support" | "resistance";
+  strength: "strong" | "moderate" | "weak";
+  source: string;
+  distance_pct: number;
+}
+
+export interface MACDReadings {
+  macd_line: number | null;
+  signal_line: number | null;
+  histogram: number | null;
+  histogram_prev: number | null;
+  zero_line_position: "above" | "below";
+  signal_cross: "bullish_cross" | "bearish_cross" | "none";
+  zero_cross: "bullish_cross" | "bearish_cross" | "none";
+  histogram_direction: string;
+  divergence: "bullish" | "bearish" | "none" | "insufficient_data";
+  divergence_note: string | null;
+}
+
+export interface RSIReadings {
+  value: number | null;
+  zone: "overbought" | "upper_neutral" | "lower_neutral" | "oversold";
+  trend_context: string;
+  divergence: "bullish" | "bearish" | "none" | "insufficient_data";
+  divergence_note: string | null;
+}
+
+export interface TrendAnalysis {
+  sma50: number | null;
+  sma200: number | null;
+  current_price: number;
+  price_vs_sma50: "above" | "below" | "unknown";
+  price_vs_sma200: "above" | "below" | "unknown";
+  sma50_vs_sma200: "above" | "below" | "unknown";
+  sma200_slope: "rising" | "falling" | "flat";
+  sma50_slope: "rising" | "falling" | "flat";
+  golden_cross: boolean;
+  death_cross: boolean;
+  cross_bars_ago: number | null;
+  primary_trend: "uptrend" | "downtrend" | "sideways";
+  intermediate_trend: "uptrend" | "downtrend" | "sideways";
+  trend_strength: "strong" | "moderate" | "weak";
+  distance_from_sma200_pct: number | null;
+  distance_from_sma50_pct: number | null;
+}
+
+export interface VolumeAnalysis {
+  obv_current: number | null;
+  obv_trend: "rising" | "falling" | "flat";
+  obv_confirms_price: boolean;
+  vol_avg_10: number | null;
+  vol_avg_50: number | null;
+  vol_ratio: number | null;
+  volume_signal: "accumulation" | "distribution" | "neutral";
+  volume_signal_note: string;
+}
+
+export interface MomentumAnalysis {
+  macd: MACDReadings;
+  rsi: RSIReadings;
+}
+
+export interface BollingerReadings {
+  upper: number | null;
+  middle: number | null;
+  lower: number | null;
+  bandwidth: number | null;
+  bandwidth_percentile: number | null;
+  price_position: string;
+  squeeze: boolean;
+}
+
+export interface StochasticReadings {
+  k_line: number | null;
+  d_line: number | null;
+  zone: "overbought" | "neutral" | "oversold";
+  signal: "bullish_cross" | "bearish_cross" | "none";
+}
+
+export interface OscillatorAnalysis {
+  bollinger: BollingerReadings;
+  stochastic: StochasticReadings;
+}
+
+export interface SupportResistanceAnalysis {
+  levels: PriceLevel[];
+  nearest_support: PriceLevel | null;
+  nearest_resistance: PriceLevel | null;
+  price_in_range: boolean;
+  high_52w: number | null;
+  low_52w: number | null;
+  pct_from_52w_high: number | null;
+  pct_from_52w_low: number | null;
+}
+
+export interface MurphySynthesis {
+  overall_signal:
+  | "strong_buy"
+  | "buy"
+  | "neutral"
+  | "sell"
+  | "strong_sell";
+  signal_strength: number;
+  risk_level: "low" | "moderate" | "high";
+  dominant_factor: "trend" | "momentum" | "volume" | "oscillators";
+  dominant_factor_note: string;
+  key_observations: string[];
+  conflicts: string[];
+  caution_note: string | null;
+}
+
+export interface TechnicalDataQuality {
+  bars_available: number;
+  bars_required_200sma: number;
+  bars_required_rsi: number;
+  bars_required_macd: number;
+  data_source: string;
+  oldest_bar_date: string | null;
+  newest_bar_date: string | null;
+  sufficient_for_full_analysis: boolean;
+  degraded_indicators: string[];
+}
+
+export interface MurphyAnalysisResponse {
+  symbol: string;
+  currency: string;
+  as_of_date: string;
+  current_price: number;
+  data_quality: TechnicalDataQuality;
+  trend: TrendAnalysis;
+  momentum: MomentumAnalysis;
+  volume: VolumeAnalysis;
+  support_resistance: SupportResistanceAnalysis;
+  oscillators: OscillatorAnalysis;
+  synthesis: MurphySynthesis;
+}

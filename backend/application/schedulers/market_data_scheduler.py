@@ -197,7 +197,7 @@ class MarketDataRefreshScheduler:
                     return
 
                 try:
-                    detail = await self._process_company(sym, cid)
+                    detail = await self._process_company(sym, cid, company.get("security_type", "stock"))
                     results["companies_succeeded"] += 1
                     results["detail"].append({"symbol": sym, "ok": True, **detail})
                 except Exception as e:
@@ -225,43 +225,68 @@ class MarketDataRefreshScheduler:
     # Per-Company Process
     # -------------------------------------------------------------------------
 
-    async def _process_company(self, symbol: str, company_id: int) -> Dict[str, Any]:
+    async def _process_company(
+        self,
+        symbol: str,
+        company_id: int,
+        security_type: str = "stock",
+    ) -> Dict[str, Any]:
         """
         Steps:
           1) Price history (monthly EOM compression; bootstrap or incremental)
           2) Splits
+          --- stock-only below ---
           3) Revenue forecast
           4) Earnings forecast
           5) Company summary snapshot
           5c) IS/BS/CF bootstrap for companies never synced via earnings scheduler
           6) Derived financial ratios (version-gated — only writes when source data changed)
-          7) Dividend metrics (exits early with no writes if no dividend history exists)
-        """
+          7) Dividend metrics (exits early if no dividend history exists)
 
-        # 1) PRICE HISTORY
+        For ETFs, indices, and funds steps 3-7 are skipped.  Price history and
+        splits are the only meaningful datasets for benchmark instruments.
+         """
+        is_stock = (security_type == "stock")
+
+        if not is_stock:
+            logger.debug(
+                "[MARKET_DATA] %s security_type=%s — running price+splits only",
+                symbol, security_type,
+            )
+
+        # 1) PRICE HISTORY — all security types
         price_rows_written = await self._upsert_monthly_price_history(symbol, company_id)
 
-        # 2) SPLITS
+        # 2) SPLITS — all security types (ETFs and funds do split)
         split_rows = await self.defeat_beta_provider.get_splits_optimized(symbol, company_id)
         if split_rows:
             await self.financial_repo.upsert_splits(split_rows)
 
-        # 3) REVENUE FORECAST
-        rev_fcst_rows = await self.defeat_beta_provider.fetch_revenue_forecast(symbol, company_id)
-        if rev_fcst_rows:
-            await self.financial_repo.upsert_revenue_forecast(rev_fcst_rows)
+        # 3) REVENUE FORECAST — stocks only
+        rev_fcst_rows: List[Dict[str, Any]] = []
+        if is_stock:
+            rev_fcst_rows = await self.defeat_beta_provider.fetch_revenue_forecast(symbol, company_id)
+            if rev_fcst_rows:
+                await self.financial_repo.upsert_revenue_forecast(rev_fcst_rows)
 
-        # 4) EARNINGS FORECAST
-        eps_fcst_rows = await self.defeat_beta_provider.fetch_earnings_forecast(symbol, company_id)
-        if eps_fcst_rows:
-            await self.financial_repo.upsert_earnings_forecast(eps_fcst_rows)
+        # 4) EARNINGS FORECAST — stocks only
+        eps_fcst_rows: List[Dict[str, Any]] = []
+        if is_stock:
+            eps_fcst_rows = await self.defeat_beta_provider.fetch_earnings_forecast(symbol, company_id)
+            if eps_fcst_rows:
+                await self.financial_repo.upsert_earnings_forecast(eps_fcst_rows)
 
-        # 5) COMPANY SUMMARY
-        summary = await self.defeat_beta_provider.get_company_summary_optimized(symbol, company_id)
-        if summary:
-            await self.financial_repo.upsert_company_summary(summary)
+        # 5) COMPANY SUMMARY — stocks only
+        #    ETF/index market cap and beta are not meaningful in this context and
+        #    would pollute company_summary with non-fundamental data.
+        summary = None
+        if is_stock:
+            summary = await self.defeat_beta_provider.get_company_summary_optimized(symbol, company_id)
+            if summary:
+                await self.financial_repo.upsert_company_summary(summary)
 
-        # 5c) Bootstrap IS/BS/CF for companies that have never been synced.
+        # 5c) IS/BS/CF bootstrap — stocks only
+        #     ETFs/indices have no income statements, balance sheets, or cash flows.
         #
         # The earnings scheduler only runs for companies in the ±N day earnings
         # window. A newly added company outside that window will have empty
@@ -272,8 +297,7 @@ class MarketDataRefreshScheduler:
         # Fix: check for at least one annual income_statement row. If absent,
         # trigger a full financial sync so derived metrics has data to work with.
         try:
-            has_financials = await self._has_any_financials(company_id)
-            if not has_financials:
+            if is_stock and not await self._has_any_financials(company_id):
                 logger.info(
                     "[BOOTSTRAP] %s (company_id=%s) has no IS/BS/CF rows — "
                     "triggering full financial sync",
@@ -316,40 +340,43 @@ class MarketDataRefreshScheduler:
             # Non-fatal — steps 6 & 7 still run. If IS/BS/CF are empty, derived
             # metrics will return count:0 and log appropriately.
 
-        # 6) DERIVED FINANCIAL RATIOS
+        # 6) DERIVED FINANCIAL RATIOS — stocks only
         # Version-gated internally: only writes rows whose source data changed.
         # Safe to call unconditionally every cycle.
         ratios_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
-        try:
-            ratios_result = await compute_and_upsert_derived_financial_metrics(
-                company_id=company_id
-            )
-            logger.info(
-                "[RATIOS] %s: %d/%d rows written",
-                symbol,
-                ratios_result.get("rows_changed", 0),
-                ratios_result.get("count", 0),
-            )
-        except Exception as exc:
-            logger.error("[RATIOS] %s failed: %s", symbol, exc)
+        if is_stock:
+            try:
+                ratios_result = await compute_and_upsert_derived_financial_metrics(
+                    company_id=company_id
+                )
+                logger.info(
+                    "[RATIOS] %s: %d/%d rows written",
+                    symbol,
+                    ratios_result.get("rows_changed", 0),
+                    ratios_result.get("count", 0),
+                )
+            except Exception as exc:
+                logger.error("[RATIOS] %s failed: %s", symbol, exc)
 
-        # 7) DIVIDEND METRICS
+        # 7) DIVIDEND METRICS — stocks only
         # Exits early with no DB writes if no dividend_history rows exist.
         # Safe to call unconditionally for every company.
         div_result: Dict[str, Any] = {"rows_changed": 0, "upserted": False}
-        try:
-            div_result = await compute_and_upsert_dividend_metrics(company_id=company_id)
-            if div_result.get("upserted"):
-                logger.info(
-                    "[DIV_METRICS] %s: %d rows written",
-                    symbol,
-                    div_result.get("rows_changed", 0),
-                )
-        except Exception as exc:
-            logger.error("[DIV_METRICS] %s failed: %s", symbol, exc)
+        if is_stock:
+            try:
+                div_result = await compute_and_upsert_dividend_metrics(company_id=company_id)
+                if div_result.get("upserted"):
+                    logger.info(
+                        "[DIV_METRICS] %s: %d rows written",
+                        symbol,
+                        div_result.get("rows_changed", 0),
+                    )
+            except Exception as exc:
+                logger.error("[DIV_METRICS] %s failed: %s", symbol, exc)
 
         return {
             "price_history_monthly": price_rows_written,
+            "security_type":         security_type,
             "splits":                len(split_rows or []),
             "revenue_forecast":      len(rev_fcst_rows or []),
             "earnings_forecast":     len(eps_fcst_rows or []),

@@ -45,4 +45,10 @@ export const QK = {
   // ── All watchlists metadata (switcher, cap check) ────────────────────────
   watchlists: () =>
     ["watchlists"] as const,
+  magicFormula: (symbol: string) =>
+    ["analysis", "magic-formula", symbol.toUpperCase()] as const,
+  canslim: (symbol: string) =>
+    ["analysis", "canslim", symbol.toUpperCase()] as const,
+  murphyTechnical: (symbol: string) =>
+    ["analysis", "technical", "murphy", symbol.toUpperCase()] as const,
 } as const;

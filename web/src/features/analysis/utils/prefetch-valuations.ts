@@ -22,7 +22,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { QK } from "@/lib/query-keys";
 import { STALE, GC } from "@/lib/query-client";
 import { rule1QueryFn } from "@/features/analysis/hooks/useAnalysis";
-import { dcfQueryFn }   from "@/features/analysis/hooks/useDcfAnalysis";
+import { dcfQueryFn } from "@/features/analysis/hooks/useDcfAnalysis";
 import {
   fetchDdmCached,
   fetchOwnerEarningsCached,
@@ -32,11 +32,11 @@ import type { DdmVariant } from "@/features/analysis/types/analysis.types";
 
 const PREFETCH_OPTIONS = {
   staleTime: STALE.VALUATION,
-  gcTime:    GC.VALUATION,
+  gcTime: GC.VALUATION,
 } as const;
 
 export function prefetchAllValuations(
-  symbol:      string,
+  symbol: string,
   queryClient: QueryClient,
 ): void {
   if (!symbol) return;
@@ -45,14 +45,14 @@ export function prefetchAllValuations(
   // ── Rule #1 ────────────────────────────────────────────────────────────────
   queryClient.prefetchQuery({
     queryKey: QK.rule1(upper),
-    queryFn:  () => rule1QueryFn(upper),
+    queryFn: () => rule1QueryFn(upper),
     ...PREFETCH_OPTIONS,
   });
 
   // ── DCF ────────────────────────────────────────────────────────────────────
   queryClient.prefetchQuery({
     queryKey: QK.dcf(upper),
-    queryFn:  () => dcfQueryFn(upper),
+    queryFn: () => dcfQueryFn(upper),
     ...PREFETCH_OPTIONS,
   });
 
@@ -60,7 +60,7 @@ export function prefetchAllValuations(
   const ddmVariant: DdmVariant = "gordon";
   queryClient.prefetchQuery({
     queryKey: QK.ddm(upper, ddmVariant),
-    queryFn:  async () => {
+    queryFn: async () => {
       const outcome = await fetchDdmCached(upper, ddmVariant);
       if (outcome.status === "not_computed") return { notComputed: true };
       if (outcome.status === "ok") return { ...outcome.payload, notComputed: false };
@@ -72,7 +72,7 @@ export function prefetchAllValuations(
   // ── Owner Earnings ─────────────────────────────────────────────────────────
   queryClient.prefetchQuery({
     queryKey: QK.ownerEarnings(upper),
-    queryFn:  async () => {
+    queryFn: async () => {
       const outcome = await fetchOwnerEarningsCached(upper);
       if (outcome.status === "not_computed") return { notComputed: true };
       if (outcome.status === "ok") return { ...outcome.payload, notComputed: false };
@@ -84,12 +84,22 @@ export function prefetchAllValuations(
   // ── Residual Income ────────────────────────────────────────────────────────
   queryClient.prefetchQuery({
     queryKey: QK.residualIncome(upper),
-    queryFn:  async () => {
+    queryFn: async () => {
       const outcome = await fetchResidualIncomeCached(upper);
       if (outcome.status === "not_computed") return { notComputed: true };
       if (outcome.status === "ok") return { ...outcome.payload, notComputed: false };
       throw new Error(outcome.message);
     },
     ...PREFETCH_OPTIONS,
+  });
+  queryClient.prefetchQuery({
+    queryKey: QK.magicFormula(symbol),
+    queryFn: () => magicFormulaQueryFn(symbol),
+    staleTime: STALE.VALUATION,
+  });
+  queryClient.prefetchQuery({
+    queryKey: QK.canslim(symbol),
+    queryFn: () => canslimQueryFn(symbol),
+    staleTime: STALE.VALUATION,
   });
 }

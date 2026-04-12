@@ -23,6 +23,9 @@ import { DdmPanel } from "@/features/analysis/components/ddm-panel";
 import { OwnerEarningsPanel } from "@/features/analysis/components/owner-earnings-panel";   // ← NEW
 import { ResidualIncomePanel } from "@/features/analysis/components/residual-income-panel"; // ← NEW
 import { DividendPanel } from "@/features/analysis/components/dividend-panel";
+import { MurphyPanel } from "@/features/analysis/components/murphy-panel";
+import { MagicFormulaPanel } from "@/features/analysis/components/magic-formula-panel";
+import { CANSlimPanel } from "@/features/analysis/components/canslim-panel";
 
 import {
   TrendingUp,
@@ -47,6 +50,8 @@ const TOP_TABS = [
   { id: "investors", label: "Super Investors", icon: Users },
   { id: "others", label: "Others", icon: MoreHorizontal },
 ] as const;
+
+type OthersMethod = "magic_formula" | "canslim";
 
 type TopTab = (typeof TOP_TABS)[number]["id"];
 
@@ -99,6 +104,7 @@ export default function AnalysisPage() {
 
   const [method, setMethod] = useState<IntrinsicMethod>("overview");
   const [tab, setTab] = useState<TopTab>("intrinsic");
+  const [othersMethod, setOthersMethod] = useState<OthersMethod>("magic_formula");
 
   const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
 
@@ -233,12 +239,9 @@ export default function AnalysisPage() {
           </div>
         )}
         {tab === "technical" && (
-          <ComingSoonPanel
-            title="Technical Analysis"
-            description="Momentum, trend, and market behavior indicators."
-            items={["RSI", "Moving Averages", "MACD", "Trend Strength"]}
-            icon={BarChart2}
-          />
+          <div className="animate-fade-up">
+            <MurphyPanel symbol={upperSymbol} />
+          </div>
         )}
         {tab === "investors" && (
           <ComingSoonPanel
@@ -249,13 +252,54 @@ export default function AnalysisPage() {
           />
         )}
         {tab === "others" && (
-          <ComingSoonPanel
-            title="Other Models"
-            description="Additional valuation frameworks and investment models."
-            items={["Magic Formula", "CAN SLIM", "Relative Valuation", "Graham Number"]}
-            // NOTE: "Residual Income" removed — it now lives in the Intrinsic Value tab (RI button)
-            icon={MoreHorizontal}
-          />
+          <div className="space-y-6 animate-fade-up">
+            {/* Sub-tab selector — matches MethodSelector pattern */}
+            <div className="glass-segmented overflow-x-auto no-scrollbar w-full">
+              <button
+                onClick={() => setOthersMethod("magic_formula")}
+                className={cn(
+                  "glass-segmented-item flex items-center gap-1.5",
+                  othersMethod === "magic_formula" && "active",
+                )}
+              >
+                <span className="hidden sm:inline">Magic Formula</span>
+                <span className="sm:hidden">Magic</span>
+              </button>
+              <button
+                onClick={() => setOthersMethod("canslim")}
+                className={cn(
+                  "glass-segmented-item flex items-center gap-1.5",
+                  othersMethod === "canslim" && "active",
+                )}
+              >
+                <span className="hidden sm:inline">CANSlim</span>
+                <span className="sm:hidden">CANS</span>
+              </button>
+              {/* Relative Valuation — coming soon */}
+              <button
+                disabled
+                className="glass-segmented-item flex items-center gap-1.5 opacity-35 cursor-not-allowed"
+              >
+                <span className="hidden sm:inline">Relative Valuation</span>
+                <span className="sm:hidden">Relative</span>
+              </button>
+              {/* Graham Number — coming soon */}
+              <button
+                disabled
+                className="glass-segmented-item flex items-center gap-1.5 opacity-35 cursor-not-allowed"
+              >
+                <span className="hidden sm:inline">Graham Number</span>
+                <span className="sm:hidden">Graham</span>
+              </button>
+            </div>
+
+            {othersMethod === "magic_formula" && (
+              <MagicFormulaPanel symbol={upperSymbol} />
+            )}
+            {othersMethod === "canslim" && (
+              <CANSlimPanel symbol={upperSymbol} />
+            )}
+          </div>
         )}
       </div>
     </div>

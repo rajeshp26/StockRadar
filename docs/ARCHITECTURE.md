@@ -153,12 +153,14 @@ All services must align with the following key identifiers:
 | `docs/` | Engineering logs and security guidelines. |
 
 .
+
 ├── .idx/
 │   ├── dev.nix
 │   └── icon.png
 ├── apphosting.yaml
 ├── backend/
 │   ├── api/
+│   │   ├── analysis.py
 │   │   ├── users.py
 │   │   ├── valuations.py
 │   │   ├── watchlist_items.py
@@ -173,61 +175,62 @@ All services must align with the following key identifiers:
 │   │   │   ├── __init__.py
 │   │   │   ├── earnings_scheduler.py
 │   │   │   └── market_data_scheduler.py
-│   │   ├── services/
-│   │   │   ├── __init__.py
-│   │   │   ├── dcf_service.py
-│   │   │   ├── dcf_suitability.py
-│   │   │   ├── ddm_service.py
-│   │   │   ├── ddm_suitability.py
-│   │   │   ├── recompute_guard.py
-│   │   │   ├── rule1_suitability.py
-│   │   │   ├── valuation_service.py
-│   │   │   └── watchlist_service.py
-│   │   └── __init__.py
+│   │   └── services/
+│   │       ├── __init__.py
+│   │       ├── ai_service.py
+│   │       ├── dcf_service.py
+│   │       ├── dcf_suitability.py
+│   │       ├── ddm_service.py
+│   │       ├── ddm_suitability.py
+│   │       ├── dividend_analysis_service.py
+│   │       ├── owner_earnings_service.py
+│   │       ├── owner_earnings_suitability.py
+│   │       ├── recompute_guard.py
+│   │       ├── residual_income_service.py
+│   │       ├── residual_income_suitability.py
+│   │       ├── rule1_service.py
+│   │       ├── rule1_suitability.py
+│   │       ├── valuation_service.py
+│   │       └── watchlist_service.py
 │   ├── auth.py
 │   ├── config.py
 │   ├── database.py
 │   ├── dependencies.py
 │   ├── domain/
 │   │   ├── entities/
-│   │   │   ├── __init__.py
 │   │   │   └── watchlist.py
 │   │   ├── exceptions.py
-│   │   ├── __init__.py
 │   │   ├── interfaces/
-│   │   │   ├── __init__.py
 │   │   │   ├── repository.py
 │   │   │   └── stock_provider.py
 │   │   ├── model_types.py
 │   │   └── models/
-│   │       ├── __init__.py
 │   │       ├── valuation_dcf.py
 │   │       ├── valuation_ddm.py
+│   │       ├── valuation_owner_earnings.py
+│   │       ├── valuation_residual_income.py
 │   │       └── valuation_rule1.py
 │   ├── google_credentials.json
 │   ├── infrastructure/
-│   │   ├── __init__.py
 │   │   └── repositories/
-│   │       ├── __init__.py
 │   │       ├── financial_repository.py
 │   │       ├── supabase_repository.py
 │   │       └── valuation_repository.py
 │   ├── main.py
 │   ├── providers/
-│   │   ├── __init__.py
 │   │   ├── base.py
 │   │   ├── defeat_beta_provider.py
 │   │   └── yfinance_provider.py
 │   ├── requirements.txt
 │   ├── schemas.py
+│   ├── scripts/
+│   │   ├── backfill_derived_metrics.py
+│   │   ├── phase7_backfill.py
+│   │   └── phase7_spot_check.py
 │   ├── service-account.json
-│   ├── services/
-│   │   └── sync_service.py
 │   ├── shared/
-│   │   ├── __init__.py
 │   │   ├── constants.py
 │   │   ├── exceptions/
-│   │   │   ├── __init__.py
 │   │   │   └── base.py
 │   │   └── finance_math.py
 │   ├── start-prod.sh
@@ -270,56 +273,36 @@ All services must align with the following key identifiers:
 │   │   │   ├── api/
 │   │   │   │   ├── api_client.dart
 │   │   │   │   ├── api_exception.dart
-│   │   │   │   ├── api_exception.freezed.dart
-│   │   │   │   ├── api_result.dart
-│   │   │   │   ├── api_result.freezed.dart
 │   │   │   │   └── auth_interceptor.dart
 │   │   │   ├── config/
 │   │   │   │   ├── environment.dart
 │   │   │   │   └── firebase_config.dart
 │   │   │   ├── models/
-│   │   │   │   ├── watchlist.dart
-│   │   │   │   ├── watchlist.freezed.dart
-│   │   │   │   └── watchlist.g.dart
+│   │   │   │   └── watchlist.dart
 │   │   │   ├── providers/
-│   │   │   │   ├── api_provider.dart
-│   │   │   │   └── api_provider.g.dart
+│   │   │   │   └── api_provider.dart
 │   │   │   └── services/
 │   │   │       └── watchlist_service.dart
 │   │   ├── features/
 │   │   │   ├── auth/
 │   │   │   │   └── providers/
-│   │   │   │       ├── auth_provider.dart
-│   │   │   │       └── auth_provider.g.dart
+│   │   │   │       └── auth_provider.dart
 │   │   │   └── watchlist/
 │   │   │       ├── presentation/
 │   │   │       │   ├── screens/
-│   │   │       │   │   └── watchlist_screen.dart
-│   │   │       │   └── widgets/
-│   │   │       │       └── stock_card.dart
+│   │   │   │   │   └── watchlist_screen.dart
+│   │   │   │   └── widgets/
+│   │   │   │       └── stock_card.dart
 │   │   │       └── providers/
-│   │   │           ├── watchlist_provider.dart
-│   │   │           └── watchlist_provider.g.dart
+│   │   │           └── watchlist_provider.dart
 │   │   ├── main.dart
-│   │   ├── preview_main.dart
 │   │   └── shared/
 │   │       └── widgets/
 │   │           ├── glass_card.dart
 │   │           └── watchlist_shimmer.dart
-│   ├── manage.sh
-│   ├── pubspec.lock
 │   ├── pubspec.yaml
-│   ├── test/
-│   │   └── widget_test.dart
-│   └── web/
-│       ├── favicon.png
-│       ├── icons/
-│       │   ├── Icon-192.png
-│       │   ├── Icon-512.png
-│       │   ├── Icon-maskable-192.png
-│       │   └── Icon-maskable-512.png
-│       ├── index.html
-│       └── manifest.json
+│   └── test/
+│       └── widget_test.dart
 ├── package-lock.json
 ├── run.sh
 ├── scripts/
@@ -342,12 +325,9 @@ All services must align with the following key identifiers:
     ├── components.json
     ├── next-env.d.ts
     ├── next.config.js
-    ├── package-lock.json
     ├── package.json
     ├── postcss.config.mjs
     ├── public/
-    │   ├── icon-192.png
-    │   └── manifest.json
     ├── src/
     │   ├── ai/
     │   │   ├── dev.ts
@@ -366,23 +346,14 @@ All services must align with the following key identifiers:
     │   │   │   │   └── page.tsx
     │   │   │   └── watchlist/
     │   │   │       └── page.tsx
-    │   │   ├── api/
-    │   │   │   ├── auth/
-    │   │   │   │   └── session/
-    │   │   │   │       └── route.ts
-    │   │   │   └── proxy/
-    │   │   │       └── [...path]/
-    │   │   │           └── route.ts
-    │   │   ├── favicon.ico
-    │   │   ├── globals.css
-    │   │   ├── layout.tsx
     │   │   ├── login/
     │   │   │   └── page.tsx
-    │   │   ├── page.tsx
-    │   │   └── signup/
-    │   │       └── page.tsx
+    │   │   ├── signup/
+    │   │   │   └── page.tsx
+    │   │   ├── globals.css
+    │   │   ├── layout.tsx
+    │   │   └── page.tsx
     │   ├── components/
-    │   │   ├── FirebaseErrorListener.tsx
     │   │   ├── auth/
     │   │   │   ├── login-form.tsx
     │   │   │   └── signup-form.tsx
@@ -393,116 +364,48 @@ All services must align with the following key identifiers:
     │   │   │   ├── watchlist-switcher.tsx
     │   │   │   ├── watchlist-toolbar.tsx
     │   │   │   └── watchlist.tsx
-    │   │   ├── header.tsx
-    │   │   ├── icons.tsx
     │   │   ├── ui/
-    │   │   │   ├── accordion.tsx
-    │   │   │   ├── alert-dialog.tsx
-    │   │   │   ├── alert.tsx
-    │   │   │   ├── avatar.tsx
-    │   │   │   ├── badge.tsx
-    │   │   │   ├── button.tsx
-    │   │   │   ├── calendar.tsx
-    │   │   │   ├── card.tsx
-    │   │   │   ├── carousel.tsx
-    │   │   │   ├── chart.tsx
-    │   │   │   ├── checkbox.tsx
-    │   │   │   ├── collapsible.tsx
-    │   │   │   ├── dialog.tsx
-    │   │   │   ├── dropdown-menu.tsx
-    │   │   │   ├── form.tsx
-    │   │   │   ├── input.tsx
-    │   │   │   ├── label.tsx
-    │   │   │   ├── menubar.tsx
-    │   │   │   ├── popover.tsx
-    │   │   │   ├── progress.tsx
-    │   │   │   ├── radio-group.tsx
-    │   │   │   ├── scroll-area.tsx
-    │   │   │   ├── select.tsx
-    │   │   │   ├── separator.tsx
-    │   │   │   ├── sheet.tsx
-    │   │   │   ├── sidebar.tsx
-    │   │   │   ├── skeleton.tsx
-    │   │   │   ├── slider.tsx
-    │   │   │   ├── switch.tsx
-    │   │   │   ├── table.tsx
-    │   │   │   ├── tabs.tsx
-    │   │   │   ├── textarea.tsx
-    │   │   │   ├── toast.tsx
-    │   │   │   ├── toaster.tsx
-    │   │   │   └── tooltip.tsx
+    │   │   │   ├── (all shadcn/ui components)
     │   │   └── user-nav.tsx
     │   ├── features/
     │   │   ├── analysis/
-    │   │   │   ├── analytics/
-    │   │   │   │   └── analysis.analytics.ts
     │   │   │   ├── components/
-    │   │   │   │   ├── dcf-history.tsx
-    │   │   │   │   ├── dcf-how.tsx
-    │   │   │   │   ├── dcf-method.tsx
-    │   │   │   │   ├── dcf-panel.tsx
-    │   │   │   │   ├── dcf-suitability.tsx
-    │   │   │   │   ├── dcf-summary.tsx
-    │   │   │   │   ├── ddm-panel.tsx
-    │   │   │   │   ├── intrinsic-panel.tsx
-    │   │   │   │   ├── method-panel.tsx
-    │   │   │   │   ├── method-selector.tsx
-    │   │   │   │   ├── rule1-panel.tsx
-    │   │   │   │   ├── shared-ui.tsx
-    │   │   │   │   └── valuation-overview.tsx
     │   │   │   ├── hooks/
-    │   │   │   │   ├── useAnalysis.ts
-    │   │   │   │   ├── useDcfAnalysis.ts
-    │   │   │   │   ├── useDcfHistory.ts
-    │   │   │   │   ├── useDdmAnalysis.ts
-    │   │   │   │   ├── useDdmHistory.ts
-    │   │   │   │   ├── useLivePrice.ts
-    │   │   │   │   └── useRule1History.ts
     │   │   │   ├── services/
-    │   │   │   │   └── analysis.service.ts
     │   │   │   ├── types/
-    │   │   │   │   └── analysis.types.ts
     │   │   │   └── valuation/
-    │   │   │       └── methods.ts
     │   │   ├── auth/
     │   │   │   ├── services/
-    │   │   │   │   ├── auth.service.ts
-    │   │   │   │   └── token-manager.ts
     │   │   │   └── types/
-    │   │   │       └── auth.types.ts
     │   │   └── watchlists/
     │   │       ├── hooks/
-    │   │       │   └── useWatchlist.ts
     │   │       ├── services/
-    │   │       │   └── watchlist.service.ts
     │   │       └── types/
-    │   │           └── watchlist.types.ts
     │   ├── firebase/
-    │   │   ├── client-provider.tsx
     │   │   ├── config.ts
-    │   │   ├── error-emitter.ts
-    │   │   ├── errors.ts
+    │   │   ├── provider.tsx
     │   │   ├── firestore/
-    │   │   │   ├── use-collection.tsx
-    │   │   │   └── use-doc.tsx
-    │   │   ├── index.ts
-    │   │   ├── non-blocking-login.tsx
-    │   │   ├── non-blocking-updates.tsx
-    │   │   └── provider.tsx
+    │   │   ├── errors.ts
+    │   │   └── index.ts
     │   ├── hooks/
     │   │   ├── use-mobile.tsx
     │   │   ├── use-toast.ts
+    │   │   ├── usePriceData.ts
     │   │   └── useWatchlist.ts
     │   ├── lib/
     │   │   ├── api.ts
     │   │   ├── data.ts
     │   │   ├── performance.ts
-    │   │   ├── placeholder-images.json
     │   │   ├── placeholder-images.ts
+    │   │   ├── query-client.ts
+    │   │   ├── query-keys.ts
+    │   │   ├── time.ts
     │   │   ├── types.ts
     │   │   └── utils.ts
     │   ├── providers/
-    │   │   └── auth-provider.tsx
+    │   │   ├── auth-provider.tsx
+    │   │   ├── GlobalSSEProvider.tsx
+    │   │   └── query-provider.tsx
     │   ├── proxy.ts
     │   ├── services/
     │   │   └── watchlist.service.ts

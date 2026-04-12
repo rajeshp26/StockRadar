@@ -825,7 +825,7 @@ class SupabaseFinancialRepository:
         try:
             resp = (
                 self.client.table("companies")
-                .select("company_id, ticker_symbol, data_completeness_status")
+                .select("company_id, ticker_symbol, data_completeness_status, security_type")
                 .in_("data_completeness_status", statuses)
                 .execute()
             )

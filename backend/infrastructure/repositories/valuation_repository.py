@@ -21,6 +21,8 @@ ALLOWED_METHODS = {
     "owner_earnings",
     "residual_income",
     "relative",
+    "magic_formula",   # ← new
+    "canslim",         # ← new
 }
 
 

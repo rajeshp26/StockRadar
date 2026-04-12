@@ -278,6 +278,10 @@ def _build_prompt(
         return _prompt_owner_earnings(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)
     elif method == "residual_income":
         return _prompt_residual_income(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)
+    elif method == "magic_formula":
+        return _prompt_magic_formula(symbol, score, category, flags, evidence, valuation_inputs)
+    elif method == "canslim":
+        return _prompt_canslim(symbol, score, category, flags, evidence)
     else:
         return _prompt_generic(symbol, method, score, category, flags)
 
@@ -1028,6 +1032,170 @@ Sentence 1: Verdict + the ROE vs CoE spread — is the company generating or des
 Sentence 2: Is book value growing consistently? Are earnings reliably positive to anchor the RI stream?
 Sentence 3: Are the CoE and growth assumptions defensible? Does leverage pose a risk to the book value anchor?
 Sentence 4: How much to trust the intrinsic value of {_fmt(intrinsic)} {currency}/share and the main sensitivity risk."""
+
+
+def _prompt_magic_formula(symbol, score, category, flags, ev, vi) -> str:
+    """
+    Prompt for Greenblatt Magic Formula suitability summary.
+    evidence keys: earnings_yield, return_on_capital, enterprise_value,
+                   ttm_ebit, sector, industry
+    valuation_inputs keys: currency, earnings_yield_pct, roc_pct
+    """
+    ey      = ev.get("earnings_yield")
+    roc     = ev.get("return_on_capital")
+    ev_val  = ev.get("enterprise_value")
+    ebit    = ev.get("ttm_ebit")
+    sector  = ev.get("sector") or "Unknown"
+    industry = ev.get("industry") or "Unknown"
+    currency = vi.get("currency", "USD")
+    ey_pct  = vi.get("earnings_yield_pct")
+    roc_pct = vi.get("roc_pct")
+
+    crit      = _critical_flags(flags)
+    crit_text = "\n".join(
+        f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}"
+        for f in crit[:4]
+    ) or "  None"
+
+    # Detect excluded sector
+    excluded = any(f.get("code") == "MF-SECTOR-EXCLUDED" for f in flags)
+    neg_ebit = any(f.get("code") == "MF-NEGATIVE-EBIT"   for f in flags)
+
+    # Available-only metrics block
+    mlines = []
+    if ey_pct  is not None: mlines.append(f"Earnings yield: {_fmt(ey_pct)}% (EBIT/EV)")
+    if roc_pct is not None: mlines.append(f"Return on capital: {_fmt(roc_pct)}% (EBIT/(NWC+NFA))")
+    if ebit    is not None: mlines.append(f"TTM EBIT: {_fmt(ebit)} {currency}")
+    if ev_val  is not None: mlines.append(f"Enterprise value: {_fmt(ev_val)} {currency}")
+    metrics_block = "\n".join(f"  {l}" for l in mlines) or "  (insufficient data)"
+
+    if excluded:
+        example = (
+            '"GS scores 0/100 (Not Applicable) because Greenblatt explicitly excludes '
+            'Financial Services companies from the Magic Formula — banks and brokerages use '
+            'leverage as an operating input, so EBIT divided by net working capital plus '
+            'net fixed assets produces a nonsensical return-on-capital figure that cannot '
+            'be compared to industrial or technology businesses. '
+            'The formula\'s two metrics are mechanically computable but carry no analytical '
+            'meaning in a financial firm context; the right approach for GS is price-to-book '
+            'combined with ROE or residual income analysis."'
+        )
+        return f"""Analyse this Magic Formula suitability for {symbol.upper()}. The company is excluded from the formula by Greenblatt's own guidelines.
+Do NOT describe earnings yield or ROC as meaningful metrics for this company.
+Explain WHY the sector exclusion exists and what the right alternative approach is.
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Sector: {sector} | Industry: {industry}
+=== SECTOR EXCLUSION ===
+{crit_text}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Cover: (1) why Greenblatt excludes this sector, (2) what alternative valuation method suits it."""
+
+    if neg_ebit:
+        return f"""Analyse this Magic Formula suitability for {symbol.upper()}. The formula requires positive EBIT.
+Explain why negative EBIT breaks both metrics and what that reveals about the company.
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Sector: {sector} | Industry: {industry}
+=== FORMULA BREAKDOWN ===
+TTM EBIT: {_fmt(ebit)} {currency} — negative value makes Earnings Yield and ROC both negative and meaningless.
+=== CRITICAL FLAGS ===
+{crit_text}
+=== AVAILABLE DATA ===
+{metrics_block}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Cover: (1) why negative EBIT breaks both Magic Formula metrics, (2) what it signals about the business, (3) when to revisit."""
+
+    example = (
+        '"AAPL scores 85/100 (Applicable) with an earnings yield of 7.2% and return on capital '
+        'of 48.3%, both of which comfortably clear the thresholds Greenblatt found empirically '
+        'predictive of market outperformance. '
+        'The earnings yield compares favourably to the Technology sector\'s implied earnings '
+        'yield of 3.8% (derived from the industry median EV/EBITDA of 26x), suggesting the '
+        'market is paying less per dollar of operating earnings for AAPL than for its peers. '
+        'The return on capital of 48.3% reflects AAPL\'s asset-light model — net working capital '
+        'and net fixed assets together are modest relative to the operating profit they generate. '
+        'Note that without a ranked universe these metrics cannot produce a Magic Formula rank '
+        'score; they are best used as a screen for whether the company meets Greenblatt\'s '
+        'quality and valuation thresholds rather than as a standalone buy signal."'
+    )
+    return f"""Analyse this Magic Formula suitability for {symbol.upper()}. Write a 3-4 sentence plain-English summary.
+=== SCORECARD ===
+Score: {score}/100 | Category: {category} | Sector: {sector} | Industry: {industry}
+=== MAGIC FORMULA METRICS ===
+{metrics_block}
+=== CRITICAL FLAGS ===
+{crit_text}
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Sentence 1: Verdict + what the earnings yield and ROC values mean in plain English.
+Sentence 2: How the earnings yield compares to the sector context (if available).
+Sentence 3: What the ROC level says about capital efficiency.
+Sentence 4: The key limitation — no universe ranking means this is a screen, not a rank."""
+
+
+def _prompt_canslim(symbol, score, category, flags, ev) -> str:
+    """
+    Prompt for CANSlim composite suitability summary.
+    evidence keys: letter scores passed as a flat dict from the composite.
+    """
+    crit      = _critical_flags(flags)
+    crit_text = "\n".join(
+        f"  - {f.get('code')} ({f.get('severity')}): {f.get('message','')}"
+        for f in crit[:4]
+    ) or "  None"
+
+    # Extract per-letter data from evidence if provided
+    letters_block = ""
+    if ev:
+        lines = []
+        for letter in ("C", "A", "N", "S", "L", "I", "M"):
+            ldata = ev.get(letter, {})
+            if ldata:
+                avail = ldata.get("available", True)
+                sig   = ldata.get("signal", "N/A")
+                head  = ldata.get("headline", "")
+                sc    = ldata.get("score", "N/A")
+                if avail:
+                    lines.append(f"  {letter}: score={sc}/100, signal={sig} — {head[:120]}")
+                else:
+                    lines.append(f"  {letter}: unavailable — {head[:80]}")
+        letters_block = "\n".join(lines) or "  (no letter detail available)"
+    else:
+        letters_block = "  (no letter detail available)"
+
+    example = (
+        '"NVDA scores 78/100 (Strong) across the CANSlim framework with particular strength '
+        'in C and A — quarterly EPS grew 265% year-over-year in the most recent quarter and '
+        'the 5-year EPS CAGR of 42% far exceeds O\'Neil\'s 25% minimum, with every year in '
+        'the series positive. '
+        'N scores well because price is within 3% of its 52-week high and revenue is '
+        'accelerating, while S is neutral given a large float of 2.4 billion shares. '
+        'L confirms leadership status with a 12-month return 48 percentage points above '
+        'the S&P 500 benchmark, and M is bullish with SPY trading above its rising '
+        '200-day SMA in a confirmed uptrend. '
+        'The one structural gap is I — institutional sponsorship cannot be scored without '
+        '13F data — which reduces composite confidence to 90%, meaning the 78 score should '
+        'be read as approximately 78 ± 8 depending on institutional trend."'
+    )
+    return f"""Analyse this CANSlim suitability for {symbol.upper()}. Write a 3-4 sentence plain-English summary following O'Neil's framework.
+=== COMPOSITE ===
+Score: {score}/100 | Category: {category}
+=== LETTER DETAIL ===
+{letters_block}
+=== CRITICAL FLAGS ===
+{crit_text}
+=== EXAMPLE OUTPUT — match this depth, replace all values with {symbol.upper()} data ===
+{example}
+=== NOW WRITE THE SUMMARY FOR {symbol.upper()} ===
+Output only the paragraph. No labels. No headers. Complete every sentence.
+Sentence 1: Verdict + the 2 strongest or weakest letters (C and A carry most weight) with actual values.
+Sentence 2: N, S, and L signals — what do price position, volume, and relative strength show?
+Sentence 3: M — what is the current market condition and does it support new purchases?
+Sentence 4: Note any unavailable letters and how they affect confidence in the composite score."""
+
 # ── Generic fallback ──────────────────────────────────────────────────────────
 
 def _prompt_generic(symbol, method, score, category, flags) -> str:
