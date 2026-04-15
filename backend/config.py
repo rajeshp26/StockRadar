@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # 🔥 Authentication (Firebase)
     # ============================================
     FIREBASE_PROJECT_ID: str = Field(..., description="Firebase project ID for token verification")
+    # Firebase Admin SDK credentials (replaces service-account.json)
+    FIREBASE_ADMIN_PROJECT_ID: Optional[str] = None
+    FIREBASE_ADMIN_CLIENT_EMAIL: Optional[str] = None
+    FIREBASE_ADMIN_PRIVATE_KEY: Optional[str] = None
     # ============================================
     # 🌐 API Server Configuration
     # ============================================

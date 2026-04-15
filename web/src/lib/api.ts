@@ -1,4 +1,10 @@
 // web/src/lib/api.ts
+//
+// SECURITY CHANGE FROM ORIGINAL:
+//  - Added CSRF token injection for POST/PUT/PATCH/DELETE requests.
+//    Reads __csrf cookie (set by server on login) and sends it as X-CSRF-Token header.
+//    The proxy validates this header before forwarding mutating requests.
+//
 import axios, {
   AxiosError,
   AxiosRequestConfig,
@@ -6,46 +12,36 @@ import axios, {
 } from "axios";
 import { getUnauthorizedHandler } from "@/features/auth/services/token-manager";
 
-// --- Security & Reliability defaults ---
+// ── Base URL ──────────────────────────────────────────────────────────────────
+
 const isProd = process.env.NODE_ENV === "production";
 
-// In production we expect an explicit backend URL.
-// In development we use the Next.js proxy.
 const baseURL = isProd
   ? (process.env.NEXT_PUBLIC_API_URL as string)
   : process.env.NEXT_PUBLIC_API_URL || "/api/proxy";
 
-// Fail fast if prod URL is missing (prevents accidental proxy use in prod)
 if (isProd && !baseURL) {
-  // eslint-disable-next-line no-console
   console.error(
     "[API] NEXT_PUBLIC_API_URL is not set in production. Requests will fail."
   );
 }
+
+// ── Axios instance ────────────────────────────────────────────────────────────
 
 export const api = axios.create({
   baseURL,
   headers: {
     "Content-Type": "application/json",
     Accept: "application/json",
-    // Optional: identify XHR to backend logs
     "X-Requested-With": "XMLHttpRequest",
   },
-  // Reasonable client-side guardrails
-  timeout: 12_000, // 12s
-  // Don’t automatically treat 4xx as success
+  timeout: 12_000,
   validateStatus: (status) => status >= 200 && status < 300,
-  /**
-   * CRITICAL:
-   * Ensure the browser sends the __session cookie on:
-   *  - client-side navigation (RSC waterfalls)
-   *  - standard CSR requests
-   * so the proxy can mint Authorization to the backend.
-   */
   withCredentials: true,
 });
 
-// --- Utilities ---
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
 const redactUrl = (url: string | undefined) =>
   (url || "").replace(/(token=)[^&]+/i, "$1<redacted>");
 
@@ -53,10 +49,8 @@ const method = (cfg?: AxiosRequestConfig) =>
   (cfg?.method || "get").toUpperCase();
 
 function logRequest(cfg: InternalAxiosRequestConfig) {
-  if (isProd) return cfg; // disable noisy logs in prod
+  if (isProd) return cfg;
   const safeUrl = `${cfg.baseURL || ""}${redactUrl(cfg.url)}`;
-  // Avoid printing headers (contains Authorization)
-  // eslint-disable-next-line no-console
   console.debug(`[API] → ${method(cfg)} ${safeUrl}`);
   return cfg;
 }
@@ -64,39 +58,62 @@ function logRequest(cfg: InternalAxiosRequestConfig) {
 function logResponse(resp: any) {
   if (isProd) return resp;
   const safeUrl = `${resp.config?.baseURL || ""}${redactUrl(resp.config?.url)}`;
-  // eslint-disable-next-line no-console
   console.debug(`[API] ← ${method(resp.config)} ${safeUrl} ${resp.status}`);
   return resp;
 }
 
 function toErrorMessage(err: unknown): string {
-  // Backend standard: { detail: string } or { message: string }
   const ax = err as AxiosError<any>;
-  const msg =
+  return (
     ax?.response?.data?.detail ||
     ax?.response?.data?.message ||
     ax?.message ||
-    "Request failed";
-  return msg;
+    "Request failed"
+  );
 }
 
-// --- Interceptors ---
-// Safety net: never allow callers to disable credentials
+// ── CSRF helper ───────────────────────────────────────────────────────────────
+
+/**
+ * Read the CSRF token from the __csrf cookie.
+ * This cookie is set by the server on login and is intentionally JS-readable
+ * (httpOnly: false) so we can copy it into request headers.
+ */
+function getCsrfToken(): string | null {
+  if (typeof document === "undefined") return null; // SSR guard
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith("__csrf="));
+  return match ? decodeURIComponent(match.split("=")[1]) : null;
+}
+
+// ── Request interceptors ──────────────────────────────────────────────────────
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 api.interceptors.request.use(
   (cfg) => {
-    cfg.withCredentials = true; // enforce cookie inclusion
+    // Always enforce credentials (cookie inclusion)
+    cfg.withCredentials = true;
 
-    /**
-     * SAFETY NORMALIZATION (non-breaking):
-     * Prevent accidental double-proxy paths such as:
-     *   baseURL="/api/proxy" + url="/api/proxy/valuations/..."  => "/api/proxy/api/proxy/..."
-     *
-     * If caller mistakenly passes "/api/proxy/..." as url, strip it once.
-     */
+    // Normalize accidental double-proxy paths
     if (typeof cfg.url === "string" && cfg.url.startsWith("/api/proxy/")) {
       cfg.url = cfg.url.replace(/^\/api\/proxy/, "");
     } else if (cfg.url === "/api/proxy") {
       cfg.url = "/";
+    }
+
+    // Inject CSRF token for state-changing requests
+    if (MUTATING_METHODS.has(method(cfg))) {
+      const csrfToken = getCsrfToken();
+      if (csrfToken) {
+        cfg.headers = cfg.headers ?? {};
+        (cfg.headers as Record<string, string>)["X-CSRF-Token"] = csrfToken;
+      } else if (isProd) {
+        // In production, missing CSRF token on a mutating request is a problem.
+        // Log it — the proxy will reject the request with 403 anyway.
+        console.warn("[API] CSRF token missing for mutating request:", method(cfg), cfg.url);
+      }
     }
 
     return logRequest(cfg);
@@ -104,12 +121,13 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// ── Response interceptors ─────────────────────────────────────────────────────
+
 api.interceptors.response.use(
   (resp) => logResponse(resp),
   (error: AxiosError) => {
     const status = error.response?.status;
 
-    // Normalize the error for callers
     const normalized = new Error(toErrorMessage(error)) as Error & {
       status?: number;
       code?: string;
@@ -119,25 +137,21 @@ api.interceptors.response.use(
     normalized.code = (error as any)?.code;
     normalized.raw = error;
 
-    // Security: on 401/403, trigger global unauthorized handler (real sign-out)
     if (status === 401 || status === 403) {
-      // eslint-disable-next-line no-console
       console.warn("[API] Unauthorized – triggering sign-out");
       try {
-        getUnauthorizedHandler()?.(); // non-blocking
+        getUnauthorizedHandler()?.();
       } catch {
         /* no-op */
       }
     }
 
-    // Respect server rate limits: do NOT auto-retry 429 here
-    // (UI can throttle buttons instead of hammering the server)
     return Promise.reject(normalized);
   }
 );
 
-// Optional: lightweight retry for transient network errors on safe methods
-// (Avoid retrying POST/PATCH/DELETE to respect idempotency and rate limits)
+// ── Lightweight retry for transient network errors on safe methods ────────────
+
 const NETWORK_ERROR_CODES = new Set([
   "ECONNABORTED",
   "ERR_NETWORK",
@@ -156,15 +170,14 @@ api.interceptors.response.use(undefined, async (error: any) => {
     cfg &&
     isSafeMethod &&
     NETWORK_ERROR_CODES.has(rawErr?.code || error?.code) &&
-    (cfg.__retryCount || 0) < 2 // up to 2 retries
+    (cfg.__retryCount || 0) < 2
   ) {
     cfg.__retryCount = (cfg.__retryCount || 0) + 1;
-    const backoffMs = [400, 1000][cfg.__retryCount - 1]; // simple backoff
+    const backoffMs = [400, 1000][cfg.__retryCount - 1];
     await new Promise((r) => setTimeout(r, backoffMs));
     return api.request(cfg);
   }
 
-  // pass through normalized error from previous interceptor
   return Promise.reject(error);
 });
 

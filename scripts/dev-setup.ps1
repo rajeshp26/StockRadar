@@ -1,4 +1,4 @@
-﻿# dev-setup.ps1
+# dev-setup.ps1
 # Windows-compatible startup script for StockerPro
 # Frontend in new terminal, Backend in current terminal with full logs
 
@@ -41,6 +41,8 @@ if (-not $SkipCleanup) {
     Write-Host "Cleaning up ports 3000, 8001..." -ForegroundColor Cyan
     Stop-ProcessOnPort -Port 3000
     Stop-ProcessOnPort -Port 8001
+    Write-Host "   Cleaning up WSL processes..." -ForegroundColor Yellow
+    wsl bash -c "pkill -f uvicorn 2>/dev/null; pkill -f 'python.*main:app' 2>/dev/null; sleep 1"
     Write-Host "   Done" -ForegroundColor Gray
     Write-Host ""
 }

@@ -146,6 +146,11 @@ async function proxy(request: NextRequest, method: string, pathParts: string[]) 
   const authPresent = !!bearer;
   console.log(`[PROXY] ${method} /${path} | auth=${authPresent ? "present" : "absent"} sse=${isSSE}`);
 
+  console.log(`[PROXY-DEBUG] ${method} /${path} | headers:`, {
+    authorization: request.headers.get("authorization") ? "present" : "absent",
+    cookie: request.headers.get("cookie") ? "present" : "absent",
+  });
+
   // In secure deployments, block unauthenticated requests universally (SSE included).
   if (REQUIRE_AUTH && !bearer) {
     return NextResponse.json(

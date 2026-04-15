@@ -1,59 +1,90 @@
 ﻿// web/src/app/api/auth/session/route.ts
 import { NextRequest, NextResponse } from "next/server";
-
-const COOKIE_NAME = process.env.PROXY_IDTOKEN_COOKIE ?? "__session";
-// Align with your refresh cadence; 55-60 minutes is typical for Firebase ID tokens
-const COOKIE_MAX_AGE = 60 * 60; // seconds
+import {
+  getAdminAuth,
+  SESSION_COOKIE_NAME,
+  SESSION_COOKIE_MAX_AGE_SECONDS,
+  SESSION_COOKIE_EXPIRES_MS,
+} from "@/lib/firebase-admin";
+import { attachCsrfCookie } from "@/lib/csrf";
+import { logSecurityEvent } from "@/lib/security-logger";
 
 export async function POST(req: NextRequest) {
-  let body: any = {};
+  let body: Record<string, unknown> = {};
   try {
     body = await req.json();
   } catch {
-    // ignore; will treat as empty body
+    // treat as empty body
   }
 
-  const { idToken, action } = body || {};
-  const res = NextResponse.json({ ok: true });
-
-  // Choose secure flag based on the incoming request's URL scheme.
+  const { idToken, action } = body as { idToken?: string; action?: string };
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   const isHttps = req.nextUrl.protocol === "https:";
+
   const cookieBase = {
     httpOnly: true,
-    secure: isHttps,            // always true if served over HTTPS
-    sameSite: "lax" as const,   // robust for first-party subresource requests (incl. SSE)
+    secure: isHttps,
+    sameSite: "lax" as const,
     path: "/",
   };
 
-  // Clear cookie
+  // ── CLEAR ────────────────────────────────────────────────────────────────
   if (action === "clear" || !idToken) {
+    const res = NextResponse.json({ ok: true });
+    res.cookies.set({ name: SESSION_COOKIE_NAME, value: "", ...cookieBase, maxAge: 0 });
     res.cookies.set({
-      name: COOKIE_NAME,
+      name: "__csrf",
       value: "",
-      ...cookieBase,
+      httpOnly: false,
+      secure: isHttps,
+      sameSite: "strict" as const,
+      path: "/",
       maxAge: 0,
     });
+    logSecurityEvent({ type: "LOGOUT", severity: "INFO", ip, details: "Session cleared" });
     return res;
   }
 
+  // ── BASIC VALIDATION ──────────────────────────────────────────────────────
   if (typeof idToken !== "string" || idToken.length < 20) {
-    return NextResponse.json(
-      { ok: false, error: "Invalid token" },
-      { status: 400 }
-    );
+    return NextResponse.json({ ok: false, error: "Invalid token format" }, { status: 400 });
   }
 
-  // (Optional but recommended) Verify the token here for defense-in-depth:
-  // import { getAuth } from "firebase-admin/auth";
-  // await getAuth().verifyIdToken(idToken, /* checkRevoked= */true);
+  // ── VERIFY + MINT SESSION COOKIE ──────────────────────────────────────────
+  try {
+    const adminAuth = getAdminAuth();
+    const decoded = await adminAuth.verifyIdToken(idToken, true);
+    const sessionCookie = await adminAuth.createSessionCookie(idToken, {
+      expiresIn: SESSION_COOKIE_EXPIRES_MS,
+    });
 
-  // Mint cookie
-  res.cookies.set({
-    name: COOKIE_NAME,
-    value: idToken,
-    ...cookieBase,
-    maxAge: COOKIE_MAX_AGE,
-  });
+    const res = NextResponse.json({ ok: true });
+    res.cookies.set({
+      name: SESSION_COOKIE_NAME,
+      value: sessionCookie,
+      ...cookieBase,
+      maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
+    });
+    attachCsrfCookie(res, isHttps);
 
-  return res;
+    logSecurityEvent({
+      type: "LOGIN_SUCCESS",
+      severity: "INFO",
+      userId: decoded.uid,
+      ip,
+      details: "Session cookie minted",
+    });
+    return res;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[Session] Token verification failed:", message);
+    logSecurityEvent({
+      type: "TOKEN_VERIFY_FAIL",
+      severity: "WARNING",
+      ip,
+      details: `Verification failed: ${message.substring(0, 200)}`,
+    });
+    return NextResponse.json({ ok: false, error: "Invalid or revoked token" }, { status: 401 });
+  }
 }
