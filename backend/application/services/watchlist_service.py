@@ -234,6 +234,49 @@ class WatchlistService:
             "stocks": stocks,
         }
 
+    def get_watchlist_structure_by_id(self, firebase_uid: str, watchlist_id: int) -> Dict[str, Any]:
+        """Get structure (symbols + targets) for a specific watchlist by ID."""
+        db_user_id = self.get_db_user_id(firebase_uid)
+
+        watchlist = (
+            supabase.table("watchlists")
+            .select("id, watchlist_name, is_default, user_id")
+            .eq("id", watchlist_id)
+            .limit(1)
+            .execute()
+        ).data[0] if True else None
+
+        if not watchlist or watchlist["user_id"] != db_user_id:
+            raise NotFoundError("Watchlist not found")
+
+        raw_items = self.watchlist_repo.get_items_by_watchlist_id(watchlist_id)
+
+        stocks = []
+        for item in raw_items or []:
+            company = item.get("companies")
+            if not company:
+                continue
+            stocks.append({
+                "id": item["watchlist_item_id"],
+                "symbol": company["ticker_symbol"],
+                "name": company["company_name"],
+                "sector": company.get("sector"),
+                "industry": company.get("industry"),
+                "targetBuy": item.get("target_buy"),
+                "targetSell": item.get("target_sell"),
+                "price": None,
+                "change": None,
+                "changePercent": None,
+                "lastUpdated": None,
+            })
+
+        return {
+            "watchlist_id": watchlist_id,
+            "name": watchlist["watchlist_name"],
+            "is_default": watchlist.get("is_default", False),
+            "stocks": stocks,
+        }
+
 
     # ========================================================================
     # NEW METHODS - Financial Data Integration
@@ -317,13 +360,26 @@ class WatchlistService:
             )
             logger.debug("[WATCHLIST][%s] Background task started (is_new=%s)", symbol, is_new_company)
 
-            # 7) Return small payload for the route to map to UI
+            # 7) Calculate change data from price info
+            prev_close = getattr(sd, 'previous_close', None) if sd else None
+            if current_price and prev_close:
+                change = float(current_price) - float(prev_close)
+                pct = (float(change) / float(prev_close)) * 100
+            else:
+                change = 0.0
+                pct = 0.0
+
+            # 8) Return payload with complete data for API
             return {
                 "watchlist_item_id": watchlist_item["watchlist_item_id"],
                 "company_id": company_id,
                 "symbol": symbol,
-                "current_price": current_price,       # may be None if YF failed
-                "financials_loading": True,           # always schedule background
+                "company_name": company.get("company_name"),
+                "current_price": current_price,
+                "previous_close": prev_close,
+                "change": change,
+                "change_percent": pct,
+                "financials_loading": True,
                 "is_new_stock": is_new_company,
                 "message": "Stock added. Loading financial data...",
             }

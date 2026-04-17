@@ -50,14 +50,29 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         return res.count or 0
 
     def find_watchlist_item_with_owner(self, item_id: int) -> Optional[Dict[str, Any]]:
+        # Query 1: Get item with companies (regular join - works with PostgREST)
         res = (
             self.client.table('watchlist_items')
-            .select('watchlist_item_id, watchlists!inner(user_id)')
+            .select('watchlist_item_id, watchlist_id, companies(ticker_symbol)')
             .eq('watchlist_item_id', item_id)
             .limit(1)
             .execute()
         )
-        return res.data[0] if res.data else None
+        if not res.data:
+            return None
+        item = res.data[0]
+
+        # Query 2: Get ownership via watchlist_id
+        owner = self.find_watchlist_owner(item['watchlist_id'])
+        if not owner:
+            return None
+
+        # Reconstruct in expected format for endpoint
+        return {
+            'watchlist_item_id': item['watchlist_item_id'],
+            'watchlists': {'user_id': owner['user_id']},
+            'companies': item.get('companies')
+        }
 
     def find_company_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
         res = (
@@ -99,6 +114,79 @@ class SupabaseWatchlistRepository(WatchlistRepository):
             'companies(company_id, ticker_symbol, company_name, sector, industry)'
         ).eq('watchlist_id', watchlist_id).execute()
         return res.data or []
+
+    def delete_item(self, item_id: int) -> None:
+        """Delete a watchlist item by ID."""
+        self.client.table("watchlist_items").delete().eq("watchlist_item_id", item_id).execute()
+
+    def update_item_targets(
+        self,
+        item_id: int,
+        target_buy: Optional[float],
+        target_sell: Optional[float]
+    ) -> Optional[Dict[str, Any]]:
+        """Update target prices for a watchlist item."""
+        update_data = {}
+        if target_buy is not None:
+            update_data["target_buy"] = target_buy
+        if target_sell is not None:
+            update_data["target_sell"] = target_sell
+
+        if not update_data:
+            return None
+
+        resp = (
+            self.client.table("watchlist_items")
+            .update(update_data)
+            .eq("watchlist_item_id", item_id)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def user_has_symbol(self, user_id: int, symbol: str) -> bool:
+        """Check if user has this symbol in ANY of their watchlists. Call BEFORE delete."""
+        # Step 1: Get company_id from symbol
+        company = self.find_company_by_symbol(symbol)
+        if not company:
+            return False
+
+        # Step 2: Get user's watchlist IDs
+        watchlists = self.find_by_user_id(user_id)
+        if not watchlists:
+            return False
+        watchlist_ids = [w['id'] for w in watchlists]
+
+        # Step 3: Check if company_id exists in any watchlist
+        res = (
+            self.client.table("watchlist_items")
+            .select("watchlist_item_id")
+            .in_("watchlist_id", watchlist_ids)
+            .eq("company_id", company["company_id"])
+            .limit(1)
+            .execute()
+        )
+        return bool(res.data)
+
+    def get_user_symbols(self, user_id: int) -> List[str]:
+        """Get all symbols user has across ALL watchlists. Used for bulk cleanup."""
+        # Step 1: Get user's watchlist IDs
+        watchlists = self.find_by_user_id(user_id)
+        if not watchlists:
+            return []
+        watchlist_ids = [w['id'] for w in watchlists]
+
+        # Step 2: Get items with companies embedding
+        res = (
+            self.client.table("watchlist_items")
+            .select("companies(ticker_symbol)")
+            .in_("watchlist_id", watchlist_ids)
+            .execute()
+        )
+        return [
+            row["companies"]["ticker_symbol"]
+            for row in (res.data or [])
+            if row.get("companies")
+        ]
 
 class SupabaseUserRepository:
     def __init__(self, client: Client = supabase):

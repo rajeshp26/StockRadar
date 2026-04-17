@@ -1,6 +1,7 @@
 #/backend/api/watchlists.py
 import asyncio
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Set, List, Optional
@@ -9,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from dependencies import get_current_user_dep, get_watchlist_service, limiter
+from dependencies import get_current_user_dep, get_watchlist_service, get_watchlist_repository, limiter
 from application.services.watchlist_service import WatchlistService
 from infrastructure.repositories.supabase_repository import (
     SupabaseUserRepository,
@@ -20,6 +21,7 @@ from shared.exceptions.base import AppException
 from database import supabase
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
 MAX_WATCHLISTS_PER_USER  = 5
@@ -291,6 +293,48 @@ async def broadcast_valuation_ready(symbol: str, method: str, company_id: int) -
         for queue in user_queues.get(uid, []):
             await queue.put(payload)
 
+
+# =============================================================================
+# SSE Subscription Helpers
+# =============================================================================
+
+async def subscribe_symbol(symbol: str, auth_id: str) -> bool:
+    """Subscribe user to price updates for a symbol."""
+    symbol_subscribers[symbol].add(auth_id)
+    success = auth_id in symbol_subscribers.get(symbol, set())
+    logger.info(f"SSE: {symbol} subscribed for {auth_id} (success={success})")
+    return success
+
+
+async def unsubscribe_symbol(symbol: str, auth_id: str) -> bool:
+    """Unsubscribe user from price updates. Removes symbol if no subscribers remain."""
+    symbol_subscribers[symbol].discard(auth_id)
+    if symbol in symbol_subscribers and not symbol_subscribers[symbol]:
+        del symbol_subscribers[symbol]
+        logger.info(f"SSE: {symbol} removed (no subscribers)")
+    return True
+
+
+async def broadcast_with_retry(
+    symbol: str,
+    price: float,
+    change: float,
+    change_percent: float,
+    max_retries: int = 3
+) -> bool:
+    """Broadcast price update with exponential backoff retry."""
+    for attempt in range(max_retries):
+        try:
+            await broadcast_stock_update(symbol, price, change, change_percent)
+            return True
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"SSE: broadcast failed after {max_retries} attempts for {symbol}: {e}")
+                return False
+            await asyncio.sleep(0.1 * (2 ** attempt))
+    return False
+
+
 # =============================================================================
 # NEW ENDPOINTS — Multi-Watchlist
 # =============================================================================
@@ -461,18 +505,19 @@ def rename_watchlist(
 # ── DELETE /watchlists/{watchlist_id} ────────────────────────────────────
 @router.delete("/watchlists/{watchlist_id}", tags=["Watchlists"], status_code=204)
 @limiter.limit("10/minute")
-def delete_watchlist(
+async def delete_watchlist(
     request: Request,
     watchlist_id: int,
     user: dict = Depends(get_current_user_dep),
+    repo: SupabaseWatchlistRepository = Depends(get_watchlist_repository),
 ):
     """
-    Delete a watchlist.
+    Delete a watchlist with SSE cleanup.
 
     Rules:
     - The default watchlist cannot be deleted.
-    - Cascade delete removes all watchlist_items (FK ON DELETE CASCADE confirmed in schema).
-    - Ownership verified before delete.
+    - Cascade delete removes all watchlist_items.
+    - SSE subscriptions for orphaned symbols are cleaned up.
     """
     try:
         auth_id    = user["uid"]
@@ -485,8 +530,27 @@ def delete_watchlist(
                 detail="The default watchlist cannot be deleted.",
             )
 
+        # ── 1. Get symbols BEFORE delete (for cleanup) ──────────────────────
+        items = repo.get_items_by_watchlist_id(watchlist_id)
+        watchlist_symbols = {
+            item["companies"]["ticker_symbol"]
+            for item in items
+            if item.get("companies")
+        }
+
+        # ── 2. Delete watchlist (cascade deletes items) ──────────────────────
         supabase.table("watchlists").delete().eq("id", watchlist_id).execute()
-        return  # 204 No Content
+
+        # ── 3. OPTIMIZED: Get remaining symbols in single query ─────────────
+        remaining = set(repo.get_user_symbols(db_user_id))
+        orphaned = watchlist_symbols - remaining
+
+        # ── 4. Unsubscribe all orphaned symbols ─────────────────────────────
+        if orphaned:
+            for symbol in orphaned:
+                await unsubscribe_symbol(symbol, auth_id)
+
+        return None
 
     except HTTPException:
         raise

@@ -164,6 +164,7 @@ async def add_item_to_watchlist(
 
         symbol = item.symbol.upper()
 
+        # ── 1. Business logic ──────────────────────────────────────────────
         svc_result = await service.add_stock_to_watchlist(
             user_id=db_user_id,
             symbol=symbol,
@@ -172,19 +173,22 @@ async def add_item_to_watchlist(
             target_sell=item.target_sell,
         )
 
-        # Enrich response with fresh YF details (read-only, no DB writes)
-        try:
-            sd = stock_provider.get_stock_details(symbol)
-        except Exception:
-            sd = None
+        # ── 2. Subscribe to SSE ──────────────────────────────────────────────
+        from api.watchlists import subscribe_symbol, broadcast_with_retry
+        subscribed = await subscribe_symbol(svc_result["symbol"], auth_id)
 
-        now_iso = datetime.now().isoformat()
-        stock_name = getattr(sd, "long_name", None) or symbol
-        price = svc_result.get("current_price") or (getattr(sd, "price", None) or 0.0)
-        prev_close = getattr(sd, "close_price", None) or getattr(sd, "previous_close", None)
-        change = float(price - prev_close) if (price is not None and prev_close) else 0.0
-        change_pct = float((change / prev_close) * 100) if (prev_close and prev_close != 0) else 0.0
+        # ── 3. Broadcast with retry ─────────────────────────────────────────
+        # Uses service data — NO re-fetch needed
+        if subscribed and svc_result.get("current_price"):
+            await broadcast_with_retry(
+                svc_result["symbol"],
+                svc_result["current_price"],
+                svc_result.get("change", 0.0),
+                svc_result.get("change_percent", 0.0)
+            )
 
+        # ── 4. Return response ─────────────────────────────────────────────
+        # Uses service data — NO re-fetch needed
         return AddStockResponse(
             watchlist_item=WatchlistItemData(
                 watchlist_item_id=svc_result["watchlist_item_id"],
@@ -196,11 +200,11 @@ async def add_item_to_watchlist(
             stock_data=StockData(
                 id=svc_result["watchlist_item_id"],
                 symbol=svc_result["symbol"],
-                name=stock_name,
-                price=float(price or 0.0),
-                change=float(change),
-                changePercent=float(change_pct),
-                lastUpdated=now_iso,
+                name=svc_result.get("company_name", svc_result["symbol"]),
+                price=float(svc_result.get("current_price") or 0.0),
+                change=float(svc_result.get("change") or 0.0),
+                changePercent=float(svc_result.get("change_percent") or 0.0),
+                lastUpdated=datetime.now().isoformat(),
             ),
             financials_loading=bool(svc_result.get("financials_loading", False)),
             is_new_stock=bool(svc_result.get("is_new_stock", False)),
@@ -293,7 +297,7 @@ def update_watchlist_item_targets(
 
 @router.post("/watchlist-items/delete", status_code=204)
 @limiter.limit("20/minute")
-def remove_item_from_watchlist(
+async def remove_item_from_watchlist(
     request: Request,
     req: DeleteItemRequest,
     user_token: dict = Depends(get_current_user_dep),
@@ -303,12 +307,26 @@ def remove_item_from_watchlist(
         auth_id = user_token["uid"]
         db_user_id = get_db_user_id(auth_id, repo)
 
+        # ── 1. Verify ownership and get symbol ──────────────────────────────
         item = repo.find_watchlist_item_with_owner(req.item_id)
         if not item or item["watchlists"]["user_id"] != db_user_id:
-            raise HTTPException(status_code=404, detail="Item not found or permission denied.")
+            raise HTTPException(status_code=404, detail="Item not found.")
 
+        symbol = item["companies"]["ticker_symbol"]
+
+        # ── 2. Check BEFORE delete ──────────────────────────────────────────
+        # Critical: check BEFORE delete to avoid race condition
+        remaining = repo.user_has_symbol(db_user_id, symbol)
+
+        # ── 3. Delete from database ─────────────────────────────────────────
         repo.delete_item(req.item_id)
-        return
+
+        # ── 4. Unsubscribe only if no remaining copies ──────────────────────
+        if not remaining:
+            from api.watchlists import unsubscribe_symbol
+            await unsubscribe_symbol(symbol, auth_id)
+
+        return None
 
     except HTTPException:
         raise
