@@ -236,56 +236,61 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         """
         Returns list of dicts with fiscal_year, fiscal_quarter,
         report_date, announcement_date, eps_estimate, revenue_estimate, (best-effort).
+
+        Changed to use earnings_history instead of calendar (Feb 2026).
+        earnings_history provides actual reported EPS, not just estimates.
         """
         try:
             tkr = yf.Ticker(ticker_symbol.upper())
             earnings_list: List[Dict[str, Any]] = []
 
-            # Calendar (future/scheduled with estimates)
+            # Earnings history (actual reported EPS + estimates)
+            # This is the correct API - provides epsActual, epsEstimate, epsDifference, surprisePercent
             try:
-                calendar = tkr.calendar
-                if calendar is not None and not calendar.empty:
-                    for _, row in calendar.iterrows():
+                earnings_history = tkr.earnings_history
+                if earnings_history is not None and not earnings_history.empty:
+                    for quarter_date, row in earnings_history.iterrows():
                         try:
-                            earnings_date = row.get('Earnings Date')
-                            if pd.isna(earnings_date):
-                                continue
-                            if isinstance(earnings_date, str):
-                                earnings_date = datetime.strptime(earnings_date, "%Y-%m-%d").date()
-                            elif isinstance(earnings_date, pd.Timestamp):
-                                earnings_date = earnings_date.date()
-
-                            report_date = row.get('Report Date')
-                            if pd.notna(report_date):
-                                if isinstance(report_date, str):
-                                    report_date = datetime.strptime(report_date, "%Y-%m-%d").date()
-                                elif isinstance(report_date, pd.Timestamp):
-                                    report_date = report_date.date()
+                            # quarter_date is the earnings date (index)
+                            if isinstance(quarter_date, pd.Timestamp):
+                                report_date = quarter_date.date()
+                            elif isinstance(quarter_date, str):
+                                report_date = datetime.strptime(quarter_date, "%Y-%m-%d").date()
                             else:
-                                report_date = earnings_date
+                                report_date = quarter_date
 
                             fy = report_date.year
                             fq = (report_date.month - 1) // 3 + 1
 
+                            eps_actual = self._safe_float(row.get('epsActual'))
+                            eps_estimate = self._safe_float(row.get('epsEstimate'))
+                            eps_difference = self._safe_float(row.get('epsDifference'))
+                            surprise_percent = self._safe_float(row.get('surprisePercent'))
+
+                            # Calculate surprise amount if we have actual and estimate
+                            eps_surprise_amount = None
+                            if eps_actual is not None and eps_estimate is not None:
+                                eps_surprise_amount = eps_actual - eps_estimate
+
                             earnings_list.append({
                                 'fiscal_year': fy,
                                 'fiscal_quarter': fq,
-                                'announcement_date': earnings_date,
+                                'announcement_date': report_date,
                                 'report_date': report_date,
-                                'eps_estimate': self._safe_float(row.get('Earnings Average')),
-                                'eps_reported': None,
-                                'eps_surprise_amount': None,
-                                'eps_surprise_percent': None,
-                                'revenue_estimate': self._safe_float(row.get('Revenue Estimate')),
+                                'eps_estimate': eps_estimate,
+                                'eps_reported': eps_actual,
+                                'eps_surprise_amount': eps_surprise_amount,
+                                'eps_surprise_percent': surprise_percent,
+                                'revenue_estimate': None,
                                 'revenue_reported': None,
                                 'revenue_surprise_amount': None,
                                 'revenue_surprise_percent': None,
                             })
                         except Exception as e:
-                            logger.debug(f"Error parsing calendar row for {ticker_symbol}: {e}")
+                            logger.debug(f"Error parsing earnings_history row for {ticker_symbol}: {e}")
                             continue
             except Exception as e:
-                logger.debug(f"Failed to fetch calendar for {ticker_symbol}: {e}")
+                logger.debug(f"Failed to fetch earnings_history for {ticker_symbol}: {e}")
 
             # Quarterly financials → infer periods (no EPS/rev surprises here)
             try:

@@ -433,7 +433,8 @@ class DefeatBetaProvider(StockDataProvider):
                 self._fetch_income_statements(ticker, symbol, company_id),
                 self._fetch_balance_sheets(ticker, symbol, company_id),
                 self._fetch_cash_flows(ticker, symbol, company_id),
-                self._fetch_earnings(ticker, symbol, company_id),
+                # _fetch_earnings removed - DefeatBeta ticker.earnings() API removed Feb 2026
+                # YFinance fallback will populate earnings via get_earnings_data()
                 self._fetch_dividends(ticker, symbol, company_id),
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -441,8 +442,9 @@ class DefeatBetaProvider(StockDataProvider):
             income_rows: IncomeStatementRows = self._extract_result(results[0], IncomeStatementRows(rows=[]))
             balance_rows: BalanceSheetRows = self._extract_result(results[1], BalanceSheetRows(rows=[]))
             cash_rows: CashFlowRows = self._extract_result(results[2], CashFlowRows(rows=[]))
-            earnings_rows: EarningsRows = self._extract_result(results[3], EarningsRows(rows=[]))
-            dividend_rows: DividendRows = self._extract_result(results[4], DividendRows(rows=[]))
+            # earnings_rows - now empty from DefeatBeta, filled by YFinance fallback
+            earnings_rows: EarningsRows = self._extract_result(results[3], EarningsRows(rows=[])) if len(results) > 3 else EarningsRows(rows=[])
+            dividend_rows: DividendRows = self._extract_result(results[4], DividendRows(rows=[])) if len(results) > 4 else DividendRows(rows=[])
 
             if not any([income_rows.rows, balance_rows.rows, cash_rows.rows]):
                 raise NoDataError(symbol, ['income_statements', 'balance_sheets', 'cash_flows'])
@@ -545,75 +547,9 @@ class DefeatBetaProvider(StockDataProvider):
             logger.warning(f"Cash flow fetch failed for {symbol}: {str(e)}")
             return CashFlowRows(rows=[])
 
-    async def _fetch_earnings(self, ticker: Ticker, symbol: str, company_id: int) -> EarningsRows:
-        """
-        Uses Ticker.earnings() per the docs:
-        columns: symbol, eps_actual, eps_estimate, surprise_percent, quarter_name, quarter_date
-        Maps to EarningsRow with eps_reported_diluted, eps_estimate, eps_surprise_amount, eps_surprise_percent.
-        Revenue fields are not present here → left None. Announcement date not provided here → None.
-        """
-        logger.debug("[DBETA][%s] enter _fetch_earnings", symbol)
-        try:
-            earn_obj = await self._timeout_fetch(lambda: ticker.earnings(), f"earnings for {symbol}")
-            # Normalize to DataFrame
-            if isinstance(earn_obj, pd.DataFrame):
-                df = earn_obj
-            elif hasattr(earn_obj, 'df'):
-                df = earn_obj.df()
-            else:
-                try:
-                    df = pd.DataFrame(earn_obj)
-                except Exception:
-                    df = None
-            if df is None or df.empty:
-                return EarningsRows(rows=[])
-            rows: List[EarningsRow] = []
-            for _, r in df.iterrows():
-                qdate = r.get('quarter_date')
-                fy: Optional[int] = None
-                fq: Optional[int] = None
-                period_end: Optional[date] = None
-                if pd.notna(qdate):
-                    ts = pd.to_datetime(str(qdate), errors='coerce')
-                    if not pd.isna(ts):
-                        period_end = ts.date()
-                        fy = int(ts.year)
-                        fq = int((ts.month - 1) // 3 + 1)
-                eps_actual = self._safe_decimal(r.get('eps_actual'))
-                eps_estimate = self._safe_decimal(r.get('eps_estimate'))
-                eps_surprise_pct = self._safe_decimal(r.get('surprise_percent'))
-                eps_surprise_amt: Optional[Decimal] = None
-                if eps_actual is not None and eps_estimate is not None:
-                    try:
-                        eps_surprise_amt = Decimal(str(eps_actual)) - Decimal(str(eps_estimate))
-                    except InvalidOperation:
-                        eps_surprise_amt = None
-                rows.append(EarningsRow(
-                    company_id=company_id,
-                    fiscal_year=fy,
-                    fiscal_quarter=fq,
-                    period_end_date=period_end,
-                    announcement_date=None,
-                    eps_reported_basic=None,
-                    eps_reported_diluted=eps_actual,
-                    eps_estimate=eps_estimate,
-                    eps_surprise_amount=eps_surprise_amt,
-                    eps_surprise_percent=eps_surprise_pct,
-                    revenue_reported=None,
-                    revenue_estimate=None,
-                    revenue_surprise_amount=None,
-                    revenue_surprise_percent=None,
-                    shares_outstanding_basic=None,
-                    shares_outstanding_diluted=None,
-                    currency="USD",
-                    confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
-                    last_validated_at=None,
-                    validation_notes=None,
-                ))
-            return EarningsRows(rows=rows)
-        except Exception as e:
-            self._log_debug_once(f"Earnings fetch failed for {symbol}: {e}")
-            return EarningsRows(rows=[])
+    # _fetch_earnings removed Feb 2026 - DefeatBeta ticker.earnings() API no longer exists
+    # Earnings data now populated via YFinance fallback in _fill_gaps_with_yfinance()
+    # See yfinance_provider.py get_earnings_data() for the implementation
 
     async def _fetch_dividends(self, ticker: Ticker, symbol: str, company_id: int) -> DividendRows:
         """

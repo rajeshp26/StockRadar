@@ -202,34 +202,72 @@ class AnalysisRepository:
 
     # ── CANSlim ───────────────────────────────────────────────────────────────
 
-    async def get_quarterly_earnings_series(
+    async def get_quarterly_eps_from_income_statements(
         self, company_id: int, limit: int = 12
     ) -> List[Dict[str, Any]]:
         """
-        Returns quarterly EPS data for CANSlim C criterion.
-        Ordered newest-first so callers can index [0] = most recent quarter.
+        Returns quarterly EPS data for CANSLIM C criterion from income_statements table.
 
+        This replaces get_quarterly_earnings_series() which queried the now-empty earnings table.
+        Uses accounting EPS (net_income / shares_outstanding_diluted) from income_statements.
+
+        Ordered newest-first so callers can index [0] = most recent quarter.
         YoY comparison: compare row where (fiscal_year, fiscal_quarter) == most recent
         against row where (fiscal_year - 1, same fiscal_quarter).
         """
         try:
             resp = (
-                supabase.table("earnings")
-                .select("fiscal_year, fiscal_quarter, eps_reported_diluted, period_end_date")
+                supabase.table("income_statements")
+                .select("fiscal_year, fiscal_quarter, net_income, net_income_to_common, shares_outstanding_diluted, period_end_date")
                 .eq("company_id", company_id)
                 .not_.is_("fiscal_quarter", "null")
-                .not_.is_("eps_reported_diluted", "null")
+                .not_.is_("net_income", "null")
                 .order("fiscal_year", desc=True)
                 .order("fiscal_quarter", desc=True)
                 .limit(limit)
                 .execute()
             )
-            return resp.data or []
+
+            if not resp.data:
+                return []
+
+            result = []
+            for row in resp.data:
+                net_income = row.get('net_income') or row.get('net_income_to_common')
+                shares = row.get('shares_outstanding_diluted')
+
+                # Calculate EPS if we have both values
+                eps = None
+                if net_income and shares and shares != 0:
+                    try:
+                        eps = float(net_income) / float(shares)
+                    except (TypeError, ZeroDivisionError):
+                        eps = None
+
+                result.append({
+                    'fiscal_year': row.get('fiscal_year'),
+                    'fiscal_quarter': row.get('fiscal_quarter'),
+                    'eps_reported_diluted': eps,
+                    'period_end_date': row.get('period_end_date'),
+                })
+
+            return result
+
         except Exception as e:
             logger.error(
-                "get_quarterly_earnings_series failed for company_id=%d: %s", company_id, e
+                "get_quarterly_eps_from_income_statements failed for company_id=%d: %s", company_id, e
             )
             return []
+
+    # Keep old function name for backward compatibility but mark as deprecated
+    async def get_quarterly_earnings_series(
+        self, company_id: int, limit: int = 12
+    ) -> List[Dict[str, Any]]:
+        """
+        DEPRECATED - Use get_quarterly_eps_from_income_statements() instead.
+        This function now redirects to income_statements for EPS data.
+        """
+        return await self.get_quarterly_eps_from_income_statements(company_id, limit)
 
     async def get_quarterly_revenue_series(
         self, company_id: int, limit: int = 8
