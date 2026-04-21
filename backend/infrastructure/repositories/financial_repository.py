@@ -907,7 +907,8 @@ class SupabaseFinancialRepository:
                 'company_id, ticker_symbol, '
                 'first_financial_data_loaded_at, last_financial_refresh_at, '
                 'last_refreshed_fiscal_year, last_refreshed_fiscal_quarter, '
-                'data_completeness_status, next_earnings_date'
+                'data_completeness_status, next_earnings_date, '
+                'last_price_refresh_at'
             ).eq('company_id', company_id).limit(1).execute()
 
             if not response.data:
@@ -936,11 +937,26 @@ class SupabaseFinancialRepository:
                     if data.get('next_earnings_date')
                     else None
                 ),
+                last_price_refresh_at=(
+                    datetime.fromisoformat(data['last_price_refresh_at'])
+                    if data.get('last_price_refresh_at')
+                    else None
+                ),
             )
 
         except Exception as e:
             logger.error(f"Failed to get refresh info for company {company_id}: {str(e)}")
             raise
+
+    async def update_price_refresh_marker(self, company_id: int) -> None:
+        """Update last_price_refresh_at to now() for incremental tracking."""
+        try:
+            self.client.table('companies').update(
+                {'last_price_refresh_at': datetime.utcnow()}
+            ).eq('company_id', company_id).execute()
+            logger.debug(f"Updated last_price_refresh_at for company_id={company_id}")
+        except Exception as e:
+            logger.error(f"Failed to update price refresh marker for {company_id}: {str(e)}")
 
     # ========================================================================
     # BATCH OPERATIONS

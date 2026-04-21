@@ -3,13 +3,16 @@ Updated Watchlist Service with Financial Data Integration
 - YFinance is used exclusively for public.current_market_data (fast path).
 - All fundamentals (IS/BS/CF/Earnings/Dividends) enter via DefeatBetaProvider, with YF fallback.
 - Unifies orchestration so routes stay thin and consistent (no YF-only deep sync paths).
-- NEW: Auto-compute Rule #1 intrinsic value after fundamentals ingestion and on-demand refresh.
+- Auto-compute Rule #1 intrinsic value after fundamentals ingestion and on-demand refresh.
+- NEW: Price history loading (monthly bars for CANSLIM N/L analysis).
 """
 
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import date
+from datetime import date, timedelta
+
+import pandas as pd
 
 from domain.interfaces.stock_provider import StockProvider
 from domain.interfaces.repository import WatchlistRepository, UserRepository
@@ -442,6 +445,9 @@ class WatchlistService:
             total_rows = sum(upsert_results.values())
             logger.info("✅ On-demand refresh complete for %s: %s rows", symbol, total_rows)
 
+            # ── Price History Load (incremental, no benchmark) ────────────
+            await self._fetch_and_store_price_history(symbol, company_id, refresh_info, is_new_company=False)
+
             # NEW: Derived metrics compute after fundamentals refresh (non-blocking)
             try:
                 await compute_and_upsert_derived_financial_metrics(company_id=company_id)
@@ -689,6 +695,10 @@ class WatchlistService:
             total_rows = sum(upsert_results.values())
             logger.info("✅ Background load complete for %s: %s total rows upserted", symbol, total_rows)
 
+            # ── Price History Load ─────────────────────────────────────────
+            # Fetch and store price history (monthly bars for CANSLIM N/L analysis)
+            await self._fetch_and_store_price_history(symbol, company_id, refresh_info, is_new_company)
+
             # NEW: Derived metrics compute after fundamentals ingestion (non-blocking)
             try:
                 await compute_and_upsert_derived_financial_metrics(company_id=company_id)
@@ -791,3 +801,113 @@ class WatchlistService:
         except Exception as e:
             logger.error("Background financial load failed for %s: %s", symbol, str(e))
             # Swallow to avoid impacting user-facing flows
+
+    # ========================================================================
+    # PRICE HISTORY METHODS
+    # ========================================================================
+
+    async def _fetch_and_store_price_history(
+        self,
+        symbol: str,
+        company_id: int,
+        refresh_info: Any,
+        is_new_company: bool,
+    ) -> None:
+        """
+        Fetch and store price history (monthly bars for CANSLIM N/L analysis).
+        - Full bootstrap if no history exists or is_new_company
+        - Incremental from last_price_refresh_at otherwise
+        """
+        try:
+            has_price = await self._has_price_history(company_id)
+            is_full_load = not has_price or is_new_company
+
+            if is_full_load:
+                # Full bootstrap (first time ever for this company)
+                daily_rows = await self.defeat_beta_provider.get_price_history_optimized(
+                    symbol=symbol, company_id=company_id
+                )
+                logger.info("[PRICE_HISTORY][%s] Full bootstrap: %d daily rows", symbol, len(daily_rows or []))
+            else:
+                # Incremental from last refresh marker
+                start_date = refresh_info.last_price_refresh_at.date() if refresh_info.last_price_refresh_at else None
+                if start_date:
+                    daily_rows = await self.defeat_beta_provider.get_price_history_optimized(
+                        symbol=symbol, company_id=company_id, start_date=start_date
+                    )
+                else:
+                    daily_rows = []
+                logger.info("[PRICE_HISTORY][%s] Incremental from %s: %d daily rows",
+                          symbol, start_date, len(daily_rows or []))
+
+            monthly_rows = self._compress_daily_to_monthly_eom(daily_rows or [])
+
+            if monthly_rows:
+                await self.financial_repo.upsert_price_history(monthly_rows)
+                await self.financial_repo.update_price_refresh_marker(company_id)
+                logger.info("[PRICE_HISTORY][%s] ✅ %d monthly rows upserted (full=%s)",
+                         symbol, len(monthly_rows), is_full_load)
+            else:
+                logger.info("[PRICE_HISTORY][%s] No monthly rows to upsert", symbol)
+
+        except Exception as e:
+            logger.warning("[PRICE_HISTORY][%s] Failed: %s", symbol, e)
+
+    async def _has_price_history(self, company_id: int) -> bool:
+        """Check if any price_history exists for company."""
+        try:
+            resp = (
+                supabase.table("price_history")
+                .select("price_date")
+                .eq("company_id", company_id)
+                .limit(1)
+                .execute()
+            )
+            return bool(resp.data)
+        except Exception as e:
+            logger.debug("_has_price_history failed for %s: %s", company_id, e)
+            return False
+
+    @staticmethod
+    def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Convert daily OHLCV rows to monthly EOM rows:
+          - Group by (year, month)
+          - Pick the row with the latest price_date (last trading day of the month)
+          - Preserve all OHLCV fields; default data_source to 'defeatbeta'
+        """
+        if not daily_rows:
+            return []
+        df = pd.DataFrame(daily_rows)
+        if df.empty or "price_date" not in df.columns:
+            return []
+        df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
+        df = df.dropna(subset=["price_date"])
+        if df.empty:
+            return []
+        df["year"] = df["price_date"].dt.year
+        df["month"] = df["price_date"].dt.month
+        idx = df.groupby(["year", "month"])["price_date"].idxmax()
+        last_trading_rows = df.loc[idx].copy()
+        out: List[Dict[str, Any]] = []
+        for _, r in last_trading_rows.iterrows():
+            def _safe_num(v: Any) -> Optional[float]:
+                if v is None:
+                    return None
+                try:
+                    f = float(v)
+                    return f if f == f else None
+                except (ValueError, TypeError):
+                    return None
+            out.append({
+                "company_id": int(r.get("company_id")),
+                "price_date": r["price_date"].date(),
+                "open_price": _safe_num(r.get("open_price")),
+                "close_price": _safe_num(r.get("close_price")),
+                "high_price": _safe_num(r.get("high_price")),
+                "low_price": _safe_num(r.get("low_price")),
+                "volume": int(r.get("volume")) if pd.notna(r.get("volume")) else None,
+                "data_source": str(r.get("data_source") or "defeatbeta"),
+            })
+        out.sort(key=lambda x: x["price_date"])
+        return out

@@ -304,6 +304,7 @@ class CompanyRefreshInfo(BaseModel):
     last_refreshed_fiscal_quarter: Optional[int] = None
     data_completeness_status: str = "INITIAL"
     next_earnings_date: Optional[date] = None
+    last_price_refresh_at: Optional[datetime] = None
 
 
 
