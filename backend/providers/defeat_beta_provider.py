@@ -259,11 +259,20 @@ class DefeatBetaProvider(StockDataProvider):
         'share_issuance': ['Issuance of Capital Stock', 'Common Stock Issuance'],
     }
 
-    def __init__(self, yfinance_provider: Optional["YFinanceProvider"] = None):
+    def __init__(
+        self,
+        yfinance_provider: Optional["YFinanceProvider"] = None,
+        edgar_provider: Optional["EdgarToolsProvider"] = None,
+    ):
         from config import settings
         self.settings = settings
         self.yfinance_provider = yfinance_provider
-        logger.info("DefeatBetaProvider initialized")
+        self.edgar_provider = edgar_provider
+        logger.info(
+            "DefeatBetaProvider initialized (edgar=%s, yfinance=%s)",
+            edgar_provider is not None,
+            yfinance_provider is not None,
+        )
 
     def get_ticker_info(self, ticker_symbol: str) -> Optional['TickerInfo']:
         if self.yfinance_provider:
@@ -443,8 +452,9 @@ class DefeatBetaProvider(StockDataProvider):
             balance_rows: BalanceSheetRows = self._extract_result(results[1], BalanceSheetRows(rows=[]))
             cash_rows: CashFlowRows = self._extract_result(results[2], CashFlowRows(rows=[]))
             # earnings_rows - now empty from DefeatBeta, filled by YFinance fallback
-            earnings_rows: EarningsRows = self._extract_result(results[3], EarningsRows(rows=[])) if len(results) > 3 else EarningsRows(rows=[])
-            dividend_rows: DividendRows = self._extract_result(results[4], DividendRows(rows=[])) if len(results) > 4 else DividendRows(rows=[])
+            earnings_rows: EarningsRows = EarningsRows(rows=[])
+            # dividends is at index 3 (4th task in the list)
+            dividend_rows: DividendRows = self._extract_result(results[3], DividendRows(rows=[]))
 
             if not any([income_rows.rows, balance_rows.rows, cash_rows.rows]):
                 raise NoDataError(symbol, ['income_statements', 'balance_sheets', 'cash_flows'])
@@ -596,8 +606,10 @@ class DefeatBetaProvider(StockDataProvider):
         company_id: int,
         only_after: Optional[Tuple[Optional[int], Optional[int]]] = None
     ) -> CompleteFundamentals:
-        if not self.yfinance_provider:
-            logger.warning("Fallback failed: yfinance_provider not configured")
+        if not self.edgar_provider and not self.yfinance_provider:
+            logger.warning(
+                "Fallback failed: neither edgar_provider nor yfinance_provider configured"
+            )
             return CompleteFundamentals(
                 company_id=company_id,
                 symbol=symbol,
@@ -611,23 +623,23 @@ class DefeatBetaProvider(StockDataProvider):
 
         fyq_filter = only_after
 
-        # Income
-        yf_q_is = await asyncio.to_thread(self.yfinance_provider.get_quarterly_income_statement_df, symbol)
-        yf_a_is = await asyncio.to_thread(self.yfinance_provider.get_annual_income_statement_df, symbol)
-        is_rows = self._parse_yf_income_statement(yf_q_is, company_id, True, symbol, fyq_filter) + \
-                  self._parse_yf_income_statement(yf_a_is, company_id, False, symbol, fyq_filter)
-
-        # Balance
-        yf_q_bs = await asyncio.to_thread(self.yfinance_provider.get_quarterly_balance_sheet_df, symbol)
-        yf_a_bs = await asyncio.to_thread(self.yfinance_provider.get_annual_balance_sheet_df, symbol)
-        bs_rows = self._parse_yf_balance_sheet(yf_q_bs, company_id, True, symbol, fyq_filter) + \
-                  self._parse_yf_balance_sheet(yf_a_bs, company_id, False, symbol, fyq_filter)
-
-        # Cash Flow
-        yf_q_cf = await asyncio.to_thread(self.yfinance_provider.get_quarterly_cash_flow_df, symbol)
-        yf_a_cf = await asyncio.to_thread(self.yfinance_provider.get_annual_cash_flow_df, symbol)
-        cf_rows = self._parse_yf_cash_flow(yf_q_cf, company_id, True, symbol, fyq_filter) + \
-                  self._parse_yf_cash_flow(yf_a_cf, company_id, False, symbol, fyq_filter)
+        # Income — Edgar first (SEC filing), then YFinance
+        yf_q_is, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_income_statement_df")
+        yf_a_is, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_income_statement_df")
+        is_rows = self._parse_yf_income_statement(yf_q_is, company_id, True, symbol, fyq_filter, q_src) + \
+                  self._parse_yf_income_statement(yf_a_is, company_id, False, symbol, fyq_filter, a_src)
+        
+        # Balance — Edgar first, then YFinance
+        yf_q_bs, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_balance_sheet_df")
+        yf_a_bs, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_balance_sheet_df")
+        bs_rows = self._parse_yf_balance_sheet(yf_q_bs, company_id, True, symbol, fyq_filter, q_src) + \
+                  self._parse_yf_balance_sheet(yf_a_bs, company_id, False, symbol, fyq_filter, a_src)
+        
+        # Cash Flow — Edgar first, then YFinance
+        yf_q_cf, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_cash_flow_df")
+        yf_a_cf, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_cash_flow_df")
+        cf_rows = self._parse_yf_cash_flow(yf_q_cf, company_id, True, symbol, fyq_filter, q_src) + \
+                  self._parse_yf_cash_flow(yf_a_cf, company_id, False, symbol, fyq_filter, a_src)
 
         # Earnings (best-effort)
         yf_earn = await asyncio.to_thread(self.yfinance_provider.get_earnings_data, symbol)
@@ -678,27 +690,28 @@ class DefeatBetaProvider(StockDataProvider):
         logger.debug("[DBETA][%s] need_bs=%s (rows=%d)", symbol, (not fin.balance_sheets.rows), len(fin.balance_sheets.rows))
 
         if need_is:
-            yf_q_is = await asyncio.to_thread(self.yfinance_provider.get_quarterly_income_statement_df, symbol)
-            yf_a_is = await asyncio.to_thread(self.yfinance_provider.get_annual_income_statement_df, symbol)
+            # Edgar → YFinance chain for income statements
+            yf_q_is, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_income_statement_df")
+            yf_a_is, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_income_statement_df")
             fin.income_statements = IncomeStatementRows(
-                rows=self._parse_yf_income_statement(yf_q_is, company_id, True, symbol, fyq_filter) +
-                     self._parse_yf_income_statement(yf_a_is, company_id, False, symbol, fyq_filter)
+                rows=self._parse_yf_income_statement(yf_q_is, company_id, True, symbol, fyq_filter, q_src) +
+                     self._parse_yf_income_statement(yf_a_is, company_id, False, symbol, fyq_filter, a_src)
             )
-
         if need_bs:
-            yf_q_bs = await asyncio.to_thread(self.yfinance_provider.get_quarterly_balance_sheet_df, symbol)
-            yf_a_bs = await asyncio.to_thread(self.yfinance_provider.get_annual_balance_sheet_df, symbol)
+            # Edgar → YFinance chain for balance sheets
+            yf_q_bs, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_balance_sheet_df")
+            yf_a_bs, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_balance_sheet_df")
             fin.balance_sheets = BalanceSheetRows(
-                rows=self._parse_yf_balance_sheet(yf_q_bs, company_id, True, symbol, fyq_filter) +
-                     self._parse_yf_balance_sheet(yf_a_bs, company_id, False, symbol, fyq_filter)
+                rows=self._parse_yf_balance_sheet(yf_q_bs, company_id, True, symbol, fyq_filter, q_src) +
+                     self._parse_yf_balance_sheet(yf_a_bs, company_id, False, symbol, fyq_filter, a_src)
             )
-
         if need_cf:
-            yf_q_cf = await asyncio.to_thread(self.yfinance_provider.get_quarterly_cash_flow_df, symbol)
-            yf_a_cf = await asyncio.to_thread(self.yfinance_provider.get_annual_cash_flow_df, symbol)
+            # Edgar → YFinance chain for cash flows
+            yf_q_cf, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_cash_flow_df")
+            yf_a_cf, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_cash_flow_df")
             fin.cash_flows = CashFlowRows(
-                rows=self._parse_yf_cash_flow(yf_q_cf, company_id, True, symbol, fyq_filter) +
-                     self._parse_yf_cash_flow(yf_a_cf, company_id, False, symbol, fyq_filter)
+                rows=self._parse_yf_cash_flow(yf_q_cf, company_id, True, symbol, fyq_filter, q_src) +
+                     self._parse_yf_cash_flow(yf_a_cf, company_id, False, symbol, fyq_filter, a_src)
             )
 
         if need_earn:
@@ -1401,7 +1414,8 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
     def _parse_yf_income_statement(
         self, df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]]
+        only_after: Optional[Tuple[Optional[int], Optional[int]]],
+        source: str = "yfinance"
     ) -> List[IncomeStatementRow]:
         rows: List[IncomeStatementRow] = []
         if df is None or df.empty:
@@ -1462,14 +1476,15 @@ class DefeatBetaProvider(StockDataProvider):
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
-                data_source="yfinance",
+                data_source=source,
                 validation_notes=None,
             ))
         return rows
 
     def _parse_yf_balance_sheet(
         self, df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]]
+        only_after: Optional[Tuple[Optional[int], Optional[int]]],
+        source: str = "yfinance"
     ) -> List[BalanceSheetRow]:
         rows: List[BalanceSheetRow] = []
         if df is None or df.empty:
@@ -1527,14 +1542,15 @@ class DefeatBetaProvider(StockDataProvider):
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
-                data_source="yfinance",
+                data_source=source,
                 validation_notes=None,
             ))
         return rows
 
     def _parse_yf_cash_flow(
         self, df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]]
+        only_after: Optional[Tuple[Optional[int], Optional[int]]],
+        source: str = "yfinance"
     ) -> List[CashFlowRow]:
         rows: List[CashFlowRow] = []
         if df is None or df.empty:
@@ -1585,7 +1601,7 @@ class DefeatBetaProvider(StockDataProvider):
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
-                data_source="yfinance",
+                data_source=source,
                 validation_notes=None,
             ))
         return rows
@@ -1745,3 +1761,52 @@ class DefeatBetaProvider(StockDataProvider):
                     break
             out[canonical] = {'matched': matched, 'alias_used': alias_used, 'value': value}
         return out
+
+    # ---------------------------------------------------------------------
+    # Fallback chain helper — Edgar → YFinance
+    # ---------------------------------------------------------------------
+    async def _fetch_statement_df_with_fallback(
+        self,
+        symbol: str,
+        method_name: str,
+    ) -> tuple[pd.DataFrame, str]:
+        """
+        Fetch a financial statement DataFrame using the Edgar → YFinance chain.
+        Returns: (dataframe, source) where source is "edgar" or "yfinance"
+ 
+        Both EdgarToolsProvider and YFinanceProvider expose the same method names:
+          get_quarterly_income_statement_df / get_annual_income_statement_df
+          get_quarterly_balance_sheet_df    / get_annual_balance_sheet_df
+          get_quarterly_cash_flow_df        / get_annual_cash_flow_df
+ 
+        EdgarTools is tried first: its data originates from SEC XBRL filings and
+        is therefore more authoritative than yfinance scrapes.
+        YFinance is used as final fallback only when Edgar returns empty.
+        """
+        # 1. Try Edgar
+        if self.edgar_provider:
+            try:
+                df = await asyncio.to_thread(
+                    getattr(self.edgar_provider, method_name), symbol
+                )
+                if df is not None and not df.empty:
+                    logger.debug(
+                        "[EDGAR][%s] %s succeeded (%d rows)",
+                        symbol, method_name, len(df),
+                    )
+                    return (df, "edgar")
+                logger.debug("[EDGAR][%s] %s returned empty", symbol, method_name)
+            except Exception as e:
+                logger.debug("[EDGAR][%s] %s failed: %s", symbol, method_name, e)
+ 
+        # 2. Fall through to YFinance
+        if self.yfinance_provider:
+            try:
+                df = await asyncio.to_thread(
+                    getattr(self.yfinance_provider, method_name), symbol
+                )
+                return (df if df is not None else pd.DataFrame(), "yfinance")
+            except Exception as e:
+                logger.debug("[YF][%s] %s failed: %s", symbol, method_name, e)
+ 
+        return (pd.DataFrame(), "yfinance")  # empty with default source

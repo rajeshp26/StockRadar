@@ -951,9 +951,12 @@ class SupabaseFinancialRepository:
     async def update_price_refresh_marker(self, company_id: int) -> None:
         """Update last_price_refresh_at to now() for incremental tracking."""
         try:
-            self.client.table('companies').update(
+            update_data = DatabaseSerializer.serialize(
                 {'last_price_refresh_at': datetime.utcnow()}
-            ).eq('company_id', company_id).execute()
+            )
+            self.client.table('companies').update(update_data).eq(
+                'company_id', company_id
+            ).execute()
             logger.debug(f"Updated last_price_refresh_at for company_id={company_id}")
         except Exception as e:
             logger.error(f"Failed to update price refresh marker for {company_id}: {str(e)}")

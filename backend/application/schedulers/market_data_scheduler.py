@@ -409,6 +409,7 @@ class MarketDataRefreshScheduler:
             monthly_rows = self._compress_daily_to_monthly_eom(daily_rows)
             if monthly_rows:
                 await self.financial_repo.upsert_price_history(monthly_rows)
+                await self.financial_repo.update_price_refresh_marker(company_id)
                 logger.info("[PH][%s] Bootstrap monthly rows (>= %s): %d", symbol, retention_cutoff, len(monthly_rows))
             return len(monthly_rows or [])
 
@@ -423,6 +424,7 @@ class MarketDataRefreshScheduler:
         monthly_recent = self._compress_daily_to_monthly_eom(daily_rows_recent)
         if monthly_recent:
             await self.financial_repo.upsert_price_history(monthly_recent)
+            await self.financial_repo.update_price_refresh_marker(company_id)
             logger.debug("[PH][%s] Incremental monthly rows (>= %s): %d", symbol, effective_cutoff, len(monthly_recent))
         return len(monthly_recent or [])
 

@@ -635,7 +635,11 @@ class WatchlistService:
             return res.data[0]
 
         except Exception as e:
-            logger.error("Failed to add watchlist item: %s", str(e))
+            error_msg = str(e)
+            # Check for duplicate key constraint violation
+            if '23505' in error_msg or 'unique_watchlist_company' in error_msg:
+                raise ExternalServiceError("This stock is already in your watchlist.")
+            logger.error("Failed to add watchlist item: %s", error_msg)
             raise
 
     async def _fetch_and_store_financials_optimized(
