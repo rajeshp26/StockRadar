@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = Field(default=None, description="Google Gemini API key for stock analysis")
     # config.py — already has GEMINI_API_KEY, add this next to it:
     GEMINI_MODEL: str = Field(default="gemini-1.5-flash", description="Gemini model for suitability summaries")
+    # EdgarTools Provider (SEC EDGAR filings)
+    EDGAR_IDENTITY: str = Field(
+        default="StockerPro stockerpro@example.com",
+        description="SEC EDGAR API identity string (required by SEC for rate limiting)"
+    )
     # ============================================
     # 📊 DEFEAT BETA INTEGRATION
     # ============================================

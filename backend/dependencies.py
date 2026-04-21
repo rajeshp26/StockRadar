@@ -24,6 +24,7 @@ from infrastructure.repositories.valuation_repository import ValuationRepository
 # Providers
 from providers.yfinance_provider import YFinanceProvider
 from providers.defeat_beta_provider import DefeatBetaProvider
+from providers.edgar_provider import EdgarToolsProvider
 
 # Services
 from application.services.watchlist_service import WatchlistService
@@ -104,18 +105,40 @@ def get_yfinance_provider() -> YFinanceProvider:
         _yfinance_provider = YFinanceProvider()
     return _yfinance_provider
 
+_edgar_provider: EdgarToolsProvider = None
+
+def get_edgar_provider() -> EdgarToolsProvider:
+    """
+    Get or create EdgarToolsProvider singleton.
+
+    Covers: IS / BS / CF fetched directly from SEC EDGAR 10-K and 10-Q filings.
+    Position in chain: DefeatBeta → EdgarTools → YFinance.
+
+    Requires EDGAR_IDENTITY env var:
+        EDGAR_IDENTITY="YourName yourname@example.com"
+    """
+    global _edgar_provider
+    if _edgar_provider is None:
+        logger.debug("Initializing EdgarToolsProvider")
+        _edgar_provider = EdgarToolsProvider()
+    return _edgar_provider
 
 def get_defeat_beta_provider() -> DefeatBetaProvider:
     """
     Get or create DefeatBetaProvider singleton.
-    Used for: Financial statements, earnings data, dividends.
-    Falls back to yfinance if defeat-beta fails.
+
+    Provider chain:
+        1. DefeatBeta  — primary (proprietary financial data API)
+        2. EdgarTools  — fallback 1 (SEC EDGAR XBRL filings, IS/BS/CF only)
+        3. YFinance    — fallback 2 (scrape-based, covers everything EdgarTools cannot)
     """
     global _defeat_beta_provider
     if _defeat_beta_provider is None:
         logger.debug("Initializing DefeatBetaProvider")
-        yfinance = get_yfinance_provider()
-        _defeat_beta_provider = DefeatBetaProvider(yfinance_provider=yfinance)
+        _defeat_beta_provider = DefeatBetaProvider(
+            yfinance_provider=get_yfinance_provider(),
+            edgar_provider=get_edgar_provider(),
+        )
     return _defeat_beta_provider
 
 
@@ -222,6 +245,7 @@ __all__ = [
     "limiter",
     # Providers
     "get_yfinance_provider",
+    "get_edgar_provider",
     "get_defeat_beta_provider",
     # Repositories
     "get_watchlist_repository",
