@@ -317,7 +317,7 @@ class SuperInvestorsService:
         
         return {
             "shares": int(row.get("SharesPrnAmount", 0)),
-            "value": float(row.get("Value", 0)),  # Already in thousands per 13F
+            "value": float(row.get("Value", 0)) * 1000,  # Convert to actual dollars
             "portfolio_weight": portfolio_weight,
         }
 

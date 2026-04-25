@@ -182,7 +182,7 @@ function HolderRow({ holder }: { holder: SuperInvestorHolder }) {
                     <p className="mt-1 text-xs text-slate-500">{holder.style}</p>
                     {holder.quarter_date && (
                         <p className="mt-1 text-xs text-indigo-400">
-                            Q{parseInt(holder.quarter_date.slice(5,7))} {holder.quarter_date.slice(0,4)} holding
+                            {getQuarterLabel(holder.quarter_date)} holding
                         </p>
                     )}
                 </div>
@@ -305,6 +305,14 @@ function formatMoney(value: number): string {
         return `${(value / 1_000_000).toFixed(1)}M`;
     }
     return `${(value / 1_000).toFixed(0)}K`;
+}
+
+function getQuarterLabel(quarterDate: string): string {
+    // quarterDate format: "2025-12-31"
+    const month = parseInt(quarterDate.slice(5, 7));
+    const year = quarterDate.slice(0, 4);
+    const q = month <= 3 ? 1 : month <= 6 ? 2 : month <= 9 ? 3 : 4;
+    return `Q${q} ${year}`;
 }
 
 function getConvictionColor(level: string): string {

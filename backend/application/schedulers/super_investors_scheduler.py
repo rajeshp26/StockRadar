@@ -332,8 +332,8 @@ class SuperInvestorsRefreshScheduler:
             company_id = company_result.data[0]["company_id"]
 
             shares = row.get("SharesPrnAmount", 0) or 0
-            value = (row.get("Value", 0) or 0) * 1000
-            weight = (value / total_value * 100) if total_value > 0 else 0
+            value = row.get("Value", 0) or 0  # Already in thousands per 13F
+            weight = (value / total_value) if total_value > 0 else 0
 
             # Check if holding exists
             existing = supabase.table("institutional_holdings").select(
