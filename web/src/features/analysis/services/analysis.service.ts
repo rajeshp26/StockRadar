@@ -28,6 +28,7 @@ import type {
   MagicFormulaResponse,
   CANSlimResponse,
   MurphyAnalysisResponse,
+  SuperInvestorData,
 } from "../types/analysis.types";
 
 import type { OverviewRecommendation } from "../hooks/useValuationOverview";
@@ -686,6 +687,33 @@ export async function fetchMurphyTechnical(
       throw new Error(
         "Invalid response from server (missing Murphy analysis payload)."
       );
+    }
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error(
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`
+  );
+}
+
+/* ── Super Investors ──────────────────────────────────────────────────────────── */
+
+export async function fetchSuperInvestors(
+  symbol: string
+): Promise<SuperInvestorData> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/super-investors`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" }, 30_000);
+  } catch (err: any) {
+    throw new Error(err?.message || "Network error fetching super investors.");
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<SuperInvestorData>(res);
+    if (!body || typeof body !== "object") {
+      throw new Error("Invalid response from server (missing super investor data).");
     }
     return body;
   }

@@ -26,6 +26,7 @@ import { DividendPanel } from "@/features/analysis/components/dividend-panel";
 import { MurphyPanel } from "@/features/analysis/components/murphy-panel";
 import { MagicFormulaPanel } from "@/features/analysis/components/magic-formula-panel";
 import { CANSlimPanel } from "@/features/analysis/components/canslim-panel";
+import { SuperInvestorsTab } from "@/features/analysis/components/SuperInvestorsTab";
 
 import {
   TrendingUp,
@@ -244,12 +245,9 @@ export default function AnalysisPage() {
           </div>
         )}
         {tab === "investors" && (
-          <ComingSoonPanel
-            title="Super Investors"
-            description="Insights from major value investors and 13F tracking."
-            items={["Buffett / Munger", "Pabrai Tracking", "High-Conviction Ideas", "Portfolio Overlap"]}
-            icon={Users}
-          />
+          <div className="animate-fade-up">
+            <SuperInvestorsTab symbol={upperSymbol} />
+          </div>
         )}
         {tab === "others" && (
           <div className="space-y-6 animate-fade-up">

@@ -51,4 +51,6 @@ export const QK = {
     ["analysis", "canslim", symbol.toUpperCase()] as const,
   murphyTechnical: (symbol: string) =>
     ["analysis", "technical", "murphy", symbol.toUpperCase()] as const,
+  superInvestors: (symbol: string) =>
+    ["analysis", "super-investors", symbol.toUpperCase()] as const,
 } as const;

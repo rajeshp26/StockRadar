@@ -309,10 +309,16 @@ class SuperInvestorsService:
         logger.info(f"[DEBUG] _find_holding: MATCH FOUND for '{ticker}' - {len(match)} row(s)")
 
         row = match.iloc[0]
+        
+        # Get total portfolio value to calculate weight
+        total_value = holdings_df["Value"].sum()
+        holding_value = float(row.get("Value", 0))
+        portfolio_weight = (holding_value / total_value) if total_value > 0 else 0.0
+        
         return {
             "shares": int(row.get("SharesPrnAmount", 0)),
-            "value": float(row.get("Value", 0)) * 1000,  # 13F values in thousands
-            "portfolio_weight": 0.0,  # Would need total portfolio value to calc
+            "value": float(row.get("Value", 0)),  # Already in thousands per 13F
+            "portfolio_weight": portfolio_weight,
         }
 
     @staticmethod

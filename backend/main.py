@@ -11,12 +11,14 @@ from typing import Optional, Dict, Any
 
 from api import watchlists, watchlist_items, users, valuations
 from api import analysis
+from api import super_investors
 from config import settings
 from database import supabase
 from auth import get_current_user, initialize_firebase_app
 from dependencies import get_current_user_dep, limiter
 from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
 from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
+from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -108,6 +110,18 @@ async def lifespan(app: FastAPI):
             logger.error(f"❌ Failed to start Market Data scheduler: {e}", exc_info=True)
     else:
         logger.info("⏭️  Market Data scheduler disabled (ENABLE_MARKET_DATA_SCHEDULER=false)")
+
+    # Super Investors scheduler
+    if getattr(settings, "ENABLE_SUPER_INVESTORS_SCHEDULER", True):
+        try:
+            super_investors_sched = SuperInvestorsRefreshScheduler()
+            await super_investors_sched.start()
+            app.state.schedulers["super_investors"] = super_investors_sched
+            logger.info("✅ Super Investors scheduler started")
+        except Exception as e:
+            logger.error(f"❌ Failed to start Super Investors scheduler: {e}", exc_info=True)
+    else:
+        logger.info("⏭️  Super Investors scheduler disabled (ENABLE_SUPER_INVESTORS_SCHEDULER=false)")
 
     # Back-compat handle
     app.state.scheduler = app.state.schedulers["earnings"]
@@ -341,3 +355,4 @@ app.include_router(watchlists.router)
 app.include_router(watchlist_items.router)
 app.include_router(valuations.router) 
 app.include_router(analysis.router)
+app.include_router(super_investors.router)

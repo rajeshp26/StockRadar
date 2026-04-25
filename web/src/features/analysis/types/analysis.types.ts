@@ -721,11 +721,11 @@ export interface SupportResistanceAnalysis {
 
 export interface MurphySynthesis {
   overall_signal:
-  | "strong_buy"
-  | "buy"
-  | "neutral"
-  | "sell"
-  | "strong_sell";
+    | "strong_buy"
+    | "buy"
+    | "neutral"
+    | "sell"
+    | "strong_sell";
   signal_strength: number;
   risk_level: "low" | "moderate" | "high";
   dominant_factor: "trend" | "momentum" | "volume" | "oscillators";
@@ -759,4 +759,33 @@ export interface MurphyAnalysisResponse {
   support_resistance: SupportResistanceAnalysis;
   oscillators: OscillatorAnalysis;
   synthesis: MurphySynthesis;
+}
+
+// ── Super Investors ─────────────────────────────────────────────────────────────
+
+export interface SuperInvestorHolder {
+  investor_name: string;
+  firm: string;
+  tag: string;
+  style: string;
+  shares: number;
+  value: number;
+  portfolio_weight: number;
+  change_pct: number;
+  change_type: "new" | "increased" | "decreased" | "held" | "sold";
+  quarter_date: string;
+}
+
+export interface SuperInvestorRecentActivity {
+  buyers: SuperInvestorHolder[];
+  sellers: SuperInvestorHolder[];
+}
+
+export interface SuperInvestorData {
+  ticker: string;
+  holders: SuperInvestorHolder[];
+  overlap_count: number;
+  avg_portfolio_weight: number;
+  conviction_level: "none" | "low" | "moderate" | "high" | "very_high";
+  recent_activity: SuperInvestorRecentActivity;
 }

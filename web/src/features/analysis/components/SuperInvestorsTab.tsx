@@ -180,6 +180,11 @@ function HolderRow({ holder }: { holder: SuperInvestorHolder }) {
                     <p className="mt-1.5 font-medium text-slate-100">{holder.investor_name}</p>
                     <p className="text-xs text-slate-400">{holder.firm}</p>
                     <p className="mt-1 text-xs text-slate-500">{holder.style}</p>
+                    {holder.quarter_date && (
+                        <p className="mt-1 text-xs text-indigo-400">
+                            Q{parseInt(holder.quarter_date.slice(5,7))} {holder.quarter_date.slice(0,4)} holding
+                        </p>
+                    )}
                 </div>
                 <div className="text-right">
                     <p className="text-sm font-medium text-slate-200">

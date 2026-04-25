@@ -216,6 +216,22 @@ class Settings(BaseSettings):
         default=True,
         description="Enable the market data refresh scheduler"
     )
+    SUPER_INVESTORS_REFRESH_INTERVAL_HOURS: int = Field(
+        default=24,
+        description="Hours between super investors scheduler runs"
+    )
+    ENABLE_SUPER_INVESTORS_SCHEDULER: bool = Field(
+        default=True,
+        description="Enable the super investors refresh scheduler"
+    )
+    SUPER_INVESTORS_INITIAL_QUARTERS: int = Field(
+        default=20,
+        description="Number of quarters to fetch on first run (20 = 5 years)"
+    )
+    SUPER_INVESTORS_GRACE_DAYS: int = Field(
+        default=49,
+        description="Days after quarter end before filing is due"
+    )
     PRICE_HISTORY_RETENTION_YEARS: int = Field(
     default=10,
     description="Number of years of price history to retain"
