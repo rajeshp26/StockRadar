@@ -153,4 +153,166 @@ def _get_holdings_from_db(ticker: str) -> Dict[str, Any] | None:
     except Exception as e:
         logger.error(f"[DEBUG] Error reading from DB: {e}")
         return None
-
+ 
+@router.get("/{symbol}/super-investors/history")
+async def get_super_investors_history(
+    symbol: str,
+) -> Dict[str, Any]:
+    """
+    Get historical position data for super investors holding this stock.
+    
+    Returns quarterly holdings from 2021 onwards (or last 5 years).
+    
+    Response:
+    {
+        "ticker": "BAC",
+        "investors": [
+            {
+                "investor_id": 1,
+                "investor_name": "Warren Buffett",
+                "firm": "Berkshire Hathaway Inc.",
+                "tag": "BUFFETT",
+                "style": "Value / Quality",
+                "holdings": [
+                    {
+                        "quarter_date": "2021-03-31",
+                        "shares_held": 1000000000,
+                        "position_value": 39000000000,
+                        "portfolio_weight": 0.12,
+                        "change_shares": 50000000,
+                        "change_pct": 5.26,
+                        "change_type": "increased"
+                    },
+                    ...
+                ]
+            },
+            ...
+        ],
+        "quarters": ["2021-03-31", "2021-06-30", ...],
+        "earliest_date": "2021-03-31",
+        "latest_date": "2024-12-31"
+    }
+    """
+    try:
+        ticker = symbol.upper()
+        
+        # Get company_id
+        company_result = supabase.table("companies").select(
+            "company_id"
+        ).eq("ticker_symbol", ticker).execute()
+        
+        if not company_result.data or len(company_result.data) == 0:
+            return {
+                "ticker": ticker,
+                "investors": [],
+                "quarters": [],
+                "earliest_date": None,
+                "latest_date": None,
+                "message": "Stock not found in database."
+            }
+        
+        company_id = company_result.data[0]["company_id"]
+        
+        # Get cutoff date (5 years ago or 2021-01-01, whichever is more recent)
+        from datetime import datetime, timedelta
+        five_years_ago = (datetime.now() - timedelta(days=5*365)).date()
+        cutoff_date = max(five_years_ago, datetime(2021, 1, 1).date())
+        
+        # Get all holdings for this company since cutoff
+        holdings_result = supabase.table("institutional_holdings").select(
+            "holding_id, investor_id, quarter_end_date, shares_held, position_value, "
+            "portfolio_weight, shares_change, shares_change_pct, change_type"
+        ).eq("company_id", company_id).gte(
+            "quarter_end_date", str(cutoff_date)
+        ).order("quarter_end_date").execute()
+        
+        if not holdings_result.data or len(holdings_result.data) == 0:
+            return {
+                "ticker": ticker,
+                "investors": [],
+                "quarters": [],
+                "earliest_date": None,
+                "latest_date": None,
+                "message": "No historical holdings data available."
+            }
+        
+        # Get unique investor IDs
+        investor_ids = list(set(h["investor_id"] for h in holdings_result.data))
+        
+        # Get investor details
+        investors_result = supabase.table("institutional_investors").select(
+            "investor_id, investor_name, firm_name, investor_tag, investment_style"
+        ).in_("investor_id", investor_ids).eq("is_super_investor", True).execute()
+        
+        if not investors_result.data:
+            return {
+                "ticker": ticker,
+                "investors": [],
+                "quarters": [],
+                "earliest_date": None,
+                "latest_date": None,
+                "message": "No super investor data found."
+            }
+        
+        # Build investor lookup map
+        investors_map = {
+            inv["investor_id"]: {
+                "investor_id": inv["investor_id"],
+                "investor_name": inv["investor_name"],
+                "firm": inv["firm_name"],
+                "tag": inv["investor_tag"],
+                "style": inv["investment_style"],
+                "holdings": []
+            }
+            for inv in investors_result.data
+        }
+        
+        # Group holdings by investor
+        for holding in holdings_result.data:
+            investor_id = holding["investor_id"]
+            if investor_id not in investors_map:
+                continue
+                
+            investors_map[investor_id]["holdings"].append({
+                "quarter_date": holding["quarter_end_date"],
+                "shares_held": holding["shares_held"],
+                "position_value": holding["position_value"],
+                "portfolio_weight": holding["portfolio_weight"],
+                "change_shares": holding.get("shares_change"),
+                "change_pct": holding.get("shares_change_pct"),
+                "change_type": holding.get("change_type", "held"),
+            })
+        
+        # Extract unique quarters and sort
+        all_quarters = sorted(set(h["quarter_end_date"] for h in holdings_result.data))
+        
+        # Build response
+        investors_list = [
+            inv for inv in investors_map.values()
+            if len(inv["holdings"]) > 0
+        ]
+        
+        # Sort by most recent total position value
+        for inv in investors_list:
+            inv["holdings"].sort(key=lambda x: x["quarter_date"])
+        
+        investors_list.sort(
+            key=lambda x: x["holdings"][-1]["position_value"] if x["holdings"] else 0,
+            reverse=True
+        )
+        
+        return {
+            "ticker": ticker,
+            "investors": investors_list,
+            "quarters": all_quarters,
+            "earliest_date": all_quarters[0] if all_quarters else None,
+            "latest_date": all_quarters[-1] if all_quarters else None,
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch super investor history for {symbol}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch super investor history: {str(e)}"
+        )
+ 

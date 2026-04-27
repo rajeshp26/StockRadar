@@ -724,3 +724,28 @@ export async function fetchSuperInvestors(
     `Request failed with status ${res.status}`
   );
 }
+
+export async function fetchSuperInvestorsHistory(
+  symbol: string
+): Promise<SuperInvestorHistoryData> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/super-investors/history`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" }, 30_000);
+  } catch (err: any) {
+    throw new Error(err?.message || "Network error fetching super investor history.");
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<SuperInvestorHistoryData>(res);
+    if (!body || typeof body !== "object") {
+      throw new Error("Invalid response from server (missing history data).");
+    }
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error(
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`
+  );
+}

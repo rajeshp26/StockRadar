@@ -28,70 +28,206 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Notable "Super Investors" — CIK numbers for tracking
 # ─────────────────────────────────────────────────────────────────────────────
-# Expand this list as needed. CIK is the SEC's unique identifier for filers.
+# 24 validated super investors with SEC exact names
+# quarters: 4 for high-holding funds (Fundsmith, ARK), 20 for others
+# category: lt_compounder, value, growth, activist, sector
 SUPER_INVESTORS: Dict[str, Dict[str, str]] = {
-    # Berkshire Hathaway (Warren Buffett)
+    # 🟢 Long-Term Compounders (4)
     "0001067983": {
         "name": "Warren Buffett",
-        "firm": "Berkshire Hathaway Inc.",
+        "firm": "BERKSHIRE HATHAWAY INC",
         "tag": "BUFFETT",
-        "style": "Value / Quality",
+        "style": "Long-Term Compounder",
+        "category": "lt_compounder",
+        "quarters": 20,
     },
-    # Pabrai Investment Funds (Mohnish Pabrai)
-    "0001336528": {
-        "name": "Mohnish Pabrai",
-        "firm": "Pabrai Investment Funds",
-        "tag": "PABRAI",
-        "style": "Deep Value / High Conviction",
-    },
-    # Pershing Square (Bill Ackman)
-    "0001336528": {
-        "name": "Bill Ackman",
-        "firm": "Pershing Square Capital Management",
-        "tag": "ACKMAN",
-        "style": "Activist Value",
-    },
-    # Baupost Group (Seth Klarman)
-    "0001061768": {
-        "name": "Seth Klarman",
-        "firm": "Baupost Group",
-        "tag": "KLARMAN",
-        "style": "Contrarian Value",
-    },
-    # Greenlight Capital (David Einhorn)
-    "0001079114": {
-        "name": "David Einhorn",
-        "firm": "Greenlight Capital",
-        "tag": "EINHORN",
-        "style": "Value / Special Situations",
-    },
-    # Fundsmith (Terry Smith) — UK-based but files 13F for US holdings
-    "0001350694": {
+    "0001569205": {
         "name": "Terry Smith",
         "firm": "Fundsmith LLP",
         "tag": "FUNDSMITH",
-        "style": "Quality Growth",
+        "style": "Long-Term Compounder",
+        "category": "lt_compounder",
+        "quarters": 4,  # High holding count (1500+ ETFs)
     },
-    # Third Point (Dan Loeb)
+    "0001112520": {
+        "name": "Chuck Akre",
+        "firm": "AKRE CAPITAL MANAGEMENT LLC",
+        "tag": "AKRE",
+        "style": "Long-Term Compounder",
+        "category": "lt_compounder",
+        "quarters": 20,
+    },
+    "0001647251": {
+        "name": "Chris H. Zook",
+        "firm": "TCI Fund Management Ltd",
+        "tag": "TCI",
+        "style": "Long-Term Compounder",
+        "category": "lt_compounder",
+        "quarters": 20,
+    },
+    # 🔵 Fundamental Value (5)
+    "0001061768": {
+        "name": "Seth Klarman",
+        "firm": "BAUPOST GROUP LLC/MA",
+        "tag": "KLARMAN",
+        "style": "Value",
+        "category": "value",
+        "quarters": 20,
+    },
+    "0001173334": {
+        "name": "Mohnish Pabrai",
+        "firm": "PABRAI MOHNISH",
+        "tag": "PABRAI",
+        "style": "Value",
+        "category": "value",
+        "quarters": 20,
+    },
+    "0001079114": {
+        "name": "David Einhorn",
+        "firm": "GREENLIGHT CAPITAL INC",
+        "tag": "EINHORN",
+        "style": "Value",
+        "category": "value",
+        "quarters": 20,
+    },
+    "0001510387": {
+        "name": "Joel Greenblatt",
+        "firm": "Gotham Asset Management, LLC",
+        "tag": "GOTHAM",
+        "style": "Value",
+        "category": "value",
+        "quarters": 20,
+    },
+    "0000949509": {
+        "name": "Howard Marks",
+        "firm": "OAKTREE CAPITAL MANAGEMENT LP",
+        "tag": "OAKTREE",
+        "style": "Value",
+        "category": "value",
+        "quarters": 20,
+    },
+    # 🔴 Growth / Quality (5)
+    "0001167483": {
+        "name": "Chase Fisher",
+        "firm": "TIGER GLOBAL MANAGEMENT LLC",
+        "tag": "TIGER",
+        "style": "Growth",
+        "category": "growth",
+        "quarters": 20,
+    },
+    "0001135730": {
+        "name": "Dan Nguyen",
+        "firm": "COATUE MANAGEMENT LLC",
+        "tag": "COATUE",
+        "style": "Growth",
+        "category": "growth",
+        "quarters": 20,
+    },
+    "0001061165": {
+        "name": "Stephen Mandel",
+        "firm": "LONE PINE CAPITAL LLC",
+        "tag": "LONE PINE",
+        "style": "Growth",
+        "category": "growth",
+        "quarters": 20,
+    },
+    "0001103804": {
+        "name": "Andreas Halvorsen",
+        "firm": "VIKING GLOBAL INVESTORS LP",
+        "tag": "VIKING",
+        "style": "Growth",
+        "category": "growth",
+        "quarters": 20,
+    },
+    "0001697748": {
+        "name": "Cathie Wood",
+        "firm": "ARK Investment Management LLC",
+        "tag": "ARK",
+        "style": "Growth",
+        "category": "growth",
+        "quarters": 4,  # High holding count
+    },
+    # 🟣 Activist / Event-Driven (5)
+    "0001336528": {
+        "name": "Bill Ackman",
+        "firm": "Pershing Square Capital Management, L.P.",
+        "tag": "ACKMAN",
+        "style": "Activist",
+        "category": "activist",
+        "quarters": 20,
+    },
+    "0000921669": {
+        "name": "Carl Icahn",
+        "firm": "ICAHN CARL C",
+        "tag": "ICAHN",
+        "style": "Activist",
+        "category": "activist",
+        "quarters": 20,
+    },
     "0001040273": {
         "name": "Dan Loeb",
         "firm": "Third Point LLC",
         "tag": "LOEB",
-        "style": "Event-Driven Value",
+        "style": "Activist",
+        "category": "activist",
+        "quarters": 20,
     },
-    # ValueAct Capital (Jeff Ubben / Mason Morfit)
-    "0001023867": {
-        "name": "ValueAct Capital",
-        "firm": "ValueAct Capital Management",
-        "tag": "VALUEACT",
-        "style": "Constructive Activism",
+    "0001791786": {
+        "name": "Paul Singer",
+        "firm": "Elliott Investment Management L.P.",
+        "tag": "ELLIOTT",
+        "style": "Activist",
+        "category": "activist",
+        "quarters": 20,
     },
-    # Appaloosa Management (David Tepper)
-    "0001040273": {
+    "0001325920": {
+        "name": "Mason Morfit",
+        "firm": "Morfit G Mason",
+        "tag": "MORFIT",
+        "style": "Activist",
+        "category": "activist",
+        "quarters": 20,
+    },
+    # 🟠 Sector Specialists (5)
+    "0000934639": {
+        "name": "Lee Freeman",
+        "firm": "MAVERICK CAPITAL LTD",
+        "tag": "MAVERICK",
+        "style": "Sector",
+        "category": "sector",
+        "quarters": 20,
+    },
+    "0001263508": {
+        "name": "Luke Byrne",
+        "firm": "BAKER BROS. ADVISORS LP",
+        "tag": "BAKER BROS",
+        "style": "Sector",
+        "category": "sector",
+        "quarters": 20,
+    },
+    "0001656456": {
         "name": "David Tepper",
-        "firm": "Appaloosa Management",
+        "firm": "Appaloosa LP",
         "tag": "TEPPER",
-        "style": "Distressed / Macro",
+        "style": "Sector",
+        "category": "sector",
+        "quarters": 20,
+    },
+    "0001553733": {
+        "name": "Paul B. Kaplan",
+        "firm": "Brave Warrior Advisors LLC",
+        "tag": "BRAVE WARRIOR",
+        "style": "Sector",
+        "category": "sector",
+        "quarters": 20,
+    },
+    "0000872323": {
+        "name": "Bill Nygren",
+        "firm": "HARRIS ASSOCIATES INVESTMENT TRUST",
+        "tag": "HARRIS",
+        "style": "Sector",
+        "category": "sector",
+        "quarters": 20,
     },
 }
 

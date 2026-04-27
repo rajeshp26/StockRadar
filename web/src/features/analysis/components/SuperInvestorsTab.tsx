@@ -5,6 +5,9 @@ import { QK } from "@/lib/query-keys";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SuperInvestorData, SuperInvestorHolder } from "../types/analysis.types";
+import { SuperInvestorPositionChart } from "./SuperInvestorPositionChart";
+import { fetchSuperInvestorsHistory } from "../services/analysis.service";
+import type { SuperInvestorHistoryData } from "../types/analysis.types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
@@ -15,6 +18,14 @@ export function SuperInvestorsTab({ symbol }: { symbol: string }) {
         queryKey: QK.superInvestors(symbol),
         queryFn: () => fetchSuperInvestors(symbol),
         staleTime: 1000 * 60 * 60 * 24, // 13F data updates quarterly, cache for 24h
+    });
+
+    // Fetch position history for chart
+    const { data: historyData, isLoading: historyLoading } = useQuery<SuperInvestorHistoryData, Error>({
+        queryKey: [...QK.superInvestors(symbol), "history"],
+        queryFn: () => fetchSuperInvestorsHistory(symbol),
+        staleTime: 1000 * 60 * 60 * 24, // Same 24h cache as main data
+        enabled: !!data && data.overlap_count > 0, // Only fetch if there are holders
     });
 
     const [refreshing, setRefreshing] = useState(false);
@@ -88,53 +99,71 @@ export function SuperInvestorsTab({ symbol }: { symbol: string }) {
                 />
             </div>
 
-            {/* Current Holders */}
-            <div className="glass-panel">
-                <div className="border-b border-white/5 p-4">
-                    <h3 className="text-sm font-medium text-slate-200">Current Holders</h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                        Most recent 13F filings (quarterly disclosure)
-                    </p>
+            {/* Main Content: Current Holders + Recent Activity side-by-side */}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                {/* Current Holders (2/3 width on desktop) */}
+                <div className="lg:col-span-2">
+                    <div className="glass-panel h-full">
+                        <div className="border-b border-white/5 p-4">
+                            <h3 className="text-sm font-medium text-slate-200">Current Holders</h3>
+                            <p className="mt-1 text-xs text-slate-400">
+                                Most recent 13F filings (quarterly disclosure)
+                            </p>
+                        </div>
+                        <div className="divide-y divide-white/5">
+                            {data.holders.map((holder, idx) => (
+                                <HolderRow key={idx} holder={holder} />
+                            ))}
+                        </div>
+                    </div>
                 </div>
-                <div className="divide-y divide-white/5">
-                    {data.holders.map((holder, idx) => (
-                        <HolderRow key={idx} holder={holder} />
-                    ))}
-                </div>
+
+                {/* Recent Activity (1/3 width on desktop) */}
+                {(data.recent_activity.buyers.length > 0 || data.recent_activity.sellers.length > 0) && (
+                    <div className="space-y-4">
+                        {/* Buyers */}
+                        {data.recent_activity.buyers.length > 0 && (
+                            <div className="glass-panel">
+                                <div className="border-b border-white/5 p-4">
+                                    <h3 className="text-sm font-medium text-emerald-400">Recent Buyers</h3>
+                                    <p className="mt-1 text-xs text-slate-400">Added or increased</p>
+                                </div>
+                                <div className="divide-y divide-white/5">
+                                    {data.recent_activity.buyers.map((holder, idx) => (
+                                        <ActivityRow key={idx} holder={holder} type="buy" />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Sellers */}
+                        {data.recent_activity.sellers.length > 0 && (
+                            <div className="glass-panel">
+                                <div className="border-b border-white/5 p-4">
+                                    <h3 className="text-sm font-medium text-rose-400">Recent Sellers</h3>
+                                    <p className="mt-1 text-xs text-slate-400">Reduced or exited</p>
+                                </div>
+                                <div className="divide-y divide-white/5">
+                                    {data.recent_activity.sellers.map((holder, idx) => (
+                                        <ActivityRow key={idx} holder={holder} type="sell" />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
+            {/* Position History Chart */}
+            {historyData && historyData.investors.length > 0 && (
+                <SuperInvestorPositionChart data={historyData} />
+            )}
 
-            {/* Recent Activity */}
-            {(data.recent_activity.buyers.length > 0 || data.recent_activity.sellers.length > 0) && (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    {/* Buyers */}
-                    {data.recent_activity.buyers.length > 0 && (
-                        <div className="glass-panel">
-                            <div className="border-b border-white/5 p-4">
-                                <h3 className="text-sm font-medium text-emerald-400">Recent Buyers</h3>
-                                <p className="mt-1 text-xs text-slate-400">Added or increased positions</p>
-                            </div>
-                            <div className="divide-y divide-white/5">
-                                {data.recent_activity.buyers.map((holder, idx) => (
-                                    <ActivityRow key={idx} holder={holder} type="buy" />
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Sellers */}
-                    {data.recent_activity.sellers.length > 0 && (
-                        <div className="glass-panel">
-                            <div className="border-b border-white/5 p-4">
-                                <h3 className="text-sm font-medium text-rose-400">Recent Sellers</h3>
-                                <p className="mt-1 text-xs text-slate-400">Reduced or exited positions</p>
-                            </div>
-                            <div className="divide-y divide-white/5">
-                                {data.recent_activity.sellers.map((holder, idx) => (
-                                    <ActivityRow key={idx} holder={holder} type="sell" />
-                                ))}
-                            </div>
-                        </div>
-                    )}
+            {historyLoading && (
+                <div className="glass-panel p-8">
+                    <div className="flex items-center justify-center space-x-3">
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" />
+                        <p className="text-sm text-slate-400">Loading position history...</p>
+                    </div>
                 </div>
             )}
         </div>
@@ -204,12 +233,17 @@ function ActivityRow({ holder, type }: { holder: SuperInvestorHolder; type: "buy
     const color = type === "buy" ? "emerald" : "rose";
     return (
         <div className="p-3">
-            <div className="flex items-center justify-between">
-                <div>
-                    <p className="text-sm font-medium text-slate-200">{holder.investor_name}</p>
-                    <p className="text-xs text-slate-400">{holder.firm}</p>
+            <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-200 truncate">{holder.investor_name}</p>
+                    <p className="text-xs text-slate-400 truncate">{holder.firm}</p>
+                    {holder.quarter_date && (
+                        <p className="mt-1 text-xs text-indigo-400">
+                            {getQuarterLabel(holder.quarter_date)}
+                        </p>
+                    )}
                 </div>
-                <div className="text-right">
+                <div className="text-right shrink-0">
                     <p className={`text-sm font-medium text-${color}-400`}>
                         {type === "buy" ? "+" : ""}
                         {holder.change_pct.toFixed(1)}%

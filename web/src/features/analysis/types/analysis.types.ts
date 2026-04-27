@@ -721,11 +721,11 @@ export interface SupportResistanceAnalysis {
 
 export interface MurphySynthesis {
   overall_signal:
-    | "strong_buy"
-    | "buy"
-    | "neutral"
-    | "sell"
-    | "strong_sell";
+  | "strong_buy"
+  | "buy"
+  | "neutral"
+  | "sell"
+  | "strong_sell";
   signal_strength: number;
   risk_level: "low" | "moderate" | "high";
   dominant_factor: "trend" | "momentum" | "volume" | "oscillators";
@@ -788,4 +788,32 @@ export interface SuperInvestorData {
   avg_portfolio_weight: number;
   conviction_level: "none" | "low" | "moderate" | "high" | "very_high";
   recent_activity: SuperInvestorRecentActivity;
+}
+
+export interface SuperInvestorHoldingPoint {
+  quarter_date: string;
+  shares_held: number;
+  position_value: number;
+  portfolio_weight: number;
+  change_shares: number | null;
+  change_pct: number | null;
+  change_type: "new" | "increased" | "decreased" | "held" | "sold";
+}
+
+export interface SuperInvestorTimeline {
+  investor_id: number;
+  investor_name: string;
+  firm: string;
+  tag: string;
+  style: string;
+  holdings: SuperInvestorHoldingPoint[];
+}
+
+export interface SuperInvestorHistoryData {
+  ticker: string;
+  investors: SuperInvestorTimeline[];
+  quarters: string[];
+  earliest_date: string | null;
+  latest_date: string | null;
+  message?: string;
 }
