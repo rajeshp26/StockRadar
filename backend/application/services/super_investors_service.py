@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Notable "Super Investors" — CIK numbers for tracking
 # ─────────────────────────────────────────────────────────────────────────────
-# 24 validated super investors with SEC exact names
+# 24 super investors - CIKs verified May 2026 (13F-HR only)
 # quarters: 4 for high-holding funds (Fundsmith, ARK), 20 for others
 # category: lt_compounder, value, growth, activist, sector
 SUPER_INVESTORS: Dict[str, Dict[str, str]] = {
@@ -74,9 +74,9 @@ SUPER_INVESTORS: Dict[str, Dict[str, str]] = {
         "category": "value",
         "quarters": 20,
     },
-    "0001173334": {
+    "0001549575": {
         "name": "Mohnish Pabrai",
-        "firm": "PABRAI MOHNISH",
+        "firm": "DALAL STREET LLC",
         "tag": "PABRAI",
         "style": "Value",
         "category": "value",
@@ -180,10 +180,10 @@ SUPER_INVESTORS: Dict[str, Dict[str, str]] = {
         "category": "activist",
         "quarters": 20,
     },
-    "0001325920": {
-        "name": "Mason Morfit",
-        "firm": "Morfit G Mason",
-        "tag": "MORFIT",
+    "0001418814": {
+        "name": "Mason Morfit / ValueAct",
+        "firm": "VALUEACT HOLDINGS, L.P.",
+        "tag": "VALUEACT",
         "style": "Activist",
         "category": "activist",
         "quarters": 20,
@@ -221,9 +221,9 @@ SUPER_INVESTORS: Dict[str, Dict[str, str]] = {
         "category": "sector",
         "quarters": 20,
     },
-    "0000872323": {
+    "0000813917": {
         "name": "Bill Nygren",
-        "firm": "HARRIS ASSOCIATES INVESTMENT TRUST",
+        "firm": "HARRIS ASSOCIATES LP",
         "tag": "HARRIS",
         "style": "Sector",
         "category": "sector",
@@ -453,7 +453,7 @@ class SuperInvestorsService:
         
         return {
             "shares": int(row.get("SharesPrnAmount", 0)),
-            "value": float(row.get("Value", 0)) * 1000,  # Convert to actual dollars
+            "value": float(row.get("Value", 0)),  
             "portfolio_weight": portfolio_weight,
         }
 

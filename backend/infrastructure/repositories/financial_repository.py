@@ -18,6 +18,9 @@ from decimal import Decimal
 
 from supabase import Client
 from database import supabase
+from application.validators.financial_data_validator import (
+    verify_database_write,
+)
 from itertools import islice
 
 from config import settings
@@ -319,6 +322,29 @@ class SupabaseFinancialRepository:
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
+            # Post-write verification (sample first + last rows)
+            if dedup:
+                # Verify first row
+                first_row = dedup[0]
+                verify_issues = verify_database_write(
+                    supabase=self.client,
+                    table="income_statements",
+                    company_id=first_row.company_id,
+                    fiscal_year=first_row.fiscal_year,
+                    fiscal_quarter=first_row.fiscal_quarter,
+                    expected_values={
+                        "revenue": first_row.revenue,
+                        "net_income": first_row.net_income,
+                        "gross_profit": first_row.gross_profit,
+                    },
+                    symbol="(upsert)"
+                )
+                
+                if verify_issues:
+                    logger.error(
+                        "[DQ] Income statement post-write verification failed: %d issues",
+                        len(verify_issues)
+                    )
             # Zero rows back when we sent rows in = constraint violation.
             returned = len(response.data) if response.data is not None else -1
             if returned == 0 and len(data) > 0:
@@ -352,6 +378,30 @@ class SupabaseFinancialRepository:
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
+
+            # Post-write verification (sample first row)
+            if dedup:
+                first_row = dedup[0]
+                verify_issues = verify_database_write(
+                    supabase=self.client,
+                    table="balance_sheets",
+                    company_id=first_row.company_id,
+                    fiscal_year=first_row.fiscal_year,
+                    fiscal_quarter=first_row.fiscal_quarter,
+                    expected_values={
+                        "total_assets": first_row.total_assets,
+                        "total_liabilities": first_row.total_liabilities,
+                        "shareholders_equity": first_row.shareholders_equity,
+                    },
+                    symbol="(upsert)"
+                )
+                
+                if verify_issues:
+                    logger.error(
+                        "[DQ] Balance sheet post-write verification failed: %d issues",
+                        len(verify_issues)
+                    )
+
             returned = len(response.data) if response.data is not None else -1
             if returned == 0 and len(data) > 0:
                 logger.error(
@@ -384,6 +434,30 @@ class SupabaseFinancialRepository:
                 data,
                 on_conflict='company_id,fiscal_year,fiscal_quarter'
             ).execute()
+
+            # Post-write verification (sample first row)
+            if dedup:
+                first_row = dedup[0]
+                verify_issues = verify_database_write(
+                    supabase=self.client,
+                    table="cash_flow_statements",
+                    company_id=first_row.company_id,
+                    fiscal_year=first_row.fiscal_year,
+                    fiscal_quarter=first_row.fiscal_quarter,
+                    expected_values={
+                        "cash_from_operating_activities": first_row.cash_from_operating_activities,
+                        "cash_from_investing_activities": first_row.cash_from_investing_activities,
+                        "capital_expenditures": first_row.capital_expenditures,
+                    },
+                    symbol="(upsert)"
+                )
+                
+                if verify_issues:
+                    logger.error(
+                        "[DQ] Cash flow post-write verification failed: %d issues",
+                        len(verify_issues)
+                    )
+            
             returned = len(response.data) if response.data is not None else -1
             if returned == 0 and len(data) > 0:
                 logger.error(
@@ -886,6 +960,8 @@ class SupabaseFinancialRepository:
             ).in_(
                 'data_completeness_status',
                 ['INITIAL', 'PARTIAL', 'COMPLETE', 'CURRENT']
+            ).or_(
+                'security_type.eq.stock,security_type.is.null'
             ).execute()
 
             count = len(response.data or [])

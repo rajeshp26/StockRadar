@@ -106,6 +106,7 @@ def get_yfinance_provider() -> YFinanceProvider:
     return _yfinance_provider
 
 _edgar_provider: EdgarToolsProvider = None
+_stockdex_provider: "StockdexMacrotrendsProvider" = None
 
 def get_edgar_provider() -> EdgarToolsProvider:
     """
@@ -123,14 +124,25 @@ def get_edgar_provider() -> EdgarToolsProvider:
         _edgar_provider = EdgarToolsProvider()
     return _edgar_provider
 
+def get_stockdex_provider() -> "StockdexMacrotrendsProvider":
+    """Get or create StockdexMacrotrendsProvider singleton."""
+    global _stockdex_provider
+    if _stockdex_provider is None:
+        logger.debug("Initializing StockdexMacrotrendsProvider")
+        from providers.stockdex_provider import StockdexMacrotrendsProvider
+        _stockdex_provider = StockdexMacrotrendsProvider()
+    return _stockdex_provider
+
+
 def get_defeat_beta_provider() -> DefeatBetaProvider:
     """
     Get or create DefeatBetaProvider singleton.
 
     Provider chain:
         1. DefeatBeta  — primary (proprietary financial data API)
-        2. EdgarTools  — fallback 1 (SEC EDGAR XBRL filings, IS/BS/CF only)
-        3. YFinance    — fallback 2 (scrape-based, covers everything EdgarTools cannot)
+        2. Stockdex    — fallback 1 (Macrotrends scraper, 15+ years of IS/BS/CF)
+        3. EdgarTools  — fallback 2 (SEC EDGAR XBRL filings, IS/BS/CF only)
+        4. YFinance    — fallback 3 (scrape-based, covers everything prior sources cannot)
     """
     global _defeat_beta_provider
     if _defeat_beta_provider is None:
@@ -138,6 +150,7 @@ def get_defeat_beta_provider() -> DefeatBetaProvider:
         _defeat_beta_provider = DefeatBetaProvider(
             yfinance_provider=get_yfinance_provider(),
             edgar_provider=get_edgar_provider(),
+            stockdex_provider=get_stockdex_provider(),
         )
     return _defeat_beta_provider
 

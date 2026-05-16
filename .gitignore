@@ -20,3 +20,4 @@ yarn-error.log*
 backend/service-account.json
 backend/google_credentials.json
 backend/.env
+backend/venv_wsl/

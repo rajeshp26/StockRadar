@@ -38,6 +38,7 @@ from providers.defeat_beta_provider import DefeatBetaProvider
 from providers.yfinance_provider import YFinanceProvider
 from application.services.valuation_service import ValuationService
 from application.services.recompute_guard import RecomputeGuard
+from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
 
 # ── logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -88,11 +89,12 @@ async def backfill_company(
         await reset_company_status(repo, company_id)
         logger.info("Reset %s (id=%s) → INITIAL", symbol, company_id)
 
-        # 2. Full re-fetch — bypasses incremental filter
+        # 2. Full re-fetch — bypasses incremental filter, limit to 2021+
         fin = await provider.get_all_financials_optimized(
             symbol=symbol,
             company_id=company_id,
             force_full_history=True,
+            min_fiscal_year=2021,
         )
 
         # 3. Persist
@@ -124,6 +126,15 @@ async def backfill_company(
         )
         logger.info("✅ RI valuation complete for %s (id=%s)", symbol, company_id)
 
+        # 6. Compute derived financial metrics
+        try:
+            ratios = await compute_and_upsert_derived_financial_metrics(company_id=company_id)
+            logger.info(
+                "[DERIVED] %s: %d rows changed", symbol, ratios.get("rows_changed", 0),
+            )
+        except Exception as de:
+            logger.error("[DERIVED] %s: %s", symbol, de)
+
         result["status"] = "ok"
         result["rows"] = counts
 
@@ -136,13 +147,17 @@ async def backfill_company(
 
 
 async def run_backfill(
-    company_id_filter: int | None,
+    company_ids: list[int] | None,
     dry_run: bool,
     concurrency: int,
 ) -> None:
     repo = SupabaseFinancialRepository(supabase)
     yf = YFinanceProvider()
-    provider = DefeatBetaProvider(yfinance_provider=yf)
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    from providers.edgar_provider import EdgarToolsProvider
+    sd = StockdexMacrotrendsProvider()
+    ed = EdgarToolsProvider()
+    provider = DefeatBetaProvider(yfinance_provider=yf, stockdex_provider=sd, edgar_provider=ed)
     
     # Instantiate valuation services
     valuation_repo = ValuationRepository()
@@ -150,17 +165,19 @@ async def run_backfill(
     valuation_service = ValuationService(repo=valuation_repo, guard=recompute_guard)
 
     # Fetch target companies
-    if company_id_filter:
-        resp = supabase.table("companies") \
-            .select("company_id, ticker_symbol") \
-            .eq("company_id", company_id_filter) \
-            .execute()
-    else:
-        resp = supabase.table("companies") \
-            .select("company_id, ticker_symbol") \
-            .execute()
+    query = supabase.table("companies").select("company_id, ticker_symbol, security_type")
+    query = query.eq("security_type", "stock")
+    if company_ids:
+        if len(company_ids) == 1:
+            query = query.eq("company_id", company_ids[0])
+        else:
+            query = query.in_("company_id", company_ids)
+    resp = query.execute()
 
     companies = resp.data or []
+    if company_ids and len(companies) < len(company_ids):
+        skipped = set(company_ids) - {c["company_id"] for c in companies}
+        logger.warning("Non-stock companies filtered out (ids=%s)", sorted(skipped))
     if not companies:
         logger.warning("No companies found — nothing to backfill.")
         return
@@ -197,12 +214,12 @@ async def run_backfill(
 def main() -> None:
     parser = argparse.ArgumentParser(description="StockerPro full-history backfill")
     parser.add_argument("--dry-run", action="store_true", help="Print plan, make no changes")
-    parser.add_argument("--company-id", type=int, default=None, help="Only process one company")
+    parser.add_argument("--company-id", type=int, nargs="*", default=None, help="Company ID(s) to process (omit for all)")
     parser.add_argument("--concurrency", type=int, default=3, help="Max parallel fetches")
     args = parser.parse_args()
 
     asyncio.run(run_backfill(
-        company_id_filter=args.company_id,
+        company_ids=args.company_id,
         dry_run=args.dry_run,
         concurrency=args.concurrency,
     ))

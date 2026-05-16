@@ -51,9 +51,15 @@ class EarningsRefreshScheduler:
         """
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
 
-        # Inject YF fallback for robust gap-fill
+        # Inject fallback chain: Stockdex → Edgar → YFinance
         yf_provider = YFinanceProvider()
-        self.defeat_beta_provider = defeat_beta_provider or DefeatBetaProvider(yfinance_provider=yf_provider)
+        from providers.stockdex_provider import StockdexMacrotrendsProvider
+        from providers.edgar_provider import EdgarToolsProvider
+        self.defeat_beta_provider = defeat_beta_provider or DefeatBetaProvider(
+            yfinance_provider=yf_provider,
+            stockdex_provider=StockdexMacrotrendsProvider(),
+            edgar_provider=EdgarToolsProvider(),
+        )
 
         self.is_running = False
         self.task: Optional[asyncio.Task] = None
@@ -312,6 +318,18 @@ class EarningsRefreshScheduler:
                     logger.error(
                         "[DQ] audit failed for %s: %s", symbol, qe
                     )
+
+                # Trigger RI valuation
+                try:
+                    from infrastructure.repositories.valuation_repository import ValuationRepository
+                    from application.services.recompute_guard import RecomputeGuard
+                    from application.services.valuation_service import ValuationService
+                    valuation_repo = ValuationRepository()
+                    vs = ValuationService(repo=valuation_repo, guard=RecomputeGuard(valuation_repo))
+                    await vs.compute_residual_income_if_stale(symbol=symbol, user_id=None, force=True)
+                    logger.info("[VALUATION] %s RI valuation complete", symbol)
+                except Exception as ve:
+                    logger.error("[VALUATION] %s failed: %s", symbol, ve)
             else:
                 logger.debug(
                     "[DERIVED] %s: no new statement rows → skipping derived metrics",
@@ -324,7 +342,7 @@ class EarningsRefreshScheduler:
                 'symbol': symbol,
                 'status': 'success',
                 'rows_upserted': upsert_results,
-                'total_rows': total_rows,
+                'total_rows': sum(upsert_results.values()),
                 'is_first_load': is_first_time_load,
                 'next_earnings_date': (
                     financials.next_earnings_date.isoformat()

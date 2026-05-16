@@ -303,16 +303,16 @@ def validate_config():
         s = Settings()
         key_type = "JWT" if s.SUPABASE_SERVICE_ROLE_KEY.startswith("eyJ") else "Legacy"
         print("\n" + "="*60)
-        print("✅ STOCKERPRO CONFIGURATION LOADED")
+        print("[OK] STOCKERPRO CONFIGURATION LOADED")
         print("="*60)
         print(f"Environment  : {s.ENVIRONMENT}")
         print(f"API Endpoint : {s.API_HOST}:{s.API_PORT}")
         print(f"Supabase URL : {s.SUPABASE_URL}")
         print(f"Supabase Key : {key_type} format detected")
         print(f"Firebase PID : {s.FIREBASE_PROJECT_ID}")
-        print(f"AI Provider  : {'Gemini Enabled ✨' if s.GEMINI_API_KEY else 'AI Disabled'}")
-        print(f"Defeat Beta  : {'Enabled ✨' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}")
-        print(f"Market Data  : {'Enabled ✨' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}")
+        print(f"AI Provider  : {'Gemini Enabled *' if s.GEMINI_API_KEY else 'AI Disabled'}")
+        print(f"Defeat Beta  : {'Enabled *' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}")
+        print(f"Market Data  : {'Enabled *' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}")
         if s.ENABLE_MARKET_DATA_SCHEDULER:
             print(f"  - Scheduler Interval: {getattr(s, 'MARKET_DATA_REFRESH_INTERVAL_HOURS', 24)}h")
         print(f"  - Scheduler Interval: {s.EARNINGS_REFRESH_CHECK_INTERVAL_HOURS}h")
@@ -324,7 +324,7 @@ def validate_config():
         return s
     except Exception as e:
         print("\n" + "!"*60)
-        print("❌ CONFIGURATION ERROR: Backend cannot start.")
+        print("[ERROR] CONFIGURATION ERROR: Backend cannot start.")
         print("!"*50)
         print(f"\n{str(e)}\n")
         print("Troubleshooting:")

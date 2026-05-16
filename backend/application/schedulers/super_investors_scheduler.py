@@ -184,17 +184,29 @@ class SuperInvestorsRefreshScheduler:
         logger.info(f"First run for {investor_name}: fetching {quarters} quarters")
 
         try:
-            filings = get_filings(form="13F-HR").filter(cik=cik)
-            if not filings or len(filings) == 0:
+            # Fetch filings by year (SEC API requires year filter for historical data)
+            all_filings = []
+            current_year = datetime.now().year
+            years_to_fetch = list(range(current_year - 5, current_year + 1))
+            
+            for year in years_to_fetch:
+                try:
+                    filings = get_filings(year=year, form="13F-HR").filter(cik=cik)
+                    if filings:
+                        all_filings.extend(list(filings))
+                except Exception:
+                    continue
+            
+            if not all_filings:
                 logger.warning(f"No filings found for {investor_name}")
                 return False
 
-            # Get all available filings (up to quarters limit)
-            filing_list = list(filings)
-            num_to_fetch = min(quarters, len(filing_list))
+            # Sort by filing date descending and take required number
+            all_filings.sort(key=lambda x: x.filing_date, reverse=True)
+            num_to_fetch = min(quarters, len(all_filings))
 
             logger.info(
-                f"Fetching {num_to_fetch} historical filings for {investor_name}"
+                f"Found {len(all_filings)} total filings, fetching {num_to_fetch} for {investor_name}"
             )
 
             latest_period = None
@@ -202,7 +214,7 @@ class SuperInvestorsRefreshScheduler:
 
             for i in range(num_to_fetch):
                 try:
-                    filing = filing_list[i]
+                    filing = all_filings[i]
                     thirteenf = filing.obj()
 
                     if not thirteenf:
@@ -214,8 +226,9 @@ class SuperInvestorsRefreshScheduler:
                     # Save holdings to DB
                     holdings_df = thirteenf.holdings
                     if holdings_df is not None and not holdings_df.empty:
+                        total_val = float(thirteenf.total_value) if thirteenf.total_value else None
                         await self._save_holdings_to_db(
-                            cik, info, holdings_df, period, filing_date
+                            cik, info, holdings_df, period, filing_date, total_value_dollars=total_val
                         )
 
                     # Track latest
@@ -277,8 +290,9 @@ class SuperInvestorsRefreshScheduler:
             # Save holdings to DB
             holdings_df = thirteenf.holdings
             if holdings_df is not None and not holdings_df.empty:
+                total_val = float(thirteenf.total_value) if thirteenf.total_value else None
                 await self._save_holdings_to_db(
-                    cik, info, holdings_df, period, filing_date
+                    cik, info, holdings_df, period, filing_date, total_value_dollars=total_val
                 )
 
             # Update tracking
@@ -297,6 +311,7 @@ class SuperInvestorsRefreshScheduler:
         holdings_df,
         period: date,
         filing_date: str,
+        total_value_dollars: float = None,
     ) -> None:
         """Save holdings to institutional_holdings table."""
         from database import supabase
@@ -312,8 +327,12 @@ class SuperInvestorsRefreshScheduler:
 
         investor_id = inv_result.data[0]["investor_id"]
 
-        # Calculate total portfolio value for weight
-        total_value = holdings_df["Value"].sum() * 1000  # Values in thousands
+        # edgar library returns Value in ACTUAL DOLLARS (not thousands)
+        # Use provided total_value or sum holdings
+        if total_value_dollars is not None:
+            total_value = total_value_dollars
+        else:
+            total_value = float(holdings_df["Value"].sum())
 
         # Process each holding (store all, not just specific ticker)
         for _, row in holdings_df.iterrows():
@@ -331,9 +350,9 @@ class SuperInvestorsRefreshScheduler:
 
             company_id = company_result.data[0]["company_id"]
 
-            shares = row.get("SharesPrnAmount", 0) or 0
-            value = row.get("Value", 0) or 0  # Already in thousands per 13F
-            weight = (value / total_value) if total_value > 0 else 0
+            shares = int(row.get("SharesPrnAmount", 0) or 0)
+            value_dollars = float(row.get("Value", 0) or 0)  # edgar returns in actual dollars
+            weight = (value_dollars / total_value) if total_value > 0 else 0
 
             # Check if holding exists
             existing = supabase.table("institutional_holdings").select(
@@ -348,7 +367,7 @@ class SuperInvestorsRefreshScheduler:
                 "quarter_end_date": str(period),
                 "filing_date": filing_date,
                 "shares_held": int(shares),
-                "position_value": float(value),
+                "position_value": (value_dollars),  # ← Fixed: now in dollars
                 "portfolio_weight": float(weight),
                 "data_source": "edgar",
             }

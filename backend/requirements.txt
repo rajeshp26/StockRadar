@@ -17,3 +17,4 @@ lxml>=4.9.3
 google-generativeai
 fsspec<=2025.10.0
 edgartools>=3.0
+stockdex>=1.2.5

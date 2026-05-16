@@ -69,8 +69,12 @@ class MarketDataRefreshScheduler:
         # Repos & Providers
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
         yf_provider = YFinanceProvider()
+        from providers.stockdex_provider import StockdexMacrotrendsProvider
+        from providers.edgar_provider import EdgarToolsProvider
         self.defeat_beta_provider = defeat_beta_provider or DefeatBetaProvider(
-            yfinance_provider=yf_provider
+            yfinance_provider=yf_provider,
+            stockdex_provider=StockdexMacrotrendsProvider(),
+            edgar_provider=EdgarToolsProvider(),
         )
 
         # Config (with safe defaults)
@@ -313,25 +317,29 @@ class MarketDataRefreshScheduler:
                         last_refreshed_fiscal_year=None,
                         last_refreshed_fiscal_quarter=None,
                         force_full_history=True,
+                        min_fiscal_year=2021,
                     )
-                    await self.financial_repo.upsert_all_financials(financials)
-                    await self.financial_repo.update_company_refresh_metadata(
-                        company_id=company_id,
-                        last_fiscal_year=(
-                            financials.income_statements.rows[-1].fiscal_year
-                            if financials.income_statements.rows else 2024
-                        ),
-                        last_fiscal_quarter=None,
-                        is_first_load=True,
-                        next_earnings_date=financials.next_earnings_date,
-                    )
-                    logger.info(
-                        "[BOOTSTRAP] %s IS/BS/CF bootstrap complete — IS:%d BS:%d CF:%d",
-                        symbol,
-                        len(financials.income_statements.rows),
-                        len(financials.balance_sheets.rows),
-                        len(financials.cash_flows.rows),
-                    )
+                    if not financials.income_statements.rows:
+                        logger.warning(
+                            "[BOOTSTRAP] %s: min_fiscal_year=2021 stripped all rows — skipping upsert & metadata",
+                            symbol,
+                        )
+                    else:
+                        await self.financial_repo.upsert_all_financials(financials)
+                        await self.financial_repo.update_company_refresh_metadata(
+                            company_id=company_id,
+                            last_fiscal_year=financials.income_statements.rows[-1].fiscal_year,
+                            last_fiscal_quarter=None,
+                            is_first_load=True,
+                            next_earnings_date=financials.next_earnings_date,
+                        )
+                        logger.info(
+                            "[BOOTSTRAP] %s IS/BS/CF bootstrap complete — IS:%d BS:%d CF:%d",
+                            symbol,
+                            len(financials.income_statements.rows),
+                            len(financials.balance_sheets.rows),
+                            len(financials.cash_flows.rows),
+                        )
         except Exception as bootstrap_exc:
             logger.error(
                 "[BOOTSTRAP] Financial bootstrap failed for %s: %s",
@@ -373,6 +381,19 @@ class MarketDataRefreshScheduler:
                     )
             except Exception as exc:
                 logger.error("[DIV_METRICS] %s failed: %s", symbol, exc)
+
+        # 8) RI VALUATION — stocks only
+        if is_stock:
+            try:
+                from infrastructure.repositories.valuation_repository import ValuationRepository
+                from application.services.recompute_guard import RecomputeGuard
+                from application.services.valuation_service import ValuationService
+                valuation_repo = ValuationRepository()
+                vs = ValuationService(repo=valuation_repo, guard=RecomputeGuard(valuation_repo))
+                await vs.compute_residual_income_if_stale(symbol=symbol, user_id=None, force=True)
+                logger.info("[VALUATION] %s RI valuation complete", symbol)
+            except Exception as ve:
+                logger.error("[VALUATION] %s failed: %s", symbol, ve)
 
         return {
             "price_history_monthly": price_rows_written,

@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Set
 
 import pandas as pd
 import html
@@ -36,12 +36,21 @@ from domain.model_types import (
     DividendRows,
 )
 
-from backend.application.normalizers.statement_normalizer import normalize_income_row, normalize_balance_row, normalize_cashflow_row
+from application.normalizers.statement_normalizer import normalize_income_row, normalize_balance_row, normalize_cashflow_row
 
 from providers.base import StockDataProvider
 
+from application.validators.financial_data_validator import (
+    FinancialDataValidator,
+    log_validation_result
+)
+
 logger = logging.getLogger(__name__)
 
+# --- Gap tracking types -------------------------------------------------------
+GapKey = Tuple[int, Optional[int], date]  # (fiscal_year, fiscal_quarter, period_end)
+GapDict = Dict[str, Set[GapKey]]          # {"is": ..., "bs": ..., "cf": ...}
+# -------------------------------------------------------------------------------
 
 # --- RAW DEFEATBETA DUMPER (file-based) ---------------------------------------
 def _logs_dir_for_provider() -> Path:
@@ -263,14 +272,17 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         yfinance_provider: Optional["YFinanceProvider"] = None,
         edgar_provider: Optional["EdgarToolsProvider"] = None,
+        stockdex_provider: Optional["StockdexMacrotrendsProvider"] = None,
     ):
         from config import settings
         self.settings = settings
         self.yfinance_provider = yfinance_provider
         self.edgar_provider = edgar_provider
+        self.stockdex_provider = stockdex_provider
         logger.info(
-            "DefeatBetaProvider initialized (edgar=%s, yfinance=%s)",
+            "DefeatBetaProvider initialized (edgar=%s, stockdex=%s, yfinance=%s)",
             edgar_provider is not None,
+            stockdex_provider is not None,
             yfinance_provider is not None,
         )
 
@@ -300,13 +312,14 @@ class DefeatBetaProvider(StockDataProvider):
         last_refreshed_fiscal_year: Optional[int] = None,
         last_refreshed_fiscal_quarter: Optional[int] = None,
         force_full_history: bool = False,
+        min_fiscal_year: Optional[int] = None,
     ) -> CompleteFundamentals:
         logger.info(f"Starting financials fetch for {symbol} (company_id={company_id})")
         last_error: Optional[Exception] = None
 
         for attempt in range(self.settings.RETRY_MAX_ATTEMPTS):
             try:
-                fin = await self._fetch_all_financials_internal(symbol, company_id)
+                fin, gaps = await self._fetch_all_financials_internal(symbol, company_id)
 
                 # incremental filter if not first load
                 if not force_full_history and last_refreshed_fiscal_year is not None:
@@ -315,7 +328,11 @@ class DefeatBetaProvider(StockDataProvider):
                 # gap-fill missing statements from yfinance (if enabled)
                 if self.settings.ENABLE_YFINANCE_FALLBACK and self.yfinance_provider:
                     only_after = None if force_full_history else (last_refreshed_fiscal_year, last_refreshed_fiscal_quarter)
-                    fin = await self._fill_gaps_with_yfinance(fin, only_after=only_after)
+                    fin = await self._fill_gaps_with_yfinance(fin, gaps, only_after=only_after)
+
+                # strip rows older than min_fiscal_year
+                if min_fiscal_year is not None:
+                    fin = self._filter_by_min_year(fin, min_fiscal_year)
 
                 logger.info(f"✅ Fetched {symbol}: {fin.total_rows_fetched} total rows")
                 return fin
@@ -334,7 +351,10 @@ class DefeatBetaProvider(StockDataProvider):
         if self.settings.ENABLE_YFINANCE_FALLBACK and self.yfinance_provider:
             logger.warning(f"Defeat-beta failed for {symbol}, attempting yfinance fallback")
             only_after = None if force_full_history else (last_refreshed_fiscal_year, last_refreshed_fiscal_quarter)
-            return await self._fallback_to_yfinance(symbol, company_id, only_after=only_after)
+            fin = await self._fallback_to_yfinance(symbol, company_id, only_after=only_after)
+            if min_fiscal_year is not None:
+                fin = self._filter_by_min_year(fin, min_fiscal_year)
+            return fin
 
         raise MaxRetriesExceededError(
             company_id=company_id,
@@ -433,7 +453,7 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
     # Primary DBeta fetch (statements & market)
     # ---------------------------------------------------------------------
-    async def _fetch_all_financials_internal(self, symbol: str, company_id: int) -> CompleteFundamentals:
+    async def _fetch_all_financials_internal(self, symbol: str, company_id: int) -> Tuple[CompleteFundamentals, GapDict]:
         try:
             ticker = Ticker(symbol)
             logger.debug(f"Created Ticker object for {symbol}")
@@ -448,9 +468,9 @@ class DefeatBetaProvider(StockDataProvider):
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            income_rows: IncomeStatementRows = self._extract_result(results[0], IncomeStatementRows(rows=[]))
-            balance_rows: BalanceSheetRows = self._extract_result(results[1], BalanceSheetRows(rows=[]))
-            cash_rows: CashFlowRows = self._extract_result(results[2], CashFlowRows(rows=[]))
+            income_rows, income_gaps = self._extract_pair_result(results[0], IncomeStatementRows(rows=[]))
+            balance_rows, balance_gaps = self._extract_pair_result(results[1], BalanceSheetRows(rows=[]))
+            cash_rows, cash_gaps = self._extract_pair_result(results[2], CashFlowRows(rows=[]))
             # earnings_rows - now empty from DefeatBeta, filled by YFinance fallback
             earnings_rows: EarningsRows = EarningsRows(rows=[])
             # dividends is at index 3 (4th task in the list)
@@ -461,6 +481,12 @@ class DefeatBetaProvider(StockDataProvider):
 
             # next earnings date
             next_earnings = await self._fetch_next_earnings_date(ticker, symbol)
+
+            gaps: GapDict = {
+                "is": income_gaps,
+                "bs": balance_gaps,
+                "cf": cash_gaps,
+            }
 
             fin = CompleteFundamentals(
                 company_id=company_id,
@@ -473,7 +499,7 @@ class DefeatBetaProvider(StockDataProvider):
                 next_earnings_date=next_earnings,
                 fetched_at=datetime.utcnow(),
             )
-            return fin
+            return fin, gaps
 
         except NoDataError:
             raise
@@ -485,38 +511,46 @@ class DefeatBetaProvider(StockDataProvider):
                 details={"symbol": symbol, "original_error": str(e)},
             )
 
-    async def _fetch_income_statements(self, ticker: Ticker, symbol: str, company_id: int) -> IncomeStatementRows:
+    async def _fetch_income_statements(self, ticker: Ticker, symbol: str, company_id: int) -> Tuple[IncomeStatementRows, Set[GapKey]]:
         logger.debug("[DBETA][%s] enter _fetch_income_statements", symbol)
         try:
-            rows: List[IncomeStatementRow] = []
+            all_rows: List[IncomeStatementRow] = []
+            all_gaps: Set[GapKey] = set()
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_income_statement(), f"quarterly_income_statement for {symbol}")
             if q_obj is not None:
                 dump_defeatbeta_raw(symbol, "quarterly_income_statement", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
-                rows.extend(self._parse_income_statement(q_df, company_id, is_quarterly=True, symbol=symbol))
+                q_rows, q_gaps = self._parse_income_statement(q_df, company_id, is_quarterly=True, symbol=symbol)
+                all_rows.extend(q_rows)
+                all_gaps |= q_gaps
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_income_statement(), f"annual_income_statement for {symbol}")
             if a_obj is not None:
                 dump_defeatbeta_raw(symbol, "annual_income_statement", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
-                rows.extend(self._parse_income_statement(a_df, company_id, is_quarterly=False, symbol=symbol))
+                a_rows, a_gaps = self._parse_income_statement(a_df, company_id, is_quarterly=False, symbol=symbol)
+                all_rows.extend(a_rows)
+                all_gaps |= a_gaps
 
-            return IncomeStatementRows(rows=rows)
+            return (IncomeStatementRows(rows=all_rows), all_gaps)
         except Exception as e:
             logger.warning(f"Income statement fetch failed for {symbol}: {str(e)}")
-            return IncomeStatementRows(rows=[])
+            return (IncomeStatementRows(rows=[]), set())
 
-    async def _fetch_balance_sheets(self, ticker: Ticker, symbol: str, company_id: int) -> BalanceSheetRows:
+    async def _fetch_balance_sheets(self, ticker: Ticker, symbol: str, company_id: int) -> Tuple[BalanceSheetRows, Set[GapKey]]:
         logger.debug("[DBETA][%s] enter _fetch_balance_sheets", symbol)
         try:
-            rows: List[BalanceSheetRow] = []
+            all_rows: List[BalanceSheetRow] = []
+            all_gaps: Set[GapKey] = set()
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_balance_sheet(), f"quarterly_balance_sheet for {symbol}")
             if q_obj is not None:
                 dump_defeatbeta_raw(symbol, "quarterly_balance_sheet", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
-                rows.extend(self._parse_balance_sheet(q_df, company_id, is_quarterly=True, symbol=symbol))
+                q_rows, q_gaps = self._parse_balance_sheet(q_df, company_id, is_quarterly=True, symbol=symbol)
+                all_rows.extend(q_rows)
+                all_gaps |= q_gaps
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_balance_sheet(), f"annual_balance_sheet for {symbol}")
             if a_obj is not None:
@@ -528,34 +562,41 @@ class DefeatBetaProvider(StockDataProvider):
                     pass
                 dump_defeatbeta_raw(symbol, "annual_balance_sheet", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
-                rows.extend(self._parse_balance_sheet(a_df, company_id, is_quarterly=False, symbol=symbol))
+                a_rows, a_gaps = self._parse_balance_sheet(a_df, company_id, is_quarterly=False, symbol=symbol)
+                all_rows.extend(a_rows)
+                all_gaps |= a_gaps
 
-            return BalanceSheetRows(rows=rows)
+            return (BalanceSheetRows(rows=all_rows), all_gaps)
         except Exception as e:
             logger.warning(f"Balance sheet fetch failed for {symbol}: {str(e)}")
-            return BalanceSheetRows(rows=[])
+            return (BalanceSheetRows(rows=[]), set())
 
-    async def _fetch_cash_flows(self, ticker: Ticker, symbol: str, company_id: int) -> CashFlowRows:
+    async def _fetch_cash_flows(self, ticker: Ticker, symbol: str, company_id: int) -> Tuple[CashFlowRows, Set[GapKey]]:
         logger.debug("[DBETA][%s] enter _fetch_cash_flows", symbol)
         try:
-            rows: List[CashFlowRow] = []
+            all_rows: List[CashFlowRow] = []
+            all_gaps: Set[GapKey] = set()
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_cash_flow(), f"quarterly_cash_flow for {symbol}")
             if q_obj is not None:
                 dump_defeatbeta_raw(symbol, "quarterly_cash_flow", q_obj)
                 q_df = q_obj.df() if hasattr(q_obj, 'df') else q_obj
-                rows.extend(self._parse_cash_flow(q_df, company_id, is_quarterly=True, symbol=symbol))
+                q_rows, q_gaps = self._parse_cash_flow(q_df, company_id, is_quarterly=True, symbol=symbol)
+                all_rows.extend(q_rows)
+                all_gaps |= q_gaps
 
             a_obj = await self._timeout_fetch(lambda: ticker.annual_cash_flow(), f"annual_cash_flow for {symbol}")
             if a_obj is not None:
                 dump_defeatbeta_raw(symbol, "annual_cash_flow", a_obj)
                 a_df = a_obj.df() if hasattr(a_obj, 'df') else a_obj
-                rows.extend(self._parse_cash_flow(a_df, company_id, is_quarterly=False, symbol=symbol))
+                a_rows, a_gaps = self._parse_cash_flow(a_df, company_id, is_quarterly=False, symbol=symbol)
+                all_rows.extend(a_rows)
+                all_gaps |= a_gaps
 
-            return CashFlowRows(rows=rows)
+            return (CashFlowRows(rows=all_rows), all_gaps)
         except Exception as e:
             logger.warning(f"Cash flow fetch failed for {symbol}: {str(e)}")
-            return CashFlowRows(rows=[])
+            return (CashFlowRows(rows=[]), set())
 
     # _fetch_earnings removed Feb 2026 - DefeatBeta ticker.earnings() API no longer exists
     # Earnings data now populated via YFinance fallback in _fill_gaps_with_yfinance()
@@ -673,6 +714,7 @@ class DefeatBetaProvider(StockDataProvider):
     async def _fill_gaps_with_yfinance(
         self,
         fin: CompleteFundamentals,
+        gaps: GapDict,
         only_after: Optional[Tuple[Optional[int], Optional[int]]] = None
     ) -> CompleteFundamentals:
         if not self.yfinance_provider:
@@ -680,14 +722,60 @@ class DefeatBetaProvider(StockDataProvider):
 
         symbol = fin.symbol
         company_id = fin.company_id
-        fyq_filter = only_after
 
+        # ═══════════════════════════════════════════════════════════════════
+        # Phase A: Per-period gap-fill
+        #   Detects which quarterly periods DefeatBeta returned * for
+        #   (dropped by validation gate) and fills them from the existing
+        #   Edgar → YFinance fallback chain.
+        # ═══════════════════════════════════════════════════════════════════
+
+        for gap_key, quarter_method, parser, rows_list in [
+            ("bs", "get_quarterly_balance_sheet_df", self._parse_yf_balance_sheet, fin.balance_sheets.rows),
+            ("cf", "get_quarterly_cash_flow_df", self._parse_yf_cash_flow, fin.cash_flows.rows),
+            ("is", "get_quarterly_income_statement_df", self._parse_yf_income_statement, fin.income_statements.rows),
+        ]:
+            # Compute missing quarterly periods from gaps
+            missing = {(fy, fq) for (fy, fq, _ped) in gaps.get(gap_key, set()) if fq is not None}
+            if only_after:
+                missing = {
+                    (fy, fq) for (fy, fq) in missing
+                    if self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1])
+                }
+            if not missing:
+                continue
+
+            df, source = await self._fetch_statement_df_with_fallback(symbol, quarter_method)
+            # Parse all periods — no only_after filter here, we filter by missing set below
+            fallback_rows = parser(df, company_id, True, symbol, None, source)
+            existing = {(r.fiscal_year, r.fiscal_quarter) for r in rows_list}
+
+            added = 0
+            for row in fallback_rows:
+                key = (row.fiscal_year, row.fiscal_quarter)
+                if key in missing and key not in existing:
+                    rows_list.append(row)
+                    added += 1
+            if added:
+                logger.info(
+                    "[GAP-FILL][%s] %s: added %d rows from %s",
+                    symbol, gap_key.upper(), added, source,
+                )
+
+        # ═══════════════════════════════════════════════════════════════════
+        # Phase B: Table-level fallback
+        #   Handles statements that are COMPLETELY empty (DefeatBeta returned
+        #   zero rows, not * gaps). need_* is re-computed after Phase A may
+        #   have added rows above.
+        # ═══════════════════════════════════════════════════════════════════
+
+        fyq_filter = only_after
         need_is = not fin.income_statements.rows
         need_bs = not fin.balance_sheets.rows
         need_cf = not fin.cash_flows.rows
         need_earn = not fin.earnings.rows
         need_div = not fin.dividends.rows
-        logger.debug("[DBETA][%s] need_bs=%s (rows=%d)", symbol, (not fin.balance_sheets.rows), len(fin.balance_sheets.rows))
+        logger.debug("[DBETA][%s] need_bs=%s (rows=%d)", symbol, need_bs, len(fin.balance_sheets.rows))
 
         if need_is:
             # Edgar → YFinance chain for income statements
@@ -735,7 +823,7 @@ class DefeatBetaProvider(StockDataProvider):
            r.shares_outstanding_diluted is None for r in fin.income_statements.rows
         ):
            fin = await self._fill_shares_gap(fin, symbol)
-        
+
         return fin
 
     async def _fill_shares_gap(
@@ -764,7 +852,7 @@ class DefeatBetaProvider(StockDataProvider):
             )
             if yf_a_is is not None and not yf_a_is.empty:
                 # Build year -> shares map from yfinance IS
-                shares_by_year: Dict[int, Optional[Decimal]] = {}
+                shares_by_year: Dict[int, Optional[int]] = {}
                 for col in yf_a_is.columns:
                     if not hasattr(col, "year"):
                         continue
@@ -775,7 +863,7 @@ class DefeatBetaProvider(StockDataProvider):
                         if label in yf_a_is.index:
                             v = yf_a_is.loc[label, col]
                             if pd.notna(v):
-                                shares_by_year[fy] = self._safe_decimal(
+                                shares_by_year[fy] = self._safe_int_field(
                                    pd.to_numeric(v, errors="coerce")
                                 )
                                 break
@@ -795,7 +883,7 @@ class DefeatBetaProvider(StockDataProvider):
                         return fin
 
             # Attempt 2: yfinance info.sharesOutstanding (snapshot, applies to all years)
-            snapshot_shares: Optional[Decimal] = None
+            snapshot_shares: Optional[int] = None
             try:
                 details = await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
                 # get_stock_details caches yf.Ticker.info; sharesOutstanding lives there
@@ -804,7 +892,7 @@ class DefeatBetaProvider(StockDataProvider):
                 info = await asyncio.to_thread(lambda: yf.Ticker(symbol.upper()).info)
                 raw_shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
                 if raw_shares:
-                    snapshot_shares = self._safe_decimal(raw_shares)
+                    snapshot_shares = self._safe_int_field(raw_shares)
             except Exception as e:
                 logger.debug("[SHARES][%s] yfinance info fetch failed: %s", symbol, e)
 
@@ -1135,11 +1223,12 @@ class DefeatBetaProvider(StockDataProvider):
         return None
 
     # ---- Income Statement parser (DBeta) ----
-    def _parse_income_statement(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> List[IncomeStatementRow]:
+    def _parse_income_statement(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> Tuple[List[IncomeStatementRow], Set[GapKey]]:
         rows: List[IncomeStatementRow] = []
+        gaps: Set[GapKey] = set()
         df = self._normalize_defeatbeta_df(raw_df)
         if df.empty:
-            return rows
+            return rows, gaps
 
         a = self.DB_INCOME_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
@@ -1175,8 +1264,8 @@ class DefeatBetaProvider(StockDataProvider):
 
                 eps_basic=self._safe_decimal(self._db_val(df, a.get('eps_basic', []), col)),
                 eps_diluted=self._safe_decimal(self._db_val(df, a.get('eps_diluted', []), col)),
-                shares_outstanding_basic=self._safe_decimal(self._db_val(df, a.get('shares_outstanding_basic', []), col)),
-                shares_outstanding_diluted=self._safe_decimal(self._db_val(df, a.get('shares_outstanding_diluted', []), col)),
+                shares_outstanding_basic=self._safe_int_field(self._db_val(df, a.get('shares_outstanding_basic', []), col)),
+                shares_outstanding_diluted=self._safe_int_field(self._db_val(df, a.get('shares_outstanding_diluted', []), col)),
                 interest_income=self._safe_decimal(self._db_val(df, a.get('interest_income', []), col)),
                 effective_tax_rate=self._safe_decimal(self._db_val(df, a.get('effective_tax_rate', []), col)),
                 # Phase 5 additions
@@ -1185,17 +1274,33 @@ class DefeatBetaProvider(StockDataProvider):
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
             )
-            rows.append(normalize_income_row(row))
-        return rows
+            # Normalize row
+            normalized_row = normalize_income_row(row)
+            
+            # Validate before adding to results
+            validation_result = FinancialDataValidator.validate_income_statement(
+                row=normalized_row.model_dump(),
+                symbol=symbol
+            )
+            log_validation_result(validation_result)
+            
+            # Only add if no critical issues; track dropped periods as gaps
+            if not validation_result.has_critical_issues():
+                rows.append(normalized_row)
+            else:
+                gaps.add((fy, fq, period_end))
+            
+        return rows, gaps
 
     # ---- Balance Sheet parser (DBeta) ----
-    def _parse_balance_sheet(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> List[BalanceSheetRow]:
+    def _parse_balance_sheet(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> Tuple[List[BalanceSheetRow], Set[GapKey]]:
         rows: List[BalanceSheetRow] = []
+        gaps: Set[GapKey] = set()
         df = self._normalize_defeatbeta_df(raw_df)
         logger.debug("[DBETA][%s] BS kept date columns: %s", symbol, list(df.columns))
         logger.debug("[DBETA][%s] BS normalized labels (first 20): %s", symbol, list(df.index[:20]))
         if df.empty:
-            return rows
+            return rows, gaps
 
         a = self.DB_BALANCE_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
@@ -1294,15 +1399,30 @@ class DefeatBetaProvider(StockDataProvider):
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
             )
-            rows.append(normalize_balance_row(row))
-        return rows
+            # Normalize row
+            normalized_row = normalize_balance_row(row)
+            
+            # Validate before adding to results
+            validation_result = FinancialDataValidator.validate_balance_sheet(
+                row=normalized_row.model_dump(),
+                symbol=symbol
+            )
+            log_validation_result(validation_result)
+            
+            # Only add if no critical issues; track dropped periods as gaps
+            if not validation_result.has_critical_issues():
+                rows.append(normalized_row)
+            else:
+                gaps.add((fy, fq, period_end))
+        return rows, gaps
 
     # ---- Cash Flow parser (DBeta) ----
-    def _parse_cash_flow(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> List[CashFlowRow]:
+    def _parse_cash_flow(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> Tuple[List[CashFlowRow], Set[GapKey]]:
         rows: List[CashFlowRow] = []
+        gaps: Set[GapKey] = set()
         df = self._normalize_defeatbeta_df(raw_df)
         if df.empty:
-            return rows
+            return rows, gaps
 
         a = self.DB_CASHFLOW_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
@@ -1344,8 +1464,22 @@ class DefeatBetaProvider(StockDataProvider):
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
             )
-            rows.append(normalize_cashflow_row(row))
-        return rows
+            # Normalize row
+            normalized_row = normalize_cashflow_row(row)
+            
+            # Validate before adding to results
+            validation_result = FinancialDataValidator.validate_cash_flow(
+                row=normalized_row.model_dump(),
+                symbol=symbol
+            )
+            log_validation_result(validation_result)
+            
+            # Only add if no critical issues; track dropped periods as gaps
+            if not validation_result.has_critical_issues():
+                rows.append(normalized_row)
+            else:
+                gaps.add((fy, fq, period_end))
+        return rows, gaps
 
     # ---- Dividends parser (DBeta & YF) ----
     def _parse_dividends(self, df: pd.DataFrame, company_id: int, symbol: str, provider: str) -> List[DividendRow]:
@@ -1466,10 +1600,10 @@ class DefeatBetaProvider(StockDataProvider):
                 discontinued_operations=None,
                 net_income_to_common=None,
                 preferred_dividends=None,
-                shares_outstanding_basic=self._safe_decimal(
+                shares_outstanding_basic=self._safe_int_field(
                     pd.to_numeric(gv(['BasicAverageShares', 'Basic Average Shares', 'Ordinary Shares Number']), errors='coerce')
                 ),
-                shares_outstanding_diluted=self._safe_decimal(
+                shares_outstanding_diluted=self._safe_int_field(
                     pd.to_numeric(gv(['DilutedAverageShares', 'Diluted Average Shares', 'BasicAverageShares', 'Basic Average Shares']), errors='coerce')
                 ),
 
@@ -1667,6 +1801,16 @@ class DefeatBetaProvider(StockDataProvider):
             return default
         return result if result else default
 
+    @staticmethod
+    def _extract_pair_result(result, default_rows, default_gaps=None):
+        if default_gaps is None:
+            default_gaps = set()
+        if isinstance(result, Exception):
+            return default_rows, default_gaps
+        if result:
+            return result
+        return default_rows, default_gaps
+
     async def _timeout_fetch(self, func, description: str):
         """
         Run callable in a thread with timeout; ensure callable is executed INSIDE the timeout.
@@ -1699,6 +1843,20 @@ class DefeatBetaProvider(StockDataProvider):
         fin.cash_flows.rows = [r for r in fin.cash_flows.rows if keep(r.fiscal_year, r.fiscal_quarter)]
         fin.earnings.rows = [r for r in fin.earnings.rows if keep(r.fiscal_year, r.fiscal_quarter)]
         # dividends: keep all; optional date filtering can be added if needed
+        return fin
+
+    def _filter_by_min_year(
+        self,
+        fin: CompleteFundamentals,
+        min_year: int,
+    ) -> CompleteFundamentals:
+        def keep(fy: Optional[int]) -> bool:
+            return fy is None or fy >= min_year
+
+        fin.income_statements.rows = [r for r in fin.income_statements.rows if keep(r.fiscal_year)]
+        fin.balance_sheets.rows = [r for r in fin.balance_sheets.rows if keep(r.fiscal_year)]
+        fin.cash_flows.rows = [r for r in fin.cash_flows.rows if keep(r.fiscal_year)]
+        fin.earnings.rows = [r for r in fin.earnings.rows if keep(r.fiscal_year)]
         return fin
 
     def _is_new_fiscal_period(
@@ -1763,7 +1921,7 @@ class DefeatBetaProvider(StockDataProvider):
         return out
 
     # ---------------------------------------------------------------------
-    # Fallback chain helper — Edgar → YFinance
+    # Fallback chain helper — Stockdex → Edgar → YFinance
     # ---------------------------------------------------------------------
     async def _fetch_statement_df_with_fallback(
         self,
@@ -1771,19 +1929,35 @@ class DefeatBetaProvider(StockDataProvider):
         method_name: str,
     ) -> tuple[pd.DataFrame, str]:
         """
-        Fetch a financial statement DataFrame using the Edgar → YFinance chain.
-        Returns: (dataframe, source) where source is "edgar" or "yfinance"
- 
-        Both EdgarToolsProvider and YFinanceProvider expose the same method names:
+        Fetch a financial statement DataFrame using the Stockdex → Edgar → YFinance chain.
+        Returns: (dataframe, source) where source is "stockdex", "edgar", or "yfinance"
+
+        All providers expose the same method names:
           get_quarterly_income_statement_df / get_annual_income_statement_df
           get_quarterly_balance_sheet_df    / get_annual_balance_sheet_df
           get_quarterly_cash_flow_df        / get_annual_cash_flow_df
- 
-        EdgarTools is tried first: its data originates from SEC XBRL filings and
-        is therefore more authoritative than yfinance scrapes.
-        YFinance is used as final fallback only when Edgar returns empty.
+
+        StockdexMacrotrends (Macrotrends scraper, 15+ years) is tried first.
+        EdgarTools (SEC XBRL filings) is tried second.
+        YFinance is the final fallback.
         """
-        # 1. Try Edgar
+        # 1. Try Stockdex/Macrotrends
+        if self.stockdex_provider:
+            try:
+                df = await asyncio.to_thread(
+                    getattr(self.stockdex_provider, method_name), symbol
+                )
+                if df is not None and not df.empty:
+                    logger.debug(
+                        "[STOCKDEX][%s] %s succeeded (%d cols)",
+                        symbol, method_name, len(df.columns),
+                    )
+                    return (df, "stockdex")
+                logger.debug("[STOCKDEX][%s] %s returned empty", symbol, method_name)
+            except Exception as e:
+                logger.debug("[STOCKDEX][%s] %s failed: %s", symbol, method_name, e)
+
+        # 2. Try Edgar
         if self.edgar_provider:
             try:
                 df = await asyncio.to_thread(
@@ -1791,15 +1965,15 @@ class DefeatBetaProvider(StockDataProvider):
                 )
                 if df is not None and not df.empty:
                     logger.debug(
-                        "[EDGAR][%s] %s succeeded (%d rows)",
-                        symbol, method_name, len(df),
+                        "[EDGAR][%s] %s succeeded (%d cols)",
+                        symbol, method_name, len(df.columns),
                     )
                     return (df, "edgar")
                 logger.debug("[EDGAR][%s] %s returned empty", symbol, method_name)
             except Exception as e:
                 logger.debug("[EDGAR][%s] %s failed: %s", symbol, method_name, e)
- 
-        # 2. Fall through to YFinance
+
+        # 3. Fall through to YFinance
         if self.yfinance_provider:
             try:
                 df = await asyncio.to_thread(
@@ -1808,5 +1982,5 @@ class DefeatBetaProvider(StockDataProvider):
                 return (df if df is not None else pd.DataFrame(), "yfinance")
             except Exception as e:
                 logger.debug("[YF][%s] %s failed: %s", symbol, method_name, e)
- 
+
         return (pd.DataFrame(), "yfinance")  # empty with default source
