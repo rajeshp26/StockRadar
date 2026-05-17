@@ -1,0 +1,86 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  BACKEND_DIR: backend
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: |
+          pip install --quiet pip-tools
+          pip-sync --quiet requirements-dev.txt
+
+      - name: Verify lock is fresh
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: pip-compile --check requirements.in -o requirements.txt
+
+      - name: Dependency conflict check
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: pip check
+
+      - name: Security audit (advisory)
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: pip-audit -r requirements.txt
+        continue-on-error: true
+
+      - name: Syntax check
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: |
+          find . -name '*.py' \
+            -not -path './.venv/*' \
+            -not -path './venv/*' \
+            -not -path './venv_wsl/*' \
+            -exec python3 -m py_compile {} +
+
+      - name: Import smoke test
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: python3 tests/test_deps.py
+
+      - name: Lint
+        uses: astral-sh/ruff-action@v3
+        with:
+          src: ${{ env.BACKEND_DIR }}
+
+  test:
+    name: Test
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: |
+          pip install --quiet pip-tools
+          pip-sync --quiet requirements-dev.txt
+
+      - name: Run tests
+        working-directory: ${{ env.BACKEND_DIR }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: pytest tests/ -v --tb=short -x
