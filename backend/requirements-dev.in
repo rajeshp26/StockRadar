@@ -1,0 +1,4 @@
+# Development-only dependencies (not for production)
+-c requirements.txt
+
+pytest==9.0.3
