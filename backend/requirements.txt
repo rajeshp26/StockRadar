@@ -3,7 +3,7 @@ uvicorn
 supabase
 pydantic
 pydantic-settings
-yfinance
+yfinance==1.2.0
 firebase-admin
 slowapi
 python-dotenv
