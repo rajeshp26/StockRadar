@@ -1,0 +1,38 @@
+[Unit]
+Description=StockerPro Background Worker (Schedulers)
+After=network.target postgresql.service
+Wants=stockerpro-api.service
+
+[Service]
+Type=simple
+User=stockerpro
+Group=stockerpro
+WorkingDirectory=/opt/stockerpro/backend
+Environment="PATH=/opt/stockerpro/backend/venv/bin"
+EnvironmentFile=/opt/stockerpro/backend/.env
+
+# Main worker process
+ExecStart=/opt/stockerpro/backend/venv/bin/python scheduler_worker.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=5min
+StartLimitBurst=3
+
+# Graceful shutdown
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=300
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=200%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stockerpro-worker
+
+[Install]
+WantedBy=multi-user.target
