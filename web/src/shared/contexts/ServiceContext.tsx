@@ -1,26 +1,28 @@
 'use client';
 
-import React, { createContext, useContext, useMemo } from 'react';
-import { api } from '@/lib/api';
-import { WatchlistService } from '@/features/watchlists/services/watchlist.service';
+import { createContext, useContext } from 'react';
+import { WatchlistService, watchlistService } from '@/features/watchlists/services/watchlist.service';
+import { PortfolioService, portfolioService } from '@/features/portfolio/services/portfolio.service';
 
 interface ServiceContextType {
   watchlistService: WatchlistService;
+  portfolioService: PortfolioService;
 }
 
 const ServiceContext = createContext<ServiceContextType | null>(null);
 
-export const ServiceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const services = useMemo(() => ({
-    watchlistService: new WatchlistService(api),
-  }), []);
-
+export function ServiceProvider({ children }: { children: React.ReactNode }) {
   return (
-    <ServiceContext.Provider value={services}>
+    <ServiceContext.Provider
+      value={{
+        watchlistService,
+        portfolioService,
+      }}
+    >
       {children}
     </ServiceContext.Provider>
   );
-};
+}
 
 export const useServices = () => {
   const context = useContext(ServiceContext);

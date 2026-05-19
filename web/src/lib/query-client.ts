@@ -6,11 +6,13 @@ import { QueryClient } from "@tanstack/react-query";
 // Data is served from cache without a network request while within stale time.
 // ─────────────────────────────────────────────────────────────────────────────
 export const STALE = {
-  VALUATION:  10 * 60 * 1_000,  // 10 min — Rule #1 / DCF / DDM results
-  HISTORY:    15 * 60 * 1_000,  // 15 min — historical snapshots
-  PRICE:           30 * 1_000,  // 30 sec — live quote
-  WATCHLIST:   2 * 60 * 1_000,  // 2 min  — watchlist structure
-  LISTS:       5 * 60 * 1_000,  // 5 min  — all-watchlists metadata
+  VALUATION: 10 * 60 * 1_000,  // 10 min — Rule #1 / DCF / DDM results
+  HISTORY: 15 * 60 * 1_000,  // 15 min — historical snapshots
+  PRICE: 30 * 1_000,  // 30 sec — live quote
+  WATCHLIST: 2 * 60 * 1_000,  // 2 min  — watchlist structure
+  LISTS: 5 * 60 * 1_000,  // 5 min  — all-watchlists metadata
+  PORTFOLIO: 2 * 60 * 1000,    // 2 minutes
+  STATIC: 60 * 60 * 1000,      // 1 hour
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -19,11 +21,13 @@ export const STALE = {
 // This is the key fix: navigating away and back serves data instantly.
 // ─────────────────────────────────────────────────────────────────────────────
 export const GC = {
-  VALUATION:  30 * 60 * 1_000,  // 30 min
-  HISTORY:    60 * 60 * 1_000,  // 60 min
-  PRICE:       5 * 60 * 1_000,  // 5 min
-  WATCHLIST:  10 * 60 * 1_000,  // 10 min
-  LISTS:      15 * 60 * 1_000,  // 15 min
+  VALUATION: 30 * 60 * 1_000,  // 30 min
+  HISTORY: 60 * 60 * 1_000,  // 60 min
+  PRICE: 5 * 60 * 1_000,  // 5 min
+  WATCHLIST: 10 * 60 * 1_000,  // 10 min
+  LISTS: 15 * 60 * 1_000,  // 15 min
+  PORTFOLIO: 5 * 60 * 1000,    // 5 minutes
+  STATIC: 24 * 60 * 60 * 1000, // 24 hours
 } as const;
 
 /**
@@ -35,10 +39,10 @@ export function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        retry:                1,
-        retryDelay:         500,
+        retry: 1,
+        retryDelay: 500,
         refetchOnWindowFocus: false,  // hooks opt-in explicitly
-        throwOnError:        false,   // don't bubble to ErrorBoundary by default
+        throwOnError: false,   // don't bubble to ErrorBoundary by default
       },
     },
   });

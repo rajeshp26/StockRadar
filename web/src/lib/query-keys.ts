@@ -53,4 +53,19 @@ export const QK = {
     ["analysis", "technical", "murphy", symbol.toUpperCase()] as const,
   superInvestors: (symbol: string) =>
     ["analysis", "super-investors", symbol.toUpperCase()] as const,
+  // Portfolio
+  portfolioOverview: () =>
+    ["portfolio", "overview"] as const,
+  portfolioAccounts: () =>
+    ["portfolio", "accounts"] as const,
+  portfolioHoldings: () =>
+    ["portfolio", "holdings"] as const,
+  portfolioAccountHoldings: (accountId: number) =>
+    ["portfolio", "account", accountId, "holdings"] as const,
+  portfolioBrokerages: () =>
+    ["portfolio", "brokerages"] as const,
+  portfolioAccountTransactions: (accountId: number, limit: number = 100) =>
+    ["portfolio", "account", accountId, "transactions", limit] as const,
+  portfolioAccountDividends: (accountId: number) =>
+    ["portfolio", "account", accountId, "dividends"] as const,
 } as const;

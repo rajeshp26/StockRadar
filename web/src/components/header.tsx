@@ -5,12 +5,13 @@ import { usePathname } from "next/navigation";
 import { UserNav } from "@/components/user-nav";
 import { ErrorBoundary } from "react-error-boundary";
 import { Suspense } from "react";
+import { Eye, PieChart } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ── Nav link definition ────────────────────────────────────── */
 const NAV_LINKS = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/watchlist",  label: "Watchlist"  },
+  { href: "/dashboard", label: "Watchlist", icon: Eye },
+  { href: "/portfolio", label: "Portfolio", icon: PieChart },
 ] as const;
 
 /* ── Skeleton for UserNav while loading ─────────────────────── */
@@ -69,7 +70,7 @@ export function Header() {
 
           {/* Desktop nav links */}
           <nav className="hidden items-center gap-1 md:flex" aria-label="Primary navigation">
-            {NAV_LINKS.map(({ href, label }) => {
+            {NAV_LINKS.map(({ href, label, icon: Icon }) => {
               const isActive = pathname === href || pathname.startsWith(href + '/');
               return (
                 <Link
@@ -83,6 +84,7 @@ export function Header() {
                   )}
                   aria-current={isActive ? "page" : undefined}
                 >
+                  <Icon className="mr-1.5 inline-block h-3.5 w-3.5" aria-hidden="true" />
                   {label}
                   {/* Active underline accent */}
                   {isActive && (
@@ -113,7 +115,7 @@ export function Header() {
         className="flex items-center gap-1 overflow-x-auto border-t border-white/5 px-4 pb-2 pt-1 no-scrollbar md:hidden"
         aria-label="Mobile navigation"
       >
-        {NAV_LINKS.map(({ href, label }) => {
+        {NAV_LINKS.map(({ href, label, icon: Icon }) => {
           const isActive = pathname === href || pathname.startsWith(href + '/');
           return (
             <Link
@@ -127,6 +129,7 @@ export function Header() {
               )}
               aria-current={isActive ? "page" : undefined}
             >
+              <Icon className="mr-1 inline-block h-3 w-3" aria-hidden="true" />
               {label}
             </Link>
           );

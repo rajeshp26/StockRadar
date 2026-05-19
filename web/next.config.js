@@ -12,6 +12,16 @@ const nextConfig = {
     ],
   },
 
+  async redirects() {
+    return [
+      {
+        source: "/watchlist",
+        destination: "/dashboard",
+        permanent: true,
+      },
+    ];
+  },
+
   turbopack: {
     root: path.resolve(__dirname),
   },

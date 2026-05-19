@@ -16,6 +16,7 @@ from config import settings
 from database import supabase
 from auth import get_current_user, initialize_firebase_app
 from dependencies import get_current_user_dep, limiter
+from api.portfolio import router as portfolio_router
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -191,3 +192,4 @@ app.include_router(watchlist_items.router)
 app.include_router(valuations.router)
 app.include_router(analysis.router)
 app.include_router(super_investors.router)
+app.include_router(portfolio_router)
