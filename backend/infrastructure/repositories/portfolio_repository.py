@@ -8,6 +8,31 @@ No business logic — pure data access layer that delegates to Supabase.
 
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, datetime
+
+# Exchange code → market group mapping for holdings enrichment
+EXCHANGE_MARKET_MAP: Dict[str, str] = {
+    "NMS": "US", "NASDAQ": "US", "NYSE": "US", "NYSEARCA": "US",
+    "NASDAQCM": "US", "BATS": "US", "IEX": "US", "AMEX": "US",
+    "NYSEAMERICAN": "US", "NASDAQNM": "US", "NASDAQSC": "US",
+    "TSX": "CA", "TSXV": "CA", "TO": "CA", "V": "CA", "CNQ": "CA",
+    "NEO": "CA",
+    "LSE": "INTL", "FRA": "INTL", "ETR": "INTL", "TSE": "INTL",
+    "HKEX": "INTL", "MIL": "INTL", "SWX": "INTL", "ASX": "INTL",
+    "SGX": "INTL", "STO": "INTL", "CPH": "INTL", "HEL": "INTL",
+    "OSL": "INTL", "BCBA": "INTL", "MCX": "INTL", "BSE": "INTL",
+    "NSE": "INTL", "KRX": "INTL", "SSE": "INTL", "SZSE": "INTL",
+    "TWSE": "INTL", "SET": "INTL", "IDX": "INTL", "PSE": "INTL",
+    "HNX": "INTL", "HOSE": "INTL", "BMV": "INTL", "BOVESPA": "INTL",
+    "JSE": "INTL", "TADAWUL": "INTL", "DFM": "INTL", "ADX": "INTL",
+    "QSE": "INTL", "ISE": "INTL",
+}
+
+
+def _exchange_to_market_group(exchange: Optional[str]) -> str:
+    """Normalize exchange code to a broad market group."""
+    if not exchange:
+        return "OTHER"
+    return EXCHANGE_MARKET_MAP.get(exchange.upper(), "OTHER")
 from decimal import Decimal
 import logging
 import uuid
@@ -296,14 +321,14 @@ class PortfolioRepository:
             return []
     
     def _enrich_holdings(self, holdings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Add company info (company_name, sector, industry) to each holding."""
+        """Add company info (name, sector, industry, exchange, market_group) to each holding."""
         company_ids = list(set(h.get("company_id") for h in holdings if h.get("company_id")))
         companies: Dict[int, Dict[str, Any]] = {}
         if company_ids:
             try:
                 res = (
                     self.client.table("companies")
-                    .select("company_id, company_name, sector, industry")
+                    .select("company_id, company_name, sector, industry, exchange")
                     .in_("company_id", company_ids)
                     .execute()
                 )
@@ -311,7 +336,7 @@ class PortfolioRepository:
                     companies[c["company_id"]] = c
             except Exception as e:
                 logger.error(f"Failed to enrich holdings with company data: {e}")
-        
+
         for h in holdings:
             cid = h.get("company_id")
             if cid in companies:
@@ -319,11 +344,15 @@ class PortfolioRepository:
                 h["company_name"] = c.get("company_name", h.get("symbol", "Unknown"))
                 h["sector"] = c.get("sector")
                 h["industry"] = c.get("industry")
+                h["exchange"] = c.get("exchange")
+                h["market_group"] = _exchange_to_market_group(c.get("exchange"))
             else:
                 h["company_name"] = h.get("symbol", "Unknown")
                 h["sector"] = None
                 h["industry"] = None
-        
+                h["exchange"] = None
+                h["market_group"] = "OTHER"
+
         return holdings
     
     def upsert_holding(self, holding: Dict[str, Any]) -> Dict[str, Any]:
@@ -361,6 +390,33 @@ class PortfolioRepository:
     # PERFORMANCE OPERATIONS
     # ========================================================================
     
+    def get_earliest_transaction_date(
+        self, account_ids: List[int]
+    ) -> Optional[date]:
+        """Get the earliest transaction date across the given accounts."""
+        if not account_ids:
+            return None
+        try:
+            res = (
+                self.client.table("portfolio_transactions")
+                .select("transaction_date")
+                .in_("account_id", account_ids)
+                .order("transaction_date", desc=False)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                d = res.data[0]["transaction_date"]
+                if isinstance(d, str):
+                    return date.fromisoformat(d)
+                elif isinstance(d, datetime):
+                    return d.date()
+                return d
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get earliest transaction date: {e}")
+            return None
+
     def get_account_performance_history(
         self, account_id: int, days: int = 90
     ) -> List[Dict[str, Any]]:

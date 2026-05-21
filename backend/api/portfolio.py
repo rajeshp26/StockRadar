@@ -34,6 +34,9 @@ from schemas_portfolio import (
     DeleteAccountRequest,
     ManualTransactionRequest,
     ManualTransactionResponse,
+    PerformanceResponse,
+    BenchmarkListResponse,
+    BenchmarkCompareResponse,
 )
 from shared.exceptions.base import AppException
 from database import supabase
@@ -733,3 +736,113 @@ async def check_company_exists(
             "exists": False,
             "ticker_symbol": symbol.upper(),
         }
+
+
+# ============================================================================
+# PORTFOLIO PERFORMANCE
+# ============================================================================
+
+@router.get("/portfolio/performance", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_portfolio_performance(
+    request: Request,
+    period: str = "1Y",
+    user: dict = Depends(get_current_user_dep),
+) -> PerformanceResponse:
+    """
+    Get portfolio value over time.
+
+    Period options: 1D, 1W, 1M, 3M, 1Y, 5Y, ALL
+    Returns time-series snapshots of portfolio value and cost basis.
+    """
+    try:
+        auth_id = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        service = _get_portfolio_service()
+        result = await service.get_portfolio_performance(db_user_id, period)
+
+        if not result.get("success"):
+            return PerformanceResponse(
+                success=False,
+                period=period,
+                snapshots=[],
+                total_return=0,
+                total_return_pct=0,
+                error=result.get("error"),
+            )
+
+        return PerformanceResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get portfolio performance failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get portfolio performance",
+        )
+
+
+@router.get("/portfolio/performance/compare", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_performance_compare(
+    request: Request,
+    period: str = "1Y",
+    benchmarks: str = "SPY",
+    user: dict = Depends(get_current_user_dep),
+) -> BenchmarkCompareResponse:
+    """
+    Compare portfolio performance against benchmark indices.
+
+    All series normalized to 100 at period start for side-by-side comparison.
+    Multiple benchmarks: ?benchmarks=SPY,QQQ
+    """
+    try:
+        auth_id = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        benchmark_symbols = [s.strip().upper() for s in benchmarks.split(",") if s.strip()]
+
+        service = _get_portfolio_service()
+        result = await service.get_performance_compare(db_user_id, period, benchmark_symbols)
+
+        return BenchmarkCompareResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get performance compare failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to compare performance",
+        )
+
+
+@router.get("/benchmarks", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def list_benchmarks(
+    request: Request,
+    user: dict = Depends(get_current_user_dep),
+) -> BenchmarkListResponse:
+    """
+    List available benchmark indices for performance comparison.
+
+    Returns all active benchmarks from benchmark_config table.
+    Used by the benchmark selector in the portfolio UI.
+    """
+    try:
+        service = _get_portfolio_service()
+        benchmarks = await service.get_benchmarks()
+
+        return BenchmarkListResponse(
+            success=True,
+            benchmarks=benchmarks,
+        )
+
+    except Exception as e:
+        logger.error(f"List benchmarks failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to list benchmarks",
+        )

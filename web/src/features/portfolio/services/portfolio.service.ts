@@ -14,6 +14,9 @@ import type {
     ImportStatusResponse,
     AddManualTransactionRequest,
     AddManualTransactionResponse,
+    PerformanceResponse,
+    BenchmarkInfo,
+    BenchmarkCompareResponse,
 } from "../types/portfolio.types";
 
 /**
@@ -170,6 +173,36 @@ export class PortfolioService {
     }> {
         const res = await this.api.get(
             `/portfolio/accounts/${accountId}/dividends`
+        );
+        return res.data;
+    }
+
+    // ========================================================================
+    // PERFORMANCE & BENCHMARKS
+    // ========================================================================
+
+    async getPortfolioPerformance(period: string = "1Y"): Promise<PerformanceResponse> {
+        const res = await this.api.get<PerformanceResponse>(
+            "/portfolio/performance",
+            { params: { period } }
+        );
+        return res.data;
+    }
+
+    async getBenchmarks(): Promise<BenchmarkInfo[]> {
+        const res = await this.api.get<{ success: boolean; benchmarks: BenchmarkInfo[] }>(
+            "/benchmarks"
+        );
+        return res.data.benchmarks;
+    }
+
+    async getBenchmarkCompare(
+        period: string,
+        benchmarks: string[]
+    ): Promise<BenchmarkCompareResponse> {
+        const res = await this.api.get<BenchmarkCompareResponse>(
+            "/portfolio/performance/compare",
+            { params: { period, benchmarks: benchmarks.join(",") } }
         );
         return res.data;
     }

@@ -86,6 +86,8 @@ class HoldingInfo(BaseModel):
     company_name: str
     sector: Optional[str]
     industry: Optional[str]
+    exchange: Optional[str] = None
+    market_group: Optional[str] = None
     quantity: float
     average_cost: float
     total_cost: float
@@ -270,3 +272,65 @@ class ManualTransactionResponse(BaseModel):
     error: Optional[str] = None
     company_created: bool = False
     company_name: Optional[str] = None
+
+
+# ============================================================================
+# PERFORMANCE & BENCHMARK SCHEMAS
+# ============================================================================
+
+class PerformanceSnapshot(BaseModel):
+    """Single portfolio value snapshot at a point in time."""
+
+    date: str
+    value: float
+    cost_basis: float
+    net_deposits: float = 0.0
+
+
+class PerformanceResponse(BaseModel):
+    """Portfolio performance time series."""
+
+    success: bool
+    period: str
+    snapshots: List[PerformanceSnapshot]
+    total_return: float
+    total_return_pct: float
+    best_day: Optional[Dict[str, Any]] = None
+    worst_day: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+class BenchmarkInfo(BaseModel):
+    """Benchmark index metadata."""
+
+    role: str
+    symbol: str
+    name: str
+    market: str
+    description: Optional[str] = None
+
+
+class BenchmarkListResponse(BaseModel):
+    """List of available benchmarks."""
+
+    success: bool
+    benchmarks: List[BenchmarkInfo]
+    error: Optional[str] = None
+
+
+class BenchmarkSeries(BaseModel):
+    """Single benchmark performance series."""
+
+    symbol: str
+    name: str
+    data: List[Dict[str, Any]]
+
+
+class BenchmarkCompareResponse(BaseModel):
+    """Portfolio vs benchmark comparison."""
+
+    success: bool
+    period: str
+    portfolio: List[Dict[str, Any]]
+    benchmarks: List[BenchmarkSeries]
+    error: Optional[str] = None

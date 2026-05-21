@@ -10,6 +10,8 @@ import { usePortfolioOverview } from '../hooks/usePortfolio';
 import { PortfolioEntrySelector } from './PortfolioEntrySelector';
 import { ImportTransactionsModal } from './ImportTransactionsModal';
 import { ManualTradeForm } from './ManualTradeForm';
+import { PortfolioPerformanceChart } from './PortfolioPerformanceChart';
+import { HoldingsSection } from './HoldingsSection';
 import { ACCOUNT_TYPE_COLORS } from '../types/portfolio.types';
 import { cn } from '@/lib/utils';
 
@@ -79,6 +81,9 @@ export function PortfolioOverview() {
                     </Button>
                 </div>
             </div>
+
+            {/* Performance Chart */}
+            <PortfolioPerformanceChart />
 
             {/* Key Metrics Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -192,51 +197,8 @@ export function PortfolioOverview() {
                 </div>
             )}
 
-            {/* Top Holdings */}
-            {overview.top_holdings.length > 0 && (
-                <div className="glass-panel p-6">
-                    <h3 className="glass-overline mb-4">Top Holdings</h3>
-                    <div className="space-y-2">
-                        {overview.top_holdings.map((holding) => {
-                            const holdingGain = (holding.current_value || 0) - holding.total_cost;
-                            const isHoldingPositive = holdingGain >= 0;
-
-                            return (
-                                <div
-                                    key={holding.holding_id}
-                                    className="flex items-center justify-between p-3 rounded-lg hover:bg-white/[0.02] transition-colors"
-                                >
-                                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                                        <div className="h-8 w-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-[10px] font-black text-indigo-400 ring-1 ring-indigo-500/20">
-                                            {holding.symbol.substring(0, 2)}
-                                        </div>
-                                        <div className="min-w-0">
-                                            <p className="text-sm font-bold text-white">{holding.symbol}</p>
-                                            <p className="text-xs text-white/40 truncate">
-                                                {holding.quantity.toFixed(2)} shares @ ${holding.average_cost.toFixed(2)}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="text-right">
-                                        <p className="text-sm font-bold text-white">
-                                            ${(holding.current_value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                        </p>
-                                        <p className={cn(
-                                            'text-xs font-bold',
-                                            isHoldingPositive ? 'text-emerald-400' : 'text-rose-400'
-                                        )}>
-                                            {isHoldingPositive ? '+' : ''}${Math.abs(holdingGain).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                            {holding.unrealized_gain_loss_pct !== null && (
-                                                <> ({isHoldingPositive ? '+' : ''}{holding.unrealized_gain_loss_pct.toFixed(1)}%)</>
-                                            )}
-                                        </p>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
+            {/* Holdings Section (replaces flat top-10 list) */}
+            <HoldingsSection />
 
             {/* Modals */}
             <ImportTransactionsModal

@@ -12,6 +12,9 @@ import type {
     Holding,
     ImportTransactionsRequest,
     ImportStatusResponse,
+    PerformanceResponse,
+    BenchmarkInfo,
+    BenchmarkCompareResponse,
 } from "../types/portfolio.types";
 
 /**
@@ -141,6 +144,52 @@ export function useDeleteAccount() {
                 variant: "destructive",
             });
         },
+    });
+}
+
+/**
+ * Hook for portfolio performance time series
+ */
+export function usePortfolioPerformance(period: string = "1Y") {
+    const { portfolioService } = useServices();
+
+    return useQuery<PerformanceResponse, Error>({
+        queryKey: QK.portfolioPerformance(period),
+        queryFn: () => portfolioService.getPortfolioPerformance(period),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for available benchmarks
+ */
+export function useBenchmarks() {
+    const { portfolioService } = useServices();
+
+    return useQuery<BenchmarkInfo[], Error>({
+        queryKey: QK.portfolioBenchmarks(),
+        queryFn: () => portfolioService.getBenchmarks(),
+        staleTime: STALE.STATIC,
+        gcTime: GC.STATIC,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for benchmark comparison data
+ */
+export function useBenchmarkCompare(period: string, benchmarks: string[]) {
+    const { portfolioService } = useServices();
+
+    return useQuery<BenchmarkCompareResponse, Error>({
+        queryKey: QK.portfolioBenchmarkCompare(period, benchmarks),
+        queryFn: () => portfolioService.getBenchmarkCompare(period, benchmarks),
+        enabled: benchmarks.length > 0,
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
     });
 }
 

@@ -30,6 +30,8 @@ export interface Holding {
     company_name: string;
     sector: string | null;
     industry: string | null;
+    exchange: string | null;
+    market_group: string | null;
     quantity: number;
     average_cost: number;
     total_cost: number;
@@ -158,6 +160,59 @@ export const ACCOUNT_TYPE_LABELS: Record<string, string> = {
     'IRA': 'IRA (Individual Retirement Account)',
     'Roth IRA': 'Roth IRA',
 };
+
+// Performance & Benchmark types
+export interface PerformanceSnapshot {
+    date: string;
+    value: number;
+    cost_basis: number;
+    net_deposits: number;
+}
+
+export interface PerformanceResponse {
+    success: boolean;
+    period: string;
+    snapshots: PerformanceSnapshot[];
+    total_return: number;
+    total_return_pct: number;
+    best_day: { date: string; return_pct: number } | null;
+    worst_day: { date: string; return_pct: number } | null;
+    error?: string;
+}
+
+export interface BenchmarkInfo {
+    role: string;
+    symbol: string;
+    name: string;
+    market: string;
+    description?: string;
+}
+
+export interface BenchmarkSeries {
+    symbol: string;
+    name: string;
+    data: { date: string; value: number }[];
+}
+
+export interface BenchmarkCompareResponse {
+    success: boolean;
+    period: string;
+    portfolio: { date: string; value: number }[];
+    benchmarks: BenchmarkSeries[];
+    error?: string;
+}
+
+export type TimePeriod = '1D' | '1W' | '1M' | '3M' | '1Y' | 'YTD' | 'ALL';
+
+export const PERIOD_OPTIONS: { label: string; value: TimePeriod }[] = [
+    { label: '1D', value: '1D' },
+    { label: '1W', value: '1W' },
+    { label: '1M', value: '1M' },
+    { label: '3M', value: '3M' },
+    { label: '1Y', value: '1Y' },
+    { label: 'YTD', value: 'YTD' },
+    { label: 'ALL', value: 'ALL' },
+];
 
 export const ACCOUNT_TYPE_COLORS: Record<string, string> = {
     'TFSA': 'emerald',

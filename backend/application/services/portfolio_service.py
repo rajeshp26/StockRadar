@@ -14,7 +14,7 @@ from application.services import owner_earnings_suitability
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 import hashlib
 from typing import List, Dict, Any, Optional, Tuple
@@ -889,3 +889,554 @@ class PortfolioService:
         except Exception as e:
             logger.error(f"Failed to create company for {symbol}: {e}")
             return None
+
+    # ========================================================================
+    # PORTFOLIO PERFORMANCE
+    # ========================================================================
+
+    def _period_to_date_range(
+        self, period: str, account_ids: Optional[List[int]] = None
+    ) -> tuple[date, date]:
+        """Convert period string to (start_date, end_date).
+
+        For 'ALL' period, dynamically determines start from the earliest
+        transaction date across the given accounts, falling back to a safe
+        default if no account_ids or transactions exist.
+        """
+        end = datetime.now().date()
+        p = period.upper()
+        if p == "1D":
+            start = end
+        elif p == "1W":
+            start = end - timedelta(days=7)
+        elif p == "1M":
+            start = end - timedelta(days=30)
+        elif p == "3M":
+            start = end - timedelta(days=90)
+        elif p == "1Y":
+            start = end - timedelta(days=365)
+        elif p == "5Y":
+            start = end - timedelta(days=1825)
+        elif p == "YTD":
+            start = date(end.year, 1, 1)
+        else:  # ALL
+            if account_ids:
+                earliest = self.portfolio_repo.get_earliest_transaction_date(account_ids)
+                if earliest is not None:
+                    start = earliest
+                    return start, end
+            start = date(2000, 1, 1)
+        return start, end
+
+    def _get_cashflow_deltas(self, account_ids: List[int]) -> List[Dict]:
+        """Fetch MoneyMovement & BonusPayment transactions as sorted cash flow deltas.
+
+        Returns list of {date: date, amount: float} sorted chronologically.
+        Positive amount = deposit (money in), negative = withdrawal (money out).
+        """
+        raw: List[Dict] = []
+        for aid in account_ids:
+            cft = self.portfolio_repo.get_account_transactions(
+                aid, activity_types=["MoneyMovement", "BonusPayment"]
+            )
+            for t in cft:
+                d = t.get("transaction_date")
+                if isinstance(d, str):
+                    t["transaction_date"] = date.fromisoformat(d)
+                elif isinstance(d, datetime):
+                    t["transaction_date"] = d.date()
+            raw.extend(cft)
+        raw.sort(key=lambda x: x["transaction_date"])
+
+        return [
+            {"date": t["transaction_date"], "amount": float(t.get("net_cash_amount") or 0)}
+            for t in raw
+        ]
+
+    async def get_portfolio_performance(
+        self, user_id: int, period: str = "1Y"
+    ) -> Dict[str, Any]:
+        """
+        Calculate portfolio value over time by walking through transactions
+        and applying FIFO lot tracking with historical prices.
+        """
+        # Get all accounts for user (needed first for dynamic ALL start date)
+        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        account_ids = [a["account_id"] for a in accounts]
+        if not account_ids:
+            return {
+                "success": True,
+                "period": period,
+                "snapshots": [],
+                "total_return": 0,
+                "total_return_pct": 0,
+            }
+
+        start_date, end_date = self._period_to_date_range(period, account_ids)
+
+        # Get all trade transactions across accounts
+        all_txns: List[Dict] = []
+        for aid in account_ids:
+            txns = self.portfolio_repo.get_account_transactions(aid, activity_types=["Trade"])
+            # Normalize string dates to date objects
+            for t in txns:
+                d = t.get("transaction_date")
+                if isinstance(d, str):
+                    t["transaction_date"] = date.fromisoformat(d)
+                elif isinstance(d, datetime):
+                    t["transaction_date"] = d.date()
+            all_txns.extend(txns)
+
+        # Sort all transactions ascending, then split into pre-period (for opening lots) and in-period
+        all_txns.sort(key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
+        pre_txns = [t for t in all_txns if t["transaction_date"] < start_date]
+        in_txns = [t for t in all_txns if start_date <= t["transaction_date"] <= end_date]
+
+        # Get cash flow deltas for cumulative net deposits lookup (ALL TIME)
+        cashflow_deltas = self._get_cashflow_deltas(account_ids)
+        net_deposits_at_date: Dict[date, float] = {}
+        running_nd = 0.0
+        for cf in cashflow_deltas:
+            running_nd += cf["amount"]
+            net_deposits_at_date[cf["date"]] = running_nd
+
+        # Get unique symbols and their company_ids (from ALL transactions for price data)
+        symbols_seen: Dict[str, int] = {}
+        for t in all_txns:
+            sym = t.get("symbol")
+            cid = t.get("company_id")
+            if sym and cid:
+                symbols_seen[sym] = cid
+
+        # Fetch price_history for all symbols in the date range (batched, with slight extension)
+        price_map: Dict[str, Dict[str, float]] = {}  # symbol -> {date_str: close_price}
+        company_ids = list(set(symbols_seen.values()))
+        if company_ids:
+            try:
+                resp = (
+                    supabase.table("price_history")
+                    .select("company_id, price_date, close_price")
+                    .in_("company_id", company_ids)
+                    .gte("price_date", (start_date - timedelta(days=7)).isoformat())
+                    .lte("price_date", end_date.isoformat())
+                    .order("price_date", desc=False)
+                    .execute()
+                )
+                if resp.data:
+                    sym_by_cid = {cid: sym for sym, cid in symbols_seen.items()}
+                    for row in resp.data:
+                        cid = row["company_id"]
+                        sym = sym_by_cid.get(cid)
+                        if sym:
+                            price_map.setdefault(sym, {})[row["price_date"]] = float(row["close_price"])
+            except Exception as e:
+                logger.warning(f"Failed to batch fetch price_history: {e}")
+
+        # ── Process pre-period transactions to establish opening FIFO lots ──
+        # lots: (account_id, symbol) -> [{quantity, cost_per_share, date}]
+        lots: Dict[tuple, list] = defaultdict(list)
+        for t in pre_txns:
+            sym = t.get("symbol")
+            if not sym:
+                continue
+            key = (t.get("account_id"), sym)
+            qty = Decimal(str(t.get("quantity") or 0))
+            price = Decimal(str(t.get("unit_price") or 0))
+            commission = Decimal(str(t.get("commission") or 0))
+            sub = (t.get("activity_sub_type") or "").upper()
+
+            if sub == "BUY" or (sub == "" and qty > 0):
+                cost_per_share = price + (commission / qty) if qty else price
+                lots[key].append({
+                    "quantity": float(qty),
+                    "cost_per_share": float(cost_per_share),
+                    "date": t["transaction_date"].isoformat(),
+                })
+            elif sub == "SELL" or (sub == "" and qty < 0):
+                sell_qty = abs(float(qty))
+                remaining = sell_qty
+                while remaining > 0 and lots[key]:
+                    lot = lots[key][0]
+                    if lot["quantity"] <= remaining:
+                        remaining -= lot["quantity"]
+                        lots[key].pop(0)
+                    else:
+                        lot["quantity"] -= remaining
+                        remaining = 0
+
+        # Sort in-period transactions by date for sequential processing
+        in_txns_sorted = sorted(in_txns, key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
+
+        # ── Generate snapshot dates at regular intervals ──
+        p = period.upper()
+        if p == "1D":
+            step = timedelta(days=1)
+        elif p == "1W":
+            step = timedelta(days=1)
+        elif p == "1M":
+            step = timedelta(days=2)
+        elif p == "3M":
+            step = timedelta(days=3)
+        elif p == "1Y":
+            step = timedelta(days=7)
+        elif p == "5Y":
+            step = timedelta(days=14)
+        else:  # ALL
+            step = timedelta(days=30)
+
+        sorted_dates: List[str] = []
+        current_d = start_date
+        while current_d <= end_date:
+            sorted_dates.append(current_d.isoformat())
+            current_d += step
+        end_str = end_date.isoformat()
+        if sorted_dates[-1] != end_str:
+            sorted_dates.append(end_str)
+
+        # Sort net deposits dates once for efficient lookup
+        sorted_nd_dates = sorted(net_deposits_at_date.keys())
+
+        def _cumulative_net_deposits(as_of: date) -> float:
+            nd = 0.0
+            for nd_date in sorted_nd_dates:
+                if nd_date <= as_of:
+                    nd = net_deposits_at_date[nd_date]
+                else:
+                    break
+            return nd
+
+        snapshots: List[Dict] = []
+        txn_index = 0  # pointer into in_txns_sorted
+
+        for d in sorted_dates:
+            current_date = date.fromisoformat(d)
+
+            # Process ALL transactions with date <= current snapshot date
+            while txn_index < len(in_txns_sorted) and in_txns_sorted[txn_index]["transaction_date"].isoformat() <= d:
+                t = in_txns_sorted[txn_index]
+                sym = t.get("symbol")
+                if sym:
+                    key = (t.get("account_id"), sym)
+                    qty = Decimal(str(t.get("quantity") or 0))
+                    price = Decimal(str(t.get("unit_price") or 0))
+                    commission = Decimal(str(t.get("commission") or 0))
+                    sub = (t.get("activity_sub_type") or "").upper()
+
+                    if sub == "BUY" or (sub == "" and qty > 0):
+                        cost_per_share = price + (commission / qty) if qty else price
+                        lots[key].append({
+                            "quantity": float(qty),
+                            "cost_per_share": float(cost_per_share),
+                            "date": d,
+                        })
+                    elif sub == "SELL" or (sub == "" and qty < 0):
+                        sell_qty = abs(float(qty))
+                        remaining = sell_qty
+                        while remaining > 0 and lots[key]:
+                            lot = lots[key][0]
+                            if lot["quantity"] <= remaining:
+                                remaining -= lot["quantity"]
+                                lots[key].pop(0)
+                            else:
+                                lot["quantity"] -= remaining
+                                remaining = 0
+                txn_index += 1
+
+            # Compute snapshot at this date
+            total_value = 0.0
+            total_cost = 0.0
+            for (_, sym), lot_list in lots.items():
+                qty_held = sum(l["quantity"] for l in lot_list)
+                if qty_held <= 0:
+                    continue
+                avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
+                total_cost += qty_held * avg_cost
+
+                # Look up historical price (nearest on or before snapshot date)
+                price_map_for_sym = price_map.get(sym, {})
+                historical_price = None
+                if d in price_map_for_sym:
+                    historical_price = price_map_for_sym[d]
+                else:
+                    nearest = None
+                    for pd_str in sorted(price_map_for_sym.keys()):
+                        if pd_str <= d:
+                            nearest = pd_str
+                        else:
+                            break
+                    if nearest:
+                        historical_price = price_map_for_sym[nearest]
+
+                if historical_price is not None:
+                    total_value += qty_held * historical_price
+                else:
+                    total_value += qty_held * avg_cost
+
+            snapshots.append({
+                "date": d,
+                "value": round(total_value, 2),
+                "cost_basis": round(total_cost, 2),
+                "net_deposits": round(_cumulative_net_deposits(current_date), 2),
+            })
+
+        if not snapshots:
+            return {
+                "success": True,
+                "period": period,
+                "snapshots": [],
+                "total_return": 0,
+                "total_return_pct": 0,
+            }
+
+        # Calculate summary stats
+        first_value = snapshots[0]["value"]
+        last_value = snapshots[-1]["value"]
+        total_return = last_value - snapshots[0]["cost_basis"]
+        total_return_pct = ((last_value - snapshots[0]["cost_basis"]) / snapshots[0]["cost_basis"] * 100) if snapshots[0]["cost_basis"] > 0 else 0
+
+        # Find best/worst day
+        best_day = None
+        worst_day = None
+        for i in range(1, len(snapshots)):
+            prev = snapshots[i - 1]["value"]
+            curr = snapshots[i]["value"]
+            if prev > 0:
+                change_pct = (curr - prev) / prev * 100
+                entry = {"date": snapshots[i]["date"], "return_pct": round(change_pct, 2)}
+                if best_day is None or change_pct > best_day["return_pct"]:
+                    best_day = entry
+                if worst_day is None or change_pct < worst_day["return_pct"]:
+                    worst_day = entry
+
+        return {
+            "success": True,
+            "period": period,
+            "snapshots": snapshots,
+            "total_return": round(total_return, 2),
+            "total_return_pct": round(total_return_pct, 2),
+            "best_day": best_day,
+            "worst_day": worst_day,
+        }
+
+    # ------------------------------------------------------------------
+    # Benchmark simulation (same-cash-flows approach)
+    # ------------------------------------------------------------------
+
+    def _nearest_price(self, price_map: Dict[str, float], target: str) -> Optional[float]:
+        """Find the nearest price on or before target date in price_map.
+
+        If no price exists on or before target, falls forward to the
+        earliest available price (handles start dates before first EOM).
+        """
+        nearest = None
+        for d in sorted(price_map):
+            if d <= target:
+                nearest = d
+            else:
+                break
+        if nearest is None and price_map:
+            nearest = sorted(price_map)[0]
+        return price_map.get(nearest)
+
+    def _simulate_benchmark_value(
+        self,
+        benchmark_company_id: int,
+        start_date: date,
+        end_date: date,
+        initial_value: float,
+        cashflow_deltas: List[Dict],
+        snapshot_dates: List[str],
+    ) -> Optional[List[Dict]]:
+        """
+        Simulate what a benchmark (e.g. SPY) would be worth if the same
+        deposits/withdrawals had been invested in it instead of the portfolio.
+
+        Returns list of {date, value} in dollar terms at each snapshot date,
+        or None if no price data is available for the benchmark.
+        """
+        try:
+            resp = (
+                supabase.table("price_history")
+                .select("price_date, close_price")
+                .eq("company_id", benchmark_company_id)
+                .gte("price_date", (start_date - timedelta(days=7)).isoformat())
+                .lte("price_date", end_date.isoformat())
+                .order("price_date", desc=False)
+                .execute()
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch benchmark price data for company_id=%s: %s", benchmark_company_id, e)
+            return None
+
+        if not resp.data:
+            logger.info("No price history for benchmark company_id=%s", benchmark_company_id)
+            return None
+
+        price_map: Dict[str, float] = {}
+        for row in resp.data:
+            pd_val = row["price_date"]
+            if isinstance(pd_val, str):
+                pd_str = pd_val
+            elif isinstance(pd_val, date):
+                pd_str = pd_val.isoformat()
+            else:
+                continue
+            price_map[pd_str] = float(row["close_price"])
+
+        if not price_map:
+            return None
+
+        start_str = start_date.isoformat()
+        start_price = self._nearest_price(price_map, start_str)
+        if not start_price or start_price <= 0:
+            logger.info("No valid start price for benchmark company_id=%s", benchmark_company_id)
+            return None
+
+        # If portfolio had no value at start, benchmark is always zero
+        if initial_value <= 0:
+            return [{"date": d, "value": 0.0} for d in snapshot_dates]
+
+        shares = initial_value / start_price
+
+        # Filter cash flows to the period and normalize dates to ISO strings
+        period_cashflows = [
+            {
+                "date": cf["date"].isoformat() if isinstance(cf["date"], date) else str(cf["date"]),
+                "amount": cf["amount"],
+            }
+            for cf in cashflow_deltas
+            if start_date <= cf["date"] <= end_date
+        ]
+
+        series: List[Dict] = []
+        cf_index = 0
+
+        for sd in snapshot_dates:
+            # Process any cash flows on or before this snapshot date
+            while cf_index < len(period_cashflows):
+                cf = period_cashflows[cf_index]
+                if cf["date"] <= sd:
+                    cf_price = self._nearest_price(price_map, cf["date"])
+                    if cf_price and cf_price > 0:
+                        if cf["amount"] > 0:
+                            shares += cf["amount"] / cf_price
+                        elif cf["amount"] < 0:
+                            sell_qty = min(abs(cf["amount"]) / cf_price, shares)
+                            shares -= sell_qty
+                    cf_index += 1
+                else:
+                    break
+
+            snap_price = self._nearest_price(price_map, sd)
+            if snap_price:
+                series.append({
+                    "date": sd,
+                    "value": round(shares * snap_price, 2),
+                })
+            else:
+                series.append({"date": sd, "value": 0.0})
+
+        return series
+
+    # ------------------------------------------------------------------
+    # Benchmark list & comparison
+    # ------------------------------------------------------------------
+
+    async def get_benchmarks(self) -> List[Dict[str, Any]]:
+        """List all active benchmarks from benchmark_config."""
+        try:
+            resp = (
+                supabase.table("benchmark_config")
+                .select("*")
+                .eq("is_active", True)
+                .execute()
+            )
+            return [
+                {
+                    "role": r.get("role"),
+                    "symbol": r.get("symbol"),
+                    "name": r.get("name", r.get("symbol")),
+                    "market": r.get("market", "US"),
+                    "description": r.get("description"),
+                }
+                for r in (resp.data or [])
+            ]
+        except Exception as e:
+            logger.error(f"Failed to list benchmarks: {e}")
+            return []
+
+    async def get_performance_compare(
+        self, user_id: int, period: str, benchmark_symbols: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Compare portfolio performance against benchmark indices.
+
+        Uses the "same cash flows" approach: simulates what each benchmark
+        would be worth if the same deposits/withdrawals were invested in it
+        instead of the portfolio. Both portfolio and benchmark series are
+        in dollar terms, allowing a direct side-by-side comparison.
+        """
+        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        account_ids = [a["account_id"] for a in accounts]
+        start_date, end_date = self._period_to_date_range(period, account_ids)
+
+        perf = await self.get_portfolio_performance(user_id, period)
+        if not perf.get("success") or not perf.get("snapshots"):
+            return {
+                "success": True,
+                "period": period,
+                "portfolio": [],
+                "benchmarks": [],
+            }
+
+        snapshots = perf["snapshots"]
+
+        # Find first snapshot with non-zero value as the benchmark starting point
+        first_nonzero = 0
+        for i, s in enumerate(snapshots):
+            if s["value"] > 0:
+                first_nonzero = i
+                break
+
+        snapshots_subset = snapshots[first_nonzero:]
+        if not snapshots_subset:
+            return {
+                "success": True,
+                "period": period,
+                "portfolio": snapshots,
+                "benchmarks": [],
+            }
+
+        initial_value = snapshots_subset[0]["value"]
+        snapshot_dates = [s["date"] for s in snapshots_subset]
+        cashflow_deltas = self._get_cashflow_deltas(account_ids)
+
+        benchmark_series_list = []
+        if benchmark_symbols:
+            for sym in benchmark_symbols:
+                company = await self.financial_repo.get_company_by_symbol(sym)
+                if not company:
+                    logger.info("Benchmark symbol %s not found in companies table — skipping", sym)
+                    continue
+
+                series = self._simulate_benchmark_value(
+                    benchmark_company_id=company["company_id"],
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_value=initial_value,
+                    cashflow_deltas=cashflow_deltas,
+                    snapshot_dates=snapshot_dates,
+                )
+                if series:
+                    benchmark_series_list.append({
+                        "symbol": sym,
+                        "name": sym,
+                        "data": series,
+                    })
+
+        return {
+            "success": True,
+            "period": period,
+            "portfolio": snapshots,
+            "benchmarks": benchmark_series_list,
+        }
