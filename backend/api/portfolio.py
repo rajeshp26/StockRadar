@@ -14,7 +14,7 @@ import logging
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from dependencies import get_current_user_dep, limiter
@@ -747,20 +747,24 @@ async def check_company_exists(
 async def get_portfolio_performance(
     request: Request,
     period: str = "1Y",
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> PerformanceResponse:
     """
     Get portfolio value over time.
 
     Period options: 1D, 1W, 1M, 3M, 1Y, 5Y, ALL
+    Optional account_ids filter: ?account_ids=1,3,5 (empty = all accounts)
     Returns time-series snapshots of portfolio value and cost basis.
     """
     try:
         auth_id = user["uid"]
         db_user_id = _resolve_db_user_id(auth_id)
 
+        parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
+
         service = _get_portfolio_service()
-        result = await service.get_portfolio_performance(db_user_id, period)
+        result = await service.get_portfolio_performance(db_user_id, period, parsed_ids)
 
         if not result.get("success"):
             return PerformanceResponse(
@@ -790,6 +794,7 @@ async def get_performance_compare(
     request: Request,
     period: str = "1Y",
     benchmarks: str = "SPY",
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> BenchmarkCompareResponse:
     """
@@ -797,15 +802,17 @@ async def get_performance_compare(
 
     All series normalized to 100 at period start for side-by-side comparison.
     Multiple benchmarks: ?benchmarks=SPY,QQQ
+    Optional account_ids filter: ?account_ids=1,3,5 (empty = all accounts)
     """
     try:
         auth_id = user["uid"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         benchmark_symbols = [s.strip().upper() for s in benchmarks.split(",") if s.strip()]
+        parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
 
         service = _get_portfolio_service()
-        result = await service.get_performance_compare(db_user_id, period, benchmark_symbols)
+        result = await service.get_performance_compare(db_user_id, period, benchmark_symbols, parsed_ids)
 
         return BenchmarkCompareResponse(**result)
 

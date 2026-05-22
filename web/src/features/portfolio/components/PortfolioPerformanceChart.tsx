@@ -12,9 +12,10 @@ import {
     ComposedChart,
     Legend,
 } from 'recharts';
-import { usePortfolioPerformance, useBenchmarks, useBenchmarkCompare } from '../hooks/usePortfolio';
+import { usePortfolioPerformance, useBenchmarks, useBenchmarkCompare, usePortfolioAccounts } from '../hooks/usePortfolio';
 import { TimePeriodSelector } from './TimePeriodSelector';
 import { BenchmarkSelector } from './BenchmarkSelector';
+import { AccountSelector } from './AccountSelector';
 import type { TimePeriod, BenchmarkCompareResponse } from '../types/portfolio.types';
 
 const BENCHMARK_COLORS: Record<string, string> = {
@@ -29,10 +30,12 @@ const FALLBACK_COLORS = ['#f59e0b', '#a78bfa', '#f472b6', '#06b6d4', '#fb7185'];
 export function PortfolioPerformanceChart() {
     const [period, setPeriod] = useState<TimePeriod>('1Y');
     const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([]);
+    const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
 
-    const { data: perf, isLoading: perfLoading, isError: perfError } = usePortfolioPerformance(period);
+    const { data: accounts } = usePortfolioAccounts();
+    const { data: perf, isLoading: perfLoading, isError: perfError, isFetching } = usePortfolioPerformance(period, selectedAccountIds);
     const { data: benchmarks } = useBenchmarks();
-    const { data: compareData, isLoading: compareLoading, isError: compareError } = useBenchmarkCompare(period, selectedBenchmarks);
+    const { data: compareData, isLoading: compareLoading, isError: compareError } = useBenchmarkCompare(period, selectedBenchmarks, selectedAccountIds);
 
     const chartData = buildChartData(perf?.snapshots, compareData, selectedBenchmarks);
     const hasData = chartData.length > 1 && chartData.some((d) => (d.portfolio as number) > 0 || (d.netDeposits as number) > 0);
@@ -72,6 +75,11 @@ export function PortfolioPerformanceChart() {
                     Portfolio Performance
                 </h3>
                 <div className="flex items-center gap-3">
+                    <AccountSelector
+                        accounts={accounts || []}
+                        selected={selectedAccountIds}
+                        onChange={setSelectedAccountIds}
+                    />
                     <BenchmarkSelector
                         benchmarks={benchmarks || []}
                         selected={selectedBenchmarks}
@@ -87,6 +95,11 @@ export function PortfolioPerformanceChart() {
                 </div>
             </div>
 
+            {isFetching && !perfLoading && (
+                <div className="h-0.5 rounded-full bg-indigo-500/30 overflow-hidden mb-2">
+                    <div className="h-full w-1/3 bg-indigo-400 rounded-full animate-pulse" />
+                </div>
+            )}
             {showBenchmarks && compareLoading && (
                 <div className="mb-2 text-xs text-white/30 italic">
                     Loading benchmark data...

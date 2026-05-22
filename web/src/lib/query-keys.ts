@@ -68,10 +68,14 @@ export const QK = {
     ["portfolio", "account", accountId, "transactions", limit] as const,
   portfolioAccountDividends: (accountId: number) =>
     ["portfolio", "account", accountId, "dividends"] as const,
-  portfolioPerformance: (period: string) =>
-    ["portfolio", "performance", period] as const,
+  portfolioPerformance: (period: string, accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "performance", period, accountIds] as const
+      : ["portfolio", "performance", period] as const,
   portfolioBenchmarks: () =>
     ["portfolio", "benchmarks"] as const,
-  portfolioBenchmarkCompare: (period: string, benchmarks: string[]) =>
-    ["portfolio", "benchmark-compare", period, ...benchmarks] as const,
+  portfolioBenchmarkCompare: (period: string, benchmarks: string[], accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "benchmark-compare", period, ...benchmarks, accountIds] as const
+      : ["portfolio", "benchmark-compare", period, ...benchmarks] as const,
 } as const;

@@ -181,10 +181,15 @@ export class PortfolioService {
     // PERFORMANCE & BENCHMARKS
     // ========================================================================
 
-    async getPortfolioPerformance(period: string = "1Y"): Promise<PerformanceResponse> {
+    async getPortfolioPerformance(
+        period: string = "1Y",
+        accountIds?: string
+    ): Promise<PerformanceResponse> {
+        const params: Record<string, string> = { period };
+        if (accountIds) params.account_ids = accountIds;
         const res = await this.api.get<PerformanceResponse>(
             "/portfolio/performance",
-            { params: { period } }
+            { params }
         );
         return res.data;
     }
@@ -198,11 +203,14 @@ export class PortfolioService {
 
     async getBenchmarkCompare(
         period: string,
-        benchmarks: string[]
+        benchmarks: string[],
+        accountIds?: string
     ): Promise<BenchmarkCompareResponse> {
+        const params: Record<string, string> = { period, benchmarks: benchmarks.join(",") };
+        if (accountIds) params.account_ids = accountIds;
         const res = await this.api.get<BenchmarkCompareResponse>(
             "/portfolio/performance/compare",
-            { params: { period, benchmarks: benchmarks.join(",") } }
+            { params }
         );
         return res.data;
     }

@@ -150,15 +150,19 @@ export function useDeleteAccount() {
 /**
  * Hook for portfolio performance time series
  */
-export function usePortfolioPerformance(period: string = "1Y") {
+export function usePortfolioPerformance(period: string = "1Y", accountIds?: number[]) {
     const { portfolioService } = useServices();
+    const idsParam = accountIds && accountIds.length > 0
+        ? [...accountIds].sort().join(",")
+        : undefined;
 
     return useQuery<PerformanceResponse, Error>({
-        queryKey: QK.portfolioPerformance(period),
-        queryFn: () => portfolioService.getPortfolioPerformance(period),
+        queryKey: QK.portfolioPerformance(period, idsParam),
+        queryFn: () => portfolioService.getPortfolioPerformance(period, idsParam),
         staleTime: STALE.PORTFOLIO,
         gcTime: GC.PORTFOLIO,
         retry: 1,
+        placeholderData: (previousData) => previousData,
     });
 }
 
@@ -180,16 +184,20 @@ export function useBenchmarks() {
 /**
  * Hook for benchmark comparison data
  */
-export function useBenchmarkCompare(period: string, benchmarks: string[]) {
+export function useBenchmarkCompare(period: string, benchmarks: string[], accountIds?: number[]) {
     const { portfolioService } = useServices();
+    const idsParam = accountIds && accountIds.length > 0
+        ? [...accountIds].sort().join(",")
+        : undefined;
 
     return useQuery<BenchmarkCompareResponse, Error>({
-        queryKey: QK.portfolioBenchmarkCompare(period, benchmarks),
-        queryFn: () => portfolioService.getBenchmarkCompare(period, benchmarks),
+        queryKey: QK.portfolioBenchmarkCompare(period, benchmarks, idsParam),
+        queryFn: () => portfolioService.getBenchmarkCompare(period, benchmarks, idsParam),
         enabled: benchmarks.length > 0,
         staleTime: STALE.PORTFOLIO,
         gcTime: GC.PORTFOLIO,
         retry: 1,
+        placeholderData: (previousData) => previousData,
     });
 }
 

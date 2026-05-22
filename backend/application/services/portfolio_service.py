@@ -954,15 +954,25 @@ class PortfolioService:
         ]
 
     async def get_portfolio_performance(
-        self, user_id: int, period: str = "1Y"
+        self, user_id: int, period: str = "1Y",
+        account_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         Calculate portfolio value over time by walking through transactions
         and applying FIFO lot tracking with historical prices.
+
+        When account_ids is provided, only transactions from those accounts
+        are included. None or empty list = all user accounts.
         """
-        # Get all accounts for user (needed first for dynamic ALL start date)
-        accounts = self.portfolio_repo.get_user_accounts(user_id)
-        account_ids = [a["account_id"] for a in accounts]
+        if account_ids is None:
+            accounts = self.portfolio_repo.get_user_accounts(user_id)
+            account_ids = [a["account_id"] for a in accounts]
+        else:
+            # Security: intersect with user's actual accounts
+            user_accounts = self.portfolio_repo.get_user_accounts(user_id)
+            valid_ids = {a["account_id"] for a in user_accounts}
+            account_ids = [aid for aid in account_ids if aid in valid_ids]
+
         if not account_ids:
             return {
                 "success": True,
@@ -1366,7 +1376,8 @@ class PortfolioService:
             return []
 
     async def get_performance_compare(
-        self, user_id: int, period: str, benchmark_symbols: List[str]
+        self, user_id: int, period: str, benchmark_symbols: List[str],
+        account_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         Compare portfolio performance against benchmark indices.
@@ -1375,12 +1386,21 @@ class PortfolioService:
         would be worth if the same deposits/withdrawals were invested in it
         instead of the portfolio. Both portfolio and benchmark series are
         in dollar terms, allowing a direct side-by-side comparison.
+
+        When account_ids is provided, only transactions from those accounts
+        are used. None or empty list = all user accounts.
         """
-        accounts = self.portfolio_repo.get_user_accounts(user_id)
-        account_ids = [a["account_id"] for a in accounts]
+        if account_ids is None:
+            accounts = self.portfolio_repo.get_user_accounts(user_id)
+            account_ids = [a["account_id"] for a in accounts]
+        else:
+            user_accounts = self.portfolio_repo.get_user_accounts(user_id)
+            valid_ids = {a["account_id"] for a in user_accounts}
+            account_ids = [aid for aid in account_ids if aid in valid_ids]
+
         start_date, end_date = self._period_to_date_range(period, account_ids)
 
-        perf = await self.get_portfolio_performance(user_id, period)
+        perf = await self.get_portfolio_performance(user_id, period, account_ids)
         if not perf.get("success") or not perf.get("snapshots"):
             return {
                 "success": True,
