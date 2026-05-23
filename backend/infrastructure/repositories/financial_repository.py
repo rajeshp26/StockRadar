@@ -908,6 +908,57 @@ class SupabaseFinancialRepository:
             logger.error(f"Failed to fetch companies for market data: {e}")
             raise
 
+    async def get_active_companies_for_market_data(self) -> List[Dict[str, Any]]:
+        """
+        Returns companies that are in ANY user's portfolio or watchlist.
+        This is the active set — only ~150 companies instead of all 3,114.
+
+        Two-step approach:
+        1. Get distinct symbols from portfolio_holdings across all users
+        2. Get distinct company_ids from watchlist_items across all users
+        3. Deduplicate and return company rows
+
+        Market data refresh only needs to process this subset.
+        """
+        try:
+            active_ids: set = set()
+
+            # Step 1: symbols from portfolio_holdings
+            ph = self.client.table("portfolio_holdings").select("symbol").execute()
+            portfolio_symbols = list(set(h["symbol"] for h in (ph.data or [])))
+            if portfolio_symbols:
+                ph_comps = (
+                    self.client.table("companies")
+                    .select("company_id")
+                    .in_("ticker_symbol", portfolio_symbols)
+                    .execute()
+                )
+                for c in (ph_comps.data or []):
+                    if c.get("company_id"):
+                        active_ids.add(c["company_id"])
+
+            # Step 2: company_ids from watchlist_items
+            wl = self.client.table("watchlist_items").select("company_id").execute()
+            for w in (wl.data or []):
+                if w.get("company_id"):
+                    active_ids.add(w["company_id"])
+
+            if not active_ids:
+                return []
+
+            # Step 3: Fetch full company rows for active IDs
+            resp = (
+                self.client.table("companies")
+                .select("company_id, ticker_symbol, data_completeness_status, security_type")
+                .in_("company_id", list(active_ids))
+                .execute()
+            )
+            return resp.data or []
+
+        except Exception as e:
+            logger.error(f"Failed to fetch active companies for market data: {e}")
+            return []
+
     async def update_company_refresh_metadata(
         self,
         company_id: int,

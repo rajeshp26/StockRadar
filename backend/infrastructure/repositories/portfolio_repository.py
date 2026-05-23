@@ -14,8 +14,8 @@ EXCHANGE_MARKET_MAP: Dict[str, str] = {
     "NMS": "US", "NASDAQ": "US", "NYSE": "US", "NYSEARCA": "US",
     "NASDAQCM": "US", "BATS": "US", "IEX": "US", "AMEX": "US",
     "NYSEAMERICAN": "US", "NASDAQNM": "US", "NASDAQSC": "US",
-    "TSX": "CA", "TSXV": "CA", "TO": "CA", "V": "CA", "CNQ": "CA",
-    "NEO": "CA",
+    "TSX": "CA", "TSXV": "CA", "TOR": "CA", "TO": "CA", "VAN": "CA",
+    "V": "CA", "CNQ": "CA", "NEO": "CA",
     "LSE": "INTL", "FRA": "INTL", "ETR": "INTL", "TSE": "INTL",
     "HKEX": "INTL", "MIL": "INTL", "SWX": "INTL", "ASX": "INTL",
     "SGX": "INTL", "STO": "INTL", "CPH": "INTL", "HEL": "INTL",
@@ -285,7 +285,7 @@ class PortfolioRepository:
                 self.client.table("portfolio_holdings")
                 .select("*")
                 .eq("account_id", account_id)
-                .order("current_value", desc=True)
+                .order("total_cost", desc=True)
                 .execute()
             )
             holdings = res.data or []
@@ -311,7 +311,7 @@ class PortfolioRepository:
                     portfolio_accounts!fk_portfolio_holdings_account(account_name, account_type)
                 """)
                 .in_("account_id", account_ids)
-                .order("current_value", desc=True)
+                .order("total_cost", desc=True)
                 .execute()
             )
             holdings = res.data or []
@@ -506,29 +506,6 @@ class PortfolioRepository:
             logger.error(f"Failed to get monthly dividends for account {account_id}: {e}")
             return []
     
-    # ========================================================================
-    # SUMMARY / ANALYTICS
-    # ========================================================================
-    
-    def get_user_portfolio_summary(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get aggregated portfolio summary for user (all accounts).
-        Uses the portfolio_user_summary view.
-        """
-        try:
-            res = (
-                self.client.table("portfolio_user_summary")
-                .select("*")
-                .eq("user_id", user_id)
-                .limit(1)
-                .execute()
-            )
-            return res.data[0] if res.data else None
-        except Exception as e:
-            logger.error(f"Failed to get portfolio summary for user {user_id}: {e}")
-            return None
-
-
     # ========================================================================
     # IMPORT JOB OPERATIONS
     # ========================================================================

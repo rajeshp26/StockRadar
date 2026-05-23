@@ -19,6 +19,7 @@ from decimal import Decimal
 import hashlib
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
+import re
 
 from application.parsers.portfolio_parser import (
     ParsedTransaction,
@@ -226,10 +227,17 @@ class PortfolioService:
 
             repo.update_import_progress(import_batch_id, rows_parsed=len(parse_result.transactions))
 
-            # --- Company lookup ---
-            symbols_to_process = {tx.symbol for tx in parse_result.transactions if tx.symbol}
+            # --- Company lookup (with exchange override for CDR symbols) ---
+            symbols_meta: Dict[str, Optional[str]] = {}
+            for tx in parse_result.transactions:
+                if tx.symbol:
+                    override = getattr(tx, "exchange_override", None)
+                    if tx.symbol not in symbols_meta:
+                        symbols_meta[tx.symbol] = override
+                    elif override:
+                        symbols_meta[tx.symbol] = "TOR"  # prefer TOR if any transaction is CDR
             companies_map, symbols_created = await self._ensure_companies_exist_with_tracking(
-                symbols_to_process
+                symbols_meta
             )
 
             # --- Convert to DB records ---
@@ -288,6 +296,10 @@ class PortfolioService:
             # --- Extract dividends ---
             dividends_extracted = await self._extract_dividends(list(accounts_map.values()))
 
+            # --- On-demand price fetch for new symbols (background) ---
+            account_ids_list = list(accounts_map.values())
+            asyncio.create_task(self._fetch_prices_on_import(account_ids_list))
+
             # --- Finalize ---
             result = {
                 "success": True,
@@ -338,10 +350,14 @@ class PortfolioService:
             )
     
     async def _ensure_companies_exist_with_tracking(
-        self, symbols: set[str]
+        self, symbols: Dict[str, Optional[str]]
     ) -> Tuple[Dict[str, int], List[str]]:
         """
         Ensure companies exist and track which were created.
+        
+        Args:
+            symbols: Dict mapping ticker_symbol → optional exchange_override
+                     (e.g., {"TSLA": "TOR", "AAPL": None})
         
         Returns:
             (companies_map, created_symbols)
@@ -357,7 +373,7 @@ class PortfolioService:
             res = (
                 supabase.table("companies")
                 .select("ticker_symbol, company_id")
-                .in_("ticker_symbol", list(symbols))
+                .in_("ticker_symbol", list(symbols.keys()))
                 .execute()
             )
             for row in res.data or []:
@@ -366,17 +382,17 @@ class PortfolioService:
             logger.error(f"Failed to check existing companies: {e}")
         
         # Create missing
-        missing = symbols - companies_map.keys()
+        missing = set(symbols.keys()) - companies_map.keys()
         if missing:
             logger.info(f"Creating {len(missing)} missing companies")
-            for idx, symbol in enumerate(missing):
+            for idx, symbol in enumerate(sorted(missing)):
                 try:
                     # Rate-limit: insert a small delay between provider calls to
                     # avoid triggering Yahoo Finance rate limiting (especially
                     # during CSV imports with many unique tickers).
                     if idx > 0:
                         await asyncio.sleep(0.5)
-                    company_id = await self._create_company_from_symbol(symbol)
+                    company_id = await self._create_company_from_symbol(symbol, exchange_override=symbols.get(symbol))
                     if company_id:
                         companies_map[symbol] = company_id
                         created_symbols.append(symbol)
@@ -433,38 +449,128 @@ class PortfolioService:
             )
             
             if holding and holding["quantity"] > 0:
+                # Detect CDR from transaction raw_data (symbol or name field) for exchange override
+                exchange_override = None
+                for tx in tx_list:
+                    raw = tx.get("raw_data")
+                    if isinstance(raw, dict):
+                        raw_symbol = raw.get("symbol", "") or ""
+                        raw_name = raw.get("name", "") or ""
+                        if re.search(r"\bCDR\b", raw_symbol + " " + raw_name, re.IGNORECASE):
+                            exchange_override = "TOR"
+                            break
+                if exchange_override:
+                    holding["exchange_override"] = exchange_override
                 holdings_by_symbol[symbol] = holding
         
         # Delete old holdings for this account
         self.portfolio_repo.delete_account_holdings(account_id)
         
-        # Insert new holdings
+        # Insert new holdings (price-independent cost-basis fields only)
         for holding in holdings_by_symbol.values():
             holding["account_id"] = account_id
             holding["computed_at"] = datetime.now().isoformat()
-            
-            # Get current price for unrealized gain calculation
-            try:
-                price_data = await self._get_current_price(holding["symbol"])
-                if price_data:
-                    holding["current_price"] = price_data["price"]
-                    holding["current_value"] = (
-                        price_data["price"] * holding["quantity"]
-                    )
-                    holding["unrealized_gain_loss"] = (
-                        holding["current_value"] - holding["total_cost"]
-                    )
-                    if holding["total_cost"] > 0:
-                        holding["unrealized_gain_loss_pct"] = (
-                            (holding["unrealized_gain_loss"] / holding["total_cost"]) * 100
-                        )
-            except Exception as e:
-                logger.warning(f"Failed to get current price for {holding['symbol']}: {e}")
-            
             self.portfolio_repo.upsert_holding(holding)
         
         logger.info(f"Holdings recalculated for account {account_id}: {len(holdings_by_symbol)} positions")
     
+    async def enrich_holdings_with_prices(
+        self, holdings: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Compute current_value, current_price, unrealized_gain_loss at query time.
+
+        Batches price lookups across all holdings (2 queries total, not N+1).
+        3-tier fallback: current_market_data → price_history latest close → cost basis.
+
+        Holdings with exchange_override (e.g., "TOR" for CDRs) get live YFinance
+        prices using the override exchange, bypassing the cached tables.
+        """
+        if not holdings:
+            return holdings
+
+        company_ids = list({h["company_id"] for h in holdings if h.get("company_id")})
+        if not company_ids:
+            return holdings
+
+        # Separate holdings with exchange_override (need live lookup)
+        override_holdings = [h for h in holdings if h.get("exchange_override")]
+        standard_holdings = [h for h in holdings if not h.get("exchange_override")]
+
+        # Price map: company_id → price (for standard holdings)
+        price_map: Dict[int, float] = {}
+
+        if standard_holdings:
+            std_ids = list({h["company_id"] for h in standard_holdings if h.get("company_id")})
+
+            # Tier 1: current_market_data (single batch)
+            cm_res = (
+                supabase.table("current_market_data")
+                .select("company_id, current_price")
+                .in_("company_id", std_ids)
+                .execute()
+            )
+            for row in (cm_res.data or []):
+                if row.get("current_price") is not None:
+                    price_map[row["company_id"]] = float(row["current_price"])
+
+            # Tier 2: price_history latest close for missing companies
+            missing_ids = [cid for cid in std_ids if cid not in price_map]
+            if missing_ids:
+                ph_res = (
+                    supabase.table("price_history")
+                    .select("company_id, close_price, price_date")
+                    .in_("company_id", missing_ids)
+                    .order("price_date", desc=True)
+                    .execute()
+                )
+                seen_company: set = set()
+                for row in (ph_res.data or []):
+                    cid = row["company_id"]
+                    if cid not in seen_company and row.get("close_price") is not None:
+                        seen_company.add(cid)
+                        price_map.setdefault(cid, float(row["close_price"]))
+
+        # Live lookup cache for exchange-override holdings
+        override_cache: Dict[str, Optional[float]] = {}
+
+        # Apply prices to each holding
+        for h in holdings:
+            cid = h.get("company_id")
+            total_cost = h.get("total_cost", 0) or 0
+            quantity = h.get("quantity", 0) or 0
+            avg_cost = h.get("average_cost", 0) or 0
+            exchange_override = h.get("exchange_override")
+
+            price = None
+            if exchange_override:
+                # Live lookup with override exchange (bypass cached tables)
+                cache_key = f"{h.get('symbol')}:{exchange_override}"
+                if cache_key not in override_cache:
+                    try:
+                        sd = self.stock_provider.get_stock_details(h["symbol"], exchange=exchange_override)
+                        override_cache[cache_key] = sd.price if sd else None
+                    except Exception:
+                        override_cache[cache_key] = None
+                price = override_cache[cache_key]
+            else:
+                price = price_map.get(cid)
+
+            if price is not None and quantity > 0:
+                h["current_price"] = price
+                h["current_value"] = price * quantity
+            else:
+                # Tier 3: cost-basis fallback
+                h["current_price"] = float(avg_cost) if avg_cost else 0.0
+                h["current_value"] = float(total_cost) if total_cost else 0.0
+
+            h["unrealized_gain_loss"] = h["current_value"] - float(total_cost)
+            h["unrealized_gain_loss_pct"] = (
+                (h["unrealized_gain_loss"] / float(total_cost) * 100)
+                if float(total_cost) > 0 else 0.0
+            )
+
+        return holdings
+
     def _group_by_symbol(
         self, transactions: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -581,30 +687,238 @@ class PortfolioService:
         }
     
     async def _get_current_price(self, symbol: str) -> Optional[Dict[str, float]]:
-        """Get current price from current_market_data table."""
+        """
+        Get current price for a symbol with three-tier fallback:
+        1. current_market_data (live market price)
+        2. price_history (latest close price)
+        Returns None only if both tables are empty.
+        """
         try:
-            # Get company_id
             company = await self.financial_repo.get_company_by_symbol(symbol)
             if not company:
                 return None
-            
-            # Get price
+            cid = company["company_id"]
+
+            # Tier 1: current_market_data (live)
             res = (
                 supabase.table("current_market_data")
                 .select("current_price")
-                .eq("company_id", company["company_id"])
+                .eq("company_id", cid)
                 .limit(1)
                 .execute()
             )
-            
             if res.data and res.data[0].get("current_price"):
-                return {"price": float(res.data[0]["current_price"])}
-        
+                return {"price": float(res.data[0]["current_price"]), "source": "current_market_data"}
+
+            # Tier 2: price_history (latest close)
+            res = (
+                supabase.table("price_history")
+                .select("close_price")
+                .eq("company_id", cid)
+                .order("price_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if res.data and res.data[0].get("close_price"):
+                return {"price": float(res.data[0]["close_price"]), "source": "price_history"}
+
         except Exception as e:
             logger.error(f"Failed to get price for {symbol}: {e}")
-        
+
         return None
-    
+
+    # ========================================================================
+    # ON-DEMAND PRICE FETCH (Phase 2)
+    # ========================================================================
+
+    async def _fetch_prices_on_import(self, account_ids: List[int]) -> None:
+        """
+        On-demand price fetch for symbols without current_market_data
+        discovered during portfolio import. Runs as a background task.
+
+        For each symbol in the imported accounts:
+        1. Checks if current_market_data already exists → skip
+        2. Fetches current price from YFinance → upserts current_market_data
+        3. Fetches full price history → compresses to monthly EOM → upserts price_history
+        """
+        try:
+            # Gather all unique symbols from holdings
+            symbols: set = set()
+            for aid in account_ids:
+                holdings = self.portfolio_repo.get_account_holdings(aid)
+                symbols.update(h["symbol"] for h in holdings if h.get("symbol"))
+
+            if not symbols:
+                return
+
+            logger.info("On-demand price fetch for %d symbols: %s", len(symbols), sorted(symbols))
+            fetched = 0
+            for symbol in sorted(symbols):
+                try:
+                    await self._fetch_and_store_prices(symbol)
+                    fetched += 1
+                except Exception as e:
+                    logger.warning("Price fetch failed for %s: %s", symbol, e)
+                    continue
+            logger.info("On-demand price fetch complete: %d/%d symbols", fetched, len(symbols))
+
+        except Exception as e:
+            logger.error("On-demand price fetch failed: %s", e)
+
+    async def _fetch_and_store_prices(self, symbol: str) -> None:
+        """
+        Fetch current price and price_history for a symbol.
+        Skips current_market_data if entry already exists.
+        Skips price_history if already populated.
+        """
+        company = await self.financial_repo.get_company_by_symbol(symbol)
+        if not company:
+            logger.debug("No company record for %s — skipping price fetch", symbol)
+            return
+        cid = company["company_id"]
+
+        # Check if current_market_data already exists
+        existing = (
+            supabase.table("current_market_data")
+            .select("company_id")
+            .eq("company_id", cid)
+            .limit(1)
+            .execute()
+        )
+        needs_current = not existing.data
+
+        # Check if price_history already exists
+        needs_history = not await self._has_price_history(cid)
+
+        if not needs_current and not needs_history:
+            logger.debug("Prices already exist for %s — skipping", symbol)
+            return
+
+        # Fetch from YFinance provider
+        exchange = company.get("exchange")
+        try:
+            sd = self.stock_provider.get_stock_details(symbol, exchange=exchange)
+
+            # Upsert current_market_data
+            if sd and sd.price is not None:
+                market_data = {
+                    "company_id": cid,
+                    "current_price": sd.price,
+                    "open_price": getattr(sd, "open_price", None),
+                    "high_price": getattr(sd, "high_price", None),
+                    "low_price": getattr(sd, "low_price", None),
+                    "close_price": getattr(sd, "close_price", None),
+                    "volume": getattr(sd, "volume", None),
+                    "market_state": getattr(sd, "market_state", None),
+                }
+                supabase.table("current_market_data").upsert(
+                    market_data, on_conflict="company_id"
+                ).execute()
+                logger.debug("Upserted current_market_data for %s: $%.2f", symbol, sd.price)
+            else:
+                logger.debug("No current price from YFinance for %s", symbol)
+
+            # Fetch and store price_history if needed
+            if needs_history:
+                daily_rows = await self._get_daily_price_history(symbol, cid, exchange=exchange)
+                if daily_rows:
+                    monthly_rows = self._compress_daily_to_monthly_eom(daily_rows)
+                    if monthly_rows:
+                        await self.financial_repo.upsert_price_history(monthly_rows)
+                        await self.financial_repo.update_price_refresh_marker(cid)
+                        logger.info("Price history loaded for %s: %d monthly rows", symbol, len(monthly_rows))
+
+        except Exception as e:
+            logger.warning("Price provider error for %s: %s", symbol, e)
+
+    async def _has_price_history(self, company_id: int) -> bool:
+        """Check if any price_history exists for a company."""
+        try:
+            resp = (
+                supabase.table("price_history")
+                .select("price_date")
+                .eq("company_id", company_id)
+                .limit(1)
+                .execute()
+            )
+            return bool(resp.data)
+        except Exception as e:
+            logger.debug("_has_price_history failed for company_id=%s: %s", company_id, e)
+            return False
+
+    async def _get_daily_price_history(
+        self, symbol: str, company_id: int, exchange: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Fetch daily OHLCV price history from YFinance provider."""
+        try:
+            # YFinanceProvider has get_price_history_df returning a DataFrame
+            if hasattr(self.stock_provider, "get_price_history_df"):
+                df = self.stock_provider.get_price_history_df(symbol, exchange=exchange)
+                if df is not None and not df.empty:
+                    rows = []
+                    for _, r in df.iterrows():
+                        rows.append({
+                            "company_id": company_id,
+                            "price_date": r["price_date"].date() if hasattr(r["price_date"], "date") else r["price_date"],
+                            "open_price": float(r.get("open_price", 0)),
+                            "close_price": float(r.get("close_price", 0)),
+                            "high_price": float(r.get("high_price", 0)),
+                            "low_price": float(r.get("low_price", 0)),
+                            "volume": int(r.get("volume", 0)) if r.get("volume") else None,
+                            "data_source": "yfinance",
+                        })
+                    return rows
+            return []
+        except Exception as e:
+            logger.debug("Failed to fetch daily price history for %s: %s", symbol, e)
+            return []
+
+    @staticmethod
+    def _compress_daily_to_monthly_eom(
+        daily_rows: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert daily OHLCV rows to monthly EOM rows:
+          - Group by (year, month)
+          - Pick the row with the latest price_date (last trading day of the month)
+          - Preserve all OHLCV fields
+        """
+        if not daily_rows:
+            return []
+        try:
+            import pandas as pd
+            df = pd.DataFrame(daily_rows)
+            if df.empty or "price_date" not in df.columns:
+                return []
+            df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
+            df = df.dropna(subset=["price_date"])
+            if df.empty:
+                return []
+            df["year"] = df["price_date"].dt.year
+            df["month"] = df["price_date"].dt.month
+            idx = df.groupby(["year", "month"])["price_date"].idxmax()
+            last_trading_rows = df.loc[idx].copy()
+            out: List[Dict[str, Any]] = []
+            for _, r in last_trading_rows.iterrows():
+                out.append({
+                    "company_id": int(r.get("company_id")),
+                    "price_date": r["price_date"].date(),
+                    "open_price": float(r["open_price"]) if pd.notna(r.get("open_price")) else None,
+                    "close_price": float(r["close_price"]) if pd.notna(r.get("close_price")) else None,
+                    "high_price": float(r["high_price"]) if pd.notna(r.get("high_price")) else None,
+                    "low_price": float(r["low_price"]) if pd.notna(r.get("low_price")) else None,
+                    "volume": int(r["volume"]) if pd.notna(r.get("volume")) else None,
+                    "data_source": str(r.get("data_source") or "yfinance"),
+                })
+            out.sort(key=lambda x: x["price_date"])
+            return out
+        except ImportError:
+            logger.error("pandas required for _compress_daily_to_monthly_eom")
+            return []
+        except Exception as e:
+            logger.error("Failed to compress daily to monthly EOM: %s", e)
+            return []
+
     # ========================================================================
     # DIVIDEND EXTRACTION
     # ========================================================================
@@ -672,7 +986,9 @@ class PortfolioService:
             }
         
         # Get all holdings
-        holdings = self.portfolio_repo.get_user_all_holdings(user_id)
+        holdings = await self.enrich_holdings_with_prices(
+            self.portfolio_repo.get_user_all_holdings(user_id)
+        )
         
         # Calculate totals
         total_value = sum(h.get("current_value") or 0 for h in holdings)
@@ -822,25 +1138,40 @@ class PortfolioService:
             logger.error(f"Failed to add manual transaction: {e}", exc_info=True)
             return {"success": False, "error": f"Failed to create transaction: {str(e)}"}
 
-    async def _create_company_from_symbol(self, symbol: str) -> Optional[int]:
+    async def _create_company_from_symbol(self, symbol: str, exchange_override: Optional[str] = None) -> Optional[int]:
         """
         Fetch company details from YFinance and create database record.
         
         Resilience features:
-        1. Retry with .TO / .V suffix for Canadian-listed symbols when initial lookup fails
-        2. Create a minimal company record when all provider lookups fail (so holdings
+        1. Accept exchange_override (e.g., "TOR") to skip US primary-listing resolution
+           and query the Canadian-listed version directly via .TO / .V suffix
+        2. Retry with .TO / .V suffix for Canadian-listed symbols when initial lookup fails
+        3. Create a minimal company record when all provider lookups fail (so holdings
            calculations can proceed with a valid company_id)
-        3. No crash on optional StockDetails fields (market_cap and full_time_employees
+        4. No crash on optional StockDetails fields (market_cap and full_time_employees
            are not part of the StockDetails model)
         
         Returns:
             company_id if successful, None if failed
         """
         try:
-            # 1. Fetch from provider (YFinance / DefeatBeta)
-            sd = self.stock_provider.get_stock_details(symbol)
+            # 1. Determine lookup symbol based on exchange override
+            lookup_symbol = symbol
+            if exchange_override == "TOR":
+                lookup_symbol = symbol + ".TO"
+            elif exchange_override == "VAN":
+                lookup_symbol = symbol + ".V"
 
-            # 2. Retry with Canadian exchange suffixes if initial lookup fails
+            # Attempt lookup
+            sd = self.stock_provider.get_stock_details(lookup_symbol)
+
+            # 2. If override failed (e.g., CDR no longer trades on TSX),
+            #    fall back to unsuffixed lookup
+            if not sd and exchange_override:
+                logger.warning(f"Exchange override {exchange_override} failed for {symbol}, falling back to normal lookup")
+                sd = self.stock_provider.get_stock_details(symbol)
+
+            # 3. Retry with Canadian exchange suffixes if still no data
             if not sd:
                 for suffix in [".TO", ".V"]:
                     sd = self.stock_provider.get_stock_details(symbol + suffix)
@@ -849,7 +1180,7 @@ class PortfolioService:
                         break
 
             if not sd:
-                # 3. Minimal record — no provider data available, but we still
+                # 4. Minimal record — no provider data available, but we still
                 #    need a company_id so holdings calculation does not skip the symbol.
                 logger.info(f"No stock details for {symbol}, creating minimal company record")
                 payload = {
@@ -1018,27 +1349,35 @@ class PortfolioService:
             if sym and cid:
                 symbols_seen[sym] = cid
 
-        # Fetch price_history for all symbols in the date range (batched, with slight extension)
+        # Fetch price_history for all symbols in the date range (paginated due to Supabase 1000-row limit)
         price_map: Dict[str, Dict[str, float]] = {}  # symbol -> {date_str: close_price}
         company_ids = list(set(symbols_seen.values()))
         if company_ids:
             try:
-                resp = (
-                    supabase.table("price_history")
-                    .select("company_id, price_date, close_price")
-                    .in_("company_id", company_ids)
-                    .gte("price_date", (start_date - timedelta(days=7)).isoformat())
-                    .lte("price_date", end_date.isoformat())
-                    .order("price_date", desc=False)
-                    .execute()
-                )
-                if resp.data:
-                    sym_by_cid = {cid: sym for sym, cid in symbols_seen.items()}
-                    for row in resp.data:
+                sym_by_cid = {cid: sym for sym, cid in symbols_seen.items()}
+                offset = 0
+                batch_size = 1000
+                while True:
+                    batch = (
+                        supabase.table("price_history")
+                        .select("company_id, price_date, close_price")
+                        .in_("company_id", company_ids)
+                        .gte("price_date", (start_date - timedelta(days=7)).isoformat())
+                        .lte("price_date", end_date.isoformat())
+                        .order("price_date", desc=False)
+                        .range(offset, offset + batch_size - 1)
+                        .execute()
+                    )
+                    if not batch.data:
+                        break
+                    for row in batch.data:
                         cid = row["company_id"]
                         sym = sym_by_cid.get(cid)
                         if sym:
                             price_map.setdefault(sym, {})[row["price_date"]] = float(row["close_price"])
+                    offset += batch_size
+                    if len(batch.data) < batch_size:
+                        break
             except Exception as e:
                 logger.warning(f"Failed to batch fetch price_history: {e}")
 

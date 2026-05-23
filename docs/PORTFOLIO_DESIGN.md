@@ -1190,7 +1190,6 @@ backend/
 - Holdings: `get_account_holdings()`, `get_user_all_holdings()`, `upsert_holding()`, `delete_account_holdings()`
 - Dividends: `insert_dividends()`, `get_account_dividends_by_year()`, `get_monthly_dividends()`
 - Performance: `get_account_performance_history()`, `upsert_performance_snapshot()`
-- Summary: `get_user_portfolio_summary()`
 - Import jobs: `create_import_job()`, `update_import_progress()`, `get_import_job()`, `get_import_history()`
 
 ### 11.3 Frontend Directory Tree
@@ -1525,9 +1524,7 @@ _process_import_     → status='processing' (started_at auto-set)
 | View | Purpose | Consumed By |
 |------|---------|-------------|
 | `portfolio_monthly_dividends` | Aggregates dividends by `(account_id, fiscal_year, fiscal_month)` with `payment_count`, `total_amount`, `paying_companies` | `portfolio_repository.py:get_monthly_dividends()` |
-| `portfolio_user_summary` | Per-user portfolio rollup (aggregates across all accounts) | `portfolio_repository.py:get_user_portfolio_summary()` |
 | `portfolio_user_import_history` | Import history with `brokerage_name` and account count joined | `portfolio_repository.py:get_import_history()` |
-| `portfolio_holdings_enriched` | Holdings with company details (sector, industry) pre-joined | Referenced in API comments for future use |
 
 ---
 
@@ -2438,7 +2435,9 @@ export interface PerformanceResponse {
 | Period has no trade transactions | Regular-interval snapshots still generated; flat portfolio line from pre-period lots | ✅ Implemented |
 | Price data missing for a symbol | Falls back to cost basis (`avg_cost`) | ✅ Implemented |
 | Same-day BUY and SELL | FIFO processes both before snapshot; net position correct | ✅ Implemented |
+| **Portfolio holdings have no current market data** | **3-tier fallback: current_market_data → price_history → cost basis** | ✅ Implemented |
 | Portfolio value = cost basis | All holdings valued at cost; no unrealized gain/loss visible | ⚠️ Data limitation |
+| On-demand price fetch on import | YFinance current price + price_history for new symbols (background) | ✅ Implemented |
 | Corporate actions (splits, mergers) | Not tracked; lots not adjusted | ❌ Known limitation |
 | Multi-currency holdings | All valued in currency of purchase; no FX conversion | ❌ Known limitation |
 
@@ -2450,8 +2449,10 @@ export interface PerformanceResponse {
 |------|-------|---------------------|
 | `backend/api/portfolio.py` | ~855 | Route: `GET /portfolio/performance`, `GET /portfolio/performance/compare`, `GET /benchmarks` |
 | `backend/schemas_portfolio.py` | ~336 | `PerformanceSnapshot`, `PerformanceResponse`, `BenchmarkCompareResponse` |
-| `backend/application/services/portfolio_service.py` | ~1442 | `get_portfolio_performance()`, `get_performance_compare()`, `get_benchmarks()`, FIFO logic |
+| `backend/application/services/portfolio_service.py` | ~1680 | `get_portfolio_performance()`, `get_performance_compare()`, `_get_current_price()` (3-tier fallback), `_fetch_prices_on_import()`, FIFO logic |
 | `backend/infrastructure/repositories/portfolio_repository.py` | ~700 | `get_account_transactions()`, `get_user_accounts()`, `get_earliest_transaction_date()` |
+| `backend/infrastructure/repositories/financial_repository.py` | ~1260 | `get_active_companies_for_market_data()`, `get_companies_for_market_data()`, `upsert_price_history()`, `update_price_refresh_marker()` |
+| `backend/application/schedulers/market_data_scheduler.py` | ~538 | Periodic price history refresh for active companies only (portfolio ∪ watchlist) |
 | `backend/scripts/backfill_benchmark_prices.py` | ~369 | One-time backfill of monthly EOM price history for SPY, QQQ, IWM, VTI, DIA |
 | `web/src/features/portfolio/types/portfolio.types.ts` | ~225 | TypeScript `PerformanceSnapshot`, `PerformanceResponse`, `BenchmarkInfo`, `BenchmarkCompareResponse` |
 | `web/src/features/portfolio/services/portfolio.service.ts` | ~211 | `getPortfolioPerformance()`, `getBenchmarks()`, `getBenchmarkCompare()` |
@@ -2567,3 +2568,85 @@ This prevents:
 | 7 | `test_compare_no_filter` | Compare with None → all accounts |
 | 8 | `test_compare_with_filter` | Compare with filter → subset |
 | 9 | `test_compare_invalid_ids_empty` | Compare with invalid IDs → empty portfolio |
+
+---
+
+## 15. Price Data Architecture
+
+### 15.1 Problem
+
+After adding the portfolio feature, holdings displayed **$0 current_value** for 95% of positions because `current_market_data` was only populated by the watchlist service (41 entries total). The market data scheduler tried to process all 3,114 companies but only completed 14.
+
+### 15.2 Three-Tier Price Fallback
+
+When computing current holding values (`_recalculate_account_holdings` → `_get_current_price`):
+
+| Tier | Source | Latency | Example |
+|------|--------|---------|---------|
+| 1 | `current_market_data` | Live (daily refresh) | MSFT → $372.29 |
+| 2 | `price_history` (latest close) | ~1 day stale | AAPL → $198.50 |
+| 3 | `average_cost × quantity` (= cost basis) | Always available | $0 P&L display |
+
+If all tiers fail → **never** returns None; Tier 3 ensures `current_value` is always set.
+
+### 15.3 On-Demand Price Fetch
+
+When a CSV import discovers new symbols, a background task `_fetch_prices_on_import` runs:
+1. Checks which imported symbols lack `current_market_data`
+2. Fetches current price from YFinance → upserts `current_market_data`
+3. Fetches daily price history from YFinance → compresses to monthly EOM → upserts `price_history`
+
+This mirrors the watchlist fast-path (`watchlist_service._update_market_data`) but for portfolio holdings.
+
+### 15.4 Active-Company Scheduler Scope
+
+The market data scheduler now queries only **active companies** — the union of:
+- All symbols in ANY user's `portfolio_holdings`
+- All company_ids in ANY user's `watchlist_items`
+
+This reduces the processing set from ~3,114 to ~150 companies per cycle, completing in minutes instead of days.
+
+### 15.5 Data Flow
+
+```
+CSV Import / Manual Trade
+  ├── _recalculate_account_holdings()
+  │     └── _get_current_price()  ← 3-tier fallback
+  └── _fetch_prices_on_import()   ← background, YFinance
+        ├── current_market_data.upsert()  ← Tier 1 populated
+        └── price_history.upsert()        ← Tier 2 populated
+
+Market Data Scheduler (every 24h)
+  └── get_active_companies_for_market_data()  ← ~150 companies
+        └── _upsert_monthly_price_history()   ← refreshes price_history
+
+Portfolio Overview (API)
+  └── portfolio_holdings.current_value  ← always set (never NULL)
+        └── net_worth ≈ accurate value  ← WAS: -92% artifact
+```
+
+### 15.6 Key Files
+
+| File | Role |
+|------|------|
+| `portfolio_service.py:_get_current_price()` | 3-tier fallback chain (~line 607) |
+| `portfolio_service.py:_recalculate_account_holdings()` | Tier 3 else clause + exception guard (~line 446) |
+| `portfolio_service.py:_fetch_prices_on_import()` | On-demand YFinance price fetch background task |
+| `portfolio_service.py:_fetch_and_store_prices()` | Single-symbol price fetch + DB upsert |
+| `portfolio_service.py:_compress_daily_to_monthly_eom()` | Daily OHLCV → monthly EOM compression |
+| `financial_repository.py:get_active_companies_for_market_data()` | Portfolio ∪ Watchlist company query |
+| `market_data_scheduler.py:_refresh_cycle()` | Uses active companies instead of all 3,114 |
+| `scripts/backfill_holding_prices.py` | One-time CLI backfill for existing holdings (118 symbols) |
+
+### 15.7 One-Time Backfill
+
+Existing portfolio holdings imported before Phase 2 need a backfill. Run:
+
+```bash
+cd backend
+python scripts/backfill_holding_prices.py          # backfill all 118 symbols
+python scripts/backfill_holding_prices.py --dry-run # preview
+python scripts/backfill_holding_prices.py --symbol AAPL MSFT  # specific symbols
+```
+
+The script queries all distinct symbols from `portfolio_holdings`, checks which lack `current_market_data` or `price_history`, fetches from YFinance, and upserts both tables. Follows the same standalone pattern as `backfill_benchmark_prices.py` — no service changes needed.

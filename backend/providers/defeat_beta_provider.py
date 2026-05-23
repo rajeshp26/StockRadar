@@ -286,18 +286,18 @@ class DefeatBetaProvider(StockDataProvider):
             yfinance_provider is not None,
         )
 
-    def get_ticker_info(self, ticker_symbol: str) -> Optional['TickerInfo']:
+    def get_ticker_info(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional['TickerInfo']:
         if self.yfinance_provider:
             try:
-                return self.yfinance_provider.get_ticker_info(ticker_symbol)
+                return self.yfinance_provider.get_ticker_info(ticker_symbol, exchange=exchange)
             except Exception as e:
                 logger.warning(f"YFinance get_ticker_info failed for {ticker_symbol}: {str(e)}")
         return None
 
-    def get_stock_details(self, ticker_symbol: str) -> Optional['StockDetails']:
+    def get_stock_details(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional['StockDetails']:
         if self.yfinance_provider:
             try:
-                return self.yfinance_provider.get_stock_details(ticker_symbol)
+                return self.yfinance_provider.get_stock_details(ticker_symbol, exchange=exchange)
             except Exception as e:
                 logger.warning(f"YFinance get_stock_details failed for {ticker_symbol}: {str(e)}")
         return None
@@ -373,18 +373,19 @@ class DefeatBetaProvider(StockDataProvider):
         company_id: int,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        exchange: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Primary DBeta -> fallback YF (with optional date filters).
         Dates are applied client-side after provider retrieval to ensure compatibility.
         """
-        rows = await self.fetch_price_history(symbol, company_id, start_date=start_date, end_date=end_date)
+        rows = await self.fetch_price_history(symbol, company_id, start_date=start_date, end_date=end_date, exchange=exchange)
         if rows:
             return rows
 
         # yfinance fallback
         if self.yfinance_provider:
-            df = await asyncio.to_thread(self.yfinance_provider.get_price_history_df, symbol)
+            df = await asyncio.to_thread(self.yfinance_provider.get_price_history_df, symbol, exchange)
             if df is not None and not df.empty:
                 # apply date filters on df if provided
                 df = df.copy()
@@ -921,13 +922,17 @@ class DefeatBetaProvider(StockDataProvider):
         company_id: int,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        exchange: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Returns rows for public.price_history (daily OHLCV).
         Applies client-side date filtering if start_date/end_date provided.
         """
         try:
-            t = Ticker(symbol)
+            from .yfinance_provider import EXCHANGE_SUFFIX_MAP
+            suffix = EXCHANGE_SUFFIX_MAP.get(exchange.upper()) if exchange else None
+            db_symbol = symbol.upper() + suffix if suffix else symbol.upper()
+            t = Ticker(db_symbol)
             obj = await self._timeout_fetch(lambda: t.price(), f"price history for {symbol}")
             df = obj.df() if hasattr(obj, 'df') else obj
             if df is None or df.empty:

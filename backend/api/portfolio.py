@@ -112,12 +112,15 @@ async def list_accounts(
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
+        service = _get_portfolio_service()
         accounts = repo.get_user_accounts(db_user_id, active_only=True)
         
         # Enrich with holdings count and value
         enriched_accounts = []
         for acc in accounts:
-            holdings = repo.get_account_holdings(acc["account_id"])
+            holdings = await service.enrich_holdings_with_prices(
+                repo.get_account_holdings(acc["account_id"])
+            )
             total_value = sum(h.get("current_value") or 0 for h in holdings)
             total_cost = sum(h.get("total_cost") or 0 for h in holdings)
             
@@ -369,8 +372,11 @@ async def get_account_holdings(
                 detail="You do not own this account",
             )
         
-        # Get holdings (uses portfolio_holdings_enriched view for company data)
-        holdings = repo.get_account_holdings(account_id)
+        # Get holdings enriched with computed prices
+        service = _get_portfolio_service()
+        holdings = await service.enrich_holdings_with_prices(
+            repo.get_account_holdings(account_id)
+        )
         
         return AccountHoldingsResponse(
             account_id=account_id,
@@ -404,7 +410,10 @@ async def get_all_holdings(
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
-        holdings = repo.get_user_all_holdings(db_user_id)
+        service = _get_portfolio_service()
+        holdings = await service.enrich_holdings_with_prices(
+            repo.get_user_all_holdings(db_user_id)
+        )
         
         return {"holdings": holdings}
     

@@ -50,6 +50,9 @@ class ParsedTransaction:
     
     # Metadata
     raw_data: Dict[str, Any]  # Original CSV row
+    
+    # Exchange override (e.g., "TOR" for CDR symbols detected during parsing)
+    exchange_override: Optional[str] = None
 
 
 @dataclass
@@ -327,7 +330,18 @@ class WealthsimpleParser(PortfolioParserBase):
         raw_symbol = (row.get("symbol") or "").strip() or None
         security_name = (row.get("name") or "").strip() or None
         
-        # Normalize symbol
+        # Detect CDR pattern in raw symbol or security name for exchange override
+        exchange_override = None
+        for candidate in [raw_symbol, security_name]:
+            if candidate:
+                for pattern in self.CDR_PATTERNS:
+                    if re.search(pattern, candidate, re.IGNORECASE):
+                        exchange_override = "TOR"
+                        break
+            if exchange_override:
+                break
+        
+        # Normalize symbol (strips CDR suffix, converts dots to hyphens)
         symbol = None
         if raw_symbol:
             symbol = self.normalize_symbol(raw_symbol, security_name or "")
@@ -356,6 +370,7 @@ class WealthsimpleParser(PortfolioParserBase):
             unit_price=unit_price,
             commission=commission,
             net_cash_amount=net_cash,
+            exchange_override=exchange_override,
             raw_data=dict(row),  # Store original row
         )
     

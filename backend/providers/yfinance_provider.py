@@ -9,6 +9,15 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+
+# Exchange codes known to be Canadian TSX/TSXV — yfinance requires .TO /.V suffix
+EXCHANGE_SUFFIX_MAP: Dict[str, str] = {
+    "TOR": ".TO", "TSX": ".TO", "TO": ".TO",
+    "VAN": ".V", "TSXV": ".V", "V": ".V",
+    "CNQ": ".V", "NEO": ".V",
+}
+
+
 class YFinanceProvider(StockDataProvider, StockProvider):
     """
     yfinance fallback provider with helpers for:
@@ -20,14 +29,29 @@ class YFinanceProvider(StockDataProvider, StockProvider):
     def __init__(self):
         self._cache: Dict[str, StockDetails] = {}
 
-    def get_ticker_info(self, ticker_symbol: str) -> Optional[TickerInfo]:
-        details = self.get_stock_details(ticker_symbol)
+    def _resolve_symbol(self, ticker_symbol: str, exchange: Optional[str] = None) -> str:
+        """Resolve a ticker symbol to YFinance-compatible form.
+
+        When exchange is known and maps to a Canadian exchange, append the
+        required yfinance suffix (.TO / .V) so the symbol works directly.
+        When exchange is not known, return the symbol as-is — the caller
+        can fall back through .TO / .V suffixes on failure.
+        """
+        symbol = ticker_symbol.upper()
+        if exchange:
+            suffix = EXCHANGE_SUFFIX_MAP.get(exchange.upper())
+            if suffix:
+                return symbol + suffix
+        return symbol
+
+    def get_ticker_info(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional[TickerInfo]:
+        details = self.get_stock_details(ticker_symbol, exchange=exchange)
         if details:
             return TickerInfo(long_name=details.long_name, ticker_symbol=details.ticker_symbol)
         return None
 
-    def get_stock_details(self, ticker_symbol: str) -> Optional[StockDetails]:
-        ticker_upper = ticker_symbol.upper()
+    def get_stock_details(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional[StockDetails]:
+        ticker_upper = self._resolve_symbol(ticker_symbol, exchange)
         if ticker_upper in self._cache:
             return self._cache[ticker_upper]
 
@@ -135,11 +159,11 @@ class YFinanceProvider(StockDataProvider, StockProvider):
     # ---------------------------
     # NEW: Price History (DataFrame)
     # ---------------------------
-    def get_price_history_df(self, symbol: str) -> pd.DataFrame:
+    def get_price_history_df(self, symbol: str, exchange: Optional[str] = None) -> pd.DataFrame:
         """
         Returns DataFrame with columns: price_date, open_price, high_price, low_price, close_price, volume
         """
-        tkr = yf.Ticker(symbol.upper())
+        tkr = yf.Ticker(self._resolve_symbol(symbol, exchange))
         try:
             hist = tkr.history(period="max", auto_adjust=False)  # columns: Open, High, Low, Close, Volume
             if hist is None or hist.empty:

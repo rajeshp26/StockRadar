@@ -168,7 +168,8 @@ class MarketDataRefreshScheduler:
     async def _refresh_cycle(self) -> Dict[str, Any]:
         logger.info("📊 Market data refresh cycle started")
 
-        companies = await self.financial_repo.get_companies_for_market_data(self.company_statuses)
+        # Process only active companies (in ANY user's portfolio or watchlist)
+        companies = await self.financial_repo.get_active_companies_for_market_data()
         total = len(companies or [])
         if total == 0:
             logger.info("✅ No companies eligible for market-data refresh")
@@ -201,7 +202,10 @@ class MarketDataRefreshScheduler:
                     return
 
                 try:
-                    detail = await self._process_company(sym, cid, company.get("security_type", "stock"))
+                    detail = await self._process_company(
+                        sym, cid, company.get("security_type", "stock"),
+                        exchange=company.get("exchange"),
+                    )
                     results["companies_succeeded"] += 1
                     results["detail"].append({"symbol": sym, "ok": True, **detail})
                 except Exception as e:
@@ -234,6 +238,7 @@ class MarketDataRefreshScheduler:
         symbol: str,
         company_id: int,
         security_type: str = "stock",
+        exchange: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Steps:
@@ -259,7 +264,7 @@ class MarketDataRefreshScheduler:
             )
 
         # 1) PRICE HISTORY — all security types
-        price_rows_written = await self._upsert_monthly_price_history(symbol, company_id)
+        price_rows_written = await self._upsert_monthly_price_history(symbol, company_id, exchange=exchange)
 
         # 2) SPLITS — all security types (ETFs and funds do split)
         split_rows = await self.defeat_beta_provider.get_splits_optimized(symbol, company_id)
@@ -410,7 +415,7 @@ class MarketDataRefreshScheduler:
     # Price History helpers (with rolling retention)
     # -------------------------------------------------------------------------
 
-    async def _upsert_monthly_price_history(self, symbol: str, company_id: int) -> int:
+    async def _upsert_monthly_price_history(self, symbol: str, company_id: int, exchange: Optional[str] = None) -> int:
         """
         Bootstrap path  — no existing rows: fetch full daily history, compress to
                           monthly EOM, upsert all (respects retention window).
@@ -422,7 +427,7 @@ class MarketDataRefreshScheduler:
         retention_cutoff = self._years_ago(date.today(), self.retention_years)
 
         if not has_any:
-            daily_rows = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id)
+            daily_rows = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id, exchange=exchange)
             daily_rows = [
                 r for r in (daily_rows or [])
                 if r.get("price_date") and r["price_date"] >= retention_cutoff
@@ -436,7 +441,7 @@ class MarketDataRefreshScheduler:
 
         lookback = max(self.lookback_days, 40)
         window_cutoff = date.today() - timedelta(days=lookback)
-        daily_rows_recent = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id)
+        daily_rows_recent = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id, exchange=exchange)
         effective_cutoff = max(retention_cutoff, window_cutoff)
         daily_rows_recent = [
             r for r in (daily_rows_recent or [])
