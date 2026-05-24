@@ -1,3 +1,5 @@
+// Shared types
+
 export type Stock = {
   id: number;
   symbol: string;
@@ -19,3 +21,11 @@ export type WatchlistItem = {
   targetBuy: number | null;
   targetSell: number | null;
 };
+
+export interface BenchmarkInfo {
+  role: string;
+  symbol: string;
+  name: string;
+  market: string;
+  description?: string;
+}

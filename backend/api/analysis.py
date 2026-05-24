@@ -73,6 +73,19 @@ def _get_technical_service():
     dbeta = DefeatBetaProvider(yfinance_provider=yf)
     return TechnicalAnalysisService(repo, dbeta, yf)
 
+
+def _get_stock_vs_index_service():
+    from database import supabase
+    from infrastructure.repositories.valuation_repository import ValuationRepository
+    from infrastructure.repositories.analysis_repository import AnalysisRepository
+    from application.services.stock_index_comparison_service import (
+        StockIndexComparisonService,
+    )
+    repo = ValuationRepository()
+    arepo = AnalysisRepository(repo)
+    return StockIndexComparisonService(arepo)
+
+
 @router.get(
     "/{symbol}/dividend",
     summary=(
@@ -194,3 +207,55 @@ async def get_murphy_technical(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Murphy technical analysis failed.",
         )
+
+
+@router.get(
+    "/{symbol}/stock-vs-index",
+    summary=(
+        "Stock vs Index outperformance analysis: quantitative metrics (alpha, beta, Sharpe), "
+        "fundamental growth (revenue, EPS, FCF CAGR), and visual signals (relative strength, drawdown)."
+    ),
+)
+@limiter.limit("30/minute")
+async def get_stock_vs_index(
+    request: Request,
+    symbol: str,
+    benchmark_symbols: str = Query("SPY", description="Comma-separated benchmark tickers (e.g. SPY,QQQ)"),
+    years: int = Query(3, ge=1, le=10, description="Historical years to analyze"),
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        bsym_list = [s.strip().upper() for s in benchmark_symbols.split(",") if s.strip()]
+        if not bsym_list:
+            bsym_list = ["SPY"]
+        service = _get_stock_vs_index_service()
+        result = await service.evaluate_outperformance(sym, bsym_list, years)
+        return result
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error(f"get_stock_vs_index failed for {symbol}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stock vs index analysis failed.",
+        )
+
+
+@router.get(
+    "/benchmarks",
+    summary="Lists all active benchmarks for the Stock vs Index feature.",
+)
+@limiter.limit("60/minute")
+async def list_benchmarks(
+    request: Request,
+    user=Depends(get_current_user_dep),
+) -> list:
+    try:
+        service = _get_stock_vs_index_service()
+        return await service.list_benchmarks()
+    except Exception as exc:
+        logger.error("list_benchmarks failed: %s", exc, exc_info=True)
+        return []

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { BenchmarkInfo } from '../types/portfolio.types';
+import type { BenchmarkInfo } from '@/lib/types';
 
 const MAX_BENCHMARKS = 5;
 
@@ -11,20 +11,21 @@ interface BenchmarkSelectorProps {
     benchmarks: BenchmarkInfo[];
     selected: string[];
     onToggle: (symbol: string) => void;
+    label?: string;
 }
 
-export function BenchmarkSelector({ benchmarks, selected, onToggle }: BenchmarkSelectorProps) {
+export function BenchmarkSelector({ benchmarks, selected, onToggle, label }: BenchmarkSelectorProps) {
     const [open, setOpen] = useState(false);
 
     if (benchmarks.length === 0) return null;
 
     const atMax = selected.length >= MAX_BENCHMARKS;
 
-    const buttonLabel = selected.length === 0
+    const buttonLabel = label ?? (selected.length === 0
         ? '+ Compare'
         : selected.length === 1
             ? selected[0]
-            : `${selected[0]} +${selected.length - 1}`;
+            : `${selected[0]} +${selected.length - 1}`);
 
     return (
         <div className="relative">

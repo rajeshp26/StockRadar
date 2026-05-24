@@ -2650,3 +2650,49 @@ python scripts/backfill_holding_prices.py --symbol AAPL MSFT  # specific symbols
 ```
 
 The script queries all distinct symbols from `portfolio_holdings`, checks which lack `current_market_data` or `price_history`, fetches from YFinance, and upserts both tables. Follows the same standalone pattern as `backfill_benchmark_prices.py` — no service changes needed.
+
+---
+
+## 16. Shared Infrastructure — Colors & BenchmarkSelector
+
+In a cross-feature refactoring, the benchmark color map and the `BenchmarkSelector` component were extracted from the Portfolio feature into shared locations to be reused by the Stock vs Index feature.
+
+### 16.1 Shared Color Map
+
+**File:** `web/src/lib/colors.ts`
+
+```typescript
+export const BENCHMARK_COLORS: Record<string, string> = {
+    SPY: '#f59e0b',   // amber
+    QQQ: '#a78bfa',   // violet
+    IWM: '#f472b6',   // pink
+    VTI: '#06b6d4',   // cyan
+    DIA: '#fb7185',   // rose
+};
+export const FALLBACK_COLORS = ['#f59e0b', '#a78bfa', '#f472b6', '#06b6d4', '#fb7185'];
+```
+
+Both `PortfolioPerformanceChart` and `StockVsIndexPanel` import from this single source of truth, ensuring consistent colors across the application.
+
+### 16.2 Shared BenchmarkSelector
+
+**File:** `web/src/components/ui/benchmark-selector.tsx`
+
+The `BenchmarkSelector` component was moved from `features/portfolio/components/` to `components/ui/` and its `BenchmarkInfo` type dependency was changed from `portfolio.types` to `@/lib/types`:
+
+| Before | After |
+|--------|-------|
+| Location: `features/portfolio/components/BenchmarkSelector.tsx` | Location: `components/ui/benchmark-selector.tsx` |
+| Imports `BenchmarkInfo` from `portfolio/types/portfolio.types` | Imports `BenchmarkInfo` from `@/lib/types` |
+| Only used by Portfolio Performance | Used by both Portfolio Performance and Stock vs Index |
+
+The component accepts the same props:
+```typescript
+interface BenchmarkSelectorProps {
+    benchmarks: BenchmarkInfo[];
+    selected: string[];
+    onToggle: (symbol: string) => void;
+}
+```
+
+Both features now render the same dropdown with the same max-5 constraint and visual style.

@@ -1692,27 +1692,11 @@ class PortfolioService:
     # ------------------------------------------------------------------
 
     async def get_benchmarks(self) -> List[Dict[str, Any]]:
-        """List all active benchmarks from benchmark_config."""
-        try:
-            resp = (
-                supabase.table("benchmark_config")
-                .select("*")
-                .eq("is_active", True)
-                .execute()
-            )
-            return [
-                {
-                    "role": r.get("role"),
-                    "symbol": r.get("symbol"),
-                    "name": r.get("name", r.get("symbol")),
-                    "market": r.get("market", "US"),
-                    "description": r.get("description"),
-                }
-                for r in (resp.data or [])
-            ]
-        except Exception as e:
-            logger.error(f"Failed to list benchmarks: {e}")
-            return []
+        """List all active benchmarks from benchmark_config — delegates to shared repository logic."""
+        from infrastructure.repositories.analysis_repository import AnalysisRepository
+        from infrastructure.repositories.valuation_repository import ValuationRepository
+        repo = AnalysisRepository(ValuationRepository())
+        return await repo.list_active_benchmarks()
 
     async def get_performance_compare(
         self, user_id: int, period: str, benchmark_symbols: List[str],

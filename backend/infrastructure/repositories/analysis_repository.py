@@ -51,7 +51,7 @@ class AnalysisRepository:
             return None
 
     async def get_all_active_benchmarks(self, market: str = "US") -> List[Dict[str, Any]]:
-        """Returns all active benchmarks for a market. Used for future multi-benchmark support."""
+        """Returns all active benchmarks for a market."""
         try:
             resp = (
                 supabase.table("benchmark_config")
@@ -63,6 +63,51 @@ class AnalysisRepository:
             return resp.data or []
         except Exception as e:
             logger.error("get_all_active_benchmarks failed for market=%s: %s", market, e)
+            return []
+
+    async def get_benchmark_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Looks up a benchmark config by symbol (e.g. 'SPY'). Returns None if not found."""
+        try:
+            resp = (
+                supabase.table("benchmark_config")
+                .select("role, company_id, symbol, market, description")
+                .eq("symbol", symbol.upper())
+                .eq("is_active", True)
+                .limit(1)
+                .execute()
+            )
+            return resp.data[0] if resp.data else None
+        except Exception as e:
+            logger.error("get_benchmark_by_symbol failed for symbol=%s: %s", symbol, e)
+            return None
+
+    async def list_active_benchmarks(self) -> List[Dict[str, Any]]:
+        """
+        Returns ALL active benchmarks across all markets.
+        Single source of truth for benchmark listing.
+        No `name` column exists in benchmark_config — the frontend
+        falls back to the symbol for display.
+        """
+        try:
+            resp = (
+                supabase.table("benchmark_config")
+                .select("role, symbol, market, description")
+                .eq("is_active", True)
+                .order("symbol")
+                .execute()
+            )
+            return [
+                {
+                    "role": r.get("role"),
+                    "symbol": r.get("symbol"),
+                    "name": r.get("name", r.get("symbol")),
+                    "market": r.get("market", "US"),
+                    "description": r.get("description"),
+                }
+                for r in (resp.data or [])
+            ]
+        except Exception as e:
+            logger.error("list_active_benchmarks failed: %s", e)
             return []
 
     # ── Magic Formula ─────────────────────────────────────────────────────────
@@ -361,3 +406,76 @@ class AnalysisRepository:
                 "get_shares_outstanding_latest failed for company_id=%d: %s", company_id, e
             )
             return None
+
+    # ── Stock vs Index Comparison ─────────────────────────────────────────────
+
+    async def get_price_history_range(
+        self, company_id: int, start_date: date, end_date: date
+    ) -> List[Dict[str, Any]]:
+        """Get daily/monthly price history for a date range."""
+        try:
+            resp = (
+                supabase.table("price_history")
+                .select("price_date, close_price, high_price, low_price, volume")
+                .eq("company_id", company_id)
+                .gte("price_date", start_date.isoformat())
+                .lte("price_date", end_date.isoformat())
+                .order("price_date", desc=False)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            logger.error(
+                f"get_price_history_range failed for company_id={company_id}: {e}"
+            )
+            return []
+
+    async def get_revenue_and_eps_growth(
+        self, company_id: int, years: int = 3
+    ) -> Dict[str, Optional[float]]:
+        """Calculate 3-year CAGR for revenue and EPS."""
+        try:
+            income_data = await self._repo.get_income_statements_annual(
+                company_id, limit=years + 1
+            )
+            if len(income_data) < 2:
+                return {"revenue_cagr": None, "eps_cagr": None}
+
+            income_data = sorted(income_data, key=lambda x: x.get("fiscal_year", 0))
+
+            # Revenue CAGR
+            rev_start = income_data[0].get("revenue")
+            rev_end = income_data[-1].get("revenue")
+            revenue_cagr = None
+            if rev_start and rev_end and float(rev_start) > 0:
+                n_years = income_data[-1]["fiscal_year"] - income_data[0]["fiscal_year"]
+                if n_years > 0:
+                    revenue_cagr = (float(rev_end) / float(rev_start)) ** (
+                        1 / n_years
+                    ) - 1
+
+            # EPS CAGR
+            eps_start_ni = income_data[0].get("net_income_to_common") or income_data[
+                0
+            ].get("net_income")
+            eps_start_shares = income_data[0].get("shares_outstanding_diluted")
+            eps_end_ni = income_data[-1].get("net_income_to_common") or income_data[
+                -1
+            ].get("net_income")
+            eps_end_shares = income_data[-1].get("shares_outstanding_diluted")
+
+            eps_cagr = None
+            if all([eps_start_ni, eps_start_shares, eps_end_ni, eps_end_shares]):
+                if float(eps_start_shares) > 0 and float(eps_end_shares) > 0:
+                    eps_start = float(eps_start_ni) / float(eps_start_shares)
+                    eps_end = float(eps_end_ni) / float(eps_end_shares)
+                    if eps_start > 0:
+                        n_years = income_data[-1]["fiscal_year"] - income_data[0]["fiscal_year"]
+                        if n_years > 0:
+                            eps_cagr = (eps_end / eps_start) ** (1 / n_years) - 1
+
+            return {"revenue_cagr": revenue_cagr, "eps_cagr": eps_cagr}
+        except Exception as e:
+            logger.error(f"get_revenue_and_eps_growth failed: {e}")
+            return {"revenue_cagr": None, "eps_cagr": None}
+            

@@ -180,13 +180,7 @@ export interface PerformanceResponse {
     error?: string;
 }
 
-export interface BenchmarkInfo {
-    role: string;
-    symbol: string;
-    name: string;
-    market: string;
-    description?: string;
-}
+export type { BenchmarkInfo } from '@/lib/types';
 
 export interface BenchmarkSeries {
     symbol: string;

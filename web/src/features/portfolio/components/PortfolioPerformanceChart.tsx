@@ -14,18 +14,10 @@ import {
 } from 'recharts';
 import { usePortfolioPerformance, useBenchmarks, useBenchmarkCompare, usePortfolioAccounts } from '../hooks/usePortfolio';
 import { TimePeriodSelector } from './TimePeriodSelector';
-import { BenchmarkSelector } from './BenchmarkSelector';
+import { BenchmarkSelector } from '@/components/ui/benchmark-selector';
 import { AccountSelector } from './AccountSelector';
 import type { TimePeriod, BenchmarkCompareResponse } from '../types/portfolio.types';
-
-const BENCHMARK_COLORS: Record<string, string> = {
-    SPY: '#f59e0b',
-    QQQ: '#a78bfa',
-    IWM: '#f472b6',
-    VTI: '#06b6d4',
-    DIA: '#fb7185',
-};
-const FALLBACK_COLORS = ['#f59e0b', '#a78bfa', '#f472b6', '#06b6d4', '#fb7185'];
+import { BENCHMARK_COLORS, FALLBACK_COLORS } from '@/lib/colors';
 
 export function PortfolioPerformanceChart() {
     const [period, setPeriod] = useState<TimePeriod>('1Y');

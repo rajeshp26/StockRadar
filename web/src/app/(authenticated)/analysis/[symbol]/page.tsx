@@ -27,6 +27,7 @@ import { MurphyPanel } from "@/features/analysis/components/murphy-panel";
 import { MagicFormulaPanel } from "@/features/analysis/components/magic-formula-panel";
 import { CANSlimPanel } from "@/features/analysis/components/canslim-panel";
 import { SuperInvestorsTab } from "@/features/analysis/components/SuperInvestorsTab";
+import { StockVsIndexPanel } from "@/features/analysis/components/stock-vs-index-panel";
 
 import {
   TrendingUp,
@@ -47,6 +48,7 @@ const TOP_TABS = [
   { id: "health", label: "Financial Health", icon: Heart },
   { id: "moat", label: "Moat", icon: Shield },
   { id: "dividend", label: "Dividend", icon: TrendingDown },
+  { id: "comparison", label: "Market Comparison", icon: BarChart2 },
   { id: "technical", label: "Technical", icon: BarChart2 },
   { id: "investors", label: "Super Investors", icon: Users },
   { id: "others", label: "Others", icon: MoreHorizontal },
@@ -237,6 +239,11 @@ export default function AnalysisPage() {
         {tab === "dividend" && (
           <div className="animate-fade-up">
             <DividendPanel symbol={upperSymbol} />
+          </div>
+        )}
+        {tab === "comparison" && (
+          <div className="animate-fade-up">
+            <StockVsIndexPanel symbol={upperSymbol} />
           </div>
         )}
         {tab === "technical" && (

@@ -817,3 +817,51 @@ export interface SuperInvestorHistoryData {
   latest_date: string | null;
   message?: string;
 }
+
+// ── Stock vs Index ─────────────────────────────────────────────────────────────
+export interface StockVsIndexQuantitative {
+  beta: number;
+  alpha: number;
+  stock_sharpe: number;
+  index_sharpe: number;
+  growth_score: number;
+  revenue_cagr: number | null;
+  eps_cagr: number | null;
+  fcf_cagr: number | null;
+  peg_ratio: number | null;
+  score: number;
+}
+
+export interface StockVsIndexVisual {
+  rs_trend: number;
+  outperform_rate: number;
+  stock_max_drawdown: number;
+  index_max_drawdown: number;
+  dd_ratio: number;
+  score: number;
+}
+
+export interface StockVsIndexCharts {
+  dates: string[];
+  normalized_prices: Record<string, number[]>;
+  relative_strength: Record<string, number[]>;
+  rolling_12m_returns: Record<string, (number | null)[]>;
+  drawdowns: Record<string, number[]>;
+}
+
+export interface StockVsIndexBenchmark {
+  symbol: string;
+  name: string;
+}
+
+export interface StockVsIndexResponse {
+  symbol: string;
+  primary_index: string;
+  benchmarks: StockVsIndexBenchmark[];
+  period_years: number;
+  quantitative: StockVsIndexQuantitative;
+  visual: StockVsIndexVisual;
+  combined_score: number;
+  recommendation: string;
+  charts: StockVsIndexCharts;
+}

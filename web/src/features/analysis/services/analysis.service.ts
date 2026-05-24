@@ -29,6 +29,7 @@ import type {
   CANSlimResponse,
   MurphyAnalysisResponse,
   SuperInvestorData,
+  StockVsIndexResponse,
 } from "../types/analysis.types";
 
 import type { OverviewRecommendation } from "../hooks/useValuationOverview";
@@ -723,6 +724,56 @@ export async function fetchSuperInvestors(
     (errorBody?.message as string) ||
     `Request failed with status ${res.status}`
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* STOCK VS INDEX                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** GET — Stock vs Index outperformance analysis (live, stateless). */
+export async function fetchStockVsIndex(
+  symbol: string,
+  benchmarkSymbols: string[] = ["SPY"],
+  years: number = 3
+): Promise<StockVsIndexResponse> {
+  const bmParam = benchmarkSymbols.map(s => encodeURIComponent(s)).join(",");
+  const url = apiPath(
+    `/analysis/${encodeURIComponent(symbol)}/stock-vs-index?benchmark_symbols=${bmParam}&years=${years}`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" }, 20_000);
+  } catch (err: any) {
+    throw new Error(err?.message || "Network error fetching stock vs index analysis.");
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<StockVsIndexResponse>(res);
+    if (!body || typeof body !== "object" || !body.symbol) {
+      throw new Error("Invalid response from server (missing stock vs index payload).");
+    }
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error(
+    (errorBody?.detail as string) ||
+    `Request failed with status ${res.status}`
+  );
+}
+
+/** GET — List available benchmarks from the analysis API. */
+export async function fetchBenchmarks(): Promise<{ role: string; symbol: string; name: string; market: string; description?: string }[]> {
+  const url = apiPath("/analysis/benchmarks");
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" }, 10_000);
+  } catch (err: any) {
+    throw new Error(err?.message || "Network error fetching benchmarks.");
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<{ role: string; symbol: string; name: string; market: string; description?: string }[]>(res);
+    return body || [];
+  }
+  return [];
 }
 
 export async function fetchSuperInvestorsHistory(
