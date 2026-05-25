@@ -833,6 +833,38 @@ class ValuationRepository:
         except Exception:
             return None
 
+    async def get_last_output_snapshots(
+        self, company_id: int, methods: List[str]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Single query to fetch the latest output snapshot for multiple methods.
+           Returns a dictionary mapping method name to its latest output_snapshot (or None)."""
+        if not methods:
+            return {}
+        safe_methods = [m for m in methods if m in ALLOWED_METHODS]
+        if not safe_methods:
+            return {m: None for m in methods}
+        try:
+            resp = (
+                supabase.table("valuation_runs")
+                .select("method, output_snapshot, run_at")
+                .eq("company_id", company_id)
+                .in_("method", safe_methods)
+                .order("run_at", desc=True)
+                .execute()
+            )
+            # Find the latest output_snapshot per method. Since the query is ordered by run_at desc,
+            # the first time we see a method, it is the most recent run.
+            latest_by_method = {}
+            for row in (resp.data or []):
+                m = row.get("method")
+                if m and m not in latest_by_method:
+                    latest_by_method[m] = row.get("output_snapshot")
+            
+            return {m: latest_by_method.get(m) for m in methods}
+        except Exception as exc:
+            logger.error("get_last_output_snapshots failed for company_id=%s methods=%s: %s", company_id, methods, exc)
+            return {m: None for m in methods}
+
     async def get_last_input_snapshot(self, company_id: int, method: str) -> Optional[Dict[str, Any]]:
         """
         Returns the input_snapshot from the most recent valuation run.

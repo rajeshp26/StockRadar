@@ -198,19 +198,14 @@ class ValuationService:
         sector     = ctx.get("sector")
  
         # ── Read all 5 snapshots in parallel ──────────────────────────────────
-        (
-            rule1_snap,
-            dcf_snap,
-            ddm_gordon_snap,
-            oe_snap,
-            ri_snap,
-        ) = await asyncio.gather(
-            self.repo.get_last_output_snapshot(company_id, method="rule1"),
-            self.repo.get_last_output_snapshot(company_id, method="dcf"),
-            self.repo.get_last_output_snapshot(company_id, method="ddm_gordon"),
-            self.repo.get_last_output_snapshot(company_id, method="owner_earnings"),
-            self.repo.get_last_output_snapshot(company_id, method="residual_income"),
+        snaps = await self.repo.get_last_output_snapshots(
+            company_id, ["rule1", "dcf", "ddm_gordon", "owner_earnings", "residual_income"]
         )
+        rule1_snap = snaps.get("rule1")
+        dcf_snap = snaps.get("dcf")
+        ddm_gordon_snap = snaps.get("ddm_gordon")
+        oe_snap = snaps.get("owner_earnings")
+        ri_snap = snaps.get("residual_income")
  
         current_price = await self.repo.get_current_market_price(company_id)
  

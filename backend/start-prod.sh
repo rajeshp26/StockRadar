@@ -83,7 +83,7 @@ done < .env
 echo -e "${GREEN}✅ Environment variables loaded${NC}"
 echo -e "   - SUPABASE_URL: ${SUPABASE_URL:0:20}..."
 echo -e "   - FIREBASE_PROJECT_ID: $FIREBASE_PROJECT_ID"
-[ -n "$GEMINI_API_KEY" ] && echo -e "   - GEMINI_API_KEY: configured"
+[ -n "$OPEN_ROUTER_KEY" ] && echo -e "   - OPEN_ROUTER_KEY: configured"
 echo ""
 
 

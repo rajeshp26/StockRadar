@@ -20,9 +20,7 @@ packages = [
     "pydantic_settings",
 ]
 
-dotted_tests = [
-    "google.generativeai",
-]
+dotted_tests: list[str] = []
 
 all_ok = True
 for pkg in packages:

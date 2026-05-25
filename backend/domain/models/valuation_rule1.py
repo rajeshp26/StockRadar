@@ -47,7 +47,7 @@ class Applicability(BaseModel):
     suitabilitySummary: AI-generated plain-English explanation of the score/category.
       - Generated once at compute time and stored in output_snapshot.
       - Returned as-is on cached reads at zero cost.
-      - None when AI is disabled (GEMINI_API_KEY not set) or generation failed.
+      - None when AI is disabled (OPEN_ROUTER_KEY not set) or generation failed.
         UI falls back to showing only the score ring and flag pills.
     """
     score: int = Field(ge=0, le=100)

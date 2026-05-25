@@ -132,6 +132,19 @@ app.dependency_overrides[get_current_user_dep] = get_current_user
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+@app.middleware("http")
+async def clear_request_cache_middleware(request, call_next):
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        try:
+            from dependencies import get_cache_manager
+            get_cache_manager().clear_request_cache()
+        except Exception as e:
+            logger.error("Failed to clear request cache: %s", e)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,

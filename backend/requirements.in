@@ -28,5 +28,3 @@ lxml==6.0.3
 
 # Transitive constraint: pandas 3.0 compatibility
 fsspec<=2025.10.0
-
-google-generativeai==0.8.6

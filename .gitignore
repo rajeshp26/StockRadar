@@ -21,3 +21,18 @@ backend/service-account.json
 backend/google_credentials.json
 backend/.env
 backend/venv_wsl/
+
+# Validation reports (contain raw financial data)
+backend/validation_report_*.txt
+validation_report_*.txt
+
+# Logs
+backend/backfill_log.txt
+web/*.err
+
+# Build artifacts
+*.tar.gz
+web/tsconfig.tsbuildinfo
+
+# Ad-hoc test scripts (may contain personal info)
+test_edgar_filings.py

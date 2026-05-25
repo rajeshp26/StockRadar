@@ -59,9 +59,8 @@ class Settings(BaseSettings):
     # ============================================
     # 🤖 AI & External Providers
     # ============================================
-    GEMINI_API_KEY: Optional[str] = Field(default=None, description="Google Gemini API key for stock analysis")
-    # config.py — already has GEMINI_API_KEY, add this next to it:
-    GEMINI_MODEL: str = Field(default="gemini-1.5-flash", description="Gemini model for suitability summaries")
+    OPEN_ROUTER_KEY: Optional[str] = Field(default=None, description="OpenRouter API key for AI stock analysis")
+    OPEN_ROUTER_MODEL: str = Field(default="openai/gpt-oss-120b:free", description="OpenRouter model for suitability summaries")
     # EdgarTools Provider (SEC EDGAR filings)
     EDGAR_IDENTITY: str = Field(
         default="StockerPro stockerpro@example.com",
@@ -310,7 +309,7 @@ def validate_config():
         print(f"Supabase URL : {s.SUPABASE_URL}")
         print(f"Supabase Key : {key_type} format detected")
         print(f"Firebase PID : {s.FIREBASE_PROJECT_ID}")
-        print(f"AI Provider  : {'Gemini Enabled *' if s.GEMINI_API_KEY else 'AI Disabled'}")
+        print(f"AI Provider  : {'OpenRouter Enabled *' if s.OPEN_ROUTER_KEY else 'AI Disabled'}")
         print(f"Defeat Beta  : {'Enabled *' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}")
         print(f"Market Data  : {'Enabled *' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}")
         if s.ENABLE_MARKET_DATA_SCHEDULER:

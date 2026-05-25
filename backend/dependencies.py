@@ -26,6 +26,11 @@ from providers.yfinance_provider import YFinanceProvider
 from providers.defeat_beta_provider import DefeatBetaProvider
 from providers.edgar_provider import EdgarToolsProvider
 
+# AI Provider & Snapshot Builder
+from providers.ai_provider import AIProvider, OpenRouterProvider
+from application.services.prompts.company_snapshot import CompanySnapshotBuilder
+from application.services.ai_service import configure_ai
+
 # Services
 from application.services.watchlist_service import WatchlistService
 from application.services.recompute_guard import RecomputeGuard
@@ -92,6 +97,9 @@ limiter = Limiter(key_func=get_user_identifier)
 
 _yfinance_provider: YFinanceProvider = None
 _defeat_beta_provider: DefeatBetaProvider = None
+_ai_provider: AIProvider = None
+_cache_manager = None
+_ai_configured: bool = False
 
 
 def get_yfinance_provider() -> YFinanceProvider:
@@ -192,12 +200,38 @@ def get_financial_repository() -> SupabaseFinancialRepository:
     return _financial_repo
 
 
+def get_ai_provider() -> AIProvider:
+    """Get or create OpenRouterProvider singleton."""
+    global _ai_provider
+    if _ai_provider is None:
+        logger.debug("Initializing OpenRouterProvider")
+        _ai_provider = OpenRouterProvider()
+    return _ai_provider
+
+
+def get_cache_manager():
+    """Get or create CacheManager singleton."""
+    global _cache_manager
+    if _cache_manager is None:
+        logger.debug("Initializing CacheManager")
+        from application.services.caching.cache_manager import CacheManager
+        _cache_manager = CacheManager()
+    return _cache_manager
+
+
 def get_valuation_repository() -> ValuationRepository:
     """Get or create ValuationRepository singleton."""
-    global _valuation_repo
+    global _valuation_repo, _ai_configured
     if _valuation_repo is None:
         logger.debug("Initializing ValuationRepository")
         _valuation_repo = ValuationRepository()
+    if not _ai_configured:
+        _ai_configured = True
+        configure_ai(
+            provider=get_ai_provider(),
+            snapshot_builder=CompanySnapshotBuilder(_valuation_repo),
+            cache_manager=get_cache_manager(),
+        )
     return _valuation_repo
 
 
@@ -260,6 +294,8 @@ __all__ = [
     "get_yfinance_provider",
     "get_edgar_provider",
     "get_defeat_beta_provider",
+    "get_ai_provider",
+    "get_cache_manager",
     # Repositories
     "get_watchlist_repository",
     "get_user_repository",
