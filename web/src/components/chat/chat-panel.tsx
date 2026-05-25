@@ -97,7 +97,7 @@ export function ChatPanel({ symbol, onClose }: ChatPanelProps) {
   const hasMessages = messages.length > 0;
 
   return (
-    <div className="w-96 max-h-[560px] glass-panel rounded-2xl shadow-glass-xl border border-glass-border-hi flex flex-col overflow-hidden animate-scale-in origin-bottom-right">
+    <div className="w-96 max-h-[560px] glass-panel rounded-2xl shadow-glass-xl border border-glass-border-hi flex flex-col overflow-hidden animate-scale-in origin-bottom-right" style={{ background: 'hsl(222, 47%, 5%)' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] shrink-0">
         <div className="flex items-center gap-2">
