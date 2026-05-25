@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any
 from api import watchlists, watchlist_items, users, valuations
 from api import analysis
 from api import super_investors
+from api.chat import router as chat_router
 from config import settings
 from database import supabase
 from auth import get_current_user, initialize_firebase_app
@@ -203,6 +204,7 @@ app.include_router(users.router)
 app.include_router(watchlists.router)
 app.include_router(watchlist_items.router)
 app.include_router(valuations.router)
+app.include_router(chat_router)
 app.include_router(analysis.router)
 app.include_router(super_investors.router)
 app.include_router(portfolio_router)

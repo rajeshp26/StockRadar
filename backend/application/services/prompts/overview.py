@@ -110,7 +110,9 @@ Rules you MUST follow:
 3. If multiple methods agree on direction (all show upside or all show downside), note the convergence.
 4. "consensus" must be exactly one of: Undervalued, Fairly Valued, Overvalued, Mixed.
 5. "bestMethod" must be exactly one of: rule1, dcf, ddm_gordon, owner_earnings, residual_income.
-6. Complete every sentence. Never use bullet points or labels inside the reasoning string.
+6. "bestMethodLabel" must be the human-readable label for bestMethod (e.g. "Rule #1 (Phil Town)" for rule1).
+7. "confidenceNote" must be a short 1-sentence note about data confidence and methodology certainty.
+8. Complete every sentence. Never use bullet points or labels inside the reasoning string.
 
 === NOW WRITE THE RECOMMENDATION FOR {symbol} ===
 Respond with ONLY valid JSON. No markdown fences. No text before or after the JSON object."""

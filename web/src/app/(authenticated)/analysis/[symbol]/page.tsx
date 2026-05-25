@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
 import { formatTimestamp } from "@/lib/time";
 import { prefetchAllValuations } from "@/features/analysis/utils/prefetch-valuations";
+import { AIChatBot } from "@/components/chat/ai-chat-bot";
 import {
   MethodSelector,
   type IntrinsicMethod,
@@ -307,6 +308,8 @@ export default function AnalysisPage() {
           </div>
         )}
       </div>
+
+      <AIChatBot symbol={upperSymbol} />
     </div>
   );
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 
@@ -35,6 +35,26 @@ class AIProvider(ABC):
         timeout: float = 10.0,
     ) -> Optional[Dict[str, Any]]:
         ...
+
+    @abstractmethod
+    async def generate_text_stream(
+        self,
+        messages: List[Dict[str, str]],
+        system_instruction: str = "",
+        max_tokens: int = 1024,
+        temperature: float = 0.1,
+        timeout: float = 15.0,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream tokens from the AI provider.
+
+        Yields dicts with one of these shapes:
+          {"token": "word"}    — a content token to stream to the client
+          {"done": True}       — signals the response is complete
+          {"error": "..."}     — something went wrong, stop streaming
+        """
+        ...
+        if False:
+            yield  # pragma: no cover — make the generator type-check
 
 
 class OpenRouterProvider(AIProvider):
@@ -143,3 +163,74 @@ class OpenRouterProvider(AIProvider):
         except json.JSONDecodeError as je:
             logger.warning("[AI] JSON parse failed: %s | raw=%s", je, raw[:300])
             return None
+
+    async def generate_text_stream(
+        self,
+        messages: List[Dict[str, str]],
+        system_instruction: str = "",
+        max_tokens: int = 1024,
+        temperature: float = 0.1,
+        timeout: float = 15.0,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if not self._api_key:
+            logger.info("[AI] OPEN_ROUTER_KEY not set — streaming disabled")
+            return
+
+        chat_messages: List[Dict[str, str]] = []
+        if system_instruction:
+            chat_messages.append({"role": "system", "content": system_instruction})
+        chat_messages.extend(messages)
+
+        body = {
+            "model": self._model,
+            "messages": chat_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+                async with client.stream(
+                    "POST",
+                    self._BASE_URL,
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                ) as resp:
+                    if not resp.is_success:
+                        logger.warning(
+                            "[AI] OpenRouter stream %s | body: %s",
+                            resp.status_code, resp.text[:500],
+                        )
+                        yield {"error": f"HTTP {resp.status_code}"}
+                        return
+
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[6:].strip()
+                        if payload == "[DONE]":
+                            yield {"done": True}
+                            return
+                        try:
+                            chunk = json.loads(payload)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content")
+                            if content:
+                                yield {"token": content}
+                            finish = chunk.get("choices", [{}])[0].get("finish_reason")
+                            if finish == "stop":
+                                yield {"done": True}
+                                return
+                        except json.JSONDecodeError:
+                            continue
+
+        except httpx.TimeoutException:
+            logger.warning("[AI] OpenRouter stream timed out")
+            yield {"error": "timeout"}
+        except Exception as exc:
+            logger.warning("[AI] OpenRouter stream failed: %s", exc)
+            yield {"error": str(exc)}

@@ -2,7 +2,7 @@
 
 > **Feature:** OpenRouter-based AI stock analysis summaries and cross-method valuation recommendations, enriched with full company financial context.
 >
-> **Status:** Implemented — 2026-05-24 | Caching v2 planned
+> **Status:** Implemented — 2026-05-24 | Caching v2 planned | Digital Twin Chatbot planned
 >
 > **Endpoints:**
 > - `GET /valuations/{symbol}/overview` — cross-method AI recommendation
@@ -12,8 +12,9 @@
 > - `POST /valuations/{symbol}/owner_earnings` — suitability summary
 > - `POST /valuations/{symbol}/residual_income` — suitability summary
 > - `GET /analysis/{symbol}/magic-formula` — suitability summary
+> - `POST /valuations/{symbol}/chat` — digital twin conversational AI (SSE streaming)
 >
-> **Design:** Provider-abstracted architecture with `AIProvider` ABC, `OpenRouterProvider`, extracted prompt builders, and `CompanySnapshotBuilder` for financial context enrichment. Zero behavioural change to callers.
+> **Design:** Provider-abstracted architecture with `AIProvider` ABC, `OpenRouterProvider`, extracted prompt builders, and `CompanySnapshotBuilder` for financial context enrichment. The Digital Twin adds a streaming chat layer reusing the same provider and context infrastructure.
 
 ---
 
@@ -25,7 +26,9 @@
 4. [Configuration](#4-configuration)
 5. [Error Handling](#5-error-handling)
 6. [Performance & Caching](#6-performance--caching)
-7. [Class Diagrams](#7-class-diagrams)
+7. [Test Plan](#7-test-plan)
+8. [Class Diagrams](#8-class-diagrams)
+9. [Digital Twin Chatbot](#9-digital-twin-chatbot)
 
 ---
 
@@ -45,28 +48,18 @@ Callers (unchanged)
 │  └─ Context cache: (symbol) → formatted context string        │
 └─────────────────────────────────────────────────────────────────┘
         │
-        ▼
-ai_service.py (orchestration layer)
-  configure_ai(provider, snapshot_builder, cache_manager)  ← DI wiring
-  _get_or_create_provider() → lazy OpenRouterProvider singleton
-  _build_company_context(symbol) → COMPANY CONTEXT block or ""
-
-  generate_suitability_summary(...)
-    ├─ check AI response cache → instant return if hit
-    ├─ build_suitability_prompt() → method-specific TASK block
-    ├─ (no company context for individual methods)
-    ├─ OpenRouterProvider.generate_text(TASK, system_inst)
-    ├─ store result in AI response cache
-    └─ returns str | None
-
-  generate_overview_summary(...)
-    ├─ check AI response cache → instant return if hit
-    ├─ build_overview_prompt() → cross-method TASK block
-    ├─ _build_company_context(symbol) → COMPANY CONTEXT block
-    ├─ OpenRouterProvider.generate_text(CONTEXT + TASK, system_inst)
-    ├─ parses JSON, validates keys, normalises bestMethod
-    ├─ store result in AI response cache
-    └─ returns dict | None
+        ├──────────────────────────────────────────────────────────┐
+        ▼                                                         ▼
+ai_service.py (orchestration)                         api/chat.py (chat endpoint)
+  configure_ai(...)                                      POST /{symbol}/chat
+  generate_suitability_summary(...)                        ├─ authenticate user
+  generate_overview_summary(...)                           ├─ build company context
+                                                          ├─ build chat system prompt
+                                                          ├─ OpenRouterProvider
+                                                          │  .generate_text_stream()
+                                                          │   → SSE: {"token":"..."}
+                                                          │   → SSE: {"done":true}
+                                                          └─ StreamingResponse
         │
         ├──────────────────────────┬──────────────────────────┬──────────────────────┐
         ▼                          ▼                          ▼                      ▼
@@ -96,17 +89,20 @@ Queries in parallel    │                                     │
 | Decision | Rationale |
 |----------|-----------|
 | `AIProvider` ABC | Future provider swaps (OpenAI, Anthropic, local LLM) without changing callers or prompts |
-| Prompts extracted to `prompts/` module | Keeps `ai_service.py` at ~130 lines; prompts are pure data with no API concerns |
+| Prompts extracted to `prompts/` module | Keeps `ai_service.py` at ~236 lines; prompts are pure data with no API concerns |
 | `CompanySnapshotBuilder` | Centralises all company data queries, single source of truth for AI context |
 | Two-part prompt: CONTEXT + TASK | Clear separation: model knows what is background vs what is the specific analysis task |
 | All available years, no limit | Financial data quality improves with depth |
-| Preserved function signatures | All 7 callers unchanged |
+| Preserved function signatures | All 7 existing callers unchanged; chat endpoint is new and uses `generate_text_stream` |
 | Low temperature (0.1) | Deterministic, factual output for financial analysis |
 | `configure_ai()` DI setter | Wired in `dependencies.py` via `get_valuation_repository()` |
 | **No company context for individual methods** | Individual suitability promps are self-sufficient from `evidence`/`valuation_inputs`/`input_decisions`; company context (13 queries) is only built for overview |
 | **AI response cache** | Same inputs always produce same outputs when financial data is static; TTL cache makes tab switches instant (3-6s → 0ms) |
 | **Request-scoped query cache** | Eliminates ~50% duplication — route handler and snapshot builder fetch the same rows independently |
 | **Single batch query for snapshots** | 5 `.eq()` round-trips → 1 `.in_()` call; reduces overview latency by ~4 network trips |
+| **Streaming chat pattern** | Digital Twin uses SSE streaming (`StreamingResponse`) so users see tokens appear progressively — no full-response wait. Reuses same `OpenRouterProvider` with `stream=True` |
+| **Chat reuses context cache** | The same `CompanySnapshotBuilder` + `CacheManager` context that powers overview feeds the chatbot, so the AI has the full financial picture without extra DB queries |
+| **No chat persistence (MVP)** | Messages are held in React component state only. Page refresh resets conversation. No DB writes needed. |
 
 ---
 
@@ -244,7 +240,7 @@ Cached DCF intrinsic: 412.0
 
 ### 2.4 `application/services/ai_service.py`
 
-Thin orchestration layer (~160 lines with caching). Wired via `configure_ai()` in `dependencies.py`:
+Thin orchestration layer (~236 lines with caching). Wired via `configure_ai()` in `dependencies.py`:
 
 ```python
 _provider: Optional[AIProvider] = None
@@ -274,7 +270,7 @@ async def generate_overview_summary(symbol, sector, currency,
 
 ### 2.5 System Instructions
 
-Two separate instructions:
+Three system instructions — one for each AI interaction mode:
 
 ```python
 _SUITABILITY_SYSTEM_INSTRUCTION = (
@@ -289,6 +285,19 @@ _OVERVIEW_SYSTEM_INSTRUCTION = (
     "for retail investors. You always respond with valid JSON only — no markdown, no preamble. "
     "You only reference metric values that are explicitly provided — never invent numbers. "
     "You complete every sentence in the reasoning field."
+)
+
+_CHAT_SYSTEM_INSTRUCTION_TEMPLATE = (
+    "You are a digital financial analyst specializing in {symbol}. "
+    "You answer questions about valuation, financial health, and market data "
+    "for {symbol} using the live financial data below.\n\n"
+    "{company_context}\n\n"
+    "Guidelines:\n"
+    "- Be concise and factual. Reference specific numbers from the data.\n"
+    "- If asked about something outside the provided data, say so clearly.\n"
+    "- Do not invent metrics or make up data.\n"
+    "- Use plain English — your audience is a retail investor.\n"
+    "- Keep responses under 3-4 sentences unless the question requires detail."
 )
 ```
 
@@ -313,10 +322,24 @@ def get_valuation_repository() -> ValuationRepository:
 | `ResidualIncomeService` | `generate_suitability_summary` | `residual_income_service.py` |
 | `MagicFormulaService` | `generate_suitability_summary` | `magic_formula_service.py` |
 | `ValuationService` | `generate_overview_summary` | `valuation_service.py` |
+| `ChatEndpoint` (new) | `generate_text_stream` | `api/chat.py` |
 
-### 2.8 API Layer (UNCHANGED)
+### 2.8 API Layer
 
-All 7 routes in `api/valuations.py` and `api/analysis.py` — no changes.
+All 7 existing routes in `api/valuations.py` and `api/analysis.py` remain unchanged:
+
+| Method | Path | Location | AI Used |
+|--------|------|----------|---------|
+| GET | `/valuations/{symbol}/overview` | `valuations.py` | Overview summary |
+| GET/POST | `/valuations/{symbol}/rule1` | `valuations.py` | Suitability summary |
+| GET/POST | `/valuations/{symbol}/ddm` | `valuations.py` | Suitability summary |
+| GET/POST | `/valuations/{symbol}/dcf` | `valuations.py` | Suitability summary |
+| GET/POST | `/valuations/{symbol}/owner_earnings` | `valuations.py` | Suitability summary |
+| GET/POST | `/valuations/{symbol}/residual_income` | `valuations.py` | Suitability summary |
+| GET | `/analysis/{symbol}/magic-formula` | `analysis.py` | Suitability summary |
+| POST | `/valuations/{symbol}/chat` | `chat.py` (new) | Digital Twin conversational AI |
+
+The new chat endpoint is defined in a separate `api/chat.py` router, included from `main.py`, using the same `/valuations` prefix so the stock symbol context is immediately available.
 
 ### 2.9 Repository Methods Used
 
@@ -411,7 +434,8 @@ Prompt includes per-method results, convergence analysis (spread %), method sele
 | Few-shot examples | Per-branch examples with placeholder tickers |
 | Sentence instructions | Precise output control ("Sentence 1: Verdict...") |
 | Temperature | 0.1 — deterministic, factual |
-| Max tokens | 800 (suitability) / 1000 (overview) |
+| Max tokens | 800 (suitability) / 1000 (overview) / 1024 (chat) |
+| Streaming | Chat uses SSE streaming; suitability & overview are single-response |
 
 ---
 
@@ -453,8 +477,12 @@ No AI-specific dependencies. Uses `httpx` (already in the dependency tree) for R
 | JSON parse failure (overview) | Log parse error + raw text, return `None` |
 | Missing JSON keys (overview) | Fill missing keys from `OVERVIEW_FALLBACK`, return partial dict |
 | Unknown `bestMethod` (overview) | Fall back to highest-scored computed method |
+| API key not set (chat) | Endpoint returns `503 AI provider not configured` |
+| Company snapshot fails (chat) | Returns `503` — without financial context the AI cannot answer usefully |
+| HTTP error / timeout (chat) | Yields `{"error": "..."}` SSE event, then `{"done": true}` |
+| Malformed SSE chunk (chat) | Logged and skipped — streaming continues |
 
-All errors are caught at the AI layer — callers always receive `None` (never an exception).
+All errors are caught at the AI layer — callers always receive `None` (never an exception) except the chat endpoint which yields error events in the SSE stream.
 
 ---
 
@@ -464,13 +492,16 @@ All errors are caught at the AI layer — callers always receive `None` (never a
 
 Before caching, every AI call triggers:
 
-| Request type | Supabase queries | AI API call | Typical P95 latency |
-|---|---|---|---|
-| Individual method (rule1/dcf/...) | 16 (3 route + 13 context) | 1 | 5-12s |
-| Overview | 20 (7 route + 13 context) | 1 | 7-15s |
-| _Tab switch (SAME data)_ | 16-20 _again_ | _1 again_ | _5-12s again_ |
+| Request type | Supabase queries (before) | Supabase queries (after) | AI API call | Typical P95 latency |
+|---|---|---|---|---|
+| Individual method (rule1/dcf/...) | 16 (3 route + 13 context) | 3 (context, snapshot, price) — no company context | 1 | 5-12s |
+| Overview | 20 (7 route + 13 context) | 7 (CacheManager dedup + batch snapshot query) | 1 | 7-15s |
+| _Tab switch (SAME data)_ | 16-20 _again_ | **0** (all cache hits) | _1 again_ | _5-12s again_ |
+| Digital Twin chat | N/A | 0 (context already cached from overview flow) | 1+ (streaming) | stream-dependent |
 
 The financial data and valuation output snapshots are **completely static** between recomputes. Every tab switch re-fetches identical data and re-calls OpenRouter for the same inputs — pure waste.
+
+**Note on individual method optimization:** `generate_suitability_summary()` no longer builds company context for individual methods. The method-specific `evidence`, `valuation_inputs`, and `input_decisions` dicts are self-sufficient — providing the full 13-query financial snapshot added zero marginal value for per-method analysis. This reduced per-method Supabase queries from 16 to 3.
 
 ### 6.2 Three-Layer Cache Strategy
 
@@ -1060,3 +1091,560 @@ pytest tests/test_ai_migration.py -v
 │                      │  │ _prompt_generic() │
 └──────────────────────┘  └───────────────────┘
 ```
+
+---
+
+## 9. Digital Twin Chatbot
+
+> **Feature:** Conversational AI assistant embedded in the Analysis page that answers stock-specific questions by streaming responses from OpenRouter, enriched with real-time company financial context.
+>
+> **Status:** Planned — 2026-05-24
+>
+> **Endpoints:**
+> - `POST /valuations/{symbol}/chat` — SSE streaming chat endpoint
+>
+> **Pattern:** Follows the existing AI architecture — same `AIProvider` ABC, same `CompanySnapshotBuilder`, same `CacheManager` context dedup. Adds streaming support as a first-class capability.
+
+### 9.1 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Analysis Page (Next.js)                                        │
+│                                                                 │
+│  ┌──────────────┐  ┌────────────────┐  ┌────────────────────┐  │
+│  │              │  │                │  │  <AIChatBot />      │  │
+│  │ Valuation    │  │  Method Panel  │  │  ┌──────────────┐  │  │
+│  │ Overview     │  │  with Analyst  │  │  │  Pulsing Orb  │  │  │
+│  │ (AI rec)     │  │  Note          │  │  │  (fixed pos)  │  │  │
+│  │              │  │                │  │  ├──────────────┤  │  │
+│  │              │  │                │  │  │  Chat Panel   │  │  │
+│  │              │  │                │  │  │  (w-96 popup)  │  │  │
+│  │              │  │                │  │  │  Messages     │  │  │
+│  │              │  │                │  │  │  Streaming    │  │  │
+│  │              │  │                │  │  │  Input        │  │  │
+│  └──────────────┘  └────────────────┘  └────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         │ POST /api/proxy/valuations/{symbol}/chat
+         ▼
+┌────────────────────────────────────────────────────────────────┐
+│  Next.js API Proxy (web/src/app/api/proxy/[...path]/route.ts)  │
+│  • Injects Firebase auth token                                 │
+│  • Pipes SSE response through unchanged                        │
+└────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌────────────────────────────────────────────────────────────────┐
+│  api/chat.py — POST /valuations/{symbol}/chat                  │
+│                                                                │
+│  1. Authenticate user (same Depends as valuations)             │
+│  2. Parse ChatRequest { messages: [{role, content}] }          │
+│  3. Build system prompt with COMPANY CONTEXT:                  │
+│     "You are a digital financial analyst specializing          │
+│      in {symbol}. Live financial data:                         │
+│      {CompanySnapshotBuilder.format_context(snapshot)}"        │
+│  4. Construct messages: [system, ...body.messages]             │
+│  5. Call OpenRouterProvider.generate_text_stream(messages)     │
+│  6. Yield SSE events to StreamingResponse:                     │
+│       data: {"token":"The"}                                    │
+│       data: {"token":" intrinsic"}                             │
+│       data: {"done":true}                                      │
+│  7. No caching (conversations are unique by nature)            │
+└────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌────────────────────────────────────────────────────────────────┐
+│  OpenRouterProvider.generate_text_stream()                     │
+│  (providers/ai_provider.py)                                    │
+│                                                                │
+│  POST https://openrouter.ai/api/v1/chat/completions            │
+│  Body: { model, messages, stream: true, max_tokens: 1024 }    │
+│                                                                │
+│  Parses SSE chunks from OpenRouter:                            │
+│    data: {"choices":[{"delta":{"content":"The"}}]}             │
+│    → yields {"token": "The"}                                   │
+│  On [DONE] or finish_reason=stop:                              │
+│    → yields {"done": true}                                     │
+│  On error: logs + yields {"error": "msg"}                      │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2 Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Streaming (SSE) over non-streaming** | Users see progressive token rendering, feels responsive. Backend already uses SSE for price streaming — same `StreamingResponse` + `text/event-stream` pattern. No WebSocket dependency needed. |
+| **No conversation persistence (MVP)** | Chat is per-session, per-stock. Page refresh resets. No DB writes, no conversation management. Can add Supabase persistence later if needed. |
+| **Reuses `CompanySnapshotBuilder` + `CacheManager`** | The company context built for the overview is already cached at the context layer — the chat endpoint gets it for free (0 extra DB queries if overview was just loaded). |
+| **Separate `api/chat.py` router** | Keeps the chat endpoint isolated from valuation endpoints. Follows the same pattern as `api/analysis.py`. |
+| **`generate_text_stream` as new abstract method** | Adds streaming as a first-class capability to `AIProvider`. Any future provider (Anthropic, OpenAI native) can implement it independently. |
+| **No AI response cache for chat** | Chat conversations are free-form and unique — caching would rarely hit and adds complexity. The company context itself is cached (60s TTL) so repeated chats within a session share the same financial snapshot. |
+| **Low temperature (0.1)** | Same as suitability/overview — deterministic, factual answers. Stock analysis should not be creative. |
+
+### 9.3 `providers/ai_provider.py` — Streaming Extension
+
+New abstract method on `AIProvider`:
+
+```python
+class AIProvider(ABC):
+
+    @abstractmethod
+    async def generate_text(
+        ...
+    ) -> Optional[str]:
+        ...
+
+    @abstractmethod
+    async def generate_json(
+        ...
+    ) -> Optional[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    async def generate_text_stream(
+        self,
+        messages: List[Dict[str, str]],       # [{"role": "user", "content": "..."}]
+        system_instruction: str = "",
+        max_tokens: int = 1024,
+        temperature: float = 0.1,
+        timeout: float = 15.0,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream tokens from the AI provider.
+        
+        Yields dicts with one of these shapes:
+          {"token": "word"}     — a content token to stream to the client
+          {"done": True}        — signals the response is complete
+          {"error": "..."}      — something went wrong, stop streaming
+          
+        Implementations must use `stream=True` on the underlying API call
+        and parse `delta.content` from each SSE chunk.
+        """
+        ...
+        if False:
+            yield  # make the generator type-check
+```
+
+`OpenRouterProvider.generate_text_stream()` implementation:
+
+```python
+async def generate_text_stream(
+    self,
+    messages: List[Dict[str, str]],
+    system_instruction: str = "",
+    max_tokens: int = 1024,
+    temperature: float = 0.1,
+    timeout: float = 15.0,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    
+    if not self._api_key:
+        logger.info("[AI] OPEN_ROUTER_KEY not set — streaming disabled")
+        return
+    
+    chat_messages = []
+    if system_instruction:
+        chat_messages.append({"role": "system", "content": system_instruction})
+    chat_messages.extend(messages)
+    
+    body = {
+        "model": self._model,
+        "messages": chat_messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": True,
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+            async with client.stream(
+                "POST", self._BASE_URL,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+            ) as resp:
+                if not resp.is_success:
+                    logger.warning("[AI] OpenRouter stream %s", resp.status_code)
+                    yield {"error": f"HTTP {resp.status_code}"}
+                    return
+                
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+                    if payload == "[DONE]":
+                        yield {"done": True}
+                        return
+                    try:
+                        chunk = json.loads(payload)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yield {"token": content}
+                        finish = chunk.get("choices", [{}])[0].get("finish_reason")
+                        if finish == "stop":
+                            yield {"done": True}
+                            return
+                    except json.JSONDecodeError:
+                        continue
+    
+    except httpx.TimeoutException:
+        logger.warning("[AI] OpenRouter stream timed out")
+        yield {"error": "timeout"}
+    except Exception as exc:
+        logger.warning("[AI] OpenRouter stream failed: %s", exc)
+        yield {"error": str(exc)}
+```
+
+### 9.4 `api/chat.py` — Chat Endpoint
+
+```python
+router = APIRouter(prefix="/valuations", tags=["Digital Twin Chat"])
+
+
+class ChatMessage(BaseModel):
+    role: str = Field(..., pattern="^(user|assistant|system)$")
+    content: str = Field(..., min_length=1)
+
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage] = Field(..., min_length=1)
+
+
+@router.post("/{symbol}/chat")
+@limiter.limit("20/minute")
+async def chat_with_digital_twin(
+    request: Request,
+    symbol: str,
+    body: ChatRequest,
+    user=Depends(get_current_user_dep),
+):
+    sym = _normalize_symbol(symbol)
+    
+    # 1. Build company financial context (reuses CacheManager)
+    provider = _get_or_create_provider()
+    if provider is None:
+        raise HTTPException(503, detail="AI provider not configured")
+    
+    snapshot_builder = CompanySnapshotBuilder(get_valuation_repository())
+    snapshot = await snapshot_builder.build(sym)
+    context = CompanySnapshotBuilder.format_context(snapshot)
+    
+    # 2. Build system prompt with financial context
+    system_prompt = (
+        f"You are a digital financial analyst specializing in {sym.upper()}. "
+        f"You answer questions about valuation, financial health, and market data "
+        f"for {sym.upper()} using the live financial data below.\n\n"
+        f"{context}\n\n"
+        f"Be concise, factual, and reference specific numbers from the data. "
+        f"If asked about something outside the provided data, say so clearly."
+    )
+    
+    # 3. Convert messages to dict list for the provider
+    chat_messages = [m.model_dump() for m in body.messages]
+    
+    # 4. Stream response back as SSE
+    async def event_stream():
+        async for event in provider.generate_text_stream(
+            messages=chat_messages,
+            system_instruction=system_prompt,
+            max_tokens=1024,
+            temperature=0.1,
+            timeout=15.0,
+        ):
+            if "error" in event:
+                yield f"data: {json.dumps({'error': event['error']})}\n\n"
+                yield f"data: {json.dumps({'done': True})}\n\n"
+                return
+            yield f"data: {json.dumps(event)}\n\n"
+    
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+```
+
+### 9.5 Frontend Components
+
+#### 9.5.1 `AIChatBot` — Floating Orb + Popup Container
+
+```
+web/src/components/chat/
+├── ai-chat-bot.tsx     # Floating button + popup toggle
+├── chat-panel.tsx      # Message list + input + streaming UI
+├── message-bubble.tsx  # Individual message rendering
+└── index.ts            # Re-exports
+```
+
+**`ai-chat-bot.tsx`** — Floating pulsing orb at `fixed bottom-6 right-6 z-50`:
+
+```tsx
+export function AIChatBot({ symbol }: { symbol: string }) {
+  const [open, setOpen] = useState(false);
+  
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+      {open && <ChatPanel symbol={symbol} onClose={() => setOpen(false)} />}
+      
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-14 h-14 rounded-full glass-panel flex items-center justify-center
+                   animate-pulse-glow shadow-lg cursor-pointer hover:scale-105
+                   transition-all duration-200"
+        aria-label="Toggle AI assistant"
+      >
+        {open ? (
+          <X className="w-6 h-6 text-white/80" />
+        ) : (
+          <Sparkles className="w-6 h-6 text-indigo-300" />
+        )}
+      </button>
+    </div>
+  );
+}
+```
+
+**`chat-panel.tsx`** — Compact messenger popup (`w-96 max-h-[520px]`):
+
+| Section | Description |
+|---------|-------------|
+| Header | `"Digital Twin · AAPL"` + close button, glass-nav style |
+| Messages | Scrollable area, auto-scrolls to bottom on new content |
+| User bubble | Right-aligned, indigo tint, `rounded-2xl` |
+| AI bubble | Left-aligned, glass style, small sparkle avatar |
+| Streaming indicator | Three bouncing dots (`animate-bounce` with staggered delay) |
+| Input bar | `glass-input` text field + send button (ArrowUp icon) |
+| Disabled state | Input + send disabled while `isStreaming` is true |
+
+**`use-chat.ts`** — Stream-aware chat hook:
+
+```typescript
+function useChat(symbol: string) {
+  const [messages, setMessages] = useState<Array<{role: string; content: string}>>([]);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  async function send(content: string) {
+    const userMsg = { role: "user" as const, content };
+    setMessages(prev => [...prev, userMsg]);
+    setIsStreaming(true);
+    setStreamingContent("");
+
+    const res = await fetch(`/api/proxy/valuations/${symbol}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [...messages, userMsg] }),
+    });
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";  // keep incomplete line in buffer
+      
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = JSON.parse(line.slice(6));
+        if (data.done) {
+          setMessages(prev => [...prev, { role: "assistant", content: streamingContent }]);
+          setStreamingContent("");
+          setIsStreaming(false);
+        } else if (data.token) {
+          setStreamingContent(prev => prev + data.token);
+        }
+      }
+    }
+  }
+
+  return { messages, streamingContent, isStreaming, send, clear: () => setMessages([]) };
+}
+```
+
+**Integration in analysis page:**
+
+```tsx
+// web/src/app/(authenticated)/analysis/[symbol]/page.tsx
+<AIChatBot symbol={params.symbol} />
+```
+
+### 9.6 System Instruction
+
+```python
+_CHAT_SYSTEM_INSTRUCTION_TEMPLATE = (
+    "You are a digital financial analyst specializing in {symbol}. "
+    "You answer questions about valuation, financial health, and market data "
+    "for {symbol} using the live financial data below.\n\n"
+    "{company_context}\n\n"
+    "Guidelines:\n"
+    "- Be concise and factual. Reference specific numbers from the data.\n"
+    "- If asked about something outside the provided data, say so clearly.\n"
+    "- Do not invent metrics or make up data.\n"
+    "- Use plain English — your audience is a retail investor.\n"
+    "- Keep responses under 3-4 sentences unless the question requires detail."
+)
+```
+
+### 9.7 Error Handling
+
+| Scenario | Behaviour |
+|----------|-----------|
+| API key not set | Endpoint returns `503 AI provider not configured`. Logged once. |
+| Company snapshot build fails | Returns `503` — without financial context the AI cannot give useful answers |
+| HTTP error from OpenRouter | Yields `{"error": "..."}` SSE event, then `{"done": true}`. Frontend shows error state in last message. |
+| Network timeout | Yields `{"error": "timeout"}`. Frontend shows "Request timed out" in chat. |
+| Empty response | Yields `{"done": true}` with no tokens — chat shows empty assistant message. |
+| Malformed SSE chunk | Logged and skipped — streaming continues with next chunk. |
+
+### 9.8 Frontend Error States
+
+The chat bubble component handles:
+
+```
+Messages state machine:
+  idle → user sends → streaming (tokens arriving) → done (full msg) → idle
+  
+Error display within the message stream:
+  - Last AI bubble shows: "Sorry, I encountered an error: [message]"
+  - Input re-enabled so user can retry
+  - No toast/global notification needed — error is contextual to the chat
+```
+
+### 9.9 Dependencies
+
+| Dependency | Change | Reason |
+|------------|--------|--------|
+| `httpx` | Already present | Used for the streaming POST to OpenRouter |
+| `lucide-react` | Already present | `Sparkles`, `X`, `ArrowUp` icons |
+| Tailwind CSS | Already present | `animate-pulse-glow`, `glass-panel`, `glass-input` already defined |
+
+No new npm or pip packages required.
+
+### 9.10 Future Enhancements (Not Yet Implemented)
+
+| Enhancement | Effort | Impact | Status |
+|---|---|---|---|
+| Persist chat history to Supabase | Medium | Conversations survive page refresh | Not planned |
+| Follow-up suggested questions | Low | Show "Ask about DCF value" buttons below AI response | Not planned |
+| Chat context from specific valuation method | Medium | "Explain the DCF result for AAPL" — injects method-specific evidence | Not planned |
+| Multi-symbol chat | Medium | "Compare AAPL and MSFT" — builds two contexts | Not planned |
+| Abort in-flight generation | Low | Cancel button during streaming | Not planned |
+| Markdown rendering in AI responses | Low | Code blocks, bold numbers for key metrics | Not planned |
+
+### 9.11 Test Plan
+
+#### 9.11.1 Unit Tests — `providers/ai_provider.py`
+
+| # | Test | What it verifies | Mock |
+|---|------|------------------|------|
+| 1 | `test_generate_text_stream_yields_tokens` | SSE chunks parsed into `{"token": "..."}` events in correct order | `httpx.Client.stream` with canned SSE lines |
+| 2 | `test_generate_text_stream_done_signal` | `[DONE]` line yields `{"done": true}` and stops | Single-line SSE |
+| 3 | `test_generate_text_stream_finish_reason_stop` | `finish_reason: "stop"` yields `{"done": true}` | Last chunk has stop |
+| 4 | `test_generate_text_stream_http_error` | Non-2xx response yields `{"error": "..."}` + returns | Mock 401 response |
+| 5 | `test_generate_text_stream_timeout` | `httpx.TimeoutException` yields `{"error": "timeout"}` | AsyncMock side_effect=TimeoutException |
+| 6 | `test_generate_text_stream_no_api_key` | Empty key → no API call, generator yields nothing | `settings.OPEN_ROUTER_KEY = None` |
+| 7 | `test_generate_text_stream_malformed_chunk` | Bad JSON lines are skipped, valid lines still processed | Mixed valid/invalid SSE |
+| 8 | `test_generate_text_stream_system_instruction` | System message prepended to messages array | Spy on body content |
+| 9 | `test_generate_text_stream_noop_yield` | Abstract method has `yield` for type-checking (coverage) | Direct ABC call |
+| 10 | `test_generate_text_stream_produces_type` | Generator yields `dict` with correct keys only | Full stream capture |
+
+#### 9.11.2 Unit Tests — `api/chat.py`
+
+| # | Test | What it verifies | Mock |
+|---|------|------------------|------|
+| 11 | `test_chat_endpoint_200` | Valid request → 200 + `text/event-stream` | Mock provider + snapshot |
+| 12 | `test_chat_endpoint_no_provider` | No API key → 503 | `settings.OPEN_ROUTER_KEY = None` |
+| 13 | `test_chat_endpoint_snapshot_fails` | Snapshot build fails → 503 | `CompanySnapshotBuilder.build` raises |
+| 14 | `test_chat_endpoint_streams_response` | Response body contains SSE `data:` lines | Real mock stream |
+| 15 | `test_chat_endpoint_invalid_symbol` | Empty/non-existent symbol → `_normalize_symbol` error | Short symbol |
+| 16 | `test_chat_endpoint_missing_messages` | Empty messages array → 422 validation | `messages: []` |
+| 17 | `test_chat_endpoint_rate_limit` | Hits rate limit → 429 | Multiple rapid requests |
+| 18 | `test_chat_endpoint_unauthorized` | No user token → 401/403 | Unauthenticated client |
+
+#### 9.11.3 Integration Tests — End-to-End Chat Flow
+
+| # | Test | What it verifies | Setup |
+|---|------|------------------|-------|
+| 19 | `test_chat_full_flow` | POST → SSE stream → full response reconstructs coherent text | Mock OpenRouter transport |
+| 20 | `test_chat_context_injected` | System prompt contains financial metrics from snapshot | Inspect provider call args |
+| 21 | `test_chat_conversation_history` | 2-turn conversation passes both user messages to provider | Two sequential requests |
+| 22 | `test_chat_overview_cache_shared` | Company context from prior overview call is reused (0 extra DB queries) | Spy on repo methods |
+
+#### 9.11.4 Frontend Tests
+
+| # | Test | What it verifies | Setup |
+|---|------|------------------|-------|
+| 23 | `test_floating_orb_renders` | Button appears at bottom-right with sparkle icon | Render `<AIChatBot symbol="AAPL" />` |
+| 24 | `test_orb_toggles_chat_panel` | Click opens panel, click again closes | React Testing Library |
+| 25 | `test_chat_panel_sends_message` | Typing + submit calls fetch with correct body | Mock fetch |
+| 26 | `test_chat_panel_displays_incoming_message` | SSE tokens reconstruct into message bubble | Mock SSE stream |
+| 27 | `test_chat_panel_streaming_indicator` | Three bouncing dots visible during streaming | Mock slow stream |
+| 28 | `test_chat_panel_disabled_during_streaming` | Input + send disabled while streaming | Mock stream in progress |
+| 29 | `test_chat_panel_send_empty_message` | Empty input does nothing (no fetch call) | Mock fetch |
+| 30 | `test_chat_panel_error_handling` | `{"error": "..."}` event shows error message in chat | Mock error SSE |
+
+#### 9.11.5 Test Fixtures — Chat
+
+```python
+@pytest.fixture
+def mock_sse_chunks() -> list:
+    """Simulates 3 token events + done from OpenRouter."""
+    return [
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"The\"}}]}\n\n",
+        b"data: {\"choices\":[{\"delta\":{\"content\":\" intrinsic\"}}]}\n\n",
+        b"data: {\"choices\":[{\"delta\":{\"content\":\" value\"}}]}\n\n",
+        b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    ]
+
+@pytest.fixture
+def mock_openrouter_stream(mock_sse_chunks):
+    """Patches httpx.AsyncClient.stream to yield mock_sse_chunks."""
+    async def mock_stream(*args, **kwargs):
+        class FakeStream:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *excinfo):
+                pass
+            @property
+            def is_success(self):
+                return True
+            async def aiter_lines(self):
+                for chunk in mock_sse_chunks:
+                    # Convert raw bytes to parsed SSE lines
+                    for line in chunk.decode().split("\n"):
+                        yield line
+        return FakeStream()
+    
+    with patch("httpx.AsyncClient.stream", new=mock_stream):
+        yield
+
+@pytest.fixture
+def chat_client(mock_valuation_repo, mock_supabase_transport) -> TestClient:
+    """FastAPI TestClient with mocked chat dependencies."""
+    # Wires OpenRouterProvider with mock stream + CompanySnapshotBuilder
+    ...
+```
+
+#### 9.11.6 Test Success Criteria
+
+| Metric | Threshold |
+|--------|-----------|
+| Provider unit tests | ≥ 10 |
+| API endpoint tests | ≥ 8 |
+| Integration tests | ≥ 4 |
+| Frontend component tests | ≥ 8 |
+| Total test count | ≥ 30 |
+| Streaming coverage | Token yield, done signal, error, timeout, malformed data |
+| Error coverage | No API key, HTTP error, timeout, snapshot failure, rate limit |
+| Mock quality | All external calls mocked (OpenRouter, Supabase) |
+| Frontend coverage | Open/close, send, receive, stream indicator, disabled state, error |
