@@ -1,6 +1,6 @@
 # Risk Assessment Tab — Detailed Design Document
 
-> **Version:** 1.1
+> **Version:** 1.2
 > **Date:** 2026-05-26
 > **Status:** Implementation Complete
 > **Scope:** Full-stack design of the Risk Assessment tab on the Stock Analysis page (`/analysis/[symbol]`)
@@ -178,21 +178,31 @@
 |---|---|
 | **Actor** | Authenticated user |
 | **Trigger** | Risk Assessment tab loads (bottom section) |
-| **Precondition** | Current EPS and price available |
-| **Postcondition** | Bull/Base/Bear/Severe scenarios displayed with probability-weighted MEL |
+| **Precondition** | Current EPS (or revenue data), shares outstanding, and price available |
+| **Postcondition** | Bull/Base/Bear/Severe scenarios displayed with probability-weighted MEL (or "N/A" when uncomputable) |
 | **Priority** | P1 — Phase 3 |
 
 **Flow:**
-1. `ScenarioModeler` fetches current EPS, price, and historical CAGRs
-2. Computes 4 scenarios with configurable growth and exit multiples
-3. Calculates total return and downside for each
-4. Computes probability-weighted expected return and MEL
-5. Returns scenarios for frontend display
+1. `ScenarioModeler` fetches current EPS, revenue, shares outstanding, price, and historical CAGRs
+2. If `current_eps > 0`, use **EPS-based model**:
+   - Project EPS forward 5 years using EPS growth rate
+   - Apply exit P/E to get future stock value
+3. If `current_eps <= 0`, use **revenue-based fallback**:
+   - Compute Revenue Per Share (RPS) = revenue / shares outstanding for each year
+   - Compute revenue CAGR for growth assumptions
+   - Determine terminal net margin (company's best historical if ever profitable, else 10% conservative)
+   - Project future EPS = future RPS × terminal margin
+   - Apply exit P/E to get future stock value
+4. Computes 4 scenarios with configurable growth and exit multiples
+5. Calculates total return and downside for each
+6. Computes probability-weighted expected return and MEL (capped at 100%)
+7. Returns scenarios for frontend display (null when uncomputable)
 
 **Acceptance criteria:**
 - 4 scenario cards (Bull/Base/Bear/Severe) with return %
 - Probability weights displayed
-- MEL computed and shown as worst-case expected loss
+- MEL computed and shown as worst-case expected loss (capped at 100%)
+- When scenarios cannot be computed (missing price/income data), MEL shows "N/A"
 - Sensitivity controls (future phase)
 
 ---
@@ -203,18 +213,21 @@
 |---|---|
 | **Actor** | Authenticated user |
 | **Trigger** | Risk Assessment tab loads |
-| **Precondition** | All 5 layers computed |
-| **Postcondition** | MEL displayed as percentage in hero section |
+| **Precondition** | Scenarios computed (either EPS-based or revenue-based) |
+| **Postcondition** | MEL displayed as percentage in hero section, or "N/A" when uncomputable |
 | **Priority** | P0 |
 
 **Flow:**
 1. Composite score computed from weighted layer scores
-2. Bear-case return extracted from scenario modeler
-3. MEL displayed as primary downside metric
+2. Scenario modeler computes 4 scenarios (see UC-7)
+3. MEL = sum(probability × |downside|) for scenarios with negative downside, capped at 100%
+4. MEL displayed as primary downside metric (or "N/A" when scenarios = null)
 
 **Acceptance criteria:**
-- MEL shown prominently near composite score
+- MEL shown prominently near composite score (or "N/A" when uncomputable)
 - Bear case scenario shown (Future EPS, Exit P/E, Future Value, Downside %)
+- MEL never exceeds 100% (capped)
+- When EPS is negative, scenario model falls back to revenue-based projection
 
 ---
 
@@ -419,7 +432,7 @@ class BearCase(BaseModel):
 class CompositeScore(BaseModel):
     score: float                            # 0-100
     category: RiskCategory
-    maximum_expected_loss_pct: float
+    maximum_expected_loss_pct: Optional[float] = None   # null when uncomputable (e.g. negative EPS)
     bear_case: BearCase
 
 
@@ -475,8 +488,10 @@ class RiskDataQuality(BaseModel):
 │ # Internal helpers:                                              │
 │ # _compute_all_layers(ctx, ratios, prices) -> Dict[LayerName, float] │
 │ # _compute_composite(layers) -> CompositeScore                   │
-│ # _compute_scenarios(ctx, current_price) -> ScenarioResults      │
-│ # _compute_mel(scenarios) -> float                               │
+│ # _compute_scenarios(income, price) -> ScenarioResults | None     │
+│ #   → EPS-based when current_eps > 0                             │
+│ #   → Revenue-based fallback when current_eps <= 0                │
+│ # _compute_mel(scenarios) -> float | None (capped at 100%)       │
 │ # _build_ai_prompt(layers, scenarios, moat) -> str               │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -501,10 +516,12 @@ get_risk_assessment(symbol):
   13. layer5 = self._analyze_drawdown_risk(prices, ctx)
   
   14. composite = self._compute_composite([layer1..layer5])
-  15. scenarios = self._compute_scenarios(ctx, income, current_price)
-  16. mel = self._compute_mel(scenarios)
-  
-  17. return RiskAssessmentResponse(...)
+  15. scenarios = self._compute_scenarios(income, current_price)
+  16. if scenarios:
+  17.     composite.maximum_expected_loss_pct = self._compute_mel(scenarios)
+  18.     # bear_case populated from bear scenario (else defaults stay)
+  19. 
+  20. return RiskAssessmentResponse(...)
 ```
 
 #### File: `backend/application/services/risk_assessment_service.py` — Layer Analyzers
@@ -577,6 +594,72 @@ class RiskAssessmentService:
     ) -> DrawdownRisk:
         """Layer 5: Max drawdown, beta, crisis periods."""
 ```
+
+### 2.2a Scenario Modeling Algorithm
+
+The `_compute_scenarios` method implements a **dual-path approach** depending on profitability:
+
+```
+_compute_scenarios(income_statements, current_price):
+
+  1. Sort income statements by fiscal_year ASC
+  2. Extract eps_diluted values from sorted income
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ PATH A: EPS-BASED (current_eps > 0)                         │
+  ├─────────────────────────────────────────────────────────────┤
+  │ current_eps = eps_values[-1]                                │
+  │ eps_cagr = _compute_cagr(eps_values) or 0.08                │
+  │ growth_base = eps_cagr                                      │
+  │ future_eps = current_eps × (1 + growth)^years               │
+  │ future_value = future_eps × exit_pe                         │
+  └─────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ PATH B: REVENUE-BASED (current_eps <= 0, revenue available) │
+  ├─────────────────────────────────────────────────────────────┤
+  │ Compute RPS = revenue / shares_outstanding_diluted per year │
+  │ rps_cagr = _compute_cagr(rps_values) or 0.08                │
+  │ growth_base = rps_cagr                                      │
+  │ current_rps = rps_values[-1]                                │
+  │                                                             │
+  │ # Determine terminal net margin                             │
+  │ net_margins = [net_income/revenue for each year]            │
+  │ positive_margins = [m for m in net_margins if m > 0]       │
+  │ terminal_margin = max(positive_margins) if present else 0.10│
+  │                                                             │
+  │ future_rps = current_rps × (1 + growth)^years               │
+  │ future_eps = future_rps × terminal_margin                   │
+  │ future_value = future_eps × exit_pe                         │
+  └─────────────────────────────────────────────────────────────┘
+
+  3. Define 4 scenarios from growth_base:
+     bull:   growth = max(growth_base × 1.8, 0.10),  exit_pe=28, prob=0.25
+     base:   growth = max(growth_base, 0.05),        exit_pe=22, prob=0.50
+     bear:   growth = max(growth_base × 0.3, 0.02),  exit_pe=15, prob=0.20
+     severe: growth = 0.0,                            exit_pe=12, prob=0.05
+
+  4. For each scenario:
+     total_return = (future_value / current_price) - 1.0
+     downside = min(0.0, total_return)
+
+  5. Return list of ScenarioResult, or None if neither path succeeds
+
+_mel = sum(prob × |downside|) for scenarios with downside < 0
+       capped at min(100.0, result × 100)
+       returns None when scenarios is None
+```
+
+**Key edge cases handled:**
+
+| Case | Behavior |
+|---|---|
+| `current_eps = 0.0` | Rejected (divides by zero in CAGR), falls to Path B |
+| `current_eps < 0` | Falls to Path B (revenue-based) |
+| No revenue/shares data in Path B | Returns None (scenarios unavailable) |
+| `current_price = None` | Returns None (fallback to latest close tried in orchestrator) |
+| Weighted MEL exceeds 100% | Capped at 100.0 |
+| No `eps_diluted` in DB row | Uses `eps_diluted` column (already selected in query); missing → treated as None |
 
 **Reuse of existing services:**
 
@@ -735,13 +818,15 @@ class RiskRepository:
                        │ uses
           ┌────────────┼────────────┐
           ▼            ▼            ▼
-┌─────────────────┐ ┌──────────┐ ┌──────────────────┐
-│  RiskRepository  │ │MoatAnaly│ │  ScenarioModeler  │
-│                  │ │sisServic│ │  (internal)       │
-│ Delegates to     │ │e        │ │                    │
-│ ValuationRepo    │ │(existing)│ │ BEAR = EPS*(1+g)^n│
-└─────────────────┘ └──────────┘ │ * exit_PE          │
-                                 └────────────────────┘
+┌─────────────────┐ ┌──────────┐ ┌────────────────────────┐
+│  RiskRepository  │ │MoatAnaly│ │  ScenarioModeler        │
+│                  │ │sisServic│ │  (internal)             │
+│ Delegates to     │ │e        │ │                         │
+│ ValuationRepo    │ │(existing)│ │ EPS>0: EPS*(1+g)^5*PE  │
+└─────────────────┘ └──────────┘ │ EPS<=0: RPS*(1+g)^5*   │
+                                 │         margin*PE       │
+                                 │ MEL capped at 100%      │
+                                 └─────────────────────────┘
 ```
 
 ### 2.5 API Endpoint
@@ -946,7 +1031,7 @@ export interface BearCase {
 export interface CompositeScore {
   score: number;
   category: RiskCategory;
-  maximum_expected_loss_pct: number;
+  maximum_expected_loss_pct: number | null;   // null when uncomputable (negative EPS)
   bear_case: BearCase;
 }
 
@@ -1001,7 +1086,7 @@ export interface RiskAssessmentResponse {
 ├─────────────────┤ │  (extends)  │ ├──────────────────┤
 │ score: number   │ └──────┬──────┘ │ scenario: string │
 │ category: string│        │        │ probability: num │
-│ maximum_expected_loss_pct: number  │   ┌────┼────┐   │ total_return: num │
+│ maximum_expected_loss_pct: number│ null│  ┌────┼────┐   │ total_return: num │
 │ bear_case        │   │    │    │   │ downside: number │
 └─────────────────┘   ▼    ▼    ▼   └──────────────────┘
                ┌──────┐ ┌────┐ ┌──────┐
@@ -1223,7 +1308,7 @@ export function useRiskAssessment(symbol: string) {
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │  ┌────────────────────┐  ┌────────────────────┐      │   │
 │  │  │  Composite Score   │  │  Maximum Expected  │      │   │
-│  │  │  [ScoreRing 85]    │  │  Loss: 12%         │      │   │
+│  │  │  [ScoreRing 85]    │  │  Loss: 12% (or N/A)│      │   │
 │  │  │  "Moderate"        │  │  Bear Case: -16%   │      │   │
 │  │  └────────────────────┘  └────────────────────┘      │   │
 │  │                                                       │   │
@@ -1653,7 +1738,33 @@ TEST SUITE: RiskAssessmentService
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ UT-B15: _compute_scenarios — Bear Case Downside                             │
+│ UT-B15a: _compute_scenarios — Negative Current EPS (Revenue Fallback)       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Given: Current EPS = -$1.54 (negative, e.g. RBLX), revenue data available   │
+│        Revenue Per Share = revenue / shares_outstanding                     │
+│        Revenue CAGR computed from RPS values                                 │
+│ When:  _compute_scenarios called with income having eps_diluted <= 0        │
+│ Then:  Scenarios are computed using revenue-based fallback:                 │
+│        future_rps = current_rps × (1 + rev_growth)^5                        │
+│        future_eps = future_rps × terminal_margin (best historical or 10%)   │
+│        future_value = future_eps × exit_pe                                   │
+│        total_return = (future_value / current_price) - 1                    │
+│        Result is always > -100% (sensible)                                   │
+│        MEL does not exceed 100%                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ UT-B15b: _compute_scenarios — No Revenue Data (Fallback Unavailable)        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Given: Current EPS <= 0, no revenue OR shares data available                │
+│ When:  _compute_scenarios called                                             │
+│ Then:  Returns None (scenarios cannot be computed)                          │
+│        MEL = None (displays as "N/A" in UI)                                  │
+│        Bear case card not rendered                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ UT-B15c: _compute_scenarios — Bear Case Downside                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Given: Current EPS = $10, Current Price = $200                              │
 │        Bear scenario: eps_growth=0.02, exit_pe=15, prob=0.20               │
@@ -1690,7 +1801,25 @@ TEST SUITE: RiskAssessmentService
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ UT-B18: generate_ai_narrative — API Failure                                 │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ UT-B18a: _compute_mel — Capped at 100%                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Given: Scenarios with total_return < -100% (e.g. -200%, -300%)              │
+│        Weighted loss would exceed 100%                                       │
+│ When:  _compute_mel called                                                   │
+│ Then:  Returns 100.0 (capped), never exceeds                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ UT-B18b: _compute_mel — Returns None When Scenarios = None                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Given: scenarios = None or empty list                                       │
+│ When:  _compute_mel called                                                   │
+│ Then:  Returns None (not 0.0)                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ UT-B19: generate_ai_narrative — API Failure                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Given: Mock httpx client raises Exception                                  │
 │ When:  generate_ai_narrative called                                         │
@@ -2102,8 +2231,10 @@ def mock_risk_repo():
         {"close_price": 180.0, "price_date": "2025-01-01"},
     ])
     repo.get_income_statements_annual = AsyncMock(return_value=[
-        {"fiscal_year": 2021, "net_income": 100, "revenue": 1000, "eps": 5.0},
-        {"fiscal_year": 2023, "net_income": 150, "revenue": 1500, "eps": 7.5},
+        {"fiscal_year": 2021, "net_income": 100, "revenue": 1000,
+         "eps_diluted": 5.0, "shares_outstanding_diluted": 200},
+        {"fiscal_year": 2023, "net_income": 150, "revenue": 1500,
+         "eps_diluted": 7.5, "shares_outstanding_diluted": 200},
     ])
     repo.get_current_market_price = AsyncMock(return_value=200.0)
     return repo
@@ -2230,11 +2361,13 @@ export function makeRiskResponse(overrides: Partial<RiskAssessmentResponse> = {}
       },
     },
     scenarios: [
-      { scenario: "bull", probability: 0.25, eps_growth: 0.15, exit_pe: 28, future_eps: 20.11, future_value: 563.08, total_return: 1.815, downside: 0 },
-      { scenario: "base", probability: 0.50, eps_growth: 0.08, exit_pe: 22, future_eps: 14.69, future_value: 323.18, total_return: 0.616, downside: 0 },
-      { scenario: "bear", probability: 0.20, eps_growth: 0.02, exit_pe: 15, future_eps: 11.04, future_value: 165.62, total_return: -0.172, downside: -0.172 },
+      { scenario: "bull",   probability: 0.25, eps_growth: 0.15, exit_pe: 28, future_eps: 20.11, future_value: 563.08, total_return: 1.815,  downside: 0 },
+      { scenario: "base",   probability: 0.50, eps_growth: 0.08, exit_pe: 22, future_eps: 14.69, future_value: 323.18, total_return: 0.616,  downside: 0 },
+      { scenario: "bear",   probability: 0.20, eps_growth: 0.02, exit_pe: 15, future_eps: 11.04, future_value: 165.62, total_return: -0.172, downside: -0.172 },
       { scenario: "severe", probability: 0.05, eps_growth: 0.00, exit_pe: 12, future_eps: 10.00, future_value: 120.00, total_return: -0.400, downside: -0.400 },
     ],
+    // Note: when scenarios computed via revenue-based fallback (negative EPS),
+    // future_eps represents (future_rps × terminal_margin), still stored as future_eps
     data_quality: {
       data_sources: "financial_ratios + income_statements + company_summary",
       fallbacks_used: false,

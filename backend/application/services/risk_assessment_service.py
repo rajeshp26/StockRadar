@@ -643,7 +643,7 @@ class RiskAssessmentService:
         return CompositeScore(
             score=round(composite_100, 1),
             category=category,
-            maximum_expected_loss_pct=0.0,
+            maximum_expected_loss_pct=None,
             bear_case=BearCase(
                 eps_growth_assumption=0.0,
                 exit_pe_ratio=0.0,
@@ -664,23 +664,61 @@ class RiskAssessmentService:
         sorted_is = sorted(income_statements, key=lambda x: x.get("fiscal_year", 0))
         eps_values = [safe_float(r.get("eps_diluted")) for r in sorted_is if safe_float(r.get("eps_diluted")) is not None]
 
-        if not eps_values or not eps_values[-1]:
+        if not eps_values or eps_values[-1] is None:
             return None
 
+        # ── Determine growth base: EPS-based (positive) or revenue-based (negative/zero EPS) ──
         current_eps = eps_values[-1]
-        eps_cagr = self._compute_cagr(eps_values) or 0.08
         years = 5
 
+        if current_eps > 0:
+            growth_base = self._compute_cagr(eps_values) or 0.08
+            future_eps_fn = lambda g: current_eps * ((1.0 + g) ** years)
+        else:
+            # Revenue-based fallback: compute RPS per year, CAGR on RPS, apply terminal margin
+            revenue_values: List[float] = []
+            shares_values: List[float] = []
+            net_income_values: List[float] = []
+            for r in sorted_is:
+                rev = safe_float(r.get("revenue"))
+                shares = safe_float(r.get("shares_outstanding_diluted"))
+                ni = safe_float(r.get("net_income"))
+                if rev is not None and shares is not None and shares > 0:
+                    revenue_values.append(rev)
+                    shares_values.append(shares)
+                    net_income_values.append(ni if ni is not None else 0.0)
+
+            if len(revenue_values) < 2:
+                return None  # Cannot compute revenue-based path without enough data
+
+            rps_values = [rev / shr for rev, shr in zip(revenue_values, shares_values)]
+            growth_base = self._compute_cagr(rps_values) or 0.08
+
+            # Terminal margin: best historical net margin among positive years, or 10%
+            terminal_margin = 0.10
+            positive_margins = []
+            for ni, rev in zip(net_income_values, revenue_values):
+                if rev > 0 and ni > 0:
+                    positive_margins.append(ni / rev)
+            if positive_margins:
+                terminal_margin = max(positive_margins)
+
+            current_rps = rps_values[-1]
+
+            def future_eps_fn(g: float) -> float:
+                future_rps = current_rps * ((1.0 + g) ** years)
+                return future_rps * terminal_margin
+
         scenarios: List[Dict[str, Any]] = [
-            {"name": "bull", "eps_growth": max(eps_cagr * 1.8, 0.10), "exit_pe": 28, "probability": 0.25},
-            {"name": "base", "eps_growth": max(eps_cagr, 0.05), "exit_pe": 22, "probability": 0.50},
-            {"name": "bear", "eps_growth": max(eps_cagr * 0.3, 0.02), "exit_pe": 15, "probability": 0.20},
+            {"name": "bull", "eps_growth": max(growth_base * 1.8, 0.10), "exit_pe": 28, "probability": 0.25},
+            {"name": "base", "eps_growth": max(growth_base, 0.05), "exit_pe": 22, "probability": 0.50},
+            {"name": "bear", "eps_growth": max(growth_base * 0.3, 0.02), "exit_pe": 15, "probability": 0.20},
             {"name": "severe", "eps_growth": 0.0, "exit_pe": 12, "probability": 0.05},
         ]
 
         results = []
         for sc in scenarios:
-            future_eps = current_eps * ((1.0 + sc["eps_growth"]) ** years)
+            future_eps = future_eps_fn(sc["eps_growth"])
             future_value = future_eps * sc["exit_pe"]
             total_return = (future_value / current_price) - 1.0
             downside = min(0.0, total_return)
@@ -698,13 +736,13 @@ class RiskAssessmentService:
 
         return results
 
-    def _compute_mel(self, scenarios: Optional[List[ScenarioResult]]) -> float:
+    def _compute_mel(self, scenarios: Optional[List[ScenarioResult]]) -> Optional[float]:
         if not scenarios:
-            return 0.0
+            return None
         weighted_loss = sum(
             s.probability * abs(s.downside) for s in scenarios if s.downside < 0
         )
-        return round(weighted_loss * 100, 1)
+        return min(100.0, round(weighted_loss * 100, 1))
 
     # ── AI Narrative ──────────────────────────────────────────────────────
 
@@ -716,10 +754,11 @@ class RiskAssessmentService:
             )
             layers_summary.append(f"{layer.display_name} ({layer.score:.1f}/10, {layer.category}): {metrics_str}")
 
+        mel_str = f"{assessment.composite.maximum_expected_loss_pct:.1f}%" if assessment.composite.maximum_expected_loss_pct is not None else "N/A"
         return (
             f"Provide a concise risk assessment summary for {assessment.symbol}. "
             f"Composite Score: {assessment.composite.score}/100 ({assessment.composite.category}). "
-            f"Maximum Expected Loss: {assessment.composite.maximum_expected_loss_pct:.1f}%. "
+            f"Maximum Expected Loss: {mel_str}. "
             f"Layer breakdown:\n" + "\n".join(layers_summary) +
             f"\nBear case downside: {assessment.composite.bear_case.downside_pct:.1%}. "
             "Highlight the key risk factors and whether the company's risk profile is favorable. "

@@ -1067,7 +1067,7 @@ export interface BearCase {
 export interface CompositeScore {
   score: number;
   category: RiskCategory;
-  maximum_expected_loss_pct: number;
+  maximum_expected_loss_pct: number | null;
   bear_case: BearCase;
 }
 

@@ -132,7 +132,7 @@ class BearCase(BaseModel):
 class CompositeScore(BaseModel):
     score: float
     category: RiskCategory
-    maximum_expected_loss_pct: float
+    maximum_expected_loss_pct: Optional[float] = None
     bear_case: BearCase
 
 

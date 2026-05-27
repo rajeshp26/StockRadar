@@ -103,11 +103,12 @@ export function RiskHero({
           <p className="glass-overline">Maximum Expected Loss</p>
           <p className={cn(
             "text-4xl font-black tracking-tighter",
+            maximumExpectedLossPct == null ? "text-white/30" :
             maximumExpectedLossPct > 20 ? "text-rose-400" :
             maximumExpectedLossPct > 10 ? "text-amber-400" :
             "text-emerald-400"
           )}>
-            {maximumExpectedLossPct.toFixed(1)}%
+            {maximumExpectedLossPct != null ? `${maximumExpectedLossPct.toFixed(1)}%` : "N/A"}
           </p>
           <p className="text-[10px] text-white/30 mt-1">Probability-weighted worst case</p>
         </div>

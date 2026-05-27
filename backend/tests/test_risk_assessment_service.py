@@ -113,7 +113,7 @@ class TestRiskAssessmentService:
         assert result.symbol == "AAPL"
         assert 0 <= result.composite.score <= 100
         assert result.composite.category in ("Very Low Downside", "Moderate", "Elevated", "High Risk")
-        assert isinstance(result.composite.maximum_expected_loss_pct, float)
+        assert result.composite.maximum_expected_loss_pct is None or isinstance(result.composite.maximum_expected_loss_pct, float)
         assert len(result.layers) == 5
         for layer_name in ("business_fragility", "balance_sheet", "valuation_compression", "earnings_stress", "drawdown_risk"):
             assert layer_name in result.layers
@@ -449,6 +449,69 @@ class TestRiskAssessmentService:
         income = [{"fiscal_year": 2021, "net_income": 0, "revenue": 1000, "eps_diluted": 0.0}]
         assert service._compute_scenarios(income, 200.0) is None
 
+    def test_scenarios_negative_current_eps_before_fix(self, service):
+        """Single year — no revenue CAGR possible, still returns None."""
+        income = [{"fiscal_year": 2021, "net_income": -50, "revenue": 1000, "eps_diluted": -1.54}]
+        assert service._compute_scenarios(income, 200.0) is None
+
+    def test_scenarios_negative_eps_revenue_based_path(self, service):
+        """Revenue-based fallback: negative EPS but revenue data exists."""
+        income = [
+            {"fiscal_year": 2021, "net_income": -50, "revenue": 1000, "eps_diluted": -1.54, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2022, "net_income": -30, "revenue": 1200, "eps_diluted": -0.80, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2023, "net_income": -10, "revenue": 1400, "eps_diluted": -0.25, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2024, "net_income": 5,  "revenue": 1600, "eps_diluted": 0.10, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2025, "net_income": -20, "revenue": 1800, "eps_diluted": -0.50, "shares_outstanding_diluted": 100},
+        ]
+        scenarios = service._compute_scenarios(income, 200.0)
+        assert scenarios is not None
+        assert len(scenarios) == 4
+        # All returns should be > -100% (i.e. downside > -1.0)
+        for s in scenarios:
+            assert s.downside > -1.0
+            assert s.future_eps > 0  # terminal margin applied to positive RPS * revenue growth
+
+    def test_scenarios_negative_eps_revenue_no_shares(self, service):
+        """Revenue-based fallback unavailable — missing shares_outstanding_diluted."""
+        income = [
+            {"fiscal_year": 2021, "net_income": -50, "revenue": 1000, "eps_diluted": -1.54},
+            {"fiscal_year": 2025, "net_income": -20, "revenue": 1800, "eps_diluted": -0.50},
+        ]
+        assert service._compute_scenarios(income, 200.0) is None
+
+    def test_scenarios_negative_eps_revenue_no_revenue_data(self, service):
+        """Revenue-based fallback unavailable — revenue field missing."""
+        income = [
+            {"fiscal_year": 2021, "net_income": -50, "eps_diluted": -1.54, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2025, "net_income": -20, "eps_diluted": -0.50, "shares_outstanding_diluted": 100},
+        ]
+        assert service._compute_scenarios(income, 200.0) is None
+
+    def test_scenarios_zero_eps_revenue_based_path(self, service):
+        """Zero current_eps falls to revenue-based path when revenue data exists."""
+        income = [
+            {"fiscal_year": 2021, "net_income": 0, "revenue": 1000, "eps_diluted": 0.0, "shares_outstanding_diluted": 50},
+            {"fiscal_year": 2025, "net_income": 0, "revenue": 2000, "eps_diluted": 0.0, "shares_outstanding_diluted": 50},
+        ]
+        scenarios = service._compute_scenarios(income, 200.0)
+        assert scenarios is not None
+        assert len(scenarios) == 4
+
+    def test_scenarios_negative_eps_mel_integration(self, service):
+        """End-to-end: revenue-based scenarios compute and MEL is positive."""
+        income = [
+            {"fiscal_year": 2021, "net_income": -50, "revenue": 1000, "eps_diluted": -1.54, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2022, "net_income": -30, "revenue": 1200, "eps_diluted": -0.80, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2023, "net_income": -10, "revenue": 1400, "eps_diluted": -0.25, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2024, "net_income": 5,  "revenue": 1600, "eps_diluted": 0.10, "shares_outstanding_diluted": 100},
+            {"fiscal_year": 2025, "net_income": -20, "revenue": 1800, "eps_diluted": -0.50, "shares_outstanding_diluted": 100},
+        ]
+        scenarios = service._compute_scenarios(income, 200.0)
+        assert scenarios is not None
+        mel = service._compute_mel(scenarios)
+        assert mel is not None
+        assert 0.0 < mel <= 100.0
+
     def test_scenarios_full_math_validation(self, service):
         current_price = 200.0
         eps_0 = 10.0
@@ -499,8 +562,8 @@ class TestRiskAssessmentService:
     # ── _compute_mel validation ────────────────────────────────────────────
 
     def test_mel_no_scenarios(self, service):
-        assert service._compute_mel(None) == 0.0
-        assert service._compute_mel([]) == 0.0
+        assert service._compute_mel(None) is None
+        assert service._compute_mel([]) is None
 
     def test_mel_all_scenarios_have_downside(self, service):
         scenarios = [
@@ -530,6 +593,15 @@ class TestRiskAssessmentService:
                            future_eps=14.0, future_value=308.0, total_return=0.10, downside=0.0),
         ]
         assert service._compute_mel(scenarios) == 0.0
+
+    def test_mel_capped_at_100(self, service):
+        scenarios = [
+            ScenarioResult(scenario="bear", probability=0.50, eps_growth=0.02, exit_pe=15,
+                           future_eps=5.0, future_value=75.0, total_return=-2.0, downside=-2.0),
+            ScenarioResult(scenario="severe", probability=0.50, eps_growth=0.0, exit_pe=12,
+                           future_eps=4.0, future_value=48.0, total_return=-3.0, downside=-3.0),
+        ]
+        assert service._compute_mel(scenarios) == 100.0
 
     # ── _compute_layer_score validation ────────────────────────────────────
 
@@ -602,7 +674,7 @@ class TestRiskAssessmentService:
         expected_10 = (8.0*0.20 + 9.0*0.25 + 6.0*0.20 + 7.0*0.25 + 8.0*0.10) / 1.0
         expected_100 = round(expected_10 * 10.0, 1)
         assert composite.score == expected_100
-        assert composite.maximum_expected_loss_pct == 0.0
+        assert composite.maximum_expected_loss_pct is None
         assert composite.bear_case.eps_growth_assumption == 0.0
         assert composite.bear_case.downside_pct == 0.0
 
@@ -1073,7 +1145,7 @@ class TestRiskAssessmentService:
         mock_risk_repo.get_price_history_range.return_value = []
         result = await service.get_risk_assessment("AAPL")
         assert result.scenarios is None
-        assert result.composite.maximum_expected_loss_pct == 0.0
+        assert result.composite.maximum_expected_loss_pct is None
 
     # ── get_risk_assessment end-to-end validation ──────────────────────────
 
