@@ -244,6 +244,205 @@ async def get_stock_vs_index(
         )
 
 
+# ── MOAT Analysis ──────────────────────────────────────────────────────────────
+
+def _get_moat_service():
+    from database import supabase
+    from infrastructure.repositories.moat_repository import MoatRepository
+    from application.services.moat_wacc_service import MoatWaccService
+    from application.services.edgar_filing_service import EdgarFilingService
+    from application.services.moat_keyword_analyzer import MoatKeywordAnalyzer
+    from application.services.moat_analysis_service import MoatAnalysisService
+    repo = MoatRepository()
+    wacc = MoatWaccService(repo)
+    edgar = EdgarFilingService()
+    analyzer = MoatKeywordAnalyzer()
+    return MoatAnalysisService(repo, wacc, edgar, analyzer)
+
+
+@router.get(
+    "/{symbol}/moat",
+    summary=(
+        "Moat Analysis: ROIC durability, margin strength, return stability, "
+        "and capital efficiency composite score."
+    ),
+)
+@limiter.limit("30/minute")
+async def get_moat_analysis(
+    request: Request,
+    symbol: str,
+    force: bool = Query(False, description="Bypass cache and recompute"),
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        service = _get_moat_service()
+        result = await service.get_moat_analysis(sym, force=force)
+        return result.dict()
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error("get_moat_analysis failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Moat analysis failed.",
+        )
+
+
+@router.get(
+    "/{symbol}/moat/evidence",
+    summary="EDGAR 10-K keyword evidence for moat analysis.",
+)
+@limiter.limit("20/minute")
+async def get_moat_evidence(
+    request: Request,
+    symbol: str,
+    refresh: bool = Query(False, description="Re-fetch from EDGAR and re-run keyword analysis"),
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        service = _get_moat_service()
+        if refresh:
+            result = await service.run_text_analysis(sym)
+        else:
+            result = await service.get_moat_evidence(sym)
+        return result.dict()
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error("get_moat_evidence failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Moat evidence retrieval failed.",
+        )
+
+
+@router.get(
+    "/{symbol}/moat/ai",
+    summary="Cached AI narrative for moat analysis.",
+)
+@limiter.limit("10/minute")
+async def get_moat_ai_narrative(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        service = _get_moat_service()
+        result = await service.get_moat_ai_narrative(sym)
+        return result.dict()
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error("get_moat_ai_narrative failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Moat AI narrative retrieval failed.",
+        )
+
+
+@router.post(
+    "/{symbol}/moat/ai",
+    summary="Generate a new AI moat narrative.",
+)
+@limiter.limit("5/minute")
+async def generate_moat_ai_narrative(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        service = _get_moat_service()
+        result = await service.generate_moat_ai_narrative(sym)
+        return result.dict()
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error("generate_moat_ai_narrative failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Moat AI narrative generation failed.",
+        )
+
+
+# ── Risk Assessment ─────────────────────────────────────────────────────────
+
+def _get_risk_service():
+    from database import supabase
+    from infrastructure.repositories.moat_repository import MoatRepository
+    from infrastructure.repositories.valuation_repository import ValuationRepository
+    from infrastructure.repositories.risk_repository import RiskRepository
+    from application.services.moat_wacc_service import MoatWaccService
+    from application.services.moat_analysis_service import MoatAnalysisService
+    from application.services.risk_assessment_service import RiskAssessmentService
+    repo = ValuationRepository()
+    risk_repo = RiskRepository(repo)
+    moat_repo = MoatRepository()
+    wacc = MoatWaccService(moat_repo)
+    moat = MoatAnalysisService(moat_repo, wacc)
+    return RiskAssessmentService(risk_repo, moat, wacc)
+
+
+@router.get(
+    "/{symbol}/risk-assessment",
+    summary="Risk Assessment: composite downside risk across 5 layers.",
+)
+@limiter.limit("30/minute")
+async def get_risk_assessment(
+    request: Request,
+    symbol: str,
+    force: bool = Query(False, description="Bypass cache and recompute"),
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        service = _get_risk_service()
+        result = await service.get_risk_assessment(sym, force=force)
+        return result.dict()
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error("get_risk_assessment failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Risk assessment failed.",
+        )
+
+
+@router.post(
+    "/{symbol}/risk-assessment/ai",
+    summary="Generate AI summary for risk assessment.",
+)
+@limiter.limit("5/minute")
+async def generate_risk_ai_narrative(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        service = _get_risk_service()
+        assessment = await service.get_risk_assessment(sym, force=True)
+        narrative = await service.generate_ai_narrative(sym, assessment)
+        return {"narrative": narrative.narrative, "model": narrative.model}
+    except Exception as exc:
+        logger.error("generate_risk_ai failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="AI narrative generation failed.")
+
+
 @router.get(
     "/benchmarks",
     summary="Lists all active benchmarks for the Stock vs Index feature.",

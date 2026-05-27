@@ -66,3 +66,80 @@ def mock_defeat_beta_provider():
     provider.fetch_earnings_forecast = AsyncMock(return_value=[])
     provider.get_company_summary_optimized = AsyncMock(return_value=None)
     return provider
+
+
+# ─── Moat Test Fixtures ───────────────────────────────────────────────────────
+
+@pytest.fixture
+def mock_moat_repo():
+    repo = MagicMock()
+    repo.get_company_context = MagicMock(return_value={
+        "company_id": 1, "currency": "USD", "sector": "Technology",
+        "industry": "Software", "ticker_symbol": "AAPL",
+    })
+    repo.get_financial_ratios_history = AsyncMock(return_value=[
+        {"fiscal_year": 2024, "roic": 0.32, "roe": 0.45, "gross_margin": 0.43,
+         "operating_margin": 0.30, "net_margin": 0.25, "asset_turnover": 0.88},
+        {"fiscal_year": 2023, "roic": 0.30, "roe": 0.42, "gross_margin": 0.42,
+         "operating_margin": 0.29, "net_margin": 0.24, "asset_turnover": 0.85},
+        {"fiscal_year": 2022, "roic": 0.35, "roe": 0.48, "gross_margin": 0.43,
+         "operating_margin": 0.31, "net_margin": 0.26, "asset_turnover": 0.90},
+        {"fiscal_year": 2021, "roic": 0.33, "roe": 0.46, "gross_margin": 0.42,
+         "operating_margin": 0.30, "net_margin": 0.25, "asset_turnover": 0.87},
+        {"fiscal_year": 2020, "roic": 0.28, "roe": 0.40, "gross_margin": 0.40,
+         "operating_margin": 0.27, "net_margin": 0.21, "asset_turnover": 0.82},
+    ])
+    repo.get_income_statements_annual = AsyncMock(return_value=[
+        {"fiscal_year": 2024, "revenue": 100_000, "ebit": 30_000,
+         "net_income": 25_000, "income_tax_expense": 5_000, "shares_outstanding_diluted": 1000},
+    ])
+    repo.get_balance_sheet_latest = AsyncMock(return_value={
+        "fiscal_year": 2024, "total_assets": 200_000,
+        "shareholders_equity": 80_000, "total_debt": 40_000,
+        "cash_and_cash_equivalents": 20_000, "property_plant_equipment_net": 30_000,
+    })
+    repo.get_cash_flow_latest = AsyncMock(return_value={
+        "fiscal_year": 2024, "cash_from_operating_activities": 35_000,
+        "capital_expenditures": -8_000, "depreciation_amortization": 5_000,
+    })
+    repo.get_company_summary_latest = AsyncMock(return_value={
+        "market_cap": 500_000, "enterprise_value": 520_000,
+        "beta": 1.2, "shares_outstanding": 1000,
+    })
+    repo.get_industry_multiples = AsyncMock(return_value={
+        "sector": "Technology", "industry": "Software",
+        "avg_roic": 0.15, "avg_gross_margin": 0.50, "sample_size": 100,
+    })
+    repo.get_moat_analysis = AsyncMock(return_value=None)
+    repo.upsert_moat_analysis = AsyncMock(return_value=True)
+    repo.get_moat_keyword_evidence = AsyncMock(return_value=[])
+    repo.delete_moat_keyword_evidence = AsyncMock(return_value=True)
+    repo.insert_moat_keyword_evidence = AsyncMock(return_value=True)
+    repo.get_moat_ai_narrative = AsyncMock(return_value=None)
+    repo.upsert_moat_ai_narrative = AsyncMock(return_value=True)
+    repo.get_current_market_price = AsyncMock(return_value=150.0)
+    return repo
+
+
+@pytest.fixture
+def sample_tenk_text():
+    return """
+    === Business ===
+    Apple designs, manufactures, and markets smartphones, personal computers, tablets,
+    wearables, and accessories. The company's proprietary iOS ecosystem creates significant
+    switching costs for users. Apple's brand recognition is among the strongest globally.
+    The company holds a large portfolio of patents and intellectual property.
+    Apple's supply chain is one of the most efficient in the world, providing scale efficiencies.
+
+    === Risk Factors ===
+    The company faces intense competition in the technology sector.
+    Changes in consumer preferences could impact demand.
+    The company's reliance on third-party manufacturers poses supply chain risks.
+
+    === Management Discussion ===
+    Revenue grew 8% year-over-year driven by strong Services performance.
+    Operating margin improved to 30% due to operating leverage.
+    The company generated $90 billion in operating cash flow.
+    R&D spending increased as the company invests in proprietary technology.
+    Customer retention rates remain above 90%.
+    """

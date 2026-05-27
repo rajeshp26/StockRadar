@@ -865,3 +865,234 @@ export interface StockVsIndexResponse {
   recommendation: string;
   charts: StockVsIndexCharts;
 }
+// -- Moat Analysis -------------------------------------------------------------
+// Economic moat durability assessment based on ROIC, margins, return stability,
+// and capital efficiency.
+
+export interface MoatDiagnosticFlag {
+  code: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  message: string;
+  recommendation?: string | null;
+  evidence?: Record<string, unknown> | null;
+}
+
+export interface MoatInputs {
+  nopat: number | null;
+  invested_capital: number | null;
+  gross_margin: number | null;
+  operating_margin: number | null;
+  net_margin: number | null;
+  roic_5y_avg: number | null;
+  roic_volatility: number | null;
+  asset_turnover: number | null;
+  fiscal_years_used: number;
+  as_of_date: string | null;
+  [k: string]: unknown;
+}
+
+export interface MoatValuation {
+  roic: number | null;
+  wacc: number | null;
+  roic_minus_wacc: number | null;
+  gross_margin_pct: number | null;
+  operating_margin_pct: number | null;
+  net_margin_pct: number | null;
+  roic_5y_avg: number | null;
+  roic_5y_std: number | null;
+  roic_stability_score: number | null;
+  asset_turnover: number | null;
+  capital_efficiency_score: number | null;
+  moat_score: number | null;
+  moat_category: "Wide" | "Narrow" | "None" | "Unknown";
+  moat_summary: string | null;
+}
+
+export interface MoatIndustryContext {
+  sector: string | null;
+  industry: string | null;
+  avg_roic: number | null;
+  roic_vs_industry: "above" | "below" | "inline" | null;
+  avg_margin: number | null;
+  sample_size: number | null;
+  context_note: string;
+}
+
+export interface MoatApplicability {
+  score: number;
+  category: "Applicable" | "Caution" | "Not Applicable";
+  excluded: boolean;
+  exclusion_reason: string | null;
+  flags: MoatDiagnosticFlag[];
+  suitability_summary: string | null;
+}
+
+export interface MoatDataQuality {
+  data_sources: string;
+  fiscal_year_end: number | null;
+  quarters_used: number;
+  days_since_update: number | null;
+  fallbacks_used: boolean;
+  last_computed_at: string;
+}
+
+export interface MoatResponse {
+  symbol: string;
+  company_id: number;
+  currency: string;
+  inputs: MoatInputs;
+  valuation: MoatValuation;
+  industry_context: MoatIndustryContext;
+  applicability: MoatApplicability;
+  data_quality: MoatDataQuality;
+}
+
+// ── Risk Assessment Types ──
+
+export type RiskCategory =
+  | "Very Low Downside"
+  | "Moderate"
+  | "Elevated"
+  | "High Risk";
+
+export type RiskSeverity = "low" | "moderate" | "elevated" | "high" | "severe";
+
+export type LayerName =
+  | "business_fragility"
+  | "balance_sheet"
+  | "valuation_compression"
+  | "earnings_stress"
+  | "drawdown_risk";
+
+export interface RiskMetric {
+  name: string;
+  value?: number | null;
+  label: string;
+  status: "pass" | "caution" | "fail" | "na";
+  weight: number;
+  evidence?: Record<string, unknown> | null;
+  threshold_description?: string | null;
+}
+
+export interface RiskLayer {
+  name: LayerName;
+  display_name: string;
+  score: number;
+  category: RiskSeverity;
+  metrics: RiskMetric[];
+  weight: number;
+}
+
+export interface BusinessFragility extends RiskLayer {
+  moat_score?: number | null;
+  moat_category?: string | null;
+  roic_minus_wacc?: number | null;
+  sector?: string | null;
+  industry?: string | null;
+  recurrence_classification?: string | null;
+  pricing_power_assessment?: string | null;
+}
+
+export interface BalanceSheetRisk extends RiskLayer {
+  debt_to_ebitda?: number | null;
+  net_debt_to_ebitda?: number | null;
+  interest_coverage?: number | null;
+  current_ratio?: number | null;
+  quick_ratio?: number | null;
+  debt_to_equity?: number | null;
+  fcf_conversion?: number | null;
+  fcf_stability_pct?: number | null;
+}
+
+export interface ValuationCompressionRisk extends RiskLayer {
+  pe_current?: number | null;
+  pe_percentile?: number | null;
+  pe_5y_min?: number | null;
+  pe_5y_max?: number | null;
+  pe_5y_median?: number | null;
+  ev_ebitda_current?: number | null;
+  ev_ebitda_percentile?: number | null;
+  peg_ratio?: number | null;
+}
+
+export interface EarningsStressRisk extends RiskLayer {
+  eps_cagr_3y?: number | null;
+  eps_cagr_5y?: number | null;
+  revenue_cagr_3y?: number | null;
+  revenue_cagr_5y?: number | null;
+  net_margin_current?: number | null;
+  operating_margin_trend?: "expanding" | "stable" | "contracting" | null;
+  revenue_eps_alignment?: "aligned" | "diverging" | "volatile" | null;
+  eps_volatility?: number | null;
+}
+
+export interface DrawdownRisk extends RiskLayer {
+  max_drawdown_1y?: number | null;
+  max_drawdown_3y?: number | null;
+  max_drawdown_5y?: number | null;
+  beta_5y?: number | null;
+  current_drawdown?: number | null;
+  crisis_drawdowns?: CrisisDrawdown[] | null;
+  recovery_time_days?: number | null;
+}
+
+export interface CrisisDrawdown {
+  crisis_name: string;
+  start_date: string;
+  end_date: string;
+  max_drawdown: number;
+  start_value: number;
+  end_value: number;
+}
+
+export interface ScenarioResult {
+  scenario: string;
+  probability: number;
+  eps_growth: number;
+  exit_pe: number;
+  future_eps: number;
+  future_value: number;
+  total_return: number;
+  downside: number;
+}
+
+export interface BearCase {
+  eps_growth_assumption: number;
+  exit_pe_ratio: number;
+  future_value: number;
+  current_price: number;
+  downside_pct: number;
+}
+
+export interface CompositeScore {
+  score: number;
+  category: RiskCategory;
+  maximum_expected_loss_pct: number;
+  bear_case: BearCase;
+}
+
+export interface RiskDataQuality {
+  data_sources: string;
+  fiscal_year_end?: number | null;
+  days_since_update?: number | null;
+  fallbacks_used: boolean;
+  last_computed_at: string;
+}
+
+export interface RiskAiNarrative {
+  narrative: string;
+  model: string;
+  generated_at: string;
+  generation_time_ms?: number | null;
+}
+
+export interface RiskAssessmentResponse {
+  symbol: string;
+  company_id: number;
+  currency: string;
+  composite: CompositeScore;
+  layers: Record<LayerName, RiskLayer>;
+  scenarios?: ScenarioResult[] | null;
+  ai_narrative?: RiskAiNarrative | null;
+  data_quality: RiskDataQuality;
+}

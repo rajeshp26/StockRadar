@@ -30,6 +30,8 @@ import type {
   MurphyAnalysisResponse,
   SuperInvestorData,
   StockVsIndexResponse,
+  MoatResponse,
+  RiskAssessmentResponse,
 } from "../types/analysis.types";
 
 import type { OverviewRecommendation } from "../hooks/useValuationOverview";
@@ -799,4 +801,131 @@ export async function fetchSuperInvestorsHistory(
     (errorBody?.message as string) ||
     `Request failed with status ${res.status}`
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* MOAT ANALYSIS � Economic moat durability                                   */
+/* Returns not_computed when no cached run exists. Same pattern as Magic      */
+/* Formula (GET + force GET for recompute).                                   */
+/* -------------------------------------------------------------------------- */
+
+export type MoatCachedOutcome =
+  | { status: "ok"; payload: MoatResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+/** GET � Pure cache read. Returns not_computed when backend has no cached run. */
+export async function fetchMoatCached(
+  symbol: string
+): Promise<MoatCachedOutcome> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/moat`);
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    return { status: "error", message: err?.message || "Network error." };
+  }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<MoatResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      return {
+        status: "error",
+        message: "Invalid response from server.",
+        httpStatus: 502,
+      };
+    }
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return {
+    status: "error",
+    message:
+      (errorBody?.detail as string) ||
+      `Request failed with status ${res.status}`,
+    httpStatus: res.status,
+  };
+}
+
+/** GET with force=true � triggers recompute, used only by Recompute button. */
+export async function fetchMoatValuation(
+  symbol: string,
+  options?: { force?: boolean }
+): Promise<MoatResponse> {
+  const qs = options?.force ? "?force=true" : "";
+  const url = apiPath(
+    `/analysis/${encodeURIComponent(symbol)}/moat${qs}`
+  );
+  let res: Response;
+  try {
+    res = await doFetch(url, { method: "GET" });
+  } catch (err: any) {
+    throw new Error(
+      err?.message || "Network error while computing Moat analysis."
+    );
+  }
+  if (res.ok) {
+    const body = await readJsonSafe<MoatResponse>(res);
+    if (!body || typeof body !== "object" || !body.valuation) {
+      throw new Error("Invalid response from server (missing Moat payload).");
+    }
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error(
+    (errorBody?.detail as string) ||
+    (errorBody?.message as string) ||
+    `Request failed with status ${res.status}`
+  );
+}
+
+// ── Risk Assessment ──
+
+export type RiskCachedOutcome =
+  | { status: "ok"; payload: RiskAssessmentResponse }
+  | { status: "not_computed" }
+  | { status: "error"; message: string; httpStatus?: number };
+
+export async function fetchRiskCached(symbol: string): Promise<RiskCachedOutcome> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/risk-assessment`);
+  let res: Response;
+  try { res = await doFetch(url, { method: "GET" }); }
+  catch (err: any) { return { status: "error", message: err?.message || "Network error." }; }
+  if (res.status === 404) return { status: "not_computed" };
+  if (res.ok) {
+    const body = await readJsonSafe<RiskAssessmentResponse>(res);
+    if (!body || !body.composite) return { status: "error", message: "Invalid response.", httpStatus: 502 };
+    return { status: "ok", payload: body };
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  return { status: "error", message: (errorBody?.detail as string) || `Failed with status ${res.status}`, httpStatus: res.status };
+}
+
+export async function fetchRiskAssessment(symbol: string, options?: { force?: boolean }): Promise<RiskAssessmentResponse> {
+  const qs = options?.force ? "?force=true" : "";
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/risk-assessment${qs}`);
+  let res: Response;
+  try { res = await doFetch(url, { method: "GET" }); }
+  catch (err: any) { throw new Error(err?.message || "Network error."); }
+  if (res.ok) {
+    const body = await readJsonSafe<RiskAssessmentResponse>(res);
+    if (!body || !body.composite) throw new Error("Invalid response.");
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error((errorBody?.detail as string) || `Failed with status ${res.status}`);
+}
+
+export async function fetchRiskAiNarrative(symbol: string): Promise<{ narrative: string; model: string }> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/risk-assessment/ai`);
+  let res: Response;
+  try { res = await doFetch(url, { method: "POST" }); }
+  catch (err: any) { throw new Error(err?.message || "Network error."); }
+  if (res.ok) {
+    const body = await readJsonSafe<{ narrative: string; model: string }>(res);
+    if (!body || !body.narrative) throw new Error("Invalid response.");
+    return body;
+  }
+  const errorBody = (await readJsonSafe<Json>(res)) || {};
+  throw new Error((errorBody?.detail as string) || `Failed with status ${res.status}`);
 }

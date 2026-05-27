@@ -129,3 +129,116 @@ def build_fingerprint(dep_values: dict) -> str:
     """
     raw = json.dumps(dep_values, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:32]
+
+def compute_wacc(
+    equity_value: Optional[float],
+    debt_value: Optional[float],
+    cost_of_equity: Optional[float],
+    cost_of_debt: Optional[float],
+    tax_rate: Optional[float],
+) -> Optional[float]:
+    """
+    Compute Weighted Average Cost of Capital (WACC).
+
+        WACC = (E/V) * ke + (D/V) * kd * (1 - t)
+
+    Where:
+        E/V  = equity weight
+        D/V  = debt weight
+        ke   = cost of equity (CAPM: rf + beta * ERP)
+        kd   = cost of debt (pre-tax)
+        t    = effective tax rate
+
+    Returns fraction (e.g. 0.10 for 10%). Returns None if inputs are insufficient.
+
+    Examples:
+        compute_wacc(100_000, 50_000, 0.10, 0.05, 0.21)  ? ~0.0833
+        compute_wacc(None, 50_000, 0.10, 0.05, 0.21)      ? None
+    """
+    if equity_value is None and debt_value is None:
+        return None
+    if cost_of_equity is None:
+        return None
+    ev = float(equity_value) if equity_value is not None else 0.0
+    dv = float(debt_value) if debt_value is not None else 0.0
+    total = ev + dv
+    if total <= 0:
+        return None
+    w_equity = ev / total
+    w_debt   = dv / total
+    ke = float(cost_of_equity)
+    kd_after_tax = 0.0
+    if cost_of_debt is not None and debt_value is not None and debt_value > 0:
+        kd = float(cost_of_debt)
+        t  = float(tax_rate) if tax_rate is not None else 0.0
+        t  = clamp(t, 0.0, 1.0)
+        kd_after_tax = kd * (1.0 - t)
+    return w_equity * ke + w_debt * kd_after_tax
+
+
+def compute_cost_of_equity(
+    risk_free_rate: Optional[float],
+    beta: Optional[float],
+    equity_risk_premium: Optional[float],
+    default_value: Optional[float] = None,
+) -> Optional[float]:
+    """
+    Compute Cost of Equity using CAPM.
+
+        ke = rf + beta * ERP
+
+    All inputs as fractions. Returns fraction (e.g. 0.10 for 10%).
+
+    Examples:
+        compute_cost_of_equity(0.045, 1.2, 0.055)  ? 0.111
+        compute_cost_of_equity(None, 1.2, 0.055)    ? None
+        compute_cost_of_equity(0.045, None, 0.055, default_value=0.10) ? 0.10
+    """
+    if risk_free_rate is None or beta is None or equity_risk_premium is None:
+        return default_value
+    rf  = float(risk_free_rate)
+    b   = float(beta)
+    erp = float(equity_risk_premium)
+    return rf + b * erp
+
+
+def compute_roic(
+    nopat: Optional[float],
+    invested_capital: Optional[float],
+) -> Optional[float]:
+    """
+    Compute Return on Invested Capital (ROIC).
+
+        ROIC = NOPAT / Invested Capital
+
+    NOPAT = EBIT * (1 - tax_rate)
+
+    Returns fraction (e.g. 0.15 for 15%). Returns None if inputs missing.
+
+    Examples:
+        compute_roic(10_000, 100_000)  ? 0.10
+        compute_roic(None, 100_000)    ? None
+    """
+    return safe_div(nopat, invested_capital)
+
+
+def compute_nopat(
+    ebit: Optional[float],
+    tax_rate: Optional[float],
+) -> Optional[float]:
+    """
+    Compute Net Operating Profit After Tax (NOPAT).
+
+        NOPAT = EBIT * (1 - tax_rate)
+
+    If tax_rate is None, assumes 21% default.
+
+    Examples:
+        compute_nopat(10_000, 0.21)  ? 7_900
+        compute_nopat(10_000, None)  ? 7_900  (default 21%)
+    """
+    if ebit is None:
+        return None
+    t = float(tax_rate) if tax_rate is not None else 0.21
+    t = clamp(t, 0.0, 1.0)
+    return float(ebit) * (1.0 - t)

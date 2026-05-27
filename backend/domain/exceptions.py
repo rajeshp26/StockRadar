@@ -203,3 +203,7 @@ class DuplicateDataError(DataValidationException):
                 "fiscal_quarter": fiscal_quarter
             }
         )
+class WaccRoicError(StockerProException):
+    """Raised when WACC/ROIC analysis cannot be computed for a symbol."""
+    def __init__(self, message: str, details: dict = None):
+        super().__init__(message=message, error_code="WACC_ROIC_ERROR", details=details)

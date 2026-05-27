@@ -51,9 +51,13 @@ export const QK = {
     ["analysis", "canslim", symbol.toUpperCase()] as const,
   murphyTechnical: (symbol: string) =>
     ["analysis", "technical", "murphy", symbol.toUpperCase()] as const,
+  moat: (symbol: string) =>
+    ["analysis", "moat", symbol.toUpperCase()] as const,
   stockVsIndex: (symbol: string, benchmarkSymbols: string[], years: number) => ["stock-vs-index", symbol, ...benchmarkSymbols, years] as const,
   superInvestors: (symbol: string) =>
     ["analysis", "super-investors", symbol.toUpperCase()] as const,
+  riskAssessment: (symbol: string) =>
+    ["analysis", "risk-assessment", symbol.toUpperCase()] as const,
   // Portfolio
   portfolioOverview: () =>
     ["portfolio", "overview"] as const,

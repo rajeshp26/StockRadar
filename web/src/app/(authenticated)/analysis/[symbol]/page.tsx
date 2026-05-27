@@ -27,6 +27,8 @@ import { DividendPanel } from "@/features/analysis/components/dividend-panel";
 import { MurphyPanel } from "@/features/analysis/components/murphy-panel";
 import { MagicFormulaPanel } from "@/features/analysis/components/magic-formula-panel";
 import { CANSlimPanel } from "@/features/analysis/components/canslim-panel";
+import { MoatPanel } from "@/features/analysis/components/moat-panel";
+import { RiskPanel } from "@/features/analysis/components/risk-panel";
 import { SuperInvestorsTab } from "@/features/analysis/components/SuperInvestorsTab";
 import { StockVsIndexPanel } from "@/features/analysis/components/stock-vs-index-panel";
 
@@ -39,6 +41,7 @@ import {
   Users,
   MoreHorizontal,
   ArrowLeft,
+  AlertTriangle,
 } from "lucide-react";
 
 
@@ -51,6 +54,7 @@ const TOP_TABS = [
   { id: "dividend", label: "Dividend", icon: TrendingDown },
   { id: "comparison", label: "Market Comparison", icon: BarChart2 },
   { id: "technical", label: "Technical", icon: BarChart2 },
+  { id: "risk", label: "Risk Assessment", icon: AlertTriangle },
   { id: "investors", label: "Super Investors", icon: Users },
   { id: "others", label: "Others", icon: MoreHorizontal },
 ] as const;
@@ -230,12 +234,14 @@ export default function AnalysisPage() {
           />
         )}
         {tab === "moat" && (
-          <ComingSoonPanel
-            title="Moat Analysis"
-            description="Moat durability across ROIC, margins, and industry positioning."
-            items={["ROIC vs WACC", "Margin Durability", "Return Stability", "Capital Efficiency"]}
-            icon={Shield}
-          />
+          <div className="animate-fade-up">
+            <MoatPanel symbol={upperSymbol} />
+          </div>
+        )}
+        {tab === "risk" && (
+          <div className="space-y-6 animate-fade-up">
+            <RiskPanel symbol={upperSymbol} />
+          </div>
         )}
         {tab === "dividend" && (
           <div className="animate-fade-up">

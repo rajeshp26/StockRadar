@@ -23,6 +23,7 @@ import { QK } from "@/lib/query-keys";
 import { STALE, GC } from "@/lib/query-client";
 import { rule1QueryFn } from "@/features/analysis/hooks/useAnalysis";
 import { dcfQueryFn } from "@/features/analysis/hooks/useDcfAnalysis";
+import { riskQueryFn } from "@/features/analysis/hooks/useRiskAssessment";
 import {
   fetchDdmCached,
   fetchOwnerEarningsCached,
@@ -101,5 +102,11 @@ export function prefetchAllValuations(
     queryKey: QK.canslim(symbol),
     queryFn: () => canslimQueryFn(symbol),
     staleTime: STALE.VALUATION,
+  });
+  queryClient.prefetchQuery({
+    queryKey: QK.riskAssessment(upper),
+    queryFn: () => riskQueryFn(upper),
+    staleTime: STALE.VALUATION,
+    gcTime: GC.VALUATION,
   });
 }

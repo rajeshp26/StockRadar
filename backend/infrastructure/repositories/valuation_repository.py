@@ -1656,7 +1656,7 @@ class ValuationRepository:
                 .select(
                     "fiscal_year, period_end_date, revenue, ebit, ebitda, "
                     "interest_expense, net_income, net_income_to_common, "
-                    "shares_outstanding_diluted"
+                    "eps_diluted, shares_outstanding_diluted"
                 )
                 .eq("company_id", company_id)
                 .is_("fiscal_quarter", None)
