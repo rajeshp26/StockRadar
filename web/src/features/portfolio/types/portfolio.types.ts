@@ -26,6 +26,7 @@ export interface PortfolioAccount {
 
 export interface Holding {
     holding_id: number;
+    account_id?: number;
     symbol: string;
     company_name: string;
     sector: string | null;
@@ -42,6 +43,7 @@ export interface Holding {
     realized_gain_loss: number;
     first_purchase_date: string | null;
     last_transaction_date: string | null;
+    currency?: string;
     account_name?: string;
     account_type?: string;
 }
@@ -217,3 +219,74 @@ export const ACCOUNT_TYPE_COLORS: Record<string, string> = {
     'IRA': 'rose',
     'Roth IRA': 'pink',
 };
+
+// ============================================================================
+// ALLOCATION TYPES
+// ============================================================================
+
+export interface AllocationSegment {
+    segment: string;
+    value: number;
+    weight: number;
+    count: number;
+    gain_loss: number;
+}
+
+export interface PortfolioAllocationResponse {
+    success: boolean;
+    group_by: string;
+    segments: AllocationSegment[];
+    total_value: number;
+    error?: string;
+}
+
+// ============================================================================
+// EXTENDED DIVIDEND TYPES
+// ============================================================================
+
+export interface DividendDetail {
+    dividend_id: number;
+    symbol: string;
+    company_name?: string;
+    payment_date: string;
+    amount: number;
+    shares_held?: number;
+    amount_per_share?: number;
+    account_name?: string;
+    account_type?: string;
+}
+
+export interface DividendHistoryResponse {
+    success: boolean;
+    account_id?: number;
+    dividends: DividendDetail[];
+    total_count: number;
+    current_year_total: number;
+    error?: string;
+}
+
+// ============================================================================
+// TRANSACTION FILTER TYPES
+// ============================================================================
+
+export interface TransactionFilter {
+    from_date?: string;
+    to_date?: string;
+    activity_type?: string;
+    search?: string;
+}
+
+// ============================================================================
+// TAB NAVIGATION TYPES
+// ============================================================================
+
+export const TAB_DEFINITIONS = [
+    { id: 'overview', label: 'Overview', icon: 'LayoutDashboard' },
+    { id: 'performance', label: 'Performance', icon: 'TrendingUp' },
+    { id: 'holdings', label: 'Holdings', icon: 'PieChart' },
+    { id: 'dividends', label: 'Dividends', icon: 'DollarSign' },
+    { id: 'transactions', label: 'Transactions', icon: 'Receipt' },
+    { id: 'allocation', label: 'Allocation', icon: 'PieChart' },
+] as const;
+
+export type TabId = typeof TAB_DEFINITIONS[number]['id'];

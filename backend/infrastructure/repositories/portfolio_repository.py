@@ -469,18 +469,22 @@ class PortfolioRepository:
             raise
     
     def get_account_dividends_by_year(
-        self, account_id: int, fiscal_year: int
+        self, account_id: int, fiscal_year: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """Get all dividend payments for an account in a specific year."""
+        """Get all dividend payments for an account in a specific year.
+
+        When fiscal_year is None, returns ALL dividend records for the account.
+        """
         try:
-            res = (
+            query = (
                 self.client.table("portfolio_dividends")
                 .select("*")
                 .eq("account_id", account_id)
-                .eq("fiscal_year", fiscal_year)
                 .order("payment_date", desc=False)
-                .execute()
             )
+            if fiscal_year is not None:
+                query = query.eq("fiscal_year", fiscal_year)
+            res = query.execute()
             return res.data or []
         except Exception as e:
             logger.error(f"Failed to get dividends for account {account_id}: {e}")

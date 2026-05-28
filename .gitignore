@@ -37,3 +37,14 @@ web/tsconfig.tsbuildinfo
 
 # Ad-hoc test scripts (may contain personal info)
 test_edgar_filings.py
+
+# Broker activity exports (contain personal financial data)
+docs/activities-export-*.csv
+
+# Debug screenshots (may contain personal data)
+web/debug-*.png
+
+# Playwright test artifacts
+web/playwright-report/
+web/test-results/
+web/e2e/

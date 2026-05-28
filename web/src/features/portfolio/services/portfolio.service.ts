@@ -17,6 +17,10 @@ import type {
     PerformanceResponse,
     BenchmarkInfo,
     BenchmarkCompareResponse,
+    PortfolioAllocationResponse,
+    DividendDetail,
+    DividendHistoryResponse,
+    TransactionFilter,
 } from "../types/portfolio.types";
 
 /**
@@ -177,6 +181,17 @@ export class PortfolioService {
         return res.data;
     }
 
+    async getAllDividends(accountIds?: string): Promise<{
+        account_id?: number;
+        current_year_total: number;
+        monthly_summaries: MonthlyDividendSummary[];
+    }> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get("/portfolio/dividends", { params });
+        return res.data;
+    }
+
     // ========================================================================
     // PERFORMANCE & BENCHMARKS
     // ========================================================================
@@ -212,6 +227,77 @@ export class PortfolioService {
             "/portfolio/performance/compare",
             { params }
         );
+        return res.data;
+    }
+
+    // ========================================================================
+    // ALLOCATION
+    // ========================================================================
+
+    async getPortfolioAllocation(
+        groupBy: string = "sector",
+        accountIds?: string
+    ): Promise<PortfolioAllocationResponse> {
+        const params: Record<string, string> = { group_by: groupBy };
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<PortfolioAllocationResponse>(
+            "/portfolio/allocation",
+            { params }
+        );
+        return res.data;
+    }
+
+    // ========================================================================
+    // DIVIDEND HISTORY (extended detail)
+    // ========================================================================
+
+    async getDividendHistory(accountId: number): Promise<DividendHistoryResponse> {
+        const res = await this.api.get<DividendHistoryResponse>(
+            `/portfolio/accounts/${accountId}/dividend-history`
+        );
+        return res.data;
+    }
+
+    // ========================================================================
+    // TRANSACTIONS WITH FILTERS
+    // ========================================================================
+
+    async getAccountTransactionsFiltered(
+        accountId: number,
+        filter?: TransactionFilter,
+        limit: number = 100
+    ): Promise<{
+        account_id: number;
+        transactions: Transaction[];
+        total_count: number;
+    }> {
+        const params: Record<string, string | number> = { limit };
+        if (filter?.from_date) params.from_date = filter.from_date;
+        if (filter?.to_date) params.to_date = filter.to_date;
+        if (filter?.activity_type) params.activity_type = filter.activity_type;
+        if (filter?.search) params.search = filter.search;
+        const res = await this.api.get(
+            `/portfolio/accounts/${accountId}/transactions`,
+            { params }
+        );
+        return res.data;
+    }
+
+    async getAllTransactions(
+        accountIds?: string,
+        filter?: TransactionFilter,
+        limit: number = 100
+    ): Promise<{
+        transactions: Transaction[];
+        total_count: number;
+    }> {
+        const params: Record<string, string | number> = { limit };
+        if (accountIds) params.account_ids = accountIds;
+        if (filter?.from_date) params.from_date = filter.from_date;
+        if (filter?.to_date) params.to_date = filter.to_date;
+        if (filter?.activity_type) params.activity_type = filter.activity_type;
+        if (filter?.search) params.search = filter.search;
+        const res = await this.api.get("/portfolio/transactions", { params });
         return res.data;
     }
 }

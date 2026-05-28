@@ -37,6 +37,8 @@ from schemas_portfolio import (
     PerformanceResponse,
     BenchmarkListResponse,
     BenchmarkCompareResponse,
+    PortfolioAllocationResponse,
+    DividendHistoryResponse,
 )
 from shared.exceptions.base import AppException
 from database import supabase
@@ -435,11 +437,14 @@ async def get_all_holdings(
 @limiter.limit("20/minute")
 async def get_portfolio_overview(
     request: Request,
+    account_id: Optional[int] = Query(None, description="Filter to a specific account"),
     user: dict = Depends(get_current_user_dep),
 ) -> PortfolioOverviewResponse:
     """
     Get comprehensive portfolio overview.
-    
+
+    Optional account_id filters to a single account for per-account overview.
+
     Returns:
     - Net worth (total current value)
     - Total cost basis
@@ -447,15 +452,17 @@ async def get_portfolio_overview(
     - YTD dividends
     - Holdings count
     - Accounts count
-    - Top 10 holdings by value
+    - Top holdings by value
     - Per-account breakdown
     """
     try:
         auth_id = user["uid"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         service = _get_portfolio_service()
-        overview = await service.get_user_portfolio_overview(db_user_id)
+
+        ids_param = [account_id] if account_id else None
+        overview = await service.get_user_portfolio_overview(db_user_id, account_ids=ids_param)
         
         if not overview.get("success"):
             return PortfolioOverviewResponse(
@@ -543,6 +550,65 @@ async def get_account_transactions(
         )
 
 
+@router.get("/portfolio/transactions", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_all_transactions(
+    request: Request,
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    limit: int = 100,
+    activity_type: Optional[str] = Query(None, description="Filter by activity type (BUY, SELL, DIVIDEND, etc.)"),
+    search: Optional[str] = Query(None, description="Search symbol or security name"),
+    from_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    to_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    user: dict = Depends(get_current_user_dep),
+) -> AccountTransactionsResponse:
+    """
+    Get transaction history across all (or specified) accounts.
+
+    Supports the same filters as the per-account endpoint:
+    - limit: Max transactions to return (default 100, max 1000)
+    - activity_type: Filter by BUY, SELL, DIVIDEND, etc.
+    - search: Text search on symbol or security name
+    - from_date / to_date: Date range filter
+
+    When account_ids is omitted, returns transactions for all user accounts.
+    """
+    try:
+        auth_id = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
+
+        if limit > 1000:
+            limit = 1000
+
+        service = _get_portfolio_service()
+        result = await service.get_user_all_transactions(
+            db_user_id,
+            account_ids=parsed_ids,
+            limit=limit,
+            activity_type=activity_type,
+            search=search,
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+        return AccountTransactionsResponse(
+            account_id=None,
+            transactions=result["transactions"],
+            total_count=result["total_count"],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get all transactions failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get transactions",
+        )
+
+
 # ============================================================================
 # DIVIDENDS
 # ============================================================================
@@ -600,6 +666,108 @@ async def get_account_dividends(
         raise HTTPException(
             status_code=500,
             detail="Failed to get dividends",
+        )
+
+
+@router.get("/portfolio/dividends", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_all_dividends(
+    request: Request,
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> AccountDividendsResponse:
+    """
+    Get aggregated dividends across all (or specified) accounts.
+
+    When account_ids is omitted, returns dividends for all user accounts.
+    When provided, scopes to those accounts only.
+
+    Returns:
+    - Current year total dividends
+    - Monthly breakdown for last 12 months (aggregated)
+    """
+    try:
+        auth_id = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
+
+        service = _get_portfolio_service()
+        result = await service.get_user_all_dividends(db_user_id, account_ids=parsed_ids)
+
+        if not result.get("success"):
+            return AccountDividendsResponse(
+                success=False,
+                current_year_total=0,
+                monthly_summaries=[],
+                error=result.get("error", "Failed to aggregate dividends"),
+            )
+
+        return AccountDividendsResponse(
+            account_id=None,
+            current_year_total=result["current_year_total"],
+            monthly_summaries=result["monthly_summaries"],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get all dividends failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get dividends",
+        )
+
+
+@router.get("/portfolio/accounts/{account_id}/dividend-history", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_account_dividend_history(
+    request: Request,
+    account_id: int,
+    user: dict = Depends(get_current_user_dep),
+) -> DividendHistoryResponse:
+    """
+    Get detailed dividend history for an account.
+
+    Returns every dividend record with:
+    - Symbol, company name
+    - Payment date, amount
+    - Shares held and amount per share (if available)
+    - Account name and type
+    """
+    try:
+        auth_id = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        service = _get_portfolio_service()
+        result = await service.get_dividend_history_detail(db_user_id, account_id)
+
+        if not result.get("success"):
+            return DividendHistoryResponse(
+                success=False,
+                dividends=[],
+                total_count=0,
+                current_year_total=0,
+                error=result.get("error", "Failed to get dividend history"),
+            )
+
+        return DividendHistoryResponse(
+            success=True,
+            account_id=account_id,
+            dividends=result["dividends"],
+            total_count=result["total_count"],
+            current_year_total=result["current_year_total"],
+        )
+
+    except HTTPException:
+        raise
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Get dividend history failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get dividend history",
         )
 
 
@@ -832,6 +1000,47 @@ async def get_performance_compare(
         raise HTTPException(
             status_code=500,
             detail="Failed to compare performance",
+        )
+
+
+@router.get("/portfolio/allocation", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_portfolio_allocation(
+    request: Request,
+    group_by: str = Query("sector", description="Group by: sector, geography, or account"),
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs"),
+    user: dict = Depends(get_current_user_dep),
+) -> PortfolioAllocationResponse:
+    """
+    Get portfolio allocation breakdown.
+
+    Group by options:
+    - sector: By GICS sector (default)
+    - geography: By market group (US, CA, INTL)
+    - account: By account name
+
+    Optional account_ids filter: ?account_ids=1,3,5 (empty = all accounts)
+    """
+    try:
+        auth_id = user["uid"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
+
+        service = _get_portfolio_service()
+        result = await service.get_portfolio_allocation(
+            db_user_id, group_by=group_by, account_ids=parsed_ids
+        )
+
+        return PortfolioAllocationResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get allocation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get allocation",
         )
 
 

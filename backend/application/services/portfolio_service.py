@@ -965,10 +965,16 @@ class PortfolioService:
     # PORTFOLIO SUMMARY
     # ========================================================================
     
-    async def get_user_portfolio_overview(self, user_id: int) -> Dict[str, Any]:
+    async def get_user_portfolio_overview(
+        self, user_id: int,
+        account_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
         """
         Get comprehensive portfolio overview for user.
-        
+
+        When account_ids is provided, scope to those accounts only.
+        None or empty list = all user accounts.
+
         Returns:
             - Total net worth
             - YTD performance
@@ -977,18 +983,29 @@ class PortfolioService:
             - Top holdings
             - Account breakdown
         """
-        # Get all accounts
-        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        # Get all accounts (for ownership verification)
+        all_accounts = self.portfolio_repo.get_user_accounts(user_id)
+
+        if account_ids:
+            valid_ids = {a["account_id"] for a in all_accounts}
+            account_ids = [aid for aid in account_ids if aid in valid_ids]
+            accounts = [a for a in all_accounts if a["account_id"] in account_ids]
+        else:
+            accounts = all_accounts
+
         if not accounts:
             return {
                 "success": False,
                 "error": "No portfolio accounts found",
             }
-        
+
         # Get all holdings
         holdings = await self.enrich_holdings_with_prices(
             self.portfolio_repo.get_user_all_holdings(user_id)
         )
+        # Filter by account_ids if specified
+        if account_ids:
+            holdings = [h for h in holdings if h.get("account_id") in account_ids]
         
         # Calculate totals
         total_value = sum(h.get("current_value") or 0 for h in holdings)
@@ -1050,6 +1067,200 @@ class PortfolioService:
             "top_holdings": top_holdings,
             "account_breakdown": account_breakdown,
         }
+    # ========================================================================
+    # ALL-ACCOUNTS DIVIDENDS
+    # ========================================================================
+
+    async def get_user_all_dividends(
+        self, user_id: int,
+        account_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """Aggregate dividends across all (or specified) user accounts.
+
+        When account_ids is provided, scope to those accounts only.
+        None or empty list = all user accounts.
+        """
+        if account_ids is None:
+            accounts = self.portfolio_repo.get_user_accounts(user_id, active_only=True)
+            account_ids = [a["account_id"] for a in accounts]
+        else:
+            user_accounts = self.portfolio_repo.get_user_accounts(user_id, active_only=True)
+            valid_ids = {a["account_id"] for a in user_accounts}
+            account_ids = [aid for aid in account_ids if aid in valid_ids]
+
+        if not account_ids:
+            return {
+                "success": True,
+                "current_year_total": 0,
+                "monthly_summaries": [],
+            }
+
+        current_year = datetime.now().year
+        current_year_total = Decimal("0")
+        all_monthly_summaries = []
+
+        for aid in account_ids:
+            yearly_divs = self.portfolio_repo.get_account_dividends_by_year(aid, current_year)
+            current_year_total += sum(Decimal(str(d.get("amount", 0))) for d in yearly_divs)
+            monthly = self.portfolio_repo.get_monthly_dividends(aid, months=12)
+            all_monthly_summaries.extend(monthly)
+
+        aggregated = {}
+        for m in all_monthly_summaries:
+            key = (m["fiscal_year"], m["fiscal_month"])
+            if key not in aggregated:
+                aggregated[key] = {
+                    "fiscal_year": m["fiscal_year"],
+                    "fiscal_month": m["fiscal_month"],
+                    "total_amount": 0,
+                    "payment_count": 0,
+                    "paying_companies": 0,
+                }
+            aggregated[key]["total_amount"] += m.get("total_amount", 0)
+            aggregated[key]["payment_count"] += m.get("payment_count", 0)
+            aggregated[key]["paying_companies"] += m.get("paying_companies", 0)
+
+        monthly_summaries = sorted(
+            aggregated.values(),
+            key=lambda x: (x["fiscal_year"], x["fiscal_month"]),
+            reverse=True,
+        )
+
+        return {
+            "success": True,
+            "current_year_total": float(current_year_total),
+            "monthly_summaries": monthly_summaries,
+        }
+
+    # ========================================================================
+    # ALL-ACCOUNTS TRANSACTIONS
+    # ========================================================================
+
+    async def get_user_all_transactions(
+        self, user_id: int,
+        account_ids: Optional[List[int]] = None,
+        limit: int = 100,
+        activity_type: Optional[str] = None,
+        search: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get transactions across all (or specified) user accounts.
+
+        Supports the same filters as the per-account endpoint.
+        When account_ids is None/empty, returns transactions for all accounts.
+        """
+        if account_ids is None:
+            accounts = self.portfolio_repo.get_user_accounts(user_id, active_only=True)
+            account_ids = [a["account_id"] for a in accounts]
+        else:
+            user_accounts = self.portfolio_repo.get_user_accounts(user_id, active_only=True)
+            valid_ids = {a["account_id"] for a in user_accounts}
+            account_ids = [aid for aid in account_ids if aid in valid_ids]
+
+        if not account_ids:
+            return {
+                "transactions": [],
+                "total_count": 0,
+            }
+
+        activity_types = [activity_type] if activity_type else None
+
+        all_transactions = []
+        for aid in account_ids:
+            txs = self.portfolio_repo.get_account_transactions(
+                aid, limit=limit, activity_types=activity_types,
+            )
+            all_transactions.extend(txs)
+
+        if search:
+            search_lower = search.lower()
+            all_transactions = [
+                t for t in all_transactions
+                if search_lower in (t.get("symbol") or "").lower()
+                or search_lower in (t.get("security_name") or "").lower()
+            ]
+        if from_date:
+            fd = date.fromisoformat(from_date) if isinstance(from_date, str) else from_date
+            all_transactions = [
+                t for t in all_transactions
+                if date.fromisoformat(t["transaction_date"]) >= fd
+            ]
+        if to_date:
+            td = date.fromisoformat(to_date) if isinstance(to_date, str) else to_date
+            all_transactions = [
+                t for t in all_transactions
+                if date.fromisoformat(t["transaction_date"]) <= td
+            ]
+
+        all_transactions.sort(key=lambda x: x.get("transaction_date", ""), reverse=True)
+        all_transactions = all_transactions[:limit]
+
+        return {
+            "transactions": all_transactions,
+            "total_count": len(all_transactions),
+        }
+
+    # ========================================================================
+    # DIVIDEND HISTORY (extended detail)
+    # ========================================================================
+
+    async def get_dividend_history_detail(
+        self, user_id: int, account_id: int,
+    ) -> Dict[str, Any]:
+        """Get detailed dividend history for an account with company names."""
+        repo = self.portfolio_repo
+        account = repo.get_account_by_id(account_id)
+        if not account:
+            return {"success": False, "error": "Account not found"}
+        if account["user_id"] != user_id:
+            return {"success": False, "error": "Access denied"}
+
+        dividends = repo.get_account_dividends_by_year(account_id, None)
+        dividends.sort(key=lambda d: d.get("payment_date", ""), reverse=True)
+
+        current_year = datetime.now().year
+        current_year_total = sum(
+            float(d.get("amount", 0)) for d in dividends
+            if d.get("fiscal_year") == current_year
+        )
+
+        company_ids = list({d.get("company_id") for d in dividends if d.get("company_id")})
+        company_names: Dict[int, str] = {}
+        if company_ids:
+            try:
+                res = (
+                    supabase.table("companies")
+                    .select("company_id, company_name")
+                    .in_("company_id", company_ids)
+                    .execute()
+                )
+                for c in res.data or []:
+                    company_names[c["company_id"]] = c["company_name"]
+            except Exception as e:
+                logger.error(f"Failed to fetch company names for dividends: {e}")
+
+        details = []
+        for d in dividends:
+            details.append({
+                "dividend_id": d["dividend_id"],
+                "symbol": d.get("symbol", ""),
+                "company_name": company_names.get(d.get("company_id")),
+                "payment_date": d["payment_date"],
+                "amount": float(d.get("amount", 0)),
+                "shares_held": d.get("shares_held"),
+                "amount_per_share": d.get("amount_per_share"),
+                "account_name": account.get("account_name"),
+                "account_type": account.get("account_type"),
+            })
+
+        return {
+            "success": True,
+            "dividends": details,
+            "total_count": len(details),
+            "current_year_total": current_year_total,
+        }
+
     # ========================================================================
     # MANUAL TRADE ENTRY
     # ========================================================================
@@ -1690,6 +1901,85 @@ class PortfolioService:
     # ------------------------------------------------------------------
     # Benchmark list & comparison
     # ------------------------------------------------------------------
+
+    async def get_portfolio_allocation(
+        self, user_id: int, group_by: str = "sector",
+        account_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get portfolio allocation breakdown grouped by sector, geography, or account.
+
+        When account_ids is provided, only those accounts are included.
+        None or empty list = all user accounts.
+        """
+        if account_ids is None:
+            accounts = self.portfolio_repo.get_user_accounts(user_id)
+            account_ids = [a["account_id"] for a in accounts]
+        else:
+            user_accounts = self.portfolio_repo.get_user_accounts(user_id)
+            valid_ids = {a["account_id"] for a in user_accounts}
+            account_ids = [aid for aid in account_ids if aid in valid_ids]
+
+        if not account_ids:
+            return {
+                "success": True,
+                "group_by": group_by,
+                "segments": [],
+                "total_value": 0,
+            }
+
+        holdings = await self.enrich_holdings_with_prices(
+            self.portfolio_repo.get_user_all_holdings(user_id)
+        )
+        holdings = [h for h in holdings if h.get("account_id") in account_ids]
+
+        if not holdings:
+            return {
+                "success": True,
+                "group_by": group_by,
+                "segments": [],
+                "total_value": 0,
+            }
+
+        segments: Dict[str, Dict[str, Any]] = {}
+
+        for h in holdings:
+            if group_by == "sector":
+                key = h.get("sector") or "Unknown"
+            elif group_by == "geography":
+                key = h.get("market_group") or "OTHER"
+            elif group_by == "account":
+                key = h.get("account_name") or "Unknown Account"
+            else:
+                key = "Other"
+
+            value = h.get("current_value") or 0
+            cost = h.get("total_cost") or 0
+
+            if key not in segments:
+                segments[key] = {"value": 0, "cost": 0, "count": 0}
+            segments[key]["value"] += value
+            segments[key]["cost"] += cost
+            segments[key]["count"] += 1
+
+        total_value = sum(s["value"] for s in segments.values())
+        segment_list = [
+            {
+                "segment": key,
+                "value": round(s["value"], 2),
+                "weight": round((s["value"] / total_value * 100), 2) if total_value > 0 else 0,
+                "count": s["count"],
+                "gain_loss": round(s["value"] - s["cost"], 2),
+            }
+            for key, s in sorted(segments.items(), key=lambda x: x[1]["value"], reverse=True)
+        ]
+
+        return {
+            "success": True,
+            "group_by": group_by,
+            "segments": segment_list,
+            "total_value": round(total_value, 2),
+        }
 
     async def get_benchmarks(self) -> List[Dict[str, Any]]:
         """List all active benchmarks from benchmark_config — delegates to shared repository logic."""

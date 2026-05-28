@@ -207,7 +207,7 @@ class TransactionInfo(BaseModel):
 class AccountTransactionsResponse(BaseModel):
     """Response with transactions for an account."""
     
-    account_id: int
+    account_id: Optional[int] = None
     transactions: List[TransactionInfo]
     total_count: int
 
@@ -236,7 +236,7 @@ class MonthlyDividendsSummary(BaseModel):
 class AccountDividendsResponse(BaseModel):
     """Response with dividend data for an account."""
     
-    account_id: int
+    account_id: Optional[int] = None
     current_year_total: float
     monthly_summaries: List[MonthlyDividendsSummary]
 
@@ -333,4 +333,57 @@ class BenchmarkCompareResponse(BaseModel):
     period: str
     portfolio: List[Dict[str, Any]]
     benchmarks: List[BenchmarkSeries]
+    error: Optional[str] = None
+
+
+# ============================================================================
+# ALLOCATION SCHEMAS
+# ============================================================================
+
+class AllocationSegment(BaseModel):
+    """Single allocation breakdown segment."""
+
+    segment: str
+    value: float
+    weight: float
+    count: int
+    gain_loss: float = 0
+
+
+class PortfolioAllocationResponse(BaseModel):
+    """Portfolio allocation breakdown response."""
+
+    success: bool
+    group_by: str
+    segments: List[AllocationSegment]
+    total_value: float = 0
+    error: Optional[str] = None
+
+
+# ============================================================================
+# EXTENDED DIVIDEND SCHEMAS
+# ============================================================================
+
+class DividendDetail(BaseModel):
+    """Full dividend detail for history table."""
+
+    dividend_id: int
+    symbol: str
+    company_name: Optional[str] = None
+    payment_date: date
+    amount: float
+    shares_held: Optional[float] = None
+    amount_per_share: Optional[float] = None
+    account_name: Optional[str] = None
+    account_type: Optional[str] = None
+
+
+class DividendHistoryResponse(BaseModel):
+    """Full dividend history response."""
+
+    success: bool
+    account_id: Optional[int] = None
+    dividends: List[DividendDetail]
+    total_count: int
+    current_year_total: float = 0
     error: Optional[str] = None

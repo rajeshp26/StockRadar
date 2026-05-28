@@ -15,6 +15,12 @@ import type {
     PerformanceResponse,
     BenchmarkInfo,
     BenchmarkCompareResponse,
+    PortfolioAllocationResponse,
+    Transaction,
+    TransactionFilter,
+    DividendDetail,
+    DividendHistoryResponse,
+    MonthlyDividendSummary,
 } from "../types/portfolio.types";
 
 /**
@@ -220,5 +226,134 @@ export function useImportStatus(importBatchId: string | null) {
         },
         staleTime: 1000,
         gcTime: 0,
+    });
+}
+
+/**
+ * Hook for portfolio allocation data
+ */
+export function usePortfolioAllocation(groupBy: string = "sector", accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const idsParam = accountIds && accountIds.length > 0
+        ? [...accountIds].sort().join(",")
+        : undefined;
+
+    return useQuery<PortfolioAllocationResponse, Error>({
+        queryKey: QK.portfolioAllocation(groupBy, idsParam),
+        queryFn: () => portfolioService.getPortfolioAllocation(groupBy, idsParam),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for aggregated dividends across all (or specified) accounts.
+ * When accountIds is undefined, returns data for ALL accounts.
+ * When specified, returns data only for those accounts.
+ */
+export function useAllDividends(accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const idsParam = accountIds && accountIds.length > 0
+        ? [...accountIds].sort().join(",")
+        : undefined;
+
+    return useQuery<{
+        account_id?: number;
+        current_year_total: number;
+        monthly_summaries: MonthlyDividendSummary[];
+    }, Error>({
+        queryKey: QK.portfolioAllDividends(idsParam),
+        queryFn: () => portfolioService.getAllDividends(idsParam),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for account dividend monthly summaries
+ */
+export function useAccountDividends(accountId: number | null) {
+    const { portfolioService } = useServices();
+
+    return useQuery<{
+        account_id: number;
+        current_year_total: number;
+        monthly_summaries: MonthlyDividendSummary[];
+    }, Error>({
+        queryKey: QK.portfolioAccountDividends(accountId!),
+        queryFn: () => portfolioService.getAccountDividends(accountId!),
+        enabled: accountId !== null,
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for extended dividend history
+ */
+export function useDividendHistory(accountId: number | null) {
+    const { portfolioService } = useServices();
+
+    return useQuery<DividendHistoryResponse, Error>({
+        queryKey: QK.portfolioDividendHistory(accountId!),
+        queryFn: () => portfolioService.getDividendHistory(accountId!),
+        enabled: accountId !== null,
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for transactions across all (or specified) accounts.
+ * When accountIds is undefined, returns data for ALL accounts.
+ * Supports the same TransactionFilter as the per-account hook.
+ */
+export function useAllTransactions(
+    accountIds?: number[],
+    filter?: TransactionFilter
+) {
+    const { portfolioService } = useServices();
+    const idsParam = accountIds && accountIds.length > 0
+        ? [...accountIds].sort().join(",")
+        : undefined;
+    const filterKey = JSON.stringify(filter || {});
+
+    return useQuery<{
+        transactions: Transaction[];
+        total_count: number;
+    }, Error>({
+        queryKey: QK.portfolioAllTransactions(idsParam, filterKey),
+        queryFn: () => portfolioService.getAllTransactions(idsParam, filter),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for filtered account transactions
+ */
+export function useAccountTransactionsFiltered(
+    accountId: number | null,
+    filter?: TransactionFilter
+) {
+    const { portfolioService } = useServices();
+    const filterKey = JSON.stringify(filter || {});
+
+    return useQuery<{
+        account_id: number;
+        transactions: Transaction[];
+        total_count: number;
+    }, Error>({
+        queryKey: QK.portfolioAccountTransactionsFiltered(accountId!, filterKey),
+        queryFn: () => portfolioService.getAccountTransactionsFiltered(accountId!, filter),
+        enabled: accountId !== null,
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
     });
 }
