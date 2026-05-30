@@ -35,40 +35,42 @@ export function RiskMetricCard({ label, value, subtitle, trend, trendLabel, info
     }, [showInfo]);
 
     return (
-        <div className={cn('glass-panel rounded-lg p-4 relative', className)}>
-            <div className="flex items-center gap-1.5">
-                <p className="text-xs text-white/40 font-medium uppercase tracking-wider">
-                    {label}
+        <div className="relative">
+            <div className={cn('glass-panel rounded-lg p-4', className)}>
+                <div className="flex items-center gap-1.5">
+                    <p className="text-xs text-white/40 font-medium uppercase tracking-wider">
+                        {label}
+                    </p>
+                    {info && (
+                        <div ref={infoRef}>
+                            <button
+                                onClick={() => setShowInfo(!showInfo)}
+                                className="w-3.5 h-3.5 rounded-full border border-white/20 text-white/40 hover:text-white/60 hover:border-white/40 text-[9px] flex items-center justify-center leading-none transition-colors"
+                                aria-label={`Info about ${label}`}
+                            >
+                                i
+                            </button>
+                        </div>
+                    )}
+                </div>
+                <p className="text-xl font-bold mt-1 text-white">
+                    {value}
                 </p>
-                {info && (
-                    <div ref={infoRef} className="relative">
-                        <button
-                            onClick={() => setShowInfo(!showInfo)}
-                            className="w-3.5 h-3.5 rounded-full border border-white/20 text-white/40 hover:text-white/60 hover:border-white/40 text-[9px] flex items-center justify-center leading-none transition-colors"
-                            aria-label={`Info about ${label}`}
-                        >
-                            i
-                        </button>
-                        {showInfo && (
-                            <div className="absolute z-50 top-full mt-2 left-0 w-56 bg-gray-900 border border-white/10 rounded-lg p-3 shadow-xl">
-                                <p className="text-xs text-white/70 leading-relaxed">{info}</p>
-                            </div>
-                        )}
-                    </div>
+                {subtitle && (
+                    <p className="text-xs text-white/30 mt-0.5">{subtitle}</p>
+                )}
+                {trend && (
+                    <p className={cn('text-xs font-medium mt-1.5', TREND_COLORS[trend])}>
+                        {trend === 'up' && '↑ '}
+                        {trend === 'down' && '↓ '}
+                        {trendLabel || trend}
+                    </p>
                 )}
             </div>
-            <p className="text-xl font-bold mt-1 text-white">
-                {value}
-            </p>
-            {subtitle && (
-                <p className="text-xs text-white/30 mt-0.5">{subtitle}</p>
-            )}
-            {trend && (
-                <p className={cn('text-xs font-medium mt-1.5', TREND_COLORS[trend])}>
-                    {trend === 'up' && '↑ '}
-                    {trend === 'down' && '↓ '}
-                    {trendLabel || trend}
-                </p>
+            {showInfo && info && (
+                <div className="absolute z-50 top-0 left-0 mt-14 ml-4 w-64 bg-gray-900 border border-white/10 rounded-lg p-3 shadow-xl">
+                    <p className="text-xs text-white/70 leading-relaxed">{info}</p>
+                </div>
             )}
         </div>
     );
