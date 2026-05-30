@@ -277,6 +277,111 @@ export interface TransactionFilter {
 }
 
 // ============================================================================
+// RISK METRICS TYPES
+// ============================================================================
+
+export interface RiskMetricsResponse {
+    success: boolean;
+    period: string;
+    variance: number;
+    std_deviation: number;
+    sharpe_ratio: number;
+    sortino_ratio: number;
+    max_drawdown: number;
+    max_drawdown_pct: number;
+    value_at_risk_95: number;
+    value_at_risk_99: number;
+    conditional_var_95: number;
+    downside_deviation: number;
+    tracking_error: number | null;
+    information_ratio: number | null;
+    beta: number | null;
+    alpha: number | null;
+    error?: string | null;
+    error_code?: string | null;
+}
+
+export interface DrawdownPoint {
+    date: string;
+    value: number;
+    drawdown_pct: number;
+}
+
+export interface DrawdownResponse {
+    success: boolean;
+    period: string;
+    drawdowns: DrawdownPoint[];
+    max_drawdown: number;
+    max_drawdown_pct: number;
+    max_drawdown_start: string | null;
+    max_drawdown_end: string | null;
+    max_drawdown_recovery: string | null;
+    avg_drawdown: number;
+    error?: string | null;
+    error_code?: string | null;
+}
+
+export interface CovarianceResponse {
+    success: boolean;
+    period: string;
+    holdings: string[];
+    covariance_matrix: number[][];
+    correlation_matrix: number[][];
+    error?: string | null;
+    error_code?: string | null;
+}
+
+export interface EfficientFrontierPoint {
+    volatility: number;
+    expected_return: number;
+    weights: Record<string, number>;
+    sharpe_ratio?: number | null;
+}
+
+export interface EfficientFrontierResponse {
+    success: boolean;
+    frontier: EfficientFrontierPoint[];
+    max_sharpe: EfficientFrontierPoint | null;
+    min_variance: EfficientFrontierPoint | null;
+    cml?: Record<string, number>[] | null;
+    error?: string | null;
+    error_code?: string | null;
+}
+
+export interface RollingSharpeResponse {
+    success: boolean;
+    period: string;
+    window: number;
+    series: Record<string, unknown>[];
+    error?: string | null;
+    error_code?: string | null;
+}
+
+export interface RiskContributionItem {
+    symbol: string;
+    weight: number;
+    marginal_risk: number;
+    component_risk: number;
+    risk_pct: number;
+}
+
+export interface RiskContributionResponse {
+    success: boolean;
+    contributions: RiskContributionItem[];
+    total_risk: number;
+    error?: string | null;
+    error_code?: string | null;
+}
+
+export interface FactorExposureResponse {
+    success: boolean;
+    exposures: Record<string, number>;
+    r_squared: number;
+    error?: string | null;
+    error_code?: string | null;
+}
+
+// ============================================================================
 // TAB NAVIGATION TYPES
 // ============================================================================
 
@@ -287,6 +392,7 @@ export const TAB_DEFINITIONS = [
     { id: 'dividends', label: 'Dividends', icon: 'DollarSign' },
     { id: 'transactions', label: 'Transactions', icon: 'Receipt' },
     { id: 'allocation', label: 'Allocation', icon: 'PieChart' },
+    { id: 'risk', label: 'Risk', icon: 'Shield' },
 ] as const;
 
 export type TabId = typeof TAB_DEFINITIONS[number]['id'];

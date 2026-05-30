@@ -97,6 +97,8 @@ fonttools==4.63.0
     # via matplotlib
 frozendict==2.4.7
     # via yfinance
+cvxpy==1.9.1
+    # via PyPortfolioOpt
 fsspec==2025.10.0
     # via
     #   -r requirements.in
@@ -356,6 +358,8 @@ pyparsing==3.3.2
     #   httplib2
     #   matplotlib
     #   pyiceberg
+pyportfolioopt==1.6.0
+    # via -r requirements.in
 pyrate-limiter==4.1.0
     # via
     #   edgartools
@@ -400,6 +404,8 @@ rich==14.3.4
     #   defeatbeta-api
     #   edgartools
     #   pyiceberg
+scipy==1.17.1
+    # via -r requirements.in
 selenium==4.25.0
     # via stockdex
 six==1.17.0

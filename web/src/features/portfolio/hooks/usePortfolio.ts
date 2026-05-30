@@ -21,6 +21,13 @@ import type {
     DividendDetail,
     DividendHistoryResponse,
     MonthlyDividendSummary,
+    RiskMetricsResponse,
+    DrawdownResponse,
+    CovarianceResponse,
+    EfficientFrontierResponse,
+    RollingSharpeResponse,
+    RiskContributionResponse,
+    FactorExposureResponse,
 } from "../types/portfolio.types";
 
 /**
@@ -352,6 +359,104 @@ export function useAccountTransactionsFiltered(
         queryKey: QK.portfolioAccountTransactionsFiltered(accountId!, filterKey),
         queryFn: () => portfolioService.getAccountTransactionsFiltered(accountId!, filter),
         enabled: accountId !== null,
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+// ========================================================================
+// RISK METRICS HOOKS
+// ========================================================================
+
+const idsParam = (accountIds?: number[]) =>
+    accountIds && accountIds.length > 0 ? [...accountIds].sort().join(",") : undefined;
+
+export function useRiskMetrics(period: string = "1Y", accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<RiskMetricsResponse, Error>({
+        queryKey: QK.riskMetrics(period, ids),
+        queryFn: () => portfolioService.getRiskMetrics(period, ids),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useDrawdown(period: string = "1Y", accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<DrawdownResponse, Error>({
+        queryKey: QK.drawdown(period, ids),
+        queryFn: () => portfolioService.getDrawdown(period, ids),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useCovariance(period: string = "1Y", accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<CovarianceResponse, Error>({
+        queryKey: QK.covariance(period, ids),
+        queryFn: () => portfolioService.getCovariance(period, ids),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useEfficientFrontier(points: number = 20, accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<EfficientFrontierResponse, Error>({
+        queryKey: QK.efficientFrontier(points, ids),
+        queryFn: () => portfolioService.getEfficientFrontier(points, ids),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useRollingSharpe(window: number = 60, period: string = "1Y", accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<RollingSharpeResponse, Error>({
+        queryKey: QK.rollingSharpe(window, period, ids),
+        queryFn: () => portfolioService.getRollingSharpe(window, period, ids),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useRiskContribution(accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<RiskContributionResponse, Error>({
+        queryKey: QK.riskContribution(ids),
+        queryFn: () => portfolioService.getRiskContribution(ids),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useMarketExposure(accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<FactorExposureResponse, Error>({
+        queryKey: QK.marketExposure(ids),
+        queryFn: () => portfolioService.getMarketExposure(ids),
         staleTime: STALE.PORTFOLIO,
         gcTime: GC.PORTFOLIO,
         retry: 1,

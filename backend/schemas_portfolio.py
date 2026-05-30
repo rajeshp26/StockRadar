@@ -387,3 +387,146 @@ class DividendHistoryResponse(BaseModel):
     total_count: int
     current_year_total: float = 0
     error: Optional[str] = None
+
+
+# ============================================================================
+# RISK METRICS SCHEMAS
+# ============================================================================
+
+from enum import Enum
+
+
+class RiskMetricError(str, Enum):
+    INSUFFICIENT_DATA = "insufficient_data"
+    SINGLE_HOLDING = "single_holding"
+    NO_HOLDINGS = "no_holdings"
+    DATA_INTEGRITY = "data_integrity"
+    COMPUTATION_FAILED = "computation_failed"
+    ACCOUNT_NOT_FOUND = "account_not_found"
+    BENCHMARK_NOT_FOUND = "benchmark_not_found"
+
+
+class RiskMetricsResponse(BaseModel):
+    success: bool
+    period: str
+    variance: float = 0.0
+    std_deviation: float = 0.0
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    max_drawdown: float = 0.0
+    max_drawdown_pct: float = 0.0
+    value_at_risk_95: float = 0.0
+    value_at_risk_99: float = 0.0
+    conditional_var_95: float = 0.0
+    downside_deviation: float = 0.0
+    tracking_error: Optional[float] = None
+    information_ratio: Optional[float] = None
+    beta: Optional[float] = None
+    alpha: Optional[float] = None
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+
+    @field_validator("sharpe_ratio")
+    @classmethod
+    def warn_sharpe_range(cls, v: float) -> float:
+        if v != 0.0 and (v < -3.0 or v > 5.0):
+            import logging
+            logging.getLogger(__name__).warning(f"sharpe_ratio={v} outside sane range [-3, 5]")
+        return v
+
+    @field_validator("max_drawdown_pct")
+    @classmethod
+    def clamp_drawdown(cls, v: float) -> float:
+        if v > 0.0:
+            return 0.0
+        if v < -1.0:
+            return -1.0
+        return v
+
+    @field_validator("value_at_risk_95")
+    @classmethod
+    def warn_positive_var(cls, v: float) -> float:
+        if v > 0.0:
+            import logging
+            logging.getLogger(__name__).warning(f"value_at_risk_95={v} is positive (unusual)")
+        return v
+
+
+class DrawdownPoint(BaseModel):
+    date: str
+    value: float
+    drawdown_pct: float
+
+
+class DrawdownResponse(BaseModel):
+    success: bool
+    period: str
+    drawdowns: List[DrawdownPoint]
+    max_drawdown: float = 0.0
+    max_drawdown_pct: float = 0.0
+    max_drawdown_start: Optional[str] = None
+    max_drawdown_end: Optional[str] = None
+    max_drawdown_recovery: Optional[str] = None
+    avg_drawdown: float = 0.0
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+
+
+class CovarianceResponse(BaseModel):
+    success: bool
+    period: str
+    holdings: List[str]
+    covariance_matrix: List[List[float]]
+    correlation_matrix: List[List[float]]
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+
+
+class EfficientFrontierPoint(BaseModel):
+    volatility: float
+    expected_return: float
+    weights: Dict[str, float]
+    sharpe_ratio: Optional[float] = None
+
+
+class EfficientFrontierResponse(BaseModel):
+    success: bool
+    frontier: List[EfficientFrontierPoint]
+    max_sharpe: Optional[EfficientFrontierPoint] = None
+    min_variance: Optional[EfficientFrontierPoint] = None
+    cml: Optional[List[Dict[str, float]]] = None
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+
+
+class RollingSharpeResponse(BaseModel):
+    success: bool
+    period: str
+    window: int
+    series: List[Dict[str, Any]]
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+
+
+class RiskContributionItem(BaseModel):
+    symbol: str
+    weight: float
+    marginal_risk: float
+    component_risk: float
+    risk_pct: float
+
+
+class RiskContributionResponse(BaseModel):
+    success: bool
+    contributions: List[RiskContributionItem]
+    total_risk: float = 0.0
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+
+
+class FactorExposureResponse(BaseModel):
+    success: bool
+    exposures: Dict[str, float]
+    r_squared: float = 0.0
+    error: Optional[str] = None
+    error_code: Optional[str] = None

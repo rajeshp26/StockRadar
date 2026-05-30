@@ -68,13 +68,12 @@ export function ManualTradeForm({ open, onOpenChange }: ManualTradeFormProps) {
             setIsCheckingSymbol(true);
 
             try {
-                // Check if company exists in database
-                const res = await portfolioService.api.get(`/companies/search?symbol=${upperSymbol}`);
+                const result = await portfolioService.searchCompany(upperSymbol);
 
-                if (res.data.exists) {
+                if (result.exists) {
                     setSymbolStatus({
                         exists: true,
-                        companyName: res.data.company_name,
+                        companyName: result.company_name,
                         willCreate: false,
                     });
                 } else {
@@ -96,8 +95,8 @@ export function ManualTradeForm({ open, onOpenChange }: ManualTradeFormProps) {
 
     const addTransactionMutation = useMutation({
         mutationFn: async (data: any) => {
-            const res = await portfolioService.api.post('/portfolio/transactions/manual', data);
-            return res.data;
+            const res = await portfolioService.addManualTransaction(data);
+            return res as any;
         },
         onSuccess: (result) => {
             // Invalidate all portfolio queries

@@ -99,4 +99,33 @@ export const QK = {
     accountIds
       ? ["portfolio", "transactions", accountIds, filter] as const
       : ["portfolio", "transactions", filter] as const,
+  // Portfolio Risk
+  riskMetrics: (period: string, accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "risk", "metrics", period, accountIds] as const
+      : ["portfolio", "risk", "metrics", period] as const,
+  drawdown: (period: string, accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "risk", "drawdown", period, accountIds] as const
+      : ["portfolio", "risk", "drawdown", period] as const,
+  covariance: (period: string, accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "risk", "covariance", period, accountIds] as const
+      : ["portfolio", "risk", "covariance", period] as const,
+  efficientFrontier: (points: number, accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "risk", "frontier", points, accountIds] as const
+      : ["portfolio", "risk", "frontier", points] as const,
+  rollingSharpe: (window: number, period: string, accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "risk", "rolling-sharpe", window, period, accountIds] as const
+      : ["portfolio", "risk", "rolling-sharpe", window, period] as const,
+  riskContribution: (accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "risk", "contribution", accountIds] as const
+      : ["portfolio", "risk", "contribution"] as const,
+  marketExposure: (accountIds?: string) =>
+    accountIds
+      ? ["portfolio", "risk", "market-exposure", accountIds] as const
+      : ["portfolio", "risk", "market-exposure"] as const,
 } as const;

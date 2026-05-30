@@ -1,0 +1,372 @@
+[
+  {
+    "name":"mean_historical_return returns pd.Series",
+    "passed":true,
+    "detail":"dtype=float64, len=10"
+  },
+  {
+    "name":"All returns in realistic range (-0.5, 0.5)",
+    "passed":true,
+    "detail":"min=-0.0753, max=0.3292"
+  },
+  {
+    "name":"All index values are strings (symbols)",
+    "passed":true,
+    "detail":"sample: AAPL"
+  },
+  {
+    "name":"capm_return returns pd.Series",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"CAPM returns within range (-0.5, 0.5)",
+    "passed":true,
+    "detail":"min=0.1127, max=0.1526"
+  },
+  {
+    "name":"CAPM differs from mean historical (different methodology)",
+    "passed":true,
+    "detail":"mean=0.1153, capm=0.1350"
+  },
+  {
+    "name":"ema_historical_return returns pd.Series",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"EW returns in realistic range (-1.5, 1.5)",
+    "passed":true,
+    "detail":"min=-0.1741, max=1.0971"
+  },
+  {
+    "name":"sample_cov returns pd.DataFrame",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Cov matrix shape (10x10)",
+    "passed":true,
+    "detail":"actual=(10, 10)"
+  },
+  {
+    "name":"Cov matrix is symmetric",
+    "passed":true,
+    "detail":"max diff=0.00e+00"
+  },
+  {
+    "name":"Cov matrix is positive semi-definite",
+    "passed":true,
+    "detail":"min eigval=4.80e-02"
+  },
+  {
+    "name":"Index and columns match symbols",
+    "passed":true,
+    "detail":"index=['AAPL', 'MSFT', 'GOOGL'], cols=['AAPL', 'MSFT', 'GOOGL']"
+  },
+  {
+    "name":"All values are finite (no NaN\/Inf)",
+    "passed":true,
+    "detail":"NaN count=0"
+  },
+  {
+    "name":"CovarianceShrinkage.ledoit_wolf returns pd.DataFrame",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Shrunk cov is symmetric",
+    "passed":true,
+    "detail":"max diff=0.00e+00"
+  },
+  {
+    "name":"Shrunk cov is positive semi-definite",
+    "passed":true,
+    "detail":"min eigval=5.60e-02"
+  },
+  {
+    "name":"oracle_approximating returns pd.DataFrame",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"OAS cov is symmetric",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Correlation diagonal is 1.0",
+    "passed":true,
+    "detail":"diag values: [1. 1. 1.]"
+  },
+  {
+    "name":"All correlations in [-1, 1]",
+    "passed":true,
+    "detail":"min=-0.0054, max=1.0000"
+  },
+  {
+    "name":"Correlation matrix is symmetric",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"returns_from_prices returns pd.DataFrame",
+    "passed":true,
+    "detail":"shape=(1148, 10)"
+  },
+  {
+    "name":"Returns are finite (no NaN\/Inf)",
+    "passed":true,
+    "detail":"NaN count=0"
+  },
+  {
+    "name":"Daily returns in realistic range (-0.2, 0.2)",
+    "passed":true,
+    "detail":"min=-0.0567, max=0.0612"
+  },
+  {
+    "name":"max_sharpe returns dict-like (OrderedDict)",
+    "passed":true,
+    "detail":"type=OrderedDict"
+  },
+  {
+    "name":"Weights sum to ~1.0",
+    "passed":true,
+    "detail":"sum=1.000000"
+  },
+  {
+    "name":"All weights are between 0 and 1",
+    "passed":true,
+    "detail":"min=0.0000, max=0.2730"
+  },
+  {
+    "name":"Weight keys match asset symbols",
+    "passed":true,
+    "detail":"keys=['AAPL', 'AMZN', 'DIS'], expected=['AAPL', 'AMZN', 'DIS']"
+  },
+  {
+    "name":"portfolio_performance returns (float, float, float)",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Expected return is annualized (> 0 for bull market)",
+    "passed":true,
+    "detail":"value=0.2517"
+  },
+  {
+    "name":"Volatility is annualized (typically 0.05-0.40)",
+    "passed":true,
+    "detail":"value=0.1080"
+  },
+  {
+    "name":"Max Sharpe > 0 (optimizer should find positive)",
+    "passed":true,
+    "detail":"value=2.1461"
+  },
+  {
+    "name":"Frontier generated as list of dicts",
+    "passed":true,
+    "detail":"len=19"
+  },
+  {
+    "name":"Each point has 'return', 'volatility', 'sharpe', 'weights'",
+    "passed":true,
+    "detail":"keys=['return', 'volatility', 'sharpe', 'weights']"
+  },
+  {
+    "name":"Frontier returns are non-decreasing",
+    "passed":true,
+    "detail":"rets from 0.1082 to 0.3079"
+  },
+  {
+    "name":"Each point's weights sum to ~1.0",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Generated frontier with 49\/50 feasible points",
+    "passed":true,
+    "detail":"feasible=49"
+  },
+  {
+    "name":"min_volatility returns dict-like",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Min vol weights sum to ~1.0",
+    "passed":true,
+    "detail":"sum=0.999990"
+  },
+  {
+    "name":"All weights in [0, 1]",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Min vol volatility <= Max Sharpe volatility",
+    "passed":true,
+    "detail":"min_vol=0.0755, max_sharpe=0.1080"
+  },
+  {
+    "name":"efficient_risk returns dict-like",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Efficient risk weights sum to ~1.0",
+    "passed":true,
+    "detail":"sum=1.000010"
+  },
+  {
+    "name":"efficient_return returns dict-like",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Efficient return weights sum to ~1.0",
+    "passed":true,
+    "detail":"sum=1.000000"
+  },
+  {
+    "name":"L2 regularized max_sharpe returns dict",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"L2 weights sum to ~1.0",
+    "passed":true,
+    "detail":"sum=1.000010"
+  },
+  {
+    "name":"L2 reg reduces zero-weight concentration (or equal)",
+    "passed":true,
+    "detail":"before=4, after=3"
+  },
+  {
+    "name":"Max weight constraint (0, 0.2) enforced",
+    "passed":true,
+    "detail":"max=0.2000"
+  },
+  {
+    "name":"Long\/short bounds (-1, 1) allow negative weights",
+    "passed":true,
+    "detail":"min=-0.1161"
+  },
+  {
+    "name":"Long\/short weights still sum to ~1.0",
+    "passed":true,
+    "detail":"sum=1.000010"
+  },
+  {
+    "name":"get_latest_prices returns pd.Series",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"greedy_portfolio returns (dict, float)",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Allocated + leftover ~= portfolio value",
+    "passed":true,
+    "detail":"invested=9950.92, leftover=49.08"
+  },
+  {
+    "name":"Leftover < max share price",
+    "passed":true,
+    "detail":"leftover=49.08, max_price=851.45"
+  },
+  {
+    "name":"lp_portfolio (requires pulp)",
+    "passed":false,
+    "detail":"pulp not installed; use greedy_portfolio instead"
+  },
+  {
+    "name":"BlackLittermanModel.bl_returns returns pd.Series",
+    "passed":true,
+    "detail":"len=10"
+  },
+  {
+    "name":"BL with market_cap prior returns pd.Series",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"EfficientFrontier can use BL posterior returns",
+    "passed":true,
+    "detail":"sum=1.0000"
+  },
+  {
+    "name":"HRPOpt.optimize returns dict",
+    "passed":true,
+    "detail":"type=OrderedDict"
+  },
+  {
+    "name":"HRP weights sum to ~1.0",
+    "passed":true,
+    "detail":"sum=1.000000"
+  },
+  {
+    "name":"HRP all weights in [0, 1]",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"HRP provides cluster information",
+    "passed":true,
+    "detail":"num_clusters=0"
+  },
+  {
+    "name":"Single asset: max_sharpe returns dict with 100% weight",
+    "passed":true,
+    "detail":"weights=OrderedDict([('AAPL', 1.0)])"
+  },
+  {
+    "name":"Two assets: frontier has points",
+    "passed":true,
+    "detail":"got=19"
+  },
+  {
+    "name":"Two assets: weights in each point sum to ~1",
+    "passed":true,
+    "detail":""
+  },
+  {
+    "name":"Two assets: max_sharpe succeeds",
+    "passed":true,
+    "detail":"weights=OrderedDict([('AAPL', 0.5814464629963036), ('MSFT', 0.4185535370036964)])"
+  },
+  {
+    "name":"Perfect correlation: no crash, weights sum to ~1",
+    "passed":true,
+    "detail":"weights=OrderedDict([('ASSET_A', 0.5), ('ASSET_B', 0.5)])"
+  },
+  {
+    "name":"Short history (10 days): no crash, weights sum to ~1",
+    "passed":true,
+    "detail":"sum=1.0000"
+  },
+  {
+    "name":"Mixed quality: optimizer handles extreme and poor performers",
+    "passed":true,
+    "detail":"top=XOM, worst=AMZN"
+  },
+  {
+    "name":"Extreme performer gets significant but not 100% weight",
+    "passed":true,
+    "detail":"EXTREME weight=0.1377"
+  },
+  {
+    "name":"Max Sharpe optimization < 500ms avg for 10 assets",
+    "passed":true,
+    "detail":"avg=5.8ms"
+  },
+  {
+    "name":"Efficient frontier iteration < 2s avg for 10 assets",
+    "passed":true,
+    "detail":"avg=93.5ms"
+  }
+]

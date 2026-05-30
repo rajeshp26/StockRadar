@@ -39,6 +39,13 @@ from schemas_portfolio import (
     BenchmarkCompareResponse,
     PortfolioAllocationResponse,
     DividendHistoryResponse,
+    RiskMetricsResponse,
+    DrawdownResponse,
+    CovarianceResponse,
+    EfficientFrontierResponse,
+    RollingSharpeResponse,
+    RiskContributionResponse,
+    FactorExposureResponse,
 )
 from shared.exceptions.base import AppException
 from database import supabase
@@ -63,6 +70,39 @@ def _resolve_db_user_id(auth_id: str) -> int:
 def _get_portfolio_service() -> PortfolioService:
     """Factory for PortfolioService with all dependencies."""
     return PortfolioService()
+
+
+_portfolio_risk_service_instance: Optional["PortfolioRiskService"] = None
+
+
+def _get_portfolio_risk_service() -> "PortfolioRiskService":
+    """Cached singleton factory for PortfolioRiskService."""
+    global _portfolio_risk_service_instance
+    if _portfolio_risk_service_instance is None:
+        from application.services.portfolio_risk_service import PortfolioRiskService
+        _portfolio_risk_service_instance = PortfolioRiskService()
+    return _portfolio_risk_service_instance
+
+
+def _resolve_user(user: dict) -> int:
+    """Resolve auth user dict → internal db_user_id. Caches in-memory."""
+    auth_id = user["uid"]
+    cache_key = f"user_id:{auth_id}"
+    cached = getattr(_resolve_user, "_cache", {}).get(cache_key)
+    if cached is not None:
+        return cached
+    db_user_id = _resolve_db_user_id(auth_id)
+    if not hasattr(_resolve_user, "_cache"):
+        _resolve_user._cache = {}
+    _resolve_user._cache[cache_key] = db_user_id
+    return db_user_id
+
+
+def _parse_account_ids(raw: Optional[str]) -> Optional[List[int]]:
+    """Parse comma-separated account_ids query param."""
+    if not raw:
+        return None
+    return [int(x) for x in raw.split(",") if x.strip()]
 
 
 # ============================================================================
@@ -1071,3 +1111,152 @@ async def list_benchmarks(
             status_code=500,
             detail="Failed to list benchmarks",
         )
+
+
+# ============================================================================
+# RISK METRICS
+# ============================================================================
+
+@router.get("/portfolio/risk-metrics", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_risk_metrics(
+    request: Request,
+    period: str = Query("1Y", description="Period: 1M, 3M, 6M, 1Y, 2Y, 3Y, 5Y, MAX"),
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> RiskMetricsResponse:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_risk_service()
+        return await service.compute_risk_metrics(
+            db_user_id, period=period, account_ids=_parse_account_ids(account_ids),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Risk metrics failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute risk metrics")
+
+
+@router.get("/portfolio/drawdown", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_drawdown(
+    request: Request,
+    period: str = Query("1Y", description="Period: 1M, 3M, 6M, 1Y, 2Y, 3Y, 5Y, MAX"),
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> DrawdownResponse:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_risk_service()
+        return await service.compute_drawdown(
+            db_user_id, period=period, account_ids=_parse_account_ids(account_ids),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Drawdown failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute drawdown")
+
+
+@router.get("/portfolio/covariance", tags=["Portfolio"], status_code=200)
+@limiter.limit("10/minute")
+async def get_covariance(
+    request: Request,
+    period: str = Query("1Y", description="Period: 1M, 3M, 6M, 1Y, 2Y, 3Y, 5Y"),
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> CovarianceResponse:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_risk_service()
+        return await service.compute_covariance_matrix(
+            db_user_id, period=period, account_ids=_parse_account_ids(account_ids),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Covariance failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute covariance")
+
+
+@router.get("/portfolio/efficient-frontier", tags=["Portfolio"], status_code=200)
+@limiter.limit("10/minute")
+async def get_efficient_frontier(
+    request: Request,
+    points: int = Query(50, description="Number of frontier points", ge=10, le=200),
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> EfficientFrontierResponse:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_risk_service()
+        return await service.compute_efficient_frontier(
+            db_user_id, account_ids=_parse_account_ids(account_ids), points=points,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Efficient frontier failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute efficient frontier")
+
+
+@router.get("/portfolio/rolling-sharpe", tags=["Portfolio"], status_code=200)
+@limiter.limit("10/minute")
+async def get_rolling_sharpe(
+    request: Request,
+    window: int = Query(252, description="Rolling window in trading days", ge=30, le=756),
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> RollingSharpeResponse:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_risk_service()
+        return await service.compute_rolling_sharpe(
+            db_user_id, window=window, account_ids=_parse_account_ids(account_ids),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Rolling sharpe failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute rolling sharpe")
+
+
+@router.get("/portfolio/risk-contribution", tags=["Portfolio"], status_code=200)
+@limiter.limit("10/minute")
+async def get_risk_contribution(
+    request: Request,
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> RiskContributionResponse:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_risk_service()
+        return await service.compute_risk_contribution(
+            db_user_id, account_ids=_parse_account_ids(account_ids),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Risk contribution failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute risk contribution")
+
+
+@router.get("/portfolio/market-exposure", tags=["Portfolio"], status_code=200)
+@limiter.limit("10/minute")
+async def get_market_exposure(
+    request: Request,
+    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    user: dict = Depends(get_current_user_dep),
+) -> FactorExposureResponse:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_risk_service()
+        return await service.compute_market_exposure(
+            db_user_id, account_ids=_parse_account_ids(account_ids),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Market exposure failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute market exposure")

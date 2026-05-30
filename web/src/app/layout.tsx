@@ -1,18 +1,24 @@
 // web/src/app/layout.tsx
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
-import { Toaster } from "@/components/ui/toaster";
+import localFont from "next/font/local";
 import { cn } from "@/lib/utils";
-import { FirebaseClientProvider } from "@/firebase/client-provider";
-import { ServiceProvider } from "@/shared/contexts/ServiceContext";
-import { AuthProvider } from "@/providers/auth-provider";
 import { ReactQueryProvider } from "@/providers/query-provider";
+import { FirebaseClientProvider } from "@/firebase/client-provider";
+import { AuthProvider } from "@/providers/auth-provider";
+import { ServiceProvider } from "@/shared/contexts/ServiceContext";
+import { Toaster } from "@/components/ui/toaster";
+import "./globals.css";
 
-const inter = Inter({
-  subsets: ["latin"],
+const inter = localFont({
+  src: [
+    { path: "./fonts/Inter-400.ttf", weight: "400" },
+    { path: "./fonts/Inter-500.ttf", weight: "500" },
+    { path: "./fonts/Inter-600.ttf", weight: "600" },
+    { path: "./fonts/Inter-700.ttf", weight: "700" },
+    { path: "./fonts/Inter-800.ttf", weight: "800" },
+    { path: "./fonts/Inter-900.ttf", weight: "900" },
+  ],
   variable: "--font-sans",
-  weight: ["400", "500", "600", "700", "800", "900"],
   display: "swap",
 });
 

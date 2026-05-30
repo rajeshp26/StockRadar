@@ -12,6 +12,7 @@ import { HoldingsTab } from './HoldingsTab';
 import { DividendsTab } from './DividendsTab';
 import { TransactionsTab } from './TransactionsTab';
 import { AllocationTab } from './AllocationTab';
+import { RiskPanel } from './RiskPanel';
 import { ImportTransactionsModal } from './ImportTransactionsModal';
 import { ManualTradeForm } from './ManualTradeForm';
 import { usePortfolioNavigation } from '../hooks/usePortfolioNavigation';
@@ -58,6 +59,8 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
                 return <TransactionsTab accountIds={accountIds} />;
             case 'allocation':
                 return <AllocationTab accountIds={accountIds} />;
+            case 'risk':
+                return <RiskPanel />;
             default:
                 return <OverviewTab accountIds={accountIds} />;
         }

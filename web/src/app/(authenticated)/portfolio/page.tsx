@@ -2,7 +2,7 @@
 'use client';
 
 import { useAuth } from '@/providers/auth-provider';
-import { PortfolioOverview } from '@/features/portfolio/components/PortfolioOverview';
+import { PortfolioTabShell } from '@/features/portfolio/components/PortfolioTabShell';
 
 export default function PortfolioPage() {
     const { status } = useAuth();
@@ -29,7 +29,7 @@ export default function PortfolioPage() {
     return (
         <div className="flex flex-1 items-start justify-center px-4 py-8">
             <div className="w-full max-w-7xl">
-                <PortfolioOverview />
+                <PortfolioTabShell />
             </div>
         </div>
     );

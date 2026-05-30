@@ -21,6 +21,13 @@ import type {
     DividendDetail,
     DividendHistoryResponse,
     TransactionFilter,
+    RiskMetricsResponse,
+    DrawdownResponse,
+    CovarianceResponse,
+    EfficientFrontierResponse,
+    RollingSharpeResponse,
+    RiskContributionResponse,
+    FactorExposureResponse,
 } from "../types/portfolio.types";
 
 /**
@@ -298,6 +305,70 @@ export class PortfolioService {
         if (filter?.activity_type) params.activity_type = filter.activity_type;
         if (filter?.search) params.search = filter.search;
         const res = await this.api.get("/portfolio/transactions", { params });
+        return res.data;
+    }
+
+    // ========================================================================
+    // COMPANY SEARCH
+    // ========================================================================
+
+    async searchCompany(symbol: string): Promise<{ exists: boolean; company_name?: string }> {
+        const res = await this.api.get<{ exists: boolean; company_name?: string }>(
+            `/companies/search?symbol=${symbol}`
+        );
+        return res.data;
+    }
+
+    // ========================================================================
+    // RISK METRICS
+    // ========================================================================
+
+    async getRiskMetrics(period: string = "1Y", accountIds?: string): Promise<RiskMetricsResponse> {
+        const params: Record<string, string> = { period };
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<RiskMetricsResponse>("/portfolio/risk-metrics", { params });
+        return res.data;
+    }
+
+    async getDrawdown(period: string = "1Y", accountIds?: string): Promise<DrawdownResponse> {
+        const params: Record<string, string> = { period };
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<DrawdownResponse>("/portfolio/drawdown", { params });
+        return res.data;
+    }
+
+    async getCovariance(period: string = "1Y", accountIds?: string): Promise<CovarianceResponse> {
+        const params: Record<string, string> = { period };
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<CovarianceResponse>("/portfolio/covariance", { params });
+        return res.data;
+    }
+
+    async getEfficientFrontier(points: number = 20, accountIds?: string): Promise<EfficientFrontierResponse> {
+        const params: Record<string, string> = { points: String(points) };
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<EfficientFrontierResponse>("/portfolio/efficient-frontier", { params });
+        return res.data;
+    }
+
+    async getRollingSharpe(window: number = 60, period: string = "1Y", accountIds?: string): Promise<RollingSharpeResponse> {
+        const params: Record<string, string> = { window: String(window), period };
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<RollingSharpeResponse>("/portfolio/rolling-sharpe", { params });
+        return res.data;
+    }
+
+    async getRiskContribution(accountIds?: string): Promise<RiskContributionResponse> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<RiskContributionResponse>("/portfolio/risk-contribution", { params });
+        return res.data;
+    }
+
+    async getMarketExposure(accountIds?: string): Promise<FactorExposureResponse> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<FactorExposureResponse>("/portfolio/market-exposure", { params });
         return res.data;
     }
 }

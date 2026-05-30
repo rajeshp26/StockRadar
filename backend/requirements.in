@@ -26,5 +26,9 @@ python-dotenv==1.2.2
 slowapi==0.1.9
 lxml==6.0.3
 
+scipy==1.17.1
+cvxpy==1.9.1
+PyPortfolioOpt==1.6.0
+
 # Transitive constraint: pandas 3.0 compatibility
 fsspec<=2025.10.0

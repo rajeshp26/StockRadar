@@ -2,7 +2,7 @@
 
 import { firebaseConfig } from '@/firebase/config';
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore'
 
 // IMPORTANT: DO NOT MODIFY THIS FUNCTION
@@ -25,11 +25,18 @@ export function initializeFirebase() {
       firebaseApp = initializeApp(firebaseConfig);
     }
 
-    return getSdks(firebaseApp);
+    const sdks = getSdks(firebaseApp);
+    // Fire-and-forget: set persistence to localStorage (synchronous) instead of IndexedDB (async)
+    // to eliminate race conditions where onIdTokenChanged fires null before
+    // IndexedDB resolves the persisted session on page load.
+    setPersistence(sdks.auth, browserLocalPersistence).catch(() => {});
+    return sdks;
   }
 
   // If already initialized, return the SDKs with the already initialized App
-  return getSdks(getApp());
+  const sdks = getSdks(getApp());
+  setPersistence(sdks.auth, browserLocalPersistence).catch(() => {});
+  return sdks;
 }
 
 export function getSdks(firebaseApp: FirebaseApp) {

@@ -1751,8 +1751,8 @@ class PortfolioService:
         # Calculate summary stats
         first_value = snapshots[0]["value"]
         last_value = snapshots[-1]["value"]
-        total_return = last_value - snapshots[0]["cost_basis"]
-        total_return_pct = ((last_value - snapshots[0]["cost_basis"]) / snapshots[0]["cost_basis"] * 100) if snapshots[0]["cost_basis"] > 0 else 0
+        total_return = last_value - first_value
+        total_return_pct = ((last_value - first_value) / first_value * 100) if first_value > 0 else 0
 
         # Find best/worst day
         best_day = None

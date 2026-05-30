@@ -1571,6 +1571,8 @@ Portfolio Overview:
 
 ## 12. UI Redesign — Performance Chart, Benchmark Comparison & Holdings Enhancement
 
+> **Note:** Sections 12–16 describe the Phase 1 redesign (Performance Chart + Benchmark Comparison + Holdings Enhancement), which has been implemented. Sections 17+ describe the Phase 2 redesign (Tabbed Navigation + Dividends + Transactions + Allocation). See [PORTFOLIO_IMPROVEMENTS.md](./PORTFOLIO_IMPROVEMENTS.md) for the full forward-looking spec.
+
 ### 12.1 Motivation
 
 The original portfolio UI showed static metrics (net worth, gain/loss, YTD dividends) and a flat top-10 holdings list. It lacked:
@@ -2696,3 +2698,578 @@ interface BenchmarkSelectorProps {
 ```
 
 Both features now render the same dropdown with the same max-5 constraint and visual style.
+
+---
+
+## 17. Tabbed Navigation Redesign — Impact Analysis & Feasibility Study
+
+> This section analyses the gap between the current portfolio UI (single-page layout with chart, metrics, and holdings) and the proposed Morningstar-style tabbed navigation model described in [PORTFOLIO_IMPROVEMENTS.md](./PORTFOLIO_IMPROVEMENTS.md).
+
+### 17.1 Current vs Proposed State
+
+| Dimension | Current (Phase 1) | Proposed (Phase 2) |
+|-----------|-------------------|---------------------|
+| **Layout** | Single scrolling page | Tabbed layout with 6 tabs |
+| **Navigation** | Vertical scroll | Account Selector strip + Tab Bar |
+| **Account filtering** | Multi-select dropdown (chart only) | Persistent chip strip, filters ALL tabs |
+| **URL state** | None (local state only) | `?account=TFSA&tab=holdings` deep-linkable |
+| **Overview** | Merged metrics + chart + accounts | Dedicated tab with KPI cards + mini chart + breakdown |
+| **Performance** | Chart with period/benchmark selectors | Dedicated tab with larger chart + period return cards + monthly heatmap |
+| **Holdings** | Sortable/searchable/groupable table | Full table with column picker, grouping, card view |
+| **Dividends** | YTD figure only in KPIs | Dedicated tab with calendar chart + history table + projections |
+| **Transactions** | Not in portfolio page (no UI) | Dedicated per-account tab with filters + export |
+| **Allocation** | Not available | Dedicated tab with donut charts (sector/geo/asset/account) |
+
+### 17.2 Backend Impact Analysis
+
+#### 17.2.1 Endpoints That Already Exist (No Change Needed)
+
+| Endpoint | Current Status | Used By |
+|----------|---------------|---------|
+| `GET /portfolio/overview` | Returns net_worth, gain_loss, ytd_dividends, top_holdings, account_breakdown | Overview Tab |
+| `GET /portfolio/performance` | Returns time-series with period filter + account_ids filter | Performance Tab |
+| `GET /portfolio/performance/compare` | Returns benchmark comparison series | Performance Tab |
+| `GET /portfolio/holdings` | Returns all holdings with company enrichment | Holdings Tab |
+| `GET /portfolio/accounts/{id}/holdings` | Returns per-account holdings | Holdings Tab (per-account) |
+| `GET /benchmarks` | Returns available benchmark indices | Performance Tab |
+| `GET /portfolio/accounts/{id}/transactions` | Returns paginated transactions | Transactions Tab |
+| `GET /portfolio/accounts/{id}/dividends` | Returns YTD total + monthly summaries | Dividends Tab |
+
+#### 17.2.2 Endpoints That Need Minor Extension
+
+| Endpoint | Gap | Change Required |
+|----------|-----|-----------------|
+| `GET /portfolio/overview` | No per-account overview | Add optional `account_id` query param; when provided, return account-scoped KPIs + top 5 holdings instead of full breakdown |
+| `GET /portfolio/accounts/{id}/dividends` | Only returns YTD total + 12-month monthly summaries | Extend to return full dividend history table grouped by ticker, projected annual yield, withholding tax breakdown |
+| `GET /portfolio/accounts/{id}/transactions` | No type filter, no search, no date range | Add optional `type` filter, `from`/`to` date range, `search` by ticker params; add cursor-based pagination for large ledgers |
+| `GET /portfolio/holdings` | Add weight % and day change columns | Include total_portfolio_value in response for client-side weight calculation; add day_change from current_market_data |
+
+#### 17.2.3 New Endpoints Required
+
+| Endpoint | Method | Query Params | Response | Priority |
+|----------|--------|-------------|----------|----------|
+| `/portfolio/allocation` | GET | `account_id`, `group_by` (sector\|geography\|asset_class\|account) | `[{segment, value, weight, count, gain_loss}]` | Lower |
+| `/portfolio/dividends/calendar` | GET | `account_id`, `year`, `type` (received\|projected) | Monthly bar chart data with ticker breakdown | Medium |
+| `/portfolio/transactions/export` | GET | `account_id`, `from`, `to`, `type` | CSV download of filtered transaction ledger | Medium |
+
+#### 17.2.4 Backend Service Changes
+
+| Service Method | Change Required | Effort |
+|----------------|-----------------|--------|
+| `get_user_portfolio_overview()` | Add `account_id` optional param; when set, scope all aggregations to that account | Small |
+| `_extract_dividends()` | Extend to compute projected annual yield from current holdings | Medium |
+| `get_portfolio_performance()` | Already supports `account_ids` filter — no change needed for per-account views | None |
+| New: `get_portfolio_allocation()` | Group holdings by sector/geography/asset class using company join; compute totals and percentages | Medium |
+| New: `get_dividend_calendar()` | Aggregate dividends by month for chart; compute projections using forward yields | Medium |
+| `enrich_holdings_with_prices()` | Add day_change computation from `current_market_data` | Small |
+
+### 17.3 Frontend Impact Analysis
+
+#### 17.3.1 Components to Create
+
+| Component | Purpose | Data Source | State |
+|-----------|---------|-------------|-------|
+| `PortfolioTabShell` | Container with Account Selector strip + Tab bar | URL search params (`?tab=&account=`) | URL-synced via `nuqs` or manual `useSearchParams` |
+| `AccountChipStrip` | Horizontally scrollable account chips | `usePortfolioAccounts()` | Account selected chip |
+| `TabBar` | Tab navigation (6 tabs) | URL search params | Active tab |
+| `OverviewTab` | KPI cards + mini chart + account breakdown | `usePortfolioOverview()` with account_id | None (read-only) |
+| `PerformanceTab` | Full chart + period returns + benchmark compare | `usePortfolioPerformance()` + `useBenchmarkCompare()` | Period, benchmarks |
+| `HoldingsTab` | Full holdings table (wraps HoldingsSection) | `useAllHoldings()` / `useAccountHoldings()` | Search, sort, group, view mode |
+| `DividendsTab` | Dividend KPI + calendar chart + history table | `useAccountDividends()` | Year filter, view toggle |
+| `TransactionsTab` | Transaction ledger with filters | `useAccountTransactions()` | Date range, type filter, search |
+| `AllocationTab` | Donut charts + breakdown tables | New `usePortfolioAllocation()` | Group-by selector |
+
+#### 17.3.2 Components to Refactor
+
+| Existing Component | Refactoring Required | Effort |
+|--------------------|----------------------|--------|
+| `PortfolioOverview.tsx` | Split into OverviewTab (dashboard content) + PortfolioTabShell (wrapper with nav). Extract KPI cards into reusable sub-components. | Large |
+| `PortfolioOverview.tsx` header | Extract header actions (Add Trade, Import CSV) into shared toolbar | Small |
+| `PortfolioPerformanceChart.tsx` | Move into PerformanceTab; remove AccountSelector (now in chip strip); use account context instead | Medium |
+| `HoldingsSection.tsx` | Rename to HoldingsTab; add column picker; connect to account context instead of local state | Medium |
+
+#### 17.3.3 New Hooks Required
+
+| Hook | API | Purpose |
+|------|-----|---------|
+| `usePortfolioAccount()` | `useSearchParams` | Reads/writes `?account=TFSA` from URL; returns selected account or null for All |
+| `usePortfolioTab()` | `useSearchParams` | Reads/writes `?tab=holdings` from URL |
+| `useAccountTransactions(accountId, filters)` | `GET /accounts/{id}/transactions` | Paginated transaction history with filters |
+| `useDividendHistory(accountId, year)` | `GET /accounts/{id}/dividends` | Dividend detail with monthly breakdown |
+| `usePortfolioAllocation(accountId, groupBy)` | `GET /portfolio/allocation` | Allocation breakdown data |
+
+#### 17.3.4 State Management Changes
+
+| Current | Proposed |
+|---------|----------|
+| Account filter: local state in PortfolioPerformanceChart | Account filter: URL search param, consumed by all tabs via context |
+| Tab selection: not applicable | Tab selection: URL search param |
+| Period/benchmarks: local state in chart component | Period/benchmarks: local state in PerformanceTab (no cross-tab sharing needed) |
+| No URL state | Full URL-driven navigation: `?account=TFSA&tab=holdings&sort=value&group=sector` |
+
+**Recommendation:** Use `nuqs` library for type-safe URL search params, or simpler `useSearchParams` + React context.
+
+#### 17.3.5 TypeScript Type Updates
+
+| Type | Change |
+|------|--------|
+| `PortfolioOverview` | Add optional `account_id` for scoped overviews |
+| `Holding` | Add `day_change`, `day_change_pct`, `weight_pct` |
+| `DividendInfo` | Add `projected_amount`, `withholding_tax`, `yield_on_cost` |
+| New: `AllocationSegment` | `{ segment: string, value: number, weight: number, count: number, gain_loss: number }` |
+| New: `TransactionFilter` | `{ from: string, to: string, type: string, search: string }` |
+| New: `TabInfo` | `{ id: string, label: string, icon: string, availableFor: string[] }` |
+
+### 17.4 Database Impact
+
+#### 17.4.1 No New Tables Required
+
+All data for the tabbed redesign already exists:
+
+| Tab | Data Source | Table(s) |
+|-----|-------------|----------|
+| Overview | Aggregated holdings + dividends | `portfolio_holdings`, `portfolio_dividends`, `portfolio_accounts`, `companies` |
+| Performance | Transaction history + price history | `portfolio_transactions`, `price_history` |
+| Holdings | Current positions | `portfolio_holdings`, `companies`, `current_market_data` |
+| Dividends | Extracted dividends | `portfolio_dividends`, `portfolio_transactions` |
+| Transactions | Transaction log | `portfolio_transactions` |
+| Allocation | Holdings + company metadata | `portfolio_holdings`, `companies` |
+
+#### 17.4.2 New Query Patterns
+
+| Query | Description | SQL Pattern |
+|-------|-------------|-------------|
+| Sector allocation | Group holdings by `companies.sector` | `SELECT c.sector, SUM(h.current_value) ... GROUP BY c.sector` |
+| Geography allocation | Group by exchange → market_group | `SELECT CASE ... END as market_group, SUM(...) ...` |
+| Asset class allocation | Group by security_type when available | Future: requires `security_type` on `companies` |
+| Weighted day change | Value-weighted day change | `SUM(h.current_value * (cmd.day_change / cmd.close_price)) / SUM(h.current_value)` |
+
+### 17.5 API Gap Analysis Summary
+
+| Proposed Feature | Backend Ready | Frontend Ready | Gap |
+|------------------|---------------|----------------|-----|
+| Account Selector chip strip | Accounts endpoint exists | New component needed | Frontend only |
+| Tab navigation shell | No backend change | New component + URL state | Frontend only |
+| Overview Tab (All Accounts) | `/portfolio/overview` exists | Minor refactor of PortfolioOverview | Small |
+| Overview Tab (Single Account) | Need `account_id` param on overview | New sub-component for scoped view | Small backend + Medium frontend |
+| Performance Tab | All endpoints exist | Move existing chart into tab wrapper | Small refactor |
+| Holdings Tab | All endpoints exist | Move existing section into tab wrapper, add column picker | Small refactor |
+| Dividends Tab | Need extended dividend endpoint | New DividendsTab component | Medium backend + Medium frontend |
+| Transactions Tab | Transaction endpoint exists | New TransactionsTab component | Small backend + Medium frontend |
+| Allocation Tab | New allocation endpoint needed | New AllocationTab component | Medium backend + Large frontend |
+| URL state sync | No backend change | `nuqs` integration or manual useSearchParams | Medium frontend |
+| Responsive mobile | No backend change | Account selector dropdown, tabs scroll, holdings cards | Medium frontend |
+
+### 17.6 Risk Assessment
+
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| Breaking existing layout during PortfolioOverview refactor | Medium | High | Feature-flag new layout; keep old single-page as fallback |
+| Performance of allocation queries with 144+ holdings | Low | Medium | Client-side aggregation from holdings data; no server endpoint for initial release |
+| URL state complexity with tab + account + sort/filter params | Medium | Medium | Use `nuqs` library; define clear URL schema before impl |
+| Existing Tests break during refactor | High | Medium | Run existing test suite before/after each change; update tests alongside code |
+| Mobile responsive pass (Phase 7) reveals layout issues | Medium | Low | Build with mobile-first CSS from the start; use CSS grid with responsive breakpoints |
+| Dividends projected yield data source unavailable | Medium | Low | Show "Coming soon" badge; fall back to trailing 12-month yield |
+| Transactions tab shows stale data on slow accounts | Low | Low | Add React Query stale-while-revalidate and refetchOnMount |
+
+### 17.7 Phased Delivery Plan
+
+| Phase | Scope | Backend Effort | Frontend Effort | Risk |
+|-------|-------|----------------|-----------------|------|
+| **Phase 1** | Tab shell + Account Selector + URL routing + Overview Tab refactor | 1-2 days | 4-5 days | Low |
+| **Phase 2** | Performance Tab (move existing chart into tab) | 0 | 1-2 days | Low |
+| **Phase 3** | Holdings Tab (move existing section, add column picker) | 0 | 2-3 days | Low |
+| **Phase 4** | Dividends Tab (calendar chart + history + projections) | 2-3 days | 4-5 days | Medium |
+| **Phase 5** | Transactions Tab (ledger + filters + export) | 1-2 days | 3-4 days | Medium |
+| **Phase 6** | Allocation Tab (donut charts + sector/geo/asset grouping) | 2-3 days | 4-5 days | Medium |
+| **Phase 7** | Mobile responsive + polish + edge case hardening | 0 | 3-4 days | Low |
+
+**Total estimated effort:** ~8-13 days backend + ~22-28 days frontend
+
+### 17.8 Feasibility Conclusion
+
+> **The proposed tabbed navigation redesign is FEASIBLE.** All required backend data already exists in the database. The primary effort is frontend component creation and refactoring. No new tables, no new data sources, and no breaking changes to existing API contracts are needed. The existing test suite provides a safety net for the refactoring.
+>
+> **Key recommendation:** Phase 1 (shell + overview refactor) is the highest-risk item due to the layout restructure. Proceed with a feature-flag approach: build the new tabbed shell alongside the existing single-page view, validate with a subset of users, then switch default.
+
+---
+
+## 18. Comprehensive Test Plan
+
+### 18.1 Test Strategy
+
+| Layer | Framework | Scope | Run Frequency |
+|-------|-----------|-------|---------------|
+| Backend Unit | pytest + pytest-asyncio | Service methods, repository methods, parser logic, schema validation | Every commit / pre-merge |
+| Backend Integration | pytest + FastAPI TestClient | API endpoints with mocked Supabase | Every commit / pre-merge |
+| Backend E2E | pytest + real Supabase (test DB) | Full import → holding calc → dividend extraction pipeline | Nightly / pre-release |
+| Frontend Unit | Vitest + RTL | Components, hooks, services, utility functions | Every commit / pre-merge |
+| Frontend Integration | Vitest + RTL | Multi-component flows (tab switching with data) | Every commit / pre-merge |
+| E2E (Full Stack) | Playwright / Cypress | Browser-based user flows against running dev instance | Pre-release |
+
+### 18.2 Backend Unit Test Matrix
+
+#### 18.2.1 PortfolioService — Import Operations
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-01 | `queue_import_valid_csv` | Valid base64 CSV with 10 rows | Returns `import_batch_id`, status=`pending` | High |
+| BS-02 | `queue_import_duplicate_csv` | Same CSV uploaded twice | Returns `duplicate_import=True` with `previous_import_date` | High |
+| BS-03 | `queue_import_invalid_brokerage` | Unknown brokerage code | Raises ValueError or returns error | High |
+| BS-04 | `queue_import_empty_csv` | Empty CSV content | Returns error immediately, no job created | High |
+| BS-05 | `queue_import_parse_failure` | Malformed CSV rows | Returns error with parse error details | High |
+| BS-06 | `queue_import_account_filter` | Filter for TFSA only | Only TFSA transactions parsed; warning for filtered types | Medium |
+| BS-07 | `_process_import_background_full` | Full background processing pipeline | Accounts created, companies resolved, transactions inserted, holdings recalculated, dividends extracted | High |
+| BS-08 | `_process_import_account_creation` | CSV with 3 new account IDs | 3 accounts created in `portfolio_accounts` | Medium |
+| BS-09 | `_process_import_company_creation` | CSV with 5 new symbols | 5 companies created with YFinance data or minimal fallback | Medium |
+| BS-10 | `_process_import_duplicate_rows` | CSV with 10 rows where 3 are duplicates | `imported_rows=7`, `duplicate_rows=3` | Medium |
+
+#### 18.2.2 PortfolioService — Holdings (FIFO)
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-11 | `fifo_basic_buy_sell` | BUY 10, SELL 3 | Remaining 7 shares, avg_cost correctly calculated | High |
+| BS-12 | `fifo_multiple_lots` | BUY 5, BUY 5, SELL 7 | FIFO: first 5 from lot 1, next 2 from lot 2. Remaining 3 | High |
+| BS-13 | `fifo_sell_all` | BUY 10, SELL 10 | Position closed, returns None | High |
+| BS-14 | `fifo_sell_more_than_held` | BUY 5, SELL 10 | Returns None, realized_gain from only 5 shares | Medium |
+| BS-15 | `fifo_sell_partial_lot` | BUY 10, SELL 3, SELL 4 | Lot 1: first sell 3, remaining 7; second sell 4, remaining 3 | Medium |
+| BS-16 | `fifo_no_transactions` | Empty transaction list | Returns None | Medium |
+| BS-17 | `fifo_only_sells` | SELL 5 (no prior buys) | Returns None (cannot have negative quantity) | Medium |
+| BS-18 | `fifo_commission_handling` | BUY 10 @ $100 + $5 commission | avg_cost = $100.50 (including commission) | Medium |
+| BS-19 | `fifo_realized_gain` | BUY 10 @ $100, SELL 5 @ $120 | realized_gain = $100 (5 × $20 profit) | Medium |
+| BS-20 | `fifo_negative_quantity` | CSV with negative quantity for SELL | `abs(quantity)` normalizes correctly | High |
+| BS-21 | `_recalculate_account_holdings_full` | Full account recalculation with 10 symbols | Old holdings deleted, new holdings upserted with correct values | High |
+| BS-22 | `enrich_holdings_with_prices_tier1` | Holding has `current_market_data` | Uses tier 1 price | Medium |
+| BS-23 | `enrich_holdings_with_prices_tier2` | Holding has `price_history` but no `current_market_data` | Uses tier 2 (latest close) | Medium |
+| BS-24 | `enrich_holdings_with_prices_tier3` | No price data available | Falls back to average_cost (tier 3) | Medium |
+
+#### 18.2.3 PortfolioService — Portfolio Overview
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-25 | `overview_empty_portfolio` | No accounts, no holdings | net_worth=0, holdings_count=0, accounts_count=0 | High |
+| BS-26 | `overview_single_account` | 1 account with 5 holdings | Correct net_worth, P&L, YTD dividends, 5 top holdings | High |
+| BS-27 | `overview_multiple_accounts` | 3 accounts with varying holdings | Aggregated totals, 3 account breakdown entries | High |
+| BS-28 | `overview_ytd_dividends` | Account has dividends this year | ytd_dividends = sum of all dividend amounts this year | Medium |
+| BS-29 | `overview_account_id_filter` | Request with account_id=1 | Only account 1's data returned; breakdown has 1 entry | High |
+| BS-30 | `overview_invalid_account_id` | Request with non-existent account_id | Returns empty or error | Medium |
+| BS-31 | `overview_top_10_holdings` | 15 holdings exist | Only top 10 by market value returned | Medium |
+
+#### 18.2.4 PortfolioService — Manual Transactions
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-32 | `manual_buy` | BUY 10 AAPL @ $150 | Transaction inserted, holdings recalculated | High |
+| BS-33 | `manual_sell` | SELL 5 AAPL @ $160 | Transaction inserted, realized gain calculated | High |
+| BS-34 | `manual_dividend` | DIVIDEND $50 on MSFT | Transaction + dividend record created | High |
+| BS-35 | `manual_deposit` | DEPOSIT $1000 | Cash transaction, no holding change | Medium |
+| BS-36 | `manual_withdrawal` | WITHDRAWAL $500 | Cash transaction, no holding change | Medium |
+| BS-37 | `manual_wrong_owner` | account_id belongs to another user | Error: unauthorized | High |
+| BS-38 | `manual_missing_symbol` | BUY without symbol | Validation error | Medium |
+| BS-39 | `manual_new_company` | BUY unknown symbol SYMXYZ | Company created, `company_created=True` returned | Medium |
+| BS-40 | `manual_existing_company` | BUY known AAPL | `company_created=False`, uses existing company_id | Medium |
+
+#### 18.2.5 PortfolioService — Performance Calculation
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-41 | `performance_1Y` | 1 year of data | Correct number of snapshots, correct value progression | High |
+| BS-42 | `performance_ALL` | Full history | Earliest transaction date to today, correct snapshots | High |
+| BS-43 | `performance_1D` | Single day | 1 snapshot | Medium |
+| BS-44 | `performance_no_transactions` | No trades in period | Flat line at opening value | Medium |
+| BS-45 | `performance_no_trades_all` | No trades ever | Empty or single-point snapshot | Medium |
+| BS-46 | `performance_best_worst_day` | Known best/worst days | best_day / worst_day correctly identified | Medium |
+| BS-47 | `performance_account_filter` | Filter by account_ids | Only selected accounts' transactions included | High |
+| BS-48 | `performance_net_deposits` | Multiple deposits/withdrawals | net_deposits cumulative at each snapshot | Medium |
+| BS-49 | `performance_price_fallback` | Symbol missing price data | Falls back to cost basis, value not 0 | Medium |
+| BS-50 | `_period_to_date_range_all_periods` | All 8 period strings | Each returns correct (start, end) date range | High |
+
+#### 18.2.6 PortfolioService — Benchmark Comparison
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-51 | `compare_single_benchmark` | Compare vs SPY | Portfolio + SPY series returned, both normalized to 100 | High |
+| BS-52 | `compare_multiple_benchmarks` | Compare vs SPY, QQQ | 3 series (portfolio + 2 benchmarks) | Medium |
+| BS-53 | `compare_no_benchmark_data` | Benchmark has no price history | Benchmark series returned with zero/flat values | Medium |
+| BS-54 | `compare_short_period` | 1D comparison | 1 snapshot + 1 benchmark point | Low |
+| BS-55 | `compare_account_filter` | With account_ids filter | Both portfolio and benchmark scoped to filtered accounts | Medium |
+
+#### 18.2.7 PortfolioService — Dividends
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-56 | `dividend_extraction_full` | 10 dividend transactions across 2 accounts | 10 dividend records created | High |
+| BS-57 | `dividend_extraction_dedup` | Same dividend imported twice | No duplicate records (idempotent) | Medium |
+| BS-58 | `dividend_calendar_monthly` | Dividends in months Jan, Feb, Mar | Monthly aggregation correctly grouped | Medium |
+| BS-59 | `dividend_yearly_total` | Multiple dividends in 2026 | Correct fiscal year total | Medium |
+
+#### 18.2.8 PortfolioService — Allocation
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BS-60 | `allocation_by_sector` | Holdings in Tech, Energy, Financials | 3 segments with correct value, weight, count | Medium |
+| BS-61 | `allocation_by_geography` | Holdings in US, Canada, Brazil | Market group segments with correct totals | Medium |
+| BS-62 | `allocation_by_account` | 3 accounts with different values | Account-level allocation with correct weights | Medium |
+| BS-63 | `allocation_empty_portfolio` | No holdings | Empty segments array | Low |
+| BS-64 | `allocation_account_filter` | Filter by single account | Only that account's allocation returned | Medium |
+
+#### 18.2.9 PortfolioRepository — Data Access
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BR-01 | `get_user_accounts_active_only` | 3 accounts, 1 inactive | Only 2 active accounts returned | High |
+| BR-02 | `get_or_create_account_new` | Account does not exist | New row inserted | High |
+| BR-03 | `get_or_create_account_exists` | Account already exists | Existing row returned, no INSERT | High |
+| BR-04 | `insert_transactions_bulk` | 100 transactions | All inserted with correct data | High |
+| BR-05 | `insert_transactions_duplicates` | 10 transactions, 3 duplicates | 7 inserted, 3 skipped | High |
+| BR-06 | `get_account_holdings_with_enrichment` | Holdings with company data | Sector, industry, exchange, market_group all populated | Medium |
+| BR-07 | `get_user_all_holdings_cross_account` | Holdings across 3 accounts | All returned with account_name, account_type | Medium |
+| BR-08 | `upsert_holding_new` | New symbol for account | Inserted | Medium |
+| BR-09 | `upsert_holding_update` | Existing symbol updated | Updated | Medium |
+| BR-10 | `delete_account_holdings` | Delete all for account | Count of deleted rows | Medium |
+| BR-11 | `get_monthly_dividends` | 12 months of data | 12 monthly summaries with totals | Medium |
+| BR-12 | `create_import_job_state_machine` | Create, process, complete | Status transitions: pending, processing, completed | High |
+
+#### 18.2.10 Parser — CSV Parsing
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BP-01 | `parse_csv_full_valid` | 100 valid CSV rows | 100 `ParsedTransaction` objects | High |
+| BP-02 | `parse_csv_footer_row` | CSV with "As of ..." footer | Footer skipped, remaining rows parsed | High |
+| BP-03 | `parse_csv_empty_rows` | CSV with empty lines | Empty rows skipped | High |
+| BP-04 | `parse_csv_corp_actions` | CSV with LegacyCorporateAction rows | Corp actions skipped with warnings | High |
+| BP-05 | `parse_csv_account_filter_tfsa` | Filter TFSA only | Only TFSA account_type rows parsed | High |
+| BP-06 | `parse_csv_mixed_types` | CSV with Trade, Dividend, MoneyMovement | Each type correctly identified | Medium |
+| BP-07 | `parse_csv_cdr_normalization` | Symbols with CDR suffixes | CDR stripped, exchange_override=TOR set | High |
+| BP-08 | `parse_csv_dot_to_hyphen` | Symbols with dots (BRK.B, BBD.A) | Dots converted to hyphens | Medium |
+| BP-09 | `parse_csv_negative_quantity_sells` | SELL with negative quantity | Correctly parsed as sell | High |
+| BP-10 | `parse_csv_empty_csv` | Empty CSV content | ParseResult with success=False | High |
+| BP-11 | `parse_csv_missing_columns` | CSV missing required column | Validation error | Medium |
+| BP-12 | `parse_csv_no_transactions` | CSV with header only, no data rows | ParseResult with success=True, 0 transactions | Medium |
+
+#### 18.2.11 Schema Validation
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BSV-01 | `manual_transaction_request_valid` | All fields valid | Model created successfully | High |
+| BSV-02 | `manual_transaction_request_invalid_type` | Invalid activity_type | Validation error | Medium |
+| BSV-03 | `manual_transaction_request_missing_symbol` | BUY without symbol | Validation error | Medium |
+| BSV-04 | `import_request_valid` | All fields valid | Model created | High |
+| BSV-05 | `import_request_missing_csv` | No csv_content | Validation error | High |
+| BSV-06 | `performance_response_valid` | Valid snapshots | Model serializes correctly | Medium |
+| BSV-07 | `performance_snapshot_negative` | Negative values allowed | Model accepts (edge case) | Low |
+| BSV-08 | `holding_info_optional_fields` | Missing sector, industry | Optional fields are None | Medium |
+
+### 18.3 Frontend Unit Test Matrix
+
+#### 18.3.1 Service Layer (portfolio.service.ts)
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| FS-01 | `getPortfolioOverview_success` | API returns valid overview data | Returns typed `PortfolioOverview` | High |
+| FS-02 | `getPortfolioOverview_error` | API returns 500 | Throws appropriate error | High |
+| FS-03 | `importTransactions_success` | Valid base64 CSV | Returns `ImportResult` with batch_id | High |
+| FS-04 | `importTransactions_duplicate` | API returns duplicate error | Returns `duplicate_import: true` | High |
+| FS-05 | `getImportStatus_pending` | Job is pending | Returns status=pending | Medium |
+| FS-06 | `getImportStatus_completed` | Job is done | Returns full result with counts | Medium |
+| FS-07 | `getAllHoldings_success` | Valid response | Returns Holding[] | Medium |
+| FS-08 | `getAccountHoldings_success` | Valid response per account | Returns holdings with account context | Medium |
+| FS-09 | `addManualTransaction_success` | Valid trade | Returns transaction_id | High |
+| FS-10 | `getPortfolioPerformance_success` | Valid period | Returns PerformanceResponse | Medium |
+| FS-11 | `getBenchmarks_success` | Valid response | Returns BenchmarkInfo[] | Low |
+| FS-12 | `getBenchmarkCompare_success` | Valid response with benchmarks | Returns BenchmarkCompareResponse | Medium |
+| FS-13 | `fileToBase64_valid` | Valid File object | Returns base64 string without prefix | Medium |
+| FS-14 | `getAccountTransactions_success` | Valid response | Returns transactions + total_count | Medium |
+| FS-15 | `getAccountDividends_success` | Valid response | Returns current_year_total + monthly_summaries | Medium |
+
+#### 18.3.2 React Query Hooks (usePortfolio.ts)
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| FH-01 | `usePortfolioOverview_returns_data` | Query succeeds | Returns PortfolioOverview | High |
+| FH-02 | `usePortfolioOverview_loading` | Query pending | isLoading is true | High |
+| FH-03 | `usePortfolioOverview_error` | Query fails | Error state | High |
+| FH-04 | `usePortfolioAccounts_empty` | No accounts | Returns empty array | Medium |
+| FH-05 | `useImportTransactions_mutation` | Mutation triggered | Service method called with correct params | High |
+| FH-06 | `useImportTransactions_success_invalidation` | Mutation succeeds | Portfolio queries invalidated | High |
+| FH-07 | `useImportStatus_polls_until_complete` | Batch ID processing to complete | Polls every 2s, stops on completed/failed | High |
+| FH-08 | `usePortfolioPerformance_period_change` | Period changes | Refetch triggered with new period | Medium |
+| FH-09 | `useBenchmarkCompare_enabled` | benchmarks.length > 0 | Query enabled | Medium |
+| FH-10 | `useBenchmarkCompare_disabled` | benchmarks.length === 0 | Query disabled | Medium |
+| FH-11 | `useDeleteAccount_cascade_invalidation` | Account deleted | Overview + accounts + holdings invalidated | Medium |
+| FH-12 | `useAccountTransactions_type_filter` | Filter by BUY type | Query refetched with type param | Medium |
+| FH-13 | `usePortfolioAllocation_group_by` | Switch sector to geography | Query refetched with new group_by | Medium |
+
+#### 18.3.3 Components (Rendering + Interaction)
+
+| Test ID | Test Name | Component | Scenario | Expected Result | Priority |
+|---------|-----------|-----------|----------|-----------------|----------|
+| FC-01 | `overview_loading_state` | PortfolioOverview | Loading (isLoading) | Spinner visible | High |
+| FC-02 | `overview_error_state` | PortfolioOverview | Error (isError) | Error message with import button | High |
+| FC-03 | `overview_empty_state` | PortfolioOverview | accounts_count === 0 | PortfolioEntrySelector rendered | High |
+| FC-04 | `overview_populated_state` | PortfolioOverview | Valid data | Metrics, chart, breakdown, holdings all rendered | High |
+| FC-05 | `import_modal_workflow` | ImportTransactionsModal | Open, select brokerage, pick file, upload | Progress bar, then success card | High |
+| FC-06 | `import_modal_duplicate_warning` | ImportTransactionsModal | Duplicate CSV detected | Amber warning shown | Medium |
+| FC-07 | `manual_trade_buy_validation` | ManualTradeForm | BUY without symbol | Validation error on submit | High |
+| FC-08 | `manual_trade_company_check` | ManualTradeForm | Type AAPL | Debounced call, green "exists" shown | Medium |
+| FC-09 | `holdings_search_filter` | HoldingsSection | Search "AAPL" | Only AAPL row visible | High |
+| FC-10 | `holdings_group_by_sector` | HoldingsSection | Group by Sector | Group headers with collapsible rows | High |
+| FC-11 | `holdings_sort_by_value` | HoldingsSection | Sort by Value | Descending by market value | Medium |
+| FC-12 | `holdings_staggered_reveal` | HoldingsSection | 50 holdings load | Items appear one by one at 40ms intervals | Medium |
+| FC-13 | `holdings_show_more` | HoldingsSection | 144 holdings, click "Show all" | All 144 visible | Medium |
+| FC-14 | `chart_period_change` | PortfolioPerformanceChart | Click "1Y" then "3M" | Chart updates with new data | High |
+| FC-15 | `chart_benchmark_toggle` | PortfolioPerformanceChart | Click "+ Compare", select SPY | Benchmark line appears on chart | High |
+| FC-16 | `chart_empty_state` | PortfolioPerformanceChart | No performance data | "No data points" message | Medium |
+| FC-17 | `account_selector_filter` | AccountSelector | Select 2 of 3 accounts | Only selected accounts shown | Medium |
+| FC-18 | `entry_selector_import_click` | PortfolioEntrySelector | Click "Upload CSV" | ImportTransactionsModal opens | Medium |
+| FC-19 | `entry_selector_manual_click` | PortfolioEntrySelector | Click "Manual Entry" | ManualTradeForm opens | Medium |
+| FC-20 | `staggered_reveal_basic` | useStaggeredReveal | 5 items, 100ms delay | visible increases every 100ms | Low |
+| FC-21 | `chip_strip_account_switch` | AccountChipStrip | Click "RRSP" chip | URL updates, all tabs re-render with RRSP data | High |
+| FC-22 | `tab_bar_navigation` | TabBar | Click "Holdings" tab | URL updates, Holdings tab content shown | High |
+| FC-23 | `tab_transactions_disabled_all` | TabBar | All Accounts selected | Transactions tab disabled/not shown | High |
+| FC-24 | `tab_transactions_enabled_single` | TabBar | Single account selected | Transactions tab enabled | High |
+| FC-25 | `overview_tab_single_account` | OverviewTab | Account selected | KPI cards show scoped data, top 5 holdings shown | High |
+| FC-26 | `dividends_calendar_chart` | DividendsTab | Valid dividend data | Bar chart renders with monthly bars | Medium |
+| FC-27 | `transactions_type_filter` | TransactionsTab | Filter by "BUY" | Only buy transactions shown | Medium |
+| FC-28 | `allocation_donut_chart` | AllocationTab | Valid allocation data | Donut chart renders with segments | Medium |
+| FC-29 | `allocation_group_by_switch` | AllocationTab | Switch from Sector to Geography | Chart and table update to show geography data | Medium |
+
+### 18.4 Integration Test Matrix
+
+#### 18.4.1 Backend API Integration (FastAPI TestClient)
+
+| Test ID | Test Name | Endpoint | Scenario | Expected Result | Priority |
+|---------|-----------|----------|----------|-----------------|----------|
+| BI-01 | `api_get_brokerages` | `GET /portfolio/brokerages` | Authenticated request | 200 + list of brokerages | High |
+| BI-02 | `api_get_brokerages_unauth` | `GET /portfolio/brokerages` | No auth token | 401 | High |
+| BI-03 | `api_get_overview` | `GET /portfolio/overview` | User with accounts + holdings | 200 + full overview | High |
+| BI-04 | `api_get_overview_empty` | `GET /portfolio/overview` | No accounts | 200 + zero values | High |
+| BI-05 | `api_get_accounts` | `GET /portfolio/accounts` | Valid auth | 200 + account list with balances | High |
+| BI-06 | `api_get_account_holdings` | `GET /portfolio/accounts/{id}/holdings` | Valid account | 200 + holdings with enrichment | High |
+| BI-07 | `api_get_account_holdings_wrong_owner` | `GET /portfolio/accounts/{id}/holdings` | Account belongs to other user | 403 or filtered | High |
+| BI-08 | `api_import_csv` | `POST /portfolio/import` | Valid CSV | 200 + import_batch_id + status=pending | High |
+| BI-09 | `api_import_status_poll` | `GET /portfolio/import/{id}/status` | Completed import | 200 + status=completed + result counts | High |
+| BI-10 | `api_manual_transaction` | `POST /portfolio/transactions/manual` | Valid BUY | 200 + transaction_id | High |
+| BI-11 | `api_get_performance` | `GET /portfolio/performance?period=1Y` | Valid request | 200 + snapshots array | High |
+| BI-12 | `api_get_performance_compare` | `GET /portfolio/performance/compare?period=1Y&benchmarks=SPY` | Valid request | 200 + portfolio + benchmarks series | High |
+| BI-13 | `api_get_transactions` | `GET /portfolio/accounts/{id}/transactions` | Account with history | 200 + transactions list | High |
+| BI-14 | `api_get_dividends` | `GET /portfolio/accounts/{id}/dividends` | Account with dividends | 200 + YTD total + monthly summaries | High |
+| BI-15 | `api_delete_account_cascade` | `DELETE /portfolio/accounts/{id}` | Valid account | 204 + account deleted + cascade verified | High |
+| BI-16 | `api_get_import_history` | `GET /portfolio/import-history` | User with imports | 200 + history list | Medium |
+| BI-17 | `api_rate_limit_import` | `POST /portfolio/import` | 6th request in 1 min | 429 Too Many Requests | Medium |
+| BI-18 | `api_allocation_by_sector` | `GET /portfolio/allocation?group_by=sector` | Holdings with company data | 200 + sector segments | Medium |
+| BI-19 | `api_allocation_by_geography` | `GET /portfolio/allocation?group_by=geography` | Holdings with exchange data | 200 + market group segments | Medium |
+| BI-20 | `api_transactions_date_filter` | `GET /portfolio/accounts/{id}/transactions?from=2025-01-01&to=2025-06-30` | Date range | Only transactions in range | Medium |
+| BI-21 | `api_transactions_type_filter` | `GET /portfolio/accounts/{id}/transactions?type=BUY` | Type filter | Only BUY transactions | Medium |
+| BI-22 | `api_overview_account_id` | `GET /portfolio/overview?account_id=1` | Single account overview | Account-scoped KPIs | High |
+
+#### 18.4.2 Backend Service Integration (Mocked Repository)
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| BSV-09 | `full_import_pipeline` | Mock each repository step; verify service orchestrates correctly | Accounts, Companies, Transactions, Holdings, Dividends in correct order | High |
+| BSV-10 | `holdings_recalc_after_manual_trade` | After manual BUY, holdings recalculated | New position appears in holdings | High |
+| BSV-11 | `dividend_extraction_after_csv_import` | CSV with dividend rows | Dividends table populated | High |
+| BSV-12 | `performance_with_mixed_currencies` | Transactions in CAD and USD | All values computed correctly | Low |
+
+#### 18.4.3 Frontend Integration (Component + Hook + Service)
+
+| Test ID | Test Name | Scenario | Expected Result | Priority |
+|---------|-----------|----------|-----------------|----------|
+| FI-01 | `overview_data_flow` | Mock API, hook returns data, component renders | All sections populated with correct values | High |
+| FI-02 | `import_modal_end_to_end` | User opens modal, selects brokerage, uploads, polls, success | Progress bar, then success card | High |
+| FI-03 | `chart_period_account_benchmark_interaction` | User changes period, selects account, adds benchmark | Chart updates with all filters | Medium |
+| FI-04 | `holdings_search_group_sort` | User searches, groups by sector, sorts by value | Table updates correctly for each action | Medium |
+| FI-05 | `manual_trade_success_flow` | User fills form, submits, success | Toast shown, overview/holdings refetched | High |
+| FI-06 | `account_tab_url_sync` | User clicks account chip, URL updates, data refetches | URL contains `?account=TFSA`, content filtered | High |
+| FI-07 | `deep_link_restore` | User navigates to `?account=RRSP&tab=holdings` | RRSP selected, Holdings tab active | High |
+| FI-08 | `tab_switch_data_refresh` | User switches from Overview to Holdings | Holdings data fetched, Overview component unmounted | High |
+| FI-09 | `account_change_all_tabs_update` | User switches from All to TFSA | All 6 tabs show TFSA-scoped data | High |
+
+### 18.5 End-to-End Test Matrix
+
+| Test ID | Test Name | User Flow | Verification Points | Priority |
+|---------|-----------|-----------|---------------------|----------|
+| E2E-01 | `full_csv_import_flow` | Login, Navigate to Portfolio, Click Import CSV, Select brokerage, Upload Wealthsimple CSV, Wait for completion, View results | CSV parses, accounts created, holdings calculated, dividends extracted, overview shows correct values | High |
+| E2E-02 | `manual_trade_then_view` | Login, Open manual trade form, Select account, BUY 10 AAPL @ $150, Submit, View portfolio overview | Transaction inserted, holdings updated, overview metrics reflect new position | High |
+| E2E-03 | `portfolio_tab_navigation_flow` | Login, View portfolio, Switch between All Accounts and each account, Verify each tab loads | Account selector switches correctly, all 6 tabs render data scoped to selected account | High |
+| E2E-04 | `performance_chart_interaction` | Login, View portfolio, Change period to 3M, Add SPY benchmark, Hover over chart | Chart redraws with new period, benchmark appears, tooltip shows values | High |
+| E2E-05 | `holdings_sort_search_group` | Login, View holdings, Search for "PLTR", Sort by Gain %, Group by Account | Filtered results, sorted descending, grouped with correct headers | High |
+| E2E-06 | `dividends_tab_view` | Login, Select account, View dividends tab, View monthly chart, Scroll history table | KPI cards show correct totals, chart renders, table paginates | Medium |
+| E2E-07 | `transactions_tab_filter` | Login, Select TFSA, Go to Transactions, Filter by BUY, Search symbol, Export CSV | Filtered list, export downloads CSV | Medium |
+| E2E-08 | `allocation_tab_view` | Login, Go to Allocation, Switch between Sector/Geography/Account views | Donut charts render, tables show correct weights | Medium |
+| E2E-09 | `responsive_mobile` | Login on mobile (375px), View portfolio | Account selector is dropdown, tabs are scrollable, holdings use card view, KPIs stack | Medium |
+| E2E-10 | `error_recovery_flow` | Login, Navigate to portfolio, Network goes down, "Unable to load" shown, Network recovers | Error state shown on failure, automatic retry succeeds | Medium |
+| E2E-11 | `delete_account_flow` | Login, View portfolio, Delete an account, Confirm | Account removed, holdings/transactions/dividends deleted, overview updates | Medium |
+| E2E-12 | `import_duplicate_csv` | Login, Import CSV, Same file imported again | Duplicate warning shown, no duplicate data created | Medium |
+| E2E-13 | `deep_link_navigation` | Access URL with `?account=RRSP&tab=transactions` | RRSP selected, Transactions tab active, data loaded correctly | Medium |
+| E2E-14 | `multi_account_comparison` | Login, Select All Accounts, Note totals, Select each account individually, Verify per-account values sum to total | Per-account values are mutually exclusive and collectively exhaustive | Medium |
+| E2E-15 | `account_chip_strip_scroll` | Login with 5+ accounts, Scroll account chip strip horizontally | All chips visible via scroll, selection works | Low |
+| E2E-16 | `tab_disabled_for_all_accounts` | Login, Select All Accounts, View Transactions tab | Transactions tab disabled/not shown with tooltip | Medium |
+
+### 18.6 Test Environment Requirements
+
+| Environment | Configuration | Data |
+|-------------|---------------|------|
+| Unit tests (backend) | Mocked Supabase, mocked YFinance | No real data needed |
+| Unit tests (frontend) | jsdom, mocked Axios | Mock fixture data (see 18.7) |
+| Integration (backend) | Supabase test project (isolated) + FastAPI TestClient | Factory-generated test data |
+| Integration (frontend) | Vitest + RTL with mocked API | Test fixtures in `__fixtures__/` |
+| E2E | Running dev server + test Supabase project + Playwright | Seeded test database with known state |
+| CI | GitHub Actions + Supabase preview branch | Fresh database per test run |
+
+### 18.7 Test Data Fixtures
+
+The following fixture factories should be created for generating repeatable test data:
+
+| Fixture | Fields | Purpose |
+|---------|--------|---------|
+| `create_test_user()` | user_id, auth_id, email | Auth context for all tests |
+| `create_test_brokerage()` | brokerage_id, code, name | Default Wealthsimple brokerage |
+| `create_test_account(user_id)` | account_id, name, type, external_id | TFSA/RRSP/Non-reg variants |
+| `create_trade_transaction(account, symbol)` | type BUY/SELL, qty, price, date | Single trade for FIFO tests |
+| `create_dividend_transaction(account, symbol)` | amount, date | Dividend row |
+| `create_holding(account, company)` | qty, avg_cost, current_price | Current position |
+| `create_performance_snapshot(account)` | date, value, cost_basis | Historical performance |
+| `create_test_csv(accounts, transactions)` | Full Wealthsimple CSV format | Import testing |
+| `create_portfolio_overview(accounts, holdings)` | Complete overview response | Frontend fixture |
+| `create_benchmark_series(symbol)` | Price dates and values | Benchmark comparison |
+| `create_allocation_data(holdings)` | Sectors, geographies, values | Allocation tab fixture |
+
+Fixture factories should be shared between backend and frontend tests where possible.
+
+### 18.8 Test Execution
+
+```bash
+# Backend unit + integration tests (Python)
+cd backend
+pytest tests/ -v --tb=short --cov=application --cov=infrastructure --cov=api --cov=schemas_portfolio
+
+# Frontend unit + integration tests
+cd web
+npx vitest run --reporter=verbose --coverage
+
+# E2E tests (requires dev server + test DB)
+npx playwright test --config=tests/e2e/playwright.config.ts
+
+# Run all tests with CI pipeline
+./scripts/run_all_tests.sh
+```
+
+### 18.9 Coverage Targets
+
+| Layer | Current Coverage | Target Coverage | Measurement |
+|-------|-----------------|-----------------|-------------|
+| `portfolio_service.py` | ~10% | >=85% | Line coverage |
+| `portfolio_repository.py` | ~0% | >=80% | Line coverage |
+| `portfolio_parser.py` | ~30% | >=90% | Line coverage |
+| `schemas_portfolio.py` | ~0% | >=95% | Line coverage (model validation) |
+| `api/portfolio.py` | ~0% | >=80% | Path coverage via TestClient |
+| Frontend `portfolio.service.ts` | ~0% | >=90% | Line coverage |
+| Frontend hooks | ~0% | >=85% | Line coverage |
+| Frontend components | ~0% | >=80% | Line coverage |
+| **Overall portfolio** | **<5%** | **>=80%** | **Aggregate** |
+
+---
+
+_End of document — StockerPro Portfolio Module Design v2.0_

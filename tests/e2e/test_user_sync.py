@@ -1,79 +1,63 @@
+"""
+User Sync — End-to-End Test
 
-import os
-import sys
+Validates the /users/sync endpoint end-to-end:
+  1. Simulates a NEW user login → Expects 201 Created
+  2. Simulates an EXISTING user login → Expects 200 OK
+
+No mocking. Requires RUN_E2E=true + real Supabase credentials + backend running.
+"""
+
 import uuid
-from dotenv import load_dotenv
-import requests
-import json
 
-def run_e2e_test():
-    """
-    Executes an end-to-end test of the /users/sync endpoint.
-    1. Simulates a NEW user login -> Expect 201 Created
-    2. Simulates an EXISTING user login -> Expect 200 OK
-    """
-    # Load environment variables from backend/.env
-    dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', 'backend', '.env')
-    load_dotenv(dotenv_path=dotenv_path)
+import pytest
 
-    # Use a real, but temporary, Firebase auth token for a test user
-    # In a real CI/CD pipeline, you would generate this token programmatically
-    auth_token = os.environ.get("FIREBASE_TEST_AUTH_TOKEN")
-    if not auth_token:
-        print("ERROR: FIREBASE_TEST_AUTH_TOKEN must be set in backend/.env for this test.")
-        sys.exit(1)
 
-    # The URL for our local development server
-    url = "http://127.0.0.1:9002/api/proxy/users/sync"
+@pytest.mark.e2e
+class TestUserSyncE2E:
+    """Validate user sync lifecycle end-to-end."""
 
-    headers = {
-        "Authorization": f"Bearer {auth_token}",
-        "Content-Type": "application/json"
-    }
+    ENDPOINT = "/users/sync"
 
-    # --- Test Case 1: New User --- #
-    # Use a unique email to ensure this user is always new
-    new_email = f"testuser_{uuid.uuid4()}@example.com"
-    new_user_payload = {
-        "email": new_email,
-        "username": "E2E Test User"
-    }
+    async def test_new_user_creates_account(self, e2e_http_client, e2e_auth_headers):
+        """A new user should get 201 Created."""
+        new_email = f"e2e_{uuid.uuid4().hex[:8]}@example.com"
+        resp = await e2e_http_client.post(
+            self.ENDPOINT,
+            json={"email": new_email, "username": "E2E New User"},
+            headers=e2e_auth_headers,
+        )
+        assert resp.status_code == 201, (
+            f"New user sync expected 201, got {resp.status_code}: {resp.text[:200]}"
+        )
+        data = resp.json()
+        assert "user_id" in data or "id" in data
 
-    print(f"--- Running Test Case 1: NEW USER ({new_email}) ---")
-    try:
-        response_new = requests.post(url, headers=headers, data=json.dumps(new_user_payload))
-        print(f"Response Status Code: {response_new.status_code}")
-        print(f"Response Body: {response_new.json()}")
+    async def test_existing_user_returns_200(self, e2e_http_client, e2e_auth_headers):
+        """An existing user should get 200 OK."""
+        email = f"e2e_{uuid.uuid4().hex[:8]}@example.com"
+        # First call creates
+        create_resp = await e2e_http_client.post(
+            self.ENDPOINT,
+            json={"email": email, "username": "E2E Existing User"},
+            headers=e2e_auth_headers,
+        )
+        assert create_resp.status_code == 201
 
-        if response_new.status_code == 201:
-            print("\033[92mSUCCESS: New user sync returned 201 Created as expected.\033[0m")
-        else:
-            print(f"\033[91mFAILURE: Expected 201, but got {response_new.status_code}\033[0m")
-            sys.exit(1)
+        # Second call with same email should return 200
+        lookup_resp = await e2e_http_client.post(
+            self.ENDPOINT,
+            json={"email": email, "username": "E2E Existing User"},
+            headers=e2e_auth_headers,
+        )
+        assert lookup_resp.status_code == 200, (
+            f"Existing user sync expected 200, got {lookup_resp.status_code}: {lookup_resp.text[:200]}"
+        )
 
-    except requests.exceptions.RequestException as e:
-        print(f"\033[91mFAILURE: Request failed: {e}\033[0m")
-        sys.exit(1)
-
-    # --- Test Case 2: Existing User --- #
-    # Use the *same* payload again. The corrected logic should now find the user.
-    print(f"\n--- Running Test Case 2: EXISTING USER ({new_email}) ---")
-    try:
-        response_existing = requests.post(url, headers=headers, data=json.dumps(new_user_payload))
-        print(f"Response Status Code: {response_existing.status_code}")
-        print(f"Response Body: {response_existing.json()}")
-
-        if response_existing.status_code == 200:
-            print("\033[92mSUCCESS: Existing user sync returned 200 OK as expected.\033[0m")
-        else:
-            print(f"\033[91mFAILURE: Expected 200, but got {response_existing.status_code}\033[0m")
-            sys.exit(1)
-            
-    except requests.exceptions.RequestException as e:
-        print(f"\033[91mFAILURE: Request failed: {e}\033[0m")
-        sys.exit(1)
-
-    print("\n\033[1;92mAll E2E tests passed successfully!\033[0m")
-
-if __name__ == "__main__":
-    run_e2e_test()
+    async def test_user_sync_without_auth(self, e2e_http_client):
+        """Unauthenticated request should be rejected."""
+        resp = await e2e_http_client.post(
+            self.ENDPOINT,
+            json={"email": "noauth@example.com", "username": "No Auth"},
+        )
+        assert resp.status_code in (401, 403)

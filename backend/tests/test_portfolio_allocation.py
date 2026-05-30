@@ -1,0 +1,128 @@
+"""
+Tests for portfolio allocation endpoint and service.
+"""
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import date
+
+from application.services.portfolio_service import PortfolioService
+
+
+@pytest.fixture
+def mock_alloc_repo():
+    repo = MagicMock()
+    repo.get_user_accounts.return_value = [
+        {"account_id": 1, "account_name": "TFSA", "account_type": "TFSA", "brokerage_name": "Test", "is_active": True},
+        {"account_id": 2, "account_name": "RRSP", "account_type": "RRSP", "brokerage_name": "Test", "is_active": True},
+        {"account_id": 3, "account_name": "Non-reg", "account_type": "Non-registered", "brokerage_name": "Test", "is_active": True},
+    ]
+    return repo
+
+
+@pytest.fixture
+def mock_financial_repo():
+    repo = MagicMock()
+    repo.get_company_by_symbol = AsyncMock(return_value=None)
+    return repo
+
+
+@pytest.fixture
+def service(mock_alloc_repo, mock_financial_repo):
+    return PortfolioService(mock_alloc_repo, mock_financial_repo)
+
+
+def _make_holding(symbol: str, sector: str, value: float, cost: float, account_id: int = 1, account_name: str = "TFSA"):
+    return {
+        "symbol": symbol,
+        "company_id": 1,
+        "sector": sector,
+        "current_value": value,
+        "total_cost": cost,
+        "account_id": account_id,
+        "account_name": account_name,
+        "shares": 10,
+        "currency": "USD",
+    }
+
+
+MOCK_HOLDINGS = [
+    _make_holding("AAPL", "Technology", 10000, 8000),
+    _make_holding("GOOGL", "Technology", 8000, 6500),
+    _make_holding("XOM", "Energy", 5000, 5500),
+]
+
+
+@pytest.mark.anyio
+class TestGetPortfolioAllocation:
+
+    async def test_allocation_by_sector(self, service, mock_alloc_repo):
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+            result = await service.get_portfolio_allocation(1, group_by="sector")
+        assert result["success"]
+        assert len(result["segments"]) == 2
+        segments = {s["segment"]: s for s in result["segments"]}
+        assert "Technology" in segments
+        assert "Energy" in segments
+
+    async def test_allocation_total_value(self, service, mock_alloc_repo):
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+            result = await service.get_portfolio_allocation(1, group_by="sector")
+        assert result["success"]
+        assert result["total_value"] == 23000
+
+    async def test_allocation_by_account(self, service, mock_alloc_repo):
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+            result = await service.get_portfolio_allocation(1, group_by="account")
+        assert result["success"]
+        assert len(result["segments"]) > 0
+
+    async def test_allocation_filter_account_ids(self, service, mock_alloc_repo):
+        filtered = [_make_holding("AAPL", "Technology", 10000, 8000)]
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=filtered)):
+            result = await service.get_portfolio_allocation(1, group_by="sector", account_ids=[1])
+        assert result["success"]
+        total = sum(s["value"] for s in result["segments"])
+        assert total == 10000
+
+    async def test_allocation_no_holdings(self, service, mock_alloc_repo):
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=[])):
+            result = await service.get_portfolio_allocation(1, group_by="sector")
+        assert result["success"]
+        assert len(result["segments"]) == 0
+        assert result["total_value"] == 0
+
+
+@pytest.mark.anyio
+class TestGetPortfolioAllocationEdgeCases:
+
+    async def test_allocation_security_other_user_accounts(self, service, mock_alloc_repo):
+        mock_alloc_repo.get_user_accounts.return_value = [
+            {"account_id": 1, "account_name": "TFSA", "is_active": True},
+        ]
+        filtered = [_make_holding("AAPL", "Technology", 5000, 4000)]
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=filtered)):
+            result = await service.get_portfolio_allocation(1, account_ids=[1, 999])
+        assert result["success"]
+        assert result["total_value"] == 5000
+
+    async def test_allocation_unknown_accounts_empty(self, service, mock_alloc_repo):
+        mock_alloc_repo.get_user_accounts.return_value = []
+        result = await service.get_portfolio_allocation(1, account_ids=[999])
+        assert result["success"]
+        assert len(result["segments"]) == 0
+
+    async def test_allocation_handles_empty_holdings(self, service, mock_alloc_repo):
+        mock_alloc_repo.get_user_accounts.return_value = []
+        result = await service.get_portfolio_allocation(1, group_by="sector")
+        assert result["success"]
+        assert result["total_value"] == 0
+
+    async def test_allocation_with_missing_sector(self, service, mock_alloc_repo):
+        no_sector = [
+            {"symbol": "UNKNOWN", "company_id": 999, "current_value": 1000, "total_cost": 900,
+             "account_id": 1, "account_name": "TFSA", "shares": 1, "currency": "USD"}
+        ]
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=no_sector)):
+            result = await service.get_portfolio_allocation(1, group_by="sector")
+        assert result["success"]
+        assert result["segments"][0]["segment"] == "Unknown"
