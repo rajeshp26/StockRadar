@@ -104,6 +104,21 @@ class PortfolioRiskService:
         daily_returns = compute_daily_returns(values)
         return values, daily_returns, dates
 
+    def _periods_per_year(self, snapshots: List[Dict[str, Any]]) -> int:
+        """Compute periods per year from snapshot date intervals."""
+        if len(snapshots) < 2:
+            return TRADING_DAYS
+        start = date.fromisoformat(snapshots[0]["date"])
+        end = date.fromisoformat(snapshots[-1]["date"])
+        total_days = (end - start).days
+        n_returns = len(snapshots) - 1
+        if total_days <= 0 or n_returns <= 0:
+            return TRADING_DAYS
+        avg_interval = total_days / n_returns
+        if avg_interval <= 1:
+            return TRADING_DAYS
+        return max(1, min(TRADING_DAYS, round(365 / avg_interval)))
+
     async def _get_aligned_benchmark_returns(
         self, snapshots: List[Dict[str, Any]]
     ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -174,14 +189,15 @@ class PortfolioRiskService:
                 error="insufficient_data", error_code="insufficient_data",
             )
 
-        vol = compute_annualized_volatility(daily_returns)
-        sharpe = compute_sharpe_ratio(daily_returns, risk_free_rate=RISK_FREE_RATE)
-        sortino = compute_sortino_ratio(daily_returns, risk_free_rate=RISK_FREE_RATE)
+        ppy = self._periods_per_year(snapshots)
+        vol = compute_annualized_volatility(daily_returns, ppy)
+        sharpe = compute_sharpe_ratio(daily_returns, risk_free_rate=RISK_FREE_RATE, periods_per_year=ppy)
+        sortino = compute_sortino_ratio(daily_returns, risk_free_rate=RISK_FREE_RATE, periods_per_year=ppy)
         dd_val, dd_pct, _, _ = compute_max_drawdown(values_arr)
         var95 = compute_value_at_risk(daily_returns, confidence=0.95)
         var99 = compute_value_at_risk(daily_returns, confidence=0.99)
         cvar95 = compute_conditional_var(daily_returns, confidence=0.95)
-        downside = compute_downside_deviation(daily_returns)
+        downside = compute_downside_deviation(daily_returns, ppy)
         total_ret = compute_annualized_return(daily_returns)
 
         result = RiskMetricsResponse(
@@ -205,11 +221,13 @@ class PortfolioRiskService:
             port_ret, bench_ret = aligned
             result.beta = _safe_metric(compute_beta(port_ret, bench_ret))
             result.alpha = _safe_metric(
-                compute_alpha(port_ret, bench_ret, risk_free_rate=RISK_FREE_RATE)
+                compute_alpha(port_ret, bench_ret, risk_free_rate=RISK_FREE_RATE, periods_per_year=ppy)
             )
-            result.tracking_error = _safe_metric(compute_tracking_error(port_ret, bench_ret))
+            result.tracking_error = _safe_metric(
+                compute_tracking_error(port_ret, bench_ret, periods_per_year=ppy)
+            )
             result.information_ratio = _safe_metric(
-                compute_information_ratio(port_ret, bench_ret)
+                compute_information_ratio(port_ret, bench_ret, periods_per_year=ppy)
             )
 
         return _validate_risk_metrics_response(result)
@@ -432,7 +450,8 @@ class PortfolioRiskService:
                 error="insufficient_data", error_code="insufficient_data",
             )
 
-        rs = _rolling_sharpe(daily_returns, window=window, risk_free_rate=RISK_FREE_RATE)
+        ppy = self._periods_per_year(snapshots)
+        rs = _rolling_sharpe(daily_returns, window=window, risk_free_rate=RISK_FREE_RATE, periods_per_year=ppy)
         if len(rs) == 0:
             return RollingSharpeResponse(
                 success=False, period=resolved_period, window=window, series=[],
@@ -546,7 +565,7 @@ class PortfolioRiskService:
         self, user_id: int, account_ids: Optional[List[int]] = None,
     ) -> FactorExposureResponse:
         snapshots, _, error, error_code = await self._get_snapshot_series(
-            user_id, "MAX", account_ids
+            user_id, "1Y", account_ids
         )
         if error:
             return FactorExposureResponse(
@@ -568,11 +587,13 @@ class PortfolioRiskService:
             )
 
         port_ret, bench_ret = aligned
-        if len(port_ret) < 3:
+        if len(port_ret) < 5:
             return FactorExposureResponse(
                 success=False, exposures={}, r_squared=0.0,
                 error="insufficient_data", error_code="insufficient_data",
             )
+
+        ppy = self._periods_per_year(snapshots)
 
         try:
             n = len(port_ret)
@@ -588,7 +609,7 @@ class PortfolioRiskService:
                 success=True,
                 exposures={
                     "market": _safe_metric(beta_hat),
-                    "alpha": _safe_metric(alpha_hat * TRADING_DAYS),
+                    "alpha": _safe_metric(alpha_hat * ppy),
                 },
                 r_squared=_safe_metric(r_squared),
             )

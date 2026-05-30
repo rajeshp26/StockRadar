@@ -35,45 +35,53 @@ def _sanity_bounds(metric_name: str, value: float, lo: float, hi: float) -> floa
     return max(lo, min(hi, value))
 
 
-def compute_annualized_volatility(daily_returns: np.ndarray) -> float:
+def compute_annualized_volatility(
+    daily_returns: np.ndarray,
+    periods_per_year: int = TRADING_DAYS,
+) -> float:
     if len(daily_returns) < 2:
         return 0.0
-    vol = float(np.std(daily_returns, ddof=1)) * np.sqrt(TRADING_DAYS)
+    vol = float(np.std(daily_returns, ddof=1)) * np.sqrt(periods_per_year)
     return _sanity_bounds("annualized_volatility", vol, 0.0, 2.0)
 
 
 def compute_sharpe_ratio(
     daily_returns: np.ndarray,
     risk_free_rate: float = 0.02,
+    periods_per_year: int = TRADING_DAYS,
 ) -> float:
     if len(daily_returns) < 2:
         return 0.0
-    mean_return = float(np.mean(daily_returns)) * TRADING_DAYS
-    annual_vol = compute_annualized_volatility(daily_returns)
+    mean_return = float(np.mean(daily_returns)) * periods_per_year
+    annual_vol = compute_annualized_volatility(daily_returns, periods_per_year)
     if annual_vol < 1e-12:
         return 0.0
     sharpe = (mean_return - risk_free_rate) / annual_vol
     return _sanity_bounds("sharpe_ratio", sharpe, -3.0, 5.0)
 
 
-def compute_downside_deviation(daily_returns: np.ndarray) -> float:
+def compute_downside_deviation(
+    daily_returns: np.ndarray,
+    periods_per_year: int = TRADING_DAYS,
+) -> float:
     if len(daily_returns) < 2:
         return 0.0
     negative = daily_returns[daily_returns < 0]
     if len(negative) < 2:
-        return float(np.std(daily_returns, ddof=1)) * np.sqrt(TRADING_DAYS)
-    dd = float(np.std(negative, ddof=1)) * np.sqrt(TRADING_DAYS)
+        return float(np.std(daily_returns, ddof=1)) * np.sqrt(periods_per_year)
+    dd = float(np.std(negative, ddof=1)) * np.sqrt(periods_per_year)
     return _sanity_bounds("downside_deviation", dd, 0.0, 2.0)
 
 
 def compute_sortino_ratio(
     daily_returns: np.ndarray,
     risk_free_rate: float = 0.02,
+    periods_per_year: int = TRADING_DAYS,
 ) -> float:
     if len(daily_returns) < 2:
         return 0.0
-    mean_return = float(np.mean(daily_returns)) * TRADING_DAYS
-    dd = compute_downside_deviation(daily_returns)
+    mean_return = float(np.mean(daily_returns)) * periods_per_year
+    dd = compute_downside_deviation(daily_returns, periods_per_year)
     if dd < 1e-12:
         return 0.0
     sortino = (mean_return - risk_free_rate) / dd
@@ -157,12 +165,13 @@ def compute_alpha(
     portfolio_returns: np.ndarray,
     benchmark_returns: np.ndarray,
     risk_free_rate: float = 0.02,
+    periods_per_year: int = TRADING_DAYS,
 ) -> float:
     if len(portfolio_returns) < 2 or len(benchmark_returns) < 2:
         return 0.0
     b = compute_beta(portfolio_returns, benchmark_returns)
-    port_mean = float(np.mean(portfolio_returns)) * TRADING_DAYS
-    bench_mean = float(np.mean(benchmark_returns)) * TRADING_DAYS
+    port_mean = float(np.mean(portfolio_returns)) * periods_per_year
+    bench_mean = float(np.mean(benchmark_returns)) * periods_per_year
     alpha_val = port_mean - (risk_free_rate + b * (bench_mean - risk_free_rate))
     return _sanity_bounds("alpha", alpha_val, -1.0, 1.0)
 
@@ -170,23 +179,25 @@ def compute_alpha(
 def compute_tracking_error(
     portfolio_returns: np.ndarray,
     benchmark_returns: np.ndarray,
+    periods_per_year: int = TRADING_DAYS,
 ) -> float:
     if len(portfolio_returns) < 2 or len(benchmark_returns) < 2:
         return 0.0
     diff = portfolio_returns - benchmark_returns
-    te = float(np.std(diff, ddof=1)) * np.sqrt(TRADING_DAYS)
+    te = float(np.std(diff, ddof=1)) * np.sqrt(periods_per_year)
     return _sanity_bounds("tracking_error", te, 0.0, 2.0)
 
 
 def compute_information_ratio(
     portfolio_returns: np.ndarray,
     benchmark_returns: np.ndarray,
+    periods_per_year: int = TRADING_DAYS,
 ) -> float:
     if len(portfolio_returns) < 2 or len(benchmark_returns) < 2:
         return 0.0
-    port_mean = float(np.mean(portfolio_returns)) * TRADING_DAYS
-    bench_mean = float(np.mean(benchmark_returns)) * TRADING_DAYS
-    te = compute_tracking_error(portfolio_returns, benchmark_returns)
+    port_mean = float(np.mean(portfolio_returns)) * periods_per_year
+    bench_mean = float(np.mean(benchmark_returns)) * periods_per_year
+    te = compute_tracking_error(portfolio_returns, benchmark_returns, periods_per_year)
     if te < 1e-12:
         return 0.0
     ir = (port_mean - bench_mean) / te
@@ -197,6 +208,7 @@ def compute_rolling_sharpe(
     daily_returns: np.ndarray,
     window: int = 252,
     risk_free_rate: float = 0.02,
+    periods_per_year: int = TRADING_DAYS,
 ) -> np.ndarray:
     if len(daily_returns) < window:
         return np.array([])
@@ -204,8 +216,8 @@ def compute_rolling_sharpe(
     stds = np.zeros(len(daily_returns) - window + 1)
     for i in range(len(means)):
         chunk = daily_returns[i:i + window]
-        means[i] = float(np.mean(chunk)) * TRADING_DAYS
-        s = float(np.std(chunk, ddof=1)) * np.sqrt(TRADING_DAYS)
+        means[i] = float(np.mean(chunk)) * periods_per_year
+        s = float(np.std(chunk, ddof=1)) * np.sqrt(periods_per_year)
         stds[i] = s if s > 1e-12 else 1.0
     sharpe = (means - risk_free_rate) / stds
     return np.clip(sharpe, -3.0, 5.0)
