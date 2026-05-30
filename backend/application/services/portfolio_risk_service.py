@@ -12,6 +12,7 @@ from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from shared.portfolio_stats import (
     TRADING_DAYS,
     compute_alpha,
+    compute_annualized_return,
     compute_annualized_volatility,
     compute_beta,
     compute_conditional_var,
@@ -103,12 +104,58 @@ class PortfolioRiskService:
         daily_returns = compute_daily_returns(values)
         return values, daily_returns, dates
 
+    async def _get_aligned_benchmark_returns(
+        self, snapshots: List[Dict[str, Any]]
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Fetch SPY prices aligned to portfolio snapshot dates.
+
+        Returns (portfolio_returns, benchmark_returns) as equal-length arrays.
+        Returns None if benchmark data is unavailable.
+        """
+        if len(snapshots) < 2:
+            return None
+
+        dates = [s["date"] for s in snapshots]
+        values = np.array([s["value"] for s in snapshots], dtype=np.float64)
+        port_returns = compute_daily_returns(values)
+        if len(port_returns) < 2:
+            return None
+
+        start = date.fromisoformat(dates[0])
+        end = date.fromisoformat(dates[-1])
+
+        try:
+            spy = self.price_provider.fetch_prices(
+                ["SPY"], start=start, end=end, min_periods=2,
+            )
+            if spy.empty or spy.shape[1] < 1:
+                return None
+
+            spy_col = spy.iloc[:, 0]
+            spy_prices = []
+            for d in dates:
+                dt = pd.Timestamp(d) if isinstance(d, str) else pd.Timestamp(d.isoformat())
+                mask = spy_col.index <= dt
+                if not mask.any():
+                    return None
+                spy_prices.append(float(spy_col[mask].iloc[-1]))
+
+            spy_arr = np.array(spy_prices, dtype=np.float64)
+            spy_returns = compute_daily_returns(spy_arr)
+
+            min_len = min(len(port_returns), len(spy_returns))
+            if min_len < 2:
+                return None
+
+            return port_returns[:min_len], spy_returns[:min_len]
+        except Exception:
+            return None
+
     async def compute_risk_metrics(
         self,
         user_id: int,
         period: str,
         account_ids: Optional[List[int]] = None,
-        benchmark_returns: Optional[np.ndarray] = None,
     ) -> RiskMetricsResponse:
         snapshots, resolved_period, error, error_code = await self._get_snapshot_series(
             user_id, period, account_ids
@@ -119,6 +166,7 @@ class PortfolioRiskService:
                 error=error, error_code=error_code,
             )
 
+        values_arr = np.array([s["value"] for s in snapshots], dtype=np.float64)
         _, daily_returns, _ = self._returns_from_snapshots(snapshots)
         if len(daily_returns) < 5:
             return RiskMetricsResponse(
@@ -129,13 +177,12 @@ class PortfolioRiskService:
         vol = compute_annualized_volatility(daily_returns)
         sharpe = compute_sharpe_ratio(daily_returns, risk_free_rate=RISK_FREE_RATE)
         sortino = compute_sortino_ratio(daily_returns, risk_free_rate=RISK_FREE_RATE)
-        dd_val, dd_pct, _, _ = compute_max_drawdown(
-            np.array([s["value"] for s in snapshots], dtype=np.float64)
-        )
+        dd_val, dd_pct, _, _ = compute_max_drawdown(values_arr)
         var95 = compute_value_at_risk(daily_returns, confidence=0.95)
         var99 = compute_value_at_risk(daily_returns, confidence=0.99)
         cvar95 = compute_conditional_var(daily_returns, confidence=0.95)
         downside = compute_downside_deviation(daily_returns)
+        total_ret = compute_annualized_return(daily_returns)
 
         result = RiskMetricsResponse(
             success=True,
@@ -150,16 +197,19 @@ class PortfolioRiskService:
             value_at_risk_99=_safe_metric(var99),
             conditional_var_95=_safe_metric(cvar95),
             downside_deviation=_safe_metric(downside),
+            total_return_pct=_safe_metric(total_ret),
         )
 
-        if benchmark_returns is not None and len(benchmark_returns) == len(daily_returns):
-            result.beta = _safe_metric(compute_beta(daily_returns, benchmark_returns))
+        aligned = await self._get_aligned_benchmark_returns(snapshots)
+        if aligned is not None:
+            port_ret, bench_ret = aligned
+            result.beta = _safe_metric(compute_beta(port_ret, bench_ret))
             result.alpha = _safe_metric(
-                compute_alpha(daily_returns, benchmark_returns, risk_free_rate=RISK_FREE_RATE)
+                compute_alpha(port_ret, bench_ret, risk_free_rate=RISK_FREE_RATE)
             )
-            result.tracking_error = _safe_metric(compute_tracking_error(daily_returns, benchmark_returns))
+            result.tracking_error = _safe_metric(compute_tracking_error(port_ret, bench_ret))
             result.information_ratio = _safe_metric(
-                compute_information_ratio(daily_returns, benchmark_returns)
+                compute_information_ratio(port_ret, bench_ret)
             )
 
         return _validate_risk_metrics_response(result)
@@ -504,42 +554,34 @@ class PortfolioRiskService:
                 error=error, error_code=error_code,
             )
 
-        values = np.array([s["value"] for s in snapshots], dtype=np.float64)
-        portfolio_returns = compute_daily_returns(values)
-        if len(portfolio_returns) < 30:
+        if len(snapshots) < 2:
+            return FactorExposureResponse(
+                success=False, exposures={}, r_squared=0.0,
+                error="insufficient_data", error_code="insufficient_data",
+            )
+
+        aligned = await self._get_aligned_benchmark_returns(snapshots)
+        if aligned is None:
+            return FactorExposureResponse(
+                success=False, exposures={}, r_squared=0.0,
+                error="no_benchmark_data", error_code="no_benchmark_data",
+            )
+
+        port_ret, bench_ret = aligned
+        if len(port_ret) < 3:
             return FactorExposureResponse(
                 success=False, exposures={}, r_squared=0.0,
                 error="insufficient_data", error_code="insufficient_data",
             )
 
         try:
-            end = date.today()
-            spy = self.price_provider.fetch_prices(
-                ["SPY"], start=date.fromisoformat(snapshots[1]["date"]), end=end, min_periods=5,
-            )
-            if spy.empty or spy.shape[1] < 1:
-                return FactorExposureResponse(
-                    success=False, exposures={}, r_squared=0.0,
-                    error="no_benchmark_data", error_code="no_benchmark_data",
-                )
-            spy_col = spy.iloc[:, 0].values.astype(np.float64)
-            spy_returns = compute_daily_returns(spy_col)
-            min_len = min(len(portfolio_returns), len(spy_returns))
-            if min_len < 30:
-                return FactorExposureResponse(
-                    success=False, exposures={}, r_squared=0.0,
-                    error="insufficient_data", error_code="insufficient_data",
-                )
-
-            p_ret = portfolio_returns[:min_len]
-            b_ret = spy_returns[:min_len]
-
-            X = np.vstack([np.ones(min_len), b_ret]).T
-            coeffs, residuals, _, _ = np.linalg.lstsq(X, p_ret, rcond=None)
+            n = len(port_ret)
+            X = np.vstack([np.ones(n), bench_ret]).T
+            coeffs, residuals, _, _ = np.linalg.lstsq(X, port_ret, rcond=None)
             alpha_hat, beta_hat = float(coeffs[0]), float(coeffs[1])
 
-            ss_res = float(np.sum((p_ret - X @ coeffs) ** 2))
-            ss_tot = float(np.sum((p_ret - np.mean(p_ret)) ** 2))
+            ss_res = float(np.sum((port_ret - X @ coeffs) ** 2))
+            ss_tot = float(np.sum((port_ret - np.mean(port_ret)) ** 2))
             r_squared = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
             return FactorExposureResponse(

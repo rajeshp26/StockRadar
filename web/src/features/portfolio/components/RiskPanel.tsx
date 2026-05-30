@@ -142,10 +142,10 @@ export function RiskPanel() {
                         />
                         <RiskMetricCard
                             label="Return (Period)"
-                            value={fmtPct(metrics.alpha != null && metrics.tracking_error != null && metrics.information_ratio != null ? null : null)}
+                            value={fmtPct(metrics.total_return_pct)}
                             subtitle="Portfolio return for period"
                         />
-                        {exposure && (
+                        {exposure?.success && (
                             <RiskMetricCard
                                 label="Market R²"
                                 value={fmtPct(exposure.r_squared, 1)}

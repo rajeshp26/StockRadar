@@ -419,6 +419,7 @@ class RiskMetricsResponse(BaseModel):
     value_at_risk_99: float = 0.0
     conditional_var_95: float = 0.0
     downside_deviation: float = 0.0
+    total_return_pct: float = 0.0
     tracking_error: Optional[float] = None
     information_ratio: Optional[float] = None
     beta: Optional[float] = None

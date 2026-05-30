@@ -293,6 +293,7 @@ export interface RiskMetricsResponse {
     value_at_risk_99: number;
     conditional_var_95: number;
     downside_deviation: number;
+    total_return_pct: number;
     tracking_error: number | null;
     information_ratio: number | null;
     beta: number | null;
