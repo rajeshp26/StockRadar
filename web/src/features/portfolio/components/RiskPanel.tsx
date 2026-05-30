@@ -83,10 +83,12 @@ export function RiskPanel() {
                             value={fmtNum(metrics.sharpe_ratio)}
                             trend={metrics.sharpe_ratio >= 1 ? 'up' : metrics.sharpe_ratio >= 0 ? 'neutral' : 'down'}
                             trendLabel={metrics.sharpe_ratio >= 1 ? 'Good' : metrics.sharpe_ratio >= 0 ? 'Adequate' : 'Poor'}
+                            info="Measures return per unit of total risk. Above 1.0 is good, above 2.0 is great. A higher ratio means you're getting more return for the volatility you're taking on."
                         />
                         <RiskMetricCard
                             label="Sortino Ratio"
                             value={fmtNum(metrics.sortino_ratio)}
+                            info="Like Sharpe ratio, but only penalizes downside volatility (bad risk). Higher is better. Useful because investors typically care more about losses than upside swings."
                         />
                         <RiskMetricCard
                             label="Volatility (σ)"
@@ -94,12 +96,14 @@ export function RiskPanel() {
                             subtitle="Annualized"
                             trend={metrics.std_deviation < 0.15 ? 'up' : metrics.std_deviation < 0.25 ? 'neutral' : 'down'}
                             trendLabel={metrics.std_deviation < 0.15 ? 'Low' : metrics.std_deviation < 0.25 ? 'Moderate' : 'High'}
+                            info="Annualized standard deviation of returns. Higher volatility means the portfolio's value swings more day to day. Assess this against your personal risk tolerance."
                         />
                         <RiskMetricCard
                             label="Max Drawdown"
                             value={fmtPct(metrics.max_drawdown_pct)}
                             subtitle="Peak-to-trough"
                             trend="down"
+                            info="The largest peak-to-trough decline in portfolio value over the period. Shows the worst loss you would have experienced if you'd held throughout."
                         />
                     </div>
 
@@ -109,15 +113,18 @@ export function RiskPanel() {
                             label="VaR (95%)"
                             value={fmtPct(metrics.value_at_risk_95)}
                             subtitle="Value at Risk"
+                            info="Value at Risk. With 95% confidence, daily portfolio losses are not expected to exceed this amount under normal market conditions."
                         />
                         <RiskMetricCard
                             label="CVaR (95%)"
                             value={fmtPct(metrics.conditional_var_95)}
                             subtitle="Expected tail loss"
+                            info="Conditional Value at Risk — the average loss in the worst 5% of days. More conservative than VaR; it captures how severe 'bad days' really get."
                         />
                         <RiskMetricCard
                             label="Downside Dev."
                             value={fmtPct(metrics.downside_deviation)}
+                            info="Annualized standard deviation of only negative returns. Lower is better. Focuses on 'bad volatility' (losses) rather than all fluctuations."
                         />
                         <RiskMetricCard
                             label="Beta"
@@ -125,25 +132,30 @@ export function RiskPanel() {
                             subtitle={metrics.beta != null ? (metrics.beta >= 1 ? 'More volatile than market' : 'Less volatile than market') : undefined}
                             trend={metrics.beta != null ? (metrics.beta <= 1 ? 'up' : 'neutral') : undefined}
                             trendLabel={metrics.beta != null ? (metrics.beta <= 1 ? 'Defensive' : 'Aggressive') : undefined}
+                            info="Sensitivity to the overall market (SPY). 1.0 means the portfolio moves with the market. Above 1.0 is more volatile; below 1.0 is more defensive."
                         />
                         <RiskMetricCard
                             label="Alpha"
                             value={fmtPct(metrics.alpha)}
                             trend={metrics.alpha != null ? (metrics.alpha >= 0 ? 'up' : 'down') : undefined}
                             trendLabel={metrics.alpha != null ? (metrics.alpha >= 0 ? 'Outperforming' : 'Underperforming') : undefined}
+                            info="Portfolio's excess return above what its beta would predict. Positive alpha means outperformance on a risk-adjusted basis vs the market."
                         />
                         <RiskMetricCard
                             label="Tracking Error"
                             value={fmtPct(metrics.tracking_error)}
+                            info="How much the portfolio's returns deviate from the benchmark (SPY). Lower means the portfolio closely tracks the market; higher means more active bets."
                         />
                         <RiskMetricCard
                             label="Info Ratio"
                             value={fmtNum(metrics.information_ratio)}
+                            info="Excess return per unit of tracking error. Shows whether active decisions are adding value above simply holding the market. Above 0.5 is considered good."
                         />
                         <RiskMetricCard
                             label="Return (Period)"
                             value={fmtPct(metrics.total_return_pct)}
                             subtitle="Portfolio return for period"
+                            info="Total portfolio return for the selected time period. Includes both price changes and dividends — this is your actual gain or loss."
                         />
                         {exposure?.success && (
                             <RiskMetricCard
@@ -152,6 +164,7 @@ export function RiskPanel() {
                                 subtitle="Fit to market"
                                 trend={exposure.r_squared >= 0.7 ? 'up' : exposure.r_squared >= 0.4 ? 'neutral' : 'down'}
                                 trendLabel={exposure.r_squared >= 0.7 ? 'Strong' : exposure.r_squared >= 0.4 ? 'Moderate' : 'Weak'}
+                                info="The percentage of portfolio return movements explained by market (SPY) movements. Higher means the portfolio behaves more like the overall market; lower means returns are driven by stock-specific factors."
                             />
                         )}
                     </div>
