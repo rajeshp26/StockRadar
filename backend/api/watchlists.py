@@ -115,7 +115,7 @@ def get_default_watchlist_with_items(
     user: dict = Depends(get_current_user_dep),
 ):
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         return service.get_default_watchlist_with_items(auth_id)
     except AppException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -131,7 +131,7 @@ def get_default_watchlist_structure(
     user: dict = Depends(get_current_user_dep),
 ):
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         return service.get_default_watchlist_structure(auth_id)
     except AppException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -145,9 +145,7 @@ async def stream_watchlist_updates(
     request: Request,
     user: dict = Depends(get_current_user_dep),
 ):
-    auth_id: Optional[str] = user.get("uid")
-    if not auth_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    auth_id = user["sub"]
 
     async def event_generator():
         queue: asyncio.Queue = asyncio.Queue()
@@ -160,13 +158,20 @@ async def stream_watchlist_updates(
                 .execute()
             )
             rows = items_res.data or []
+            logger.info(f"[SSE-DIAG] {auth_id}: subscription query returned {len(rows)} rows")
+            if rows:
+                logger.info(f"[SSE-DIAG] First row keys: {list(rows[0].keys()) if rows else 'N/A'}")
+                logger.info(f"[SSE-DIAG] First row companies: {rows[0].get('companies')}")
+                logger.info(f"[SSE-DIAG] First row watchlists: {rows[0].get('watchlists')}")
             user_symbols = [
                 row["companies"]["ticker_symbol"]
                 for row in rows
                 if row.get("companies")
             ]
+            logger.info(f"[SSE-DIAG] {auth_id}: resolved {len(user_symbols)} user symbols: {user_symbols}")
             for sym in user_symbols:
                 symbol_subscribers[sym].add(auth_id)
+            logger.info(f"[SSE-DIAG] symbol_subscribers now has {len(symbol_subscribers)} unique symbols")
 
             while True:
                 if await request.is_disconnected():
@@ -202,7 +207,7 @@ def get_stock_quote(
     symbol: str,
     user: dict = Depends(get_current_user_dep),
 ):
-    if not user or not user.get("uid"):
+    if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
     sym = (symbol or "").upper().strip()
     if not sym:
@@ -352,7 +357,7 @@ def list_watchlists(
     Ordered: default first, then by created_at ascending.
     """
     try:
-        auth_id    = user["uid"]
+        auth_id    = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         res = (
@@ -403,7 +408,7 @@ def create_watchlist(
     - Name: 1–50 chars, trimmed, whitespace-collapsed
     """
     try:
-        auth_id    = user["uid"]
+        auth_id    = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         # Hard cap: count existing watchlists
@@ -469,7 +474,7 @@ def rename_watchlist(
     Uniqueness: enforced by DB constraint (unique_user_watchlist_name).
     """
     try:
-        auth_id    = user["uid"]
+        auth_id    = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         existing   = _assert_watchlist_ownership(watchlist_id, db_user_id)
 
@@ -520,7 +525,7 @@ async def delete_watchlist(
     - SSE subscriptions for orphaned symbols are cleaned up.
     """
     try:
-        auth_id    = user["uid"]
+        auth_id    = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         existing   = _assert_watchlist_ownership(watchlist_id, db_user_id)
 
@@ -577,7 +582,7 @@ def get_watchlist_structure_by_id(
     mirroring get_default_watchlist_structure() but accepting watchlist_id.
     """
     try:
-        auth_id    = user["uid"]
+        auth_id    = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         _assert_watchlist_ownership(watchlist_id, db_user_id)  # security gate
 

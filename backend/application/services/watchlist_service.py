@@ -7,9 +7,10 @@ Updated Watchlist Service with Financial Data Integration
 - NEW: Price history loading (monthly bars for CANSLIM N/L analysis).
 """
 
+from __future__ import annotations
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from datetime import date, timedelta
 
 import pandas as pd
@@ -21,7 +22,8 @@ from shared.exceptions.base import NotFoundError, ExternalServiceError
 from database import supabase
 
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from providers.defeat_beta_provider import DefeatBetaProvider
+if TYPE_CHECKING:
+    from providers.defeat_beta_provider import DefeatBetaProvider
 
 # NEW: Valuation imports
 from infrastructure.repositories.valuation_repository import ValuationRepository
@@ -63,9 +65,13 @@ class WatchlistService:
         self.user_repo = user_repo
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
         # Allow injecting a DBeta provider that internally knows how to fallback to YF
-        self.defeat_beta_provider = defeat_beta_provider or DefeatBetaProvider(
-            yfinance_provider=stock_provider
-        )
+        if defeat_beta_provider is not None:
+            self.defeat_beta_provider = defeat_beta_provider
+        else:
+            from providers.defeat_beta_provider import DefeatBetaProvider
+            self.defeat_beta_provider = DefeatBetaProvider(
+                yfinance_provider=stock_provider
+            )
 
     # ========================================================================
     # EXISTING METHODS (unchanged)

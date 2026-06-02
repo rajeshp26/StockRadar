@@ -19,14 +19,14 @@ def sync_user(
     user: dict = Depends(get_current_user_dep)
 ):
     """
-    Synchronizes the Firebase User with the Supabase database.
+    Synchronizes the authenticated user with the Supabase database.
     This is a robust "upsert" operation.
     - If auth_id exists, UPDATE.
     - If email exists, UPDATE (to link accounts).
     - Otherwise, INSERT.
-    IDENTITY: The 'auth_id' (Firebase UID) is from the TOKEN.
+    IDENTITY: The 'auth_id' (Supabase user UUID) is from the JWT 'sub' claim.
     """
-    auth_id = user["uid"]
+    auth_id = user["sub"]
     email = body.email
     
     try:

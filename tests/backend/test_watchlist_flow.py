@@ -9,7 +9,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from main import app 
-from dependencies import get_user_id_from_header # Correctly import the dependency
+from dependencies import get_current_user_dep
 
 # Mock user ID for all tests
 TEST_USER_ID = "test-user-123"
@@ -18,10 +18,10 @@ TEST_USER_ID = "test-user-123"
 def client():
     # Use a TestClient that re-routes the dependency
     # to use our mock user ID instead of a real header.
-    def override_get_user_id():
-        return TEST_USER_ID
+    def override_get_current_user():
+        return {"sub": TEST_USER_ID}
 
-    app.dependency_overrides[get_user_id_from_header] = override_get_user_id
+    app.dependency_overrides[get_current_user_dep] = override_get_current_user
     yield TestClient(app)
     app.dependency_overrides.clear()
 

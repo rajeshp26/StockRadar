@@ -31,13 +31,9 @@ class Settings(BaseSettings):
     # Corrected: min_length=20 to accommodate valid 46-char legacy keys
     SUPABASE_SERVICE_ROLE_KEY: str = Field(..., min_length=20, description="Supabase service_role key (JWT or Legacy)")
     # ============================================
-    # 🔥 Authentication (Firebase)
+    # 🔐 Authentication (Supabase JWT)
     # ============================================
-    FIREBASE_PROJECT_ID: str = Field(..., description="Firebase project ID for token verification")
-    # Firebase Admin SDK credentials (replaces service-account.json)
-    FIREBASE_ADMIN_PROJECT_ID: Optional[str] = None
-    FIREBASE_ADMIN_CLIENT_EMAIL: Optional[str] = None
-    FIREBASE_ADMIN_PRIVATE_KEY: Optional[str] = None
+    SUPABASE_JWT_SECRET: str = Field(..., min_length=20, description="Supabase JWT secret for HS256 token verification (from Settings → API → JWT Secret)")
     # ============================================
     # 🌐 API Server Configuration
     # ============================================
@@ -308,7 +304,7 @@ def validate_config():
         print(f"API Endpoint : {s.API_HOST}:{s.API_PORT}")
         print(f"Supabase URL : {s.SUPABASE_URL}")
         print(f"Supabase Key : {key_type} format detected")
-        print(f"Firebase PID : {s.FIREBASE_PROJECT_ID}")
+        print(f"Auth Provider: Supabase JWT (local JWKS verification)")
         print(f"AI Provider  : {'OpenRouter Enabled *' if s.OPEN_ROUTER_KEY else 'AI Disabled'}")
         print(f"Defeat Beta  : {'Enabled *' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}")
         print(f"Market Data  : {'Enabled *' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}")

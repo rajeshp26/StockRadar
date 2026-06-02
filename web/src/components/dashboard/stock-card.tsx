@@ -27,6 +27,9 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
   const changePercent    = priceData?.changePercent ?? null;
   const isPositiveChange = (change ?? 0) >= 0;
 
+  /* ── DIAG: log price data state ────────────────────────────────────────── */
+  console.log(`[PRICE-DIAG] ${stock.symbol}: priceData=`, priceData, `price=${price}`);
+
   /* ── Hover prefetch — warms analysis cache 150 ms before click ─────────── */
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlePointerEnter = useCallback(() => {

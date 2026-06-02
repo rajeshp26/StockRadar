@@ -86,7 +86,7 @@ const MAX_BACKOFF     = 30_000;  // 30 s cap  (mirrors useValuationStream)
 
 export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
   const queryClient            = useQueryClient();
-  const { firebaseUser: user } = useAuth();
+  const { session } = useAuth();
 
   const [isConnected, setIsConnected] = useState(false);
 
@@ -101,9 +101,9 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
     mountedRef.current = true;
 
     // Do not open a connection until the user is authenticated.
-    // When status transitions from initializing → authenticated, user?.uid
-    // changes from undefined → uid, re-running this effect.
-    if (!user) return;
+    // When status transitions from initializing → authenticated, session?.user?.id
+    // changes from undefined → id, re-running this effect.
+    if (!session?.user) return;
 
     function connect() {
       if (!mountedRef.current) return;
@@ -119,21 +119,27 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
         if (!connectedRef.current) {
           connectedRef.current = true;
           setIsConnected(true);
+          console.log("[SSE-DIAG] First SSE message received — connection is live");
         }
 
         let data: Record<string, unknown>;
         try {
           data = JSON.parse(event.data as string);
         } catch {
+          console.warn("[SSE-DIAG] Malformed SSE frame (non-JSON):", event.data);
           return; // keep-alive ping or malformed frame — ignore
         }
 
         const type = data.type as string | undefined;
+        console.log("[SSE-DIAG] Received event:", type, "symbol:", data.symbol, "price:", data.price);
 
         // ── Route: price_update (typed) OR legacy (no type field) ──────────
         if (type === "price_update" || (!type && typeof data.price === "number")) {
           const symbol = (data.symbol as string | undefined)?.toUpperCase();
-          if (!symbol) return;
+          if (!symbol) {
+            console.warn("[SSE-DIAG] price_update with no symbol — skipping");
+            return;
+          }
 
           // Writing to QK.price(symbol) does two things at once:
           //   a) resets the stale timer → refetchInterval in useLivePrice
@@ -204,7 +210,7 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
     // Re-run only when the user identity changes (login / logout).
     // queryClient is stable for the app lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid, queryClient]);
+  }, [session?.user?.id, queryClient]);
 
   return (
     <SSEContext.Provider value={{ isConnected }}>

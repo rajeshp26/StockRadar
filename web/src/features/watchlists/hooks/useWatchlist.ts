@@ -47,7 +47,7 @@ interface UseWatchlistOptions {
 
 export function useWatchlist(options?: UseWatchlistOptions) {
   const { watchlistService }   = useServices();
-  const { firebaseUser: user } = useAuth();
+  const { session } = useAuth();
   const { toast }              = useToast();
   const queryClient            = useQueryClient();
 
@@ -75,7 +75,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       activeQueryId === "default"
         ? watchlistService.getDefaultWatchlistStructure()
         : watchlistService.getWatchlistStructureById(activeQueryId as number),
-    enabled:   !!user,
+    enabled:   !!session?.user,
     staleTime: STALE.WATCHLIST,
     gcTime:    GC.WATCHLIST,
     retry:     1,
@@ -85,7 +85,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
   const allWatchlistsQuery = useQuery<WatchlistMeta[], Error>({
     queryKey:  QK.watchlists(),
     queryFn:   () => watchlistService.getAllWatchlists(),
-    enabled:   !!user,
+    enabled:   !!session?.user,
     staleTime: STALE.LISTS,
     gcTime:    GC.LISTS,
     retry:     1,

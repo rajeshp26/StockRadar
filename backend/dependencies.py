@@ -8,6 +8,7 @@ SECURITY PRINCIPLES (fail-closed):
 - Rate limiting identifier should not trust proxy headers unless explicitly enabled.
 """
 
+from __future__ import annotations
 import logging
 import os
 from fastapi import Request, HTTPException, status
@@ -23,8 +24,8 @@ from infrastructure.repositories.valuation_repository import ValuationRepository
 
 # Providers
 from providers.yfinance_provider import YFinanceProvider
-from providers.defeat_beta_provider import DefeatBetaProvider
-from providers.edgar_provider import EdgarToolsProvider
+# Lazy imports for DefeatBetaProvider and EdgarToolsProvider
+# to avoid startup failures from optional provider dependency issues
 
 # AI Provider & Snapshot Builder
 from providers.ai_provider import AIProvider, OpenRouterProvider
@@ -116,7 +117,7 @@ def get_yfinance_provider() -> YFinanceProvider:
 _edgar_provider: EdgarToolsProvider = None
 _stockdex_provider: "StockdexMacrotrendsProvider" = None
 
-def get_edgar_provider() -> EdgarToolsProvider:
+def get_edgar_provider():
     """
     Get or create EdgarToolsProvider singleton.
 
@@ -126,6 +127,7 @@ def get_edgar_provider() -> EdgarToolsProvider:
     Requires EDGAR_IDENTITY env var:
         EDGAR_IDENTITY="YourName yourname@example.com"
     """
+    from providers.edgar_provider import EdgarToolsProvider
     global _edgar_provider
     if _edgar_provider is None:
         logger.debug("Initializing EdgarToolsProvider")
@@ -142,7 +144,7 @@ def get_stockdex_provider() -> "StockdexMacrotrendsProvider":
     return _stockdex_provider
 
 
-def get_defeat_beta_provider() -> DefeatBetaProvider:
+def get_defeat_beta_provider():
     """
     Get or create DefeatBetaProvider singleton.
 
@@ -152,6 +154,7 @@ def get_defeat_beta_provider() -> DefeatBetaProvider:
         3. EdgarTools  — fallback 2 (SEC EDGAR XBRL filings, IS/BS/CF only)
         4. YFinance    — fallback 3 (scrape-based, covers everything prior sources cannot)
     """
+    from providers.defeat_beta_provider import DefeatBetaProvider
     global _defeat_beta_provider
     if _defeat_beta_provider is None:
         logger.debug("Initializing DefeatBetaProvider")

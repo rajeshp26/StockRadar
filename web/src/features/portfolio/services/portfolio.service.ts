@@ -135,8 +135,10 @@ export class PortfolioService {
     // OVERVIEW
     // ========================================================================
 
-    async getPortfolioOverview(): Promise<PortfolioOverview> {
-        const res = await this.api.get<PortfolioOverview>("/portfolio/overview");
+    async getPortfolioOverview(accountId?: number): Promise<PortfolioOverview> {
+        const params: Record<string, string | number> = {};
+        if (accountId) params.account_id = accountId;
+        const res = await this.api.get<PortfolioOverview>("/portfolio/overview", { params });
         return res.data;
     }
 
@@ -305,6 +307,55 @@ export class PortfolioService {
         if (filter?.activity_type) params.activity_type = filter.activity_type;
         if (filter?.search) params.search = filter.search;
         const res = await this.api.get("/portfolio/transactions", { params });
+        return res.data;
+    }
+
+    // ========================================================================
+    // PRICE HISTORY
+    // ========================================================================
+
+    async getPriceHistory(
+        symbol: string,
+        days: number = 30
+    ): Promise<{
+        success: boolean;
+        symbol: string;
+        days: number;
+        data: { date: string; open: number | null; high: number | null; low: number | null; close: number | null; volume: number | null }[];
+        error?: string;
+    }> {
+        const res = await this.api.get(`/stocks/${symbol}/price-history`, {
+            params: { days },
+        });
+        return res.data;
+    }
+
+    // ========================================================================
+    // STOCK NEWS
+    // ========================================================================
+
+    async getStockNews(
+        symbol: string,
+        limit: number = 10
+    ): Promise<{
+        success: boolean;
+        symbol: string;
+        articles: {
+            uuid?: string;
+            title: string;
+            summary?: string;
+            publisher: string;
+            published_at: string;
+            article_type: string;
+            url?: string;
+            related_symbols: string[];
+        }[];
+        source: string;
+        error?: string;
+    }> {
+        const res = await this.api.get(`/stocks/${symbol}/news`, {
+            params: { limit },
+        });
         return res.data;
     }
 

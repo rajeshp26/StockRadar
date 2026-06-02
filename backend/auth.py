@@ -1,140 +1,125 @@
 # backend/auth.py
 #
-# SECURITY CHANGES FROM ORIGINAL:
-#  1. Firebase Admin SDK initialization now prefers env vars over service-account.json
-#  2. SSE connections can be authenticated via X-Verified-UID header
-#     (set by Next.js proxy after verifying a Firebase session cookie)
-#  3. X-Verified-UID is only trusted from the local proxy (127.0.0.1/::1)
+# Cookie-only BFF (Backend for Frontend) authentication.
+# All requests arrive via the Next.js proxy, which reads the __session cookie
+# and injects it as `Authorization: Bearer <jwt>`.
+# The backend verifies the JWT locally using the Supabase JWT secret (HS256)
+# or cached JWKS public keys (RS256).
 #
+import json
+import time
+import httpx
+from jwt import decode as jwt_decode, get_unverified_header
+from jwt.algorithms import RSAAlgorithm
 from fastapi import Request, HTTPException
-from firebase_admin import auth, credentials
-import firebase_admin
 from config import settings
 from shared.constants import AUTHORIZATION_HEADER, BEARER_PREFIX
 import logging
-import os
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SERVICE_ACCOUNT_FILE = os.path.join(BASE_DIR, "service-account.json")
-
-# Header injected by the Next.js proxy after verifying a Firebase session cookie.
-# Used for SSE connections (EventSource cannot send custom Authorization headers).
-VERIFIED_UID_HEADER = "x-verified-uid"
-
-# Only trust X-Verified-UID from these hosts (the local Next.js proxy).
-# Prevents external callers from bypassing auth by forging this header.
-TRUSTED_PROXY_HOSTS = {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
+JWKS_CACHE_TTL = 86400  # 24 hours — keys rotate infrequently
+_jwks = {"keys": None, "fetched": 0}
 
 
-def _is_trusted_proxy(request: Request) -> bool:
-    """Return True only if the request originates from the local Next.js proxy."""
-    if not request.client:
-        return False
-    return request.client.host in TRUSTED_PROXY_HOSTS
+def _get_public_key(kid: str):
+    """Fetch and cache Supabase JWKS, return RSA public key for given kid."""
+    now = time.time()
+    if not _jwks["keys"] or (now - _jwks["fetched"]) > JWKS_CACHE_TTL:
+        jwks_url = f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+        try:
+            resp = httpx.get(jwks_url, timeout=5)
+            resp.raise_for_status()
+            _jwks["keys"] = resp.json()["keys"]
+            _jwks["fetched"] = now
+            logger.debug("JWKS keys refreshed from Supabase")
+        except Exception as e:
+            logger.error(f"Failed to fetch JWKS from {jwks_url}: {e}")
+            if not _jwks["keys"]:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Authentication service unavailable"
+                )
+            logger.warning("Using stale JWKS keys after fetch failure")
+
+    key_data = next((k for k in _jwks["keys"] if k["kid"] == kid), None)
+    if not key_data:
+        raise HTTPException(status_code=401, detail="Invalid token: unknown key ID")
+    return RSAAlgorithm.from_jwk(json.dumps(key_data))
 
 
-def initialize_firebase_app():
+def _verify_hs256(token: str, options: dict) -> dict:
+    """Verify a Supabase JWT signed with HS256 using the project JWT secret."""
+    return jwt_decode(
+        token,
+        settings.SUPABASE_JWT_SECRET,
+        algorithms=["HS256"],
+        audience="authenticated",
+        options=options,
+    )
+
+
+def _verify_rs256(token: str, kid: str, options: dict) -> dict:
+    """Verify a Supabase JWT signed with RS256 using cached JWKS public keys."""
+    public_key = _get_public_key(kid)
+    return jwt_decode(
+        token,
+        public_key,
+        algorithms=["RS256"],
+        audience="authenticated",
+        options=options,
+    )
+
+
+def verify_jwt(token: str) -> dict:
+    """Verify a Supabase JWT locally.
+
+    Supports both HS256 (shared secret) and RS256 (JWKS) algorithms.
     """
-    Initialize Firebase Admin SDK.
+    try:
+        unverified = get_unverified_header(token)
+    except Exception as e:
+        logger.warning(f"Failed to decode JWT header: {e}")
+        raise HTTPException(status_code=401, detail="Invalid token format")
 
-    Priority:
-      1. Environment variables (FIREBASE_ADMIN_CLIENT_EMAIL + FIREBASE_ADMIN_PRIVATE_KEY)
-         — required for production deployments.
-      2. service-account.json file — development fallback only.
-
-    Logs a critical error and raises if initialization fails.
-    """
-    if firebase_admin._apps:
-        return  # Already initialized
+    alg = unverified.get("alg")
+    kid = unverified.get("kid")
+    options = {"require": ["exp", "sub"]}
 
     try:
-        project_id = settings.FIREBASE_PROJECT_ID
-
-        client_email = getattr(settings, "FIREBASE_ADMIN_CLIENT_EMAIL", None) or \
-                       os.environ.get("FIREBASE_ADMIN_CLIENT_EMAIL")
-        private_key_raw = getattr(settings, "FIREBASE_ADMIN_PRIVATE_KEY", None) or \
-                          os.environ.get("FIREBASE_ADMIN_PRIVATE_KEY")
-
-        if client_email and private_key_raw:
-            # Production path: credentials from environment variables
-            private_key = private_key_raw.replace("\\n", "\n")
-            cred = credentials.Certificate({
-                "type": "service_account",
-                "project_id": project_id,
-                "client_email": client_email,
-                "private_key": private_key,
-                "token_uri": "https://oauth2.googleapis.com/token",
-            })
-            logger.info("Firebase Admin SDK initialized from environment variables.")
-
-        elif os.path.exists(SERVICE_ACCOUNT_FILE):
-            # Development fallback: service account JSON file
-            if settings.is_production:
-                logger.critical(
-                    "service-account.json found in production. "
-                    "Use FIREBASE_ADMIN_CLIENT_EMAIL and FIREBASE_ADMIN_PRIVATE_KEY env vars instead. "
-                    "Remove service-account.json from the repository."
-                )
-                raise RuntimeError(
-                    "service-account.json must not be used in production. "
-                    "Set FIREBASE_ADMIN_CLIENT_EMAIL and FIREBASE_ADMIN_PRIVATE_KEY."
-                )
-            cred = credentials.Certificate(SERVICE_ACCOUNT_FILE)
-            logger.warning(
-                "Firebase Admin SDK initialized from service-account.json (development only). "
-                "Set FIREBASE_ADMIN_CLIENT_EMAIL and FIREBASE_ADMIN_PRIVATE_KEY for production."
-            )
-
+        if alg == "HS256":
+            decoded = _verify_hs256(token, options)
+        elif alg == "RS256":
+            if not kid:
+                raise HTTPException(status_code=401, detail="Invalid token: missing key ID")
+            decoded = _verify_rs256(token, kid, options)
         else:
-            raise FileNotFoundError(
-                "Firebase Admin credentials not found. "
-                "Set FIREBASE_ADMIN_CLIENT_EMAIL and FIREBASE_ADMIN_PRIVATE_KEY env vars, "
-                "or provide service-account.json for development."
-            )
+            logger.warning(f"Unsupported JWT algorithm: {alg}")
+            raise HTTPException(status_code=401, detail=f"Unsupported token algorithm: {alg}")
 
-        firebase_admin.initialize_app(cred, {"projectId": project_id})
-
-    except Exception as e:
-        logger.critical(f"Failed to initialize Firebase Admin SDK: {e}")
+        logger.debug(f"JWT verified for sub={decoded.get('sub')}")
+        return decoded
+    except HTTPException:
         raise
+    except Exception as e:
+        logger.warning(f"JWT verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 def get_current_user(request: Request):
     """
     FastAPI dependency that authenticates the current request.
 
-    Authentication order:
-      1. X-Verified-UID header from trusted local proxy (SSE connections only).
-         The proxy verifies Firebase session cookies and injects this header.
-      2. Authorization: Bearer <firebase_id_token> header (standard API calls).
-         Tries ID token verification first, then falls back to session cookie
-         verification for requests forwarded from the Next.js proxy.
+    The Next.js proxy reads the __session cookie from all incoming requests
+    (including EventSource/SSE) and injects it as:
+      Authorization: Bearer <jwt>
+
+    This function verifies the JWT locally using the Supabase JWT secret (HS256)
+    or cached JWKS keys (RS256). No fallback chain — single verification path.
 
     Returns the decoded token dict on success.
     Raises HTTPException 401 on failure.
     """
-
-    # ── Path 1: Proxy-verified UID (SSE) ────────────────────────────────────
-    verified_uid = request.headers.get(VERIFIED_UID_HEADER)
-    logger.info(f"[AUTH-DEBUG] Headers: auth={bool(request.headers.get('authorization'))}, verified_uid={bool(request.headers.get('x-verified-uid'))}")
-    if verified_uid:
-        if not _is_trusted_proxy(request):
-            # Log this — it means someone is trying to forge the header externally
-            logger.warning(
-                f"X-Verified-UID header received from untrusted host: {request.client.host if request.client else 'unknown'}. "
-                "This may indicate an attack attempt."
-            )
-            raise HTTPException(
-                status_code=401,
-                detail="Unauthorized: X-Verified-UID from untrusted source"
-            )
-        # Return a minimal user dict compatible with how the rest of the app uses decoded tokens
-        logger.debug(f"SSE auth via X-Verified-UID for uid={verified_uid}")
-        return {"uid": verified_uid, "sub": verified_uid}
-
-    # ── Path 2: Firebase ID token in Authorization header ───────────────────
     auth_header = request.headers.get(AUTHORIZATION_HEADER)
     if not auth_header or not auth_header.startswith(BEARER_PREFIX):
         logger.warning("Missing or invalid Authorization header.")
@@ -145,16 +130,10 @@ def get_current_user(request: Request):
 
     token = auth_header[len(BEARER_PREFIX):]
 
-    try:
-        decoded_token = auth.verify_id_token(token)
-        return decoded_token
-    except Exception as id_token_error:
-        logger.debug(f"ID token verification failed, trying session cookie: {id_token_error}")
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header"
+        )
 
-    try:
-        decoded_token = auth.verify_session_cookie(token, check_revoked=True)
-        logger.debug(f"Session cookie verified for uid={decoded_token.get('uid')}")
-        return decoded_token
-    except Exception as session_error:
-        logger.error(f"Token verification failed (ID token: {id_token_error}, session cookie: {session_error})")
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return verify_jwt(token)

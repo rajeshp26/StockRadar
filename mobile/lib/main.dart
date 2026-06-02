@@ -1,58 +1,31 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:stockerpro/core/config/firebase_config.dart';
 import 'package:stockerpro/features/watchlist/presentation/screens/watchlist_screen.dart';
 
 void main() async {
-  // ===== CRITICAL: Initialize Flutter Bindings First =====
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   debugPrint('[BOOTSTRAP] WidgetsFlutterBinding initialized');
 
-  // ===== STEP 1: Initialize Firebase Auth Only =====
   try {
-    if (kIsWeb) {
-      // FAIL-FAST: Ensure environment variables were injected
-      if (!FirebaseConfig.isWebConfigured) {
-        throw Exception(
-          "Firebase Configuration Missing. Please run with --dart-define flags. "
-          "Refer to docs/ENVIRONMENT_SETUP_GUIDE.md"
-        );
-      }
-      
-      debugPrint('[BOOTSTRAP] Firebase Web Config Found:');
-      debugPrint('  - API Key: ${FirebaseConfig.apiKey.substring(0, 10)}...');
-      debugPrint('  - Project ID: ${FirebaseConfig.projectId}');
-      debugPrint('  - Auth Domain: ${FirebaseConfig.authDomain}');
-      
-      // Initialize Firebase ONLY for Auth
-      try {
-        await Firebase.initializeApp(
-          options: FirebaseConfig.options!,
-        );
-        debugPrint('[BOOTSTRAP] ✅ Firebase.initializeApp() COMPLETED');
-        
-        // Verify Auth is accessible
-        final auth = FirebaseAuth.instance;
-        debugPrint('[BOOTSTRAP] ✅ FirebaseAuth instance accessible');
-        debugPrint('[BOOTSTRAP]    Current user: ${auth.currentUser?.email ?? "None (anonymous)"}');
-        
-      } catch (e, st) {
-        debugPrint('[BOOTSTRAP] ❌ Firebase initialization FAILED:');
-        debugPrint('Error: $e');
-        debugPrint('StackTrace: $st');
-        rethrow;
-      }
-    } else {
-      debugPrint('[BOOTSTRAP] Not running on Web, skipping Firebase init');
-      await Firebase.initializeApp();
-    }
+    const supabaseUrl = String.fromEnvironment(
+      'SUPABASE_URL',
+      defaultValue: 'https://viqdqgxcumcdhqxooplw.supabase.co',
+    );
+    const supabaseAnonKey = String.fromEnvironment(
+      'SUPABASE_ANON_KEY',
+      defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpcWRxZ3hjdW1jZGhxeG9vcGx3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYwODI1NDAsImV4cCI6MjA4MTY1ODU0MH0.uQln345Vv9LL1c8BmiBA_kekaiKXntpcclpabfVOreg',
+    );
+
+    await Supabase.initialize(
+      url: supabaseUrl,
+      anonKey: supabaseAnonKey,
+    );
+    debugPrint('[BOOTSTRAP] ✅ Supabase.initialize() COMPLETED');
   } catch (e) {
-    debugPrint('[BOOTSTRAP] FATAL: Firebase initialization failed: $e');
-    // Show error UI instead of crashing
+    debugPrint('[BOOTSTRAP] FATAL: Supabase initialization failed: $e');
     runApp(
       MaterialApp(
         home: Scaffold(
@@ -63,7 +36,7 @@ void main() async {
                 const Icon(Icons.error_outline, size: 48, color: Colors.red),
                 const SizedBox(height: 16),
                 const Text(
-                  'Firebase Auth Initialization Failed',
+                  'Authentication Initialization Failed',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
@@ -84,9 +57,8 @@ void main() async {
     return;
   }
 
-  // ===== STEP 2: Run the app with Riverpod =====
   debugPrint('[BOOTSTRAP] All initialization complete. Launching app...');
-  
+
   runApp(
     const ProviderScope(
       child: StockerProApp(),

@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { cn } from "@/lib/utils";
 import { ReactQueryProvider } from "@/providers/query-provider";
-import { FirebaseClientProvider } from "@/firebase/client-provider";
+
 import { AuthProvider } from "@/providers/auth-provider";
 import { ServiceProvider } from "@/shared/contexts/ServiceContext";
 import { Toaster } from "@/components/ui/toaster";
@@ -52,22 +52,16 @@ export default function RootLayout({
         {/*
           Provider nesting order:
             ReactQueryProvider   — outermost: all child hooks get useQueryClient()
-              FirebaseClientProvider
-                AuthProvider
-                  ServiceProvider
-                    {children}
-
-          ReactQueryProvider must be outside Firebase/Auth so those providers'
-          own hooks can also benefit from query caching in the future.
+              AuthProvider
+                ServiceProvider
+                  {children}
         */}
         <ReactQueryProvider>
-          <FirebaseClientProvider>
-            <AuthProvider>
-              <ServiceProvider>
-                {children}
-              </ServiceProvider>
-            </AuthProvider>
-          </FirebaseClientProvider>
+          <AuthProvider>
+            <ServiceProvider>
+              {children}
+            </ServiceProvider>
+          </AuthProvider>
         </ReactQueryProvider>
 
         <Toaster />

@@ -144,7 +144,7 @@ async def add_item_to_watchlist(
     repo: SupabaseWatchlistRepository = Depends(get_watchlist_repository),
 ) -> AddStockResponse:
     try:
-        auth_id = user_token["uid"]
+        auth_id = user_token["sub"]
         db_user_id = get_db_user_id(auth_id, repo)
 
         # Verify ownership
@@ -230,7 +230,7 @@ async def refresh_stock_financials(
     repo: SupabaseWatchlistRepository = Depends(get_watchlist_repository),
 ) -> dict:
     try:
-        auth_id = user_token["uid"]
+        auth_id = user_token["sub"]
         get_db_user_id(auth_id, repo)  # auth check — result unused
 
         company = repo.find_company_by_symbol(symbol.upper())
@@ -268,7 +268,7 @@ def update_watchlist_item_targets(
     repo: SupabaseWatchlistRepository = Depends(get_watchlist_repository),
 ) -> WatchlistItemData:
     try:
-        auth_id = user_token["uid"]
+        auth_id = user_token["sub"]
         db_user_id = get_db_user_id(auth_id, repo)
 
         item = repo.find_watchlist_item_with_owner(item_id)
@@ -304,7 +304,7 @@ async def remove_item_from_watchlist(
     repo: SupabaseWatchlistRepository = Depends(get_watchlist_repository),
 ) -> None:
     try:
-        auth_id = user_token["uid"]
+        auth_id = user_token["sub"]
         db_user_id = get_db_user_id(auth_id, repo)
 
         # ── 1. Verify ownership and get symbol ──────────────────────────────

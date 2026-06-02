@@ -2,7 +2,7 @@
 Shared utilities for StockerPro End-to-End tests.
 
 Provides:
-  - Auth token generation (Firebase ID token)
+  - Auth token generation (Supabase access token)
   - Supabase client creation
   - Test user lifecycle management
 
@@ -12,7 +12,6 @@ Usage:
 
 import os
 import sys
-import json
 import logging
 from pathlib import Path
 
@@ -30,113 +29,71 @@ def _ensure_backend_on_path():
 
 # ── Auth ─────────────────────────────────────────────────────────────────
 
-def _try_load_google_credentials() -> dict | None:
-    """Load google_credentials.json from backend directory."""
-    paths = [
-        _BACKEND_DIR / "google_credentials.json",
-        _PROJECT_ROOT / "google_credentials.json",
-    ]
-    for p in paths:
-        if p.exists():
-            with open(p) as f:
-                return json.load(f)
-    return None
-
-
-def _try_generate_id_token(uid: str | None = None, email: str | None = None) -> str | None:
+def _try_generate_supabase_token(uid: str | None = None, email: str | None = None) -> str | None:
     """
-    Generate a Firebase ID token using Admin SDK.
-    Falls back: google_credentials.json → FIREBASE_ADMIN_* env vars.
+    Generate a Supabase access token for E2E testing.
+
+    Uses the Supabase service role key to create or retrieve a test user,
+    then generates a sign-in token. Falls back to E2E_SUPABASE_TOKEN env var.
     """
     try:
-        import firebase_admin
-        from firebase_admin import credentials, auth
+        from supabase import create_client, Client
     except ImportError:
-        logger.warning("firebase-admin not installed; cannot auto-generate token")
+        logger.warning("supabase package not installed; cannot auto-generate token")
         return None
 
-    if firebase_admin._apps:
-        firebase_admin.get_app()
-    else:
-        creds_dict = _try_load_google_credentials()
-        if creds_dict:
-            cred = credentials.Certificate(creds_dict)
-            project_id = creds_dict.get("project_id")
-            firebase_admin.initialize_app(cred, {"projectId": project_id} if project_id else None)
-        else:
-            pid = os.environ.get("FIREBASE_ADMIN_PROJECT_ID") or os.environ.get("FIREBASE_PROJECT_ID")
-            client_email = os.environ.get("FIREBASE_ADMIN_CLIENT_EMAIL")
-            private_key = os.environ.get("FIREBASE_ADMIN_PRIVATE_KEY")
-            if pid and client_email and private_key:
-                cred = credentials.Certificate({
-                    "type": "service_account",
-                    "project_id": pid,
-                    "client_email": client_email,
-                    "private_key": private_key.replace("\\n", "\n"),
-                    "private_key_id": "",
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                })
-                firebase_admin.initialize_app(cred, {"projectId": pid})
+    supabase_url = os.environ.get("SUPABASE_URL")
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+    if not supabase_url or not service_key:
+        logger.warning("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set for token generation")
+        return None
+
+    resolve_email = email or os.environ.get("E2E_TEST_EMAIL", "e2e-test@stockerpro-test.com")
+    resolve_password = os.environ.get("E2E_TEST_PASSWORD", "StockerPro123!")
+
+    try:
+        admin: Client = create_client(supabase_url, service_key)
+
+        try:
+            admin.auth.admin.create_user({
+                "email": resolve_email,
+                "password": resolve_password,
+                "email_confirm": True,
+            })
+            logger.info(f"Created test user: {resolve_email}")
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                logger.info(f"Test user already exists: {resolve_email}")
             else:
-                logger.warning("No Firebase credentials available for token generation")
+                logger.exception("Failed to create test user")
                 return None
 
-    resolve_uid = uid or os.environ.get("E2E_TEST_UID", "e2e-test-user")
-    resolve_email = email or os.environ.get("E2E_TEST_EMAIL", "e2e-test@stockerpro-test.com")
-
-    try:
-        user = auth.get_user_by_email(resolve_email)
-    except auth.UserNotFoundError:
-        user = auth.create_user(
-            uid=resolve_uid,
-            email=resolve_email,
-            password=os.environ.get("E2E_TEST_PASSWORD", "StockerPro123!"),
-        )
+        client: Client = create_client(supabase_url, os.environ.get("SUPABASE_ANON_KEY", ""))
+        result = client.auth.sign_in_with_password({
+            "email": resolve_email,
+            "password": resolve_password,
+        })
+        return result.session.access_token
     except Exception:
-        logger.exception("Failed to look up or create Firebase user")
-        return None
-
-    try:
-        custom_token = auth.create_custom_token(user.uid).decode("utf-8")
-    except Exception:
-        logger.exception("Failed to create Firebase custom token")
-        return None
-
-    api_key = os.environ.get("FIREBASE_WEB_API_KEY")
-    if not api_key:
-        logger.warning("FIREBASE_WEB_API_KEY not set; cannot exchange custom token for ID token")
-        return None
-
-    try:
-        import requests
-        resp = requests.post(
-            f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={api_key}",
-            json={"token": custom_token, "returnSecureToken": True},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()["idToken"]
-    except Exception:
-        logger.exception("Token exchange with Firebase Identity Toolkit failed")
+        logger.exception("Failed to generate Supabase access token")
         return None
 
 
 def get_id_token(uid: str | None = None, email: str | None = None) -> str:
     """
-    Get a valid Firebase ID token for E2E tests.
-    Priority: E2E_AUTH_TOKEN env var → auto-generate from Admin SDK.
+    Get a valid Supabase access token for E2E tests.
+    Priority: E2E_AUTH_TOKEN env var → auto-generate from Supabase Admin.
     """
     token = os.environ.get("E2E_AUTH_TOKEN")
     if token:
         return token
-    generated = _try_generate_id_token(uid, email)
+    generated = _try_generate_supabase_token(uid, email)
     if generated:
         return generated
     raise RuntimeError(
         "Cannot authenticate for E2E tests. Set E2E_AUTH_TOKEN env var, "
-        "or provide Firebase Admin credentials (google_credentials.json or FIREBASE_ADMIN_* env vars) "
-        "plus FIREBASE_WEB_API_KEY for token exchange."
+        "or provide SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_ANON_KEY env vars."
     )
 
 

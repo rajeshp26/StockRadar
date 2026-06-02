@@ -6,3 +6,13 @@ node_modules/
 
 # Log files
 *.log
+
+# Playwright E2E test artifacts
+playwright-report/
+test-results/
+
+# E2E test auth state (contains tokens)
+e2e/.auth/
+
+# E2E test environment (contains credentials)
+e2e/.env.e2e

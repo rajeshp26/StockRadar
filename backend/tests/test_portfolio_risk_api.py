@@ -17,7 +17,7 @@ from api import portfolio as _portfolio_mod
 
 
 def _mock_user():
-    return {"uid": "test-user-123", "email": "test@example.com"}
+    return {"sub": "test-user-123", "email": "test@example.com"}
 
 
 @pytest.fixture(autouse=True)

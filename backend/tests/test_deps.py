@@ -14,7 +14,7 @@ packages = [
     "requests",
     "slowapi",
     "lxml",
-    "firebase_admin",
+    "jwt",
     "dotenv",
     "uvicorn",
     "pydantic_settings",

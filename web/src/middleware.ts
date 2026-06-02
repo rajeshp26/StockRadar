@@ -34,11 +34,8 @@ function buildCsp(isDev: boolean): string {
             " http://localhost:*" +
             " ws://localhost:*" +
             " wss://localhost:*" +
-            " https://*.firebaseio.com" +
-            " wss://*.firebaseio.com" +
-            " https://*.googleapis.com" +
-            " https://identitytoolkit.googleapis.com" +
-            " https://securetoken.googleapis.com",
+            " https://viqdqgxcumcdhqxooplw.supabase.co" +
+            " https://*.googleapis.com",
             "worker-src 'self' blob:",
             "frame-ancestors 'none'",
         ].join("; ");
@@ -54,11 +51,8 @@ function buildCsp(isDev: boolean): string {
         "img-src 'self' data: blob: https://images.unsplash.com",
         "font-src 'self' data:",
         "connect-src 'self'" +
-        " https://*.firebaseio.com" +
-        " wss://*.firebaseio.com" +
-        " https://*.googleapis.com" +
-        " https://identitytoolkit.googleapis.com" +
-        " https://securetoken.googleapis.com",
+        " https://viqdqgxcumcdhqxooplw.supabase.co" +
+        " https://*.googleapis.com",
         "worker-src 'self' blob:",
         "frame-ancestors 'none'",
         "base-uri 'self'",

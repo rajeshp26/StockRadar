@@ -1,22 +1,25 @@
 import { api } from '@/lib/api';
 import { User } from '@/features/auth/types/auth.types';
-import { User as FirebaseUser } from 'firebase/auth';
+
+interface TokenExchangeParams {
+  email: string;
+  displayName?: string | null;
+}
 
 /**
- * Exchanges a Firebase token for a StockerPro AppUser profile.
- * This is the crucial step that translates a Firebase user into an application-specific user.
+ * Exchanges a Supabase session for a StockerPro AppUser profile.
  */
-export const exchangeTokenForUser = async (firebaseUser: FirebaseUser): Promise<User> => {
+export const exchangeTokenForUser = async (params: TokenExchangeParams): Promise<User> => {
   try {
-    console.log('[AuthService] Exchanging Firebase token for AppUser...');
+    console.log('[AuthService] Exchanging session for AppUser...');
     const response = await api.post('/users/sync', {
-      email: firebaseUser.email,
-      username: firebaseUser.displayName || firebaseUser.email,
+      email: params.email,
+      username: params.displayName || params.email,
     });
     console.log('[AuthService] Token exchange successful.');
     return response.data;
   } catch (error) {
     console.error('[AuthService] Token exchange failed:', error);
-    throw error; // Re-throw to be caught by the calling function
+    throw error;
   }
 };

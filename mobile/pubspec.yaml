@@ -18,11 +18,8 @@ dependencies:
   dio: ^5.4.0
   connectivity_plus: ^6.0.3
   
-  # Firebase (Standardized for 3.22+ compatibility)
-  firebase_core: ^3.1.0
-  firebase_auth: ^5.1.0
-  firebase_analytics: ^11.0.0
-  firebase_crashlytics: ^4.0.0
+  # Supabase Auth (replaces Firebase Auth)
+  supabase_flutter: ^2.8.0
   
   # JSON & Code Gen
   json_annotation: ^4.9.0

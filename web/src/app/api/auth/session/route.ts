@@ -1,13 +1,10 @@
-﻿// web/src/app/api/auth/session/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import {
-  getAdminAuth,
-  SESSION_COOKIE_NAME,
-  SESSION_COOKIE_MAX_AGE_SECONDS,
-  SESSION_COOKIE_EXPIRES_MS,
-} from "@/lib/firebase-admin";
+﻿import { NextRequest, NextResponse } from "next/server";
+import { jwtVerify } from "jose";
 import { attachCsrfCookie } from "@/lib/csrf";
 import { logSecurityEvent } from "@/lib/security-logger";
+
+const SESSION_COOKIE_NAME = "__session";
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 5; // 5 days
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown> = {};
@@ -17,7 +14,7 @@ export async function POST(req: NextRequest) {
     // treat as empty body
   }
 
-  const { idToken, action } = body as { idToken?: string; action?: string };
+  const { accessToken, action } = body as { accessToken?: string; action?: string };
   const ip =
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   const isHttps = req.nextUrl.protocol === "https:";
@@ -25,12 +22,12 @@ export async function POST(req: NextRequest) {
   const cookieBase = {
     httpOnly: true,
     secure: isHttps,
-    sameSite: "lax" as const,
+    sameSite: "strict" as const,
     path: "/",
   };
 
   // ── CLEAR ────────────────────────────────────────────────────────────────
-  if (action === "clear" || !idToken) {
+  if (action === "clear" || !accessToken) {
     const res = NextResponse.json({ ok: true });
     res.cookies.set({ name: SESSION_COOKIE_NAME, value: "", ...cookieBase, maxAge: 0 });
     res.cookies.set({
@@ -47,31 +44,31 @@ export async function POST(req: NextRequest) {
   }
 
   // ── BASIC VALIDATION ──────────────────────────────────────────────────────
-  if (typeof idToken !== "string" || idToken.length < 20) {
+  if (typeof accessToken !== "string" || accessToken.length < 20) {
     return NextResponse.json({ ok: false, error: "Invalid token format" }, { status: 400 });
   }
 
-  // ── VERIFY + MINT SESSION COOKIE ──────────────────────────────────────────
+  // ── VERIFY TOKEN LOCALLY ──────────────────────────────────────────────────
   try {
-    const adminAuth = getAdminAuth();
-    const decoded = await adminAuth.verifyIdToken(idToken, true);
-    const sessionCookie = await adminAuth.createSessionCookie(idToken, {
-      expiresIn: SESSION_COOKIE_EXPIRES_MS,
+    const secret = new TextEncoder().encode(process.env.SUPABASE_JWT_SECRET);
+    const { payload } = await jwtVerify(accessToken, secret, {
+      audience: "authenticated",
+      algorithms: ["HS256"],
     });
 
     const res = NextResponse.json({ ok: true });
     res.cookies.set({
       name: SESSION_COOKIE_NAME,
-      value: sessionCookie,
+      value: accessToken,
       ...cookieBase,
-      maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
+      maxAge: SESSION_MAX_AGE_SECONDS,
     });
     attachCsrfCookie(res, isHttps);
 
     logSecurityEvent({
       type: "LOGIN_SUCCESS",
       severity: "INFO",
-      userId: decoded.uid,
+      userId: payload.sub as string,
       ip,
       details: "Session cookie minted",
     });

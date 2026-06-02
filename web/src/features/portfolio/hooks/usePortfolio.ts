@@ -32,13 +32,15 @@ import type {
 
 /**
  * Hook for portfolio overview data
+ * @param accountIds - optional account filter (pass first ID to backend)
  */
-export function usePortfolioOverview() {
+export function usePortfolioOverview(accountIds?: number[]) {
     const { portfolioService } = useServices();
+    const accountId = accountIds?.[0];
 
     return useQuery<PortfolioOverview, Error>({
-        queryKey: QK.portfolioOverview(),
-        queryFn: () => portfolioService.getPortfolioOverview(),
+        queryKey: [...QK.portfolioOverview(), accountId].filter(Boolean),
+        queryFn: () => portfolioService.getPortfolioOverview(accountId),
         staleTime: STALE.PORTFOLIO,
         gcTime: GC.PORTFOLIO,
         retry: 1,
@@ -446,6 +448,38 @@ export function useRiskContribution(accountIds?: number[]) {
         queryFn: () => portfolioService.getRiskContribution(ids),
         staleTime: STALE.PORTFOLIO,
         gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for stock price history (sparkline data)
+ */
+export function usePriceHistory(symbol: string | null, days: number = 30) {
+    const { portfolioService } = useServices();
+
+    return useQuery({
+        queryKey: ['price-history', symbol, days],
+        queryFn: () => portfolioService.getPriceHistory(symbol!, days),
+        enabled: !!symbol,
+        staleTime: 2 * 60 * 1000,
+        gcTime: 5 * 60 * 1000,
+        retry: 1,
+    });
+}
+
+/**
+ * Hook for stock news articles
+ */
+export function useStockNews(symbol: string | null, limit: number = 10) {
+    const { portfolioService } = useServices();
+
+    return useQuery({
+        queryKey: ['stock-news', symbol, limit],
+        queryFn: () => portfolioService.getStockNews(symbol!, limit),
+        enabled: !!symbol,
+        staleTime: 5 * 60 * 1000,
+        gcTime: 10 * 60 * 1000,
         retry: 1,
     });
 }

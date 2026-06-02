@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import React from "react";
 
 const mockUseAccountHoldings = vi.fn();
 const mockUseAllHoldings = vi.fn();
+const mockUsePortfolioAllocation = vi.fn();
 
 vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
     useAccountHoldings: (...args: any[]) => mockUseAccountHoldings(...args),
     useAllHoldings: (...args: any[]) => mockUseAllHoldings(...args),
+    usePortfolioAllocation: (...args: any[]) => mockUsePortfolioAllocation(...args),
 }));
 
 vi.mock("@/components/ui/skeleton", () => ({
@@ -14,6 +17,16 @@ vi.mock("@/components/ui/skeleton", () => ({
         const React = require("react");
         return React.createElement("div", { "data-testid": "skeleton", className });
     },
+}));
+
+vi.mock("recharts", () => ({
+    ResponsiveContainer: ({ children }: any) =>
+        React.createElement("div", { "data-testid": "responsive-container" }, children),
+    PieChart: ({ children }: any) =>
+        React.createElement("div", { "data-testid": "pie-chart" }, children),
+    Pie: () => null,
+    Cell: () => null,
+    Tooltip: () => null,
 }));
 
 import { HoldingsTab } from "@/features/portfolio/components/HoldingsTab";
@@ -47,6 +60,7 @@ describe("HoldingsTab", () => {
         vi.clearAllMocks();
         mockUseAccountHoldings.mockReturnValue({ data: null, isLoading: false });
         mockUseAllHoldings.mockReturnValue({ data: [], isLoading: false });
+        mockUsePortfolioAllocation.mockReturnValue({ data: null, isLoading: false });
     });
 
     it("shows empty state when no accountIds means all accounts but none exist", () => {
@@ -56,7 +70,7 @@ describe("HoldingsTab", () => {
     });
 
     it("shows loading skeletons while fetching", () => {
-        mockUseAllHoldings.mockReturnValue({ data: null, isLoading: true });
+        mockUseAccountHoldings.mockReturnValue({ data: null, isLoading: true });
         const { container } = render(<HoldingsTab accountIds={[1]} />);
         expect(container.querySelectorAll("[data-testid='skeleton']").length).toBeGreaterThanOrEqual(1);
     });

@@ -86,7 +86,7 @@ def _get_portfolio_risk_service() -> "PortfolioRiskService":
 
 def _resolve_user(user: dict) -> int:
     """Resolve auth user dict → internal db_user_id. Caches in-memory."""
-    auth_id = user["uid"]
+    auth_id = user["sub"]
     cache_key = f"user_id:{auth_id}"
     cached = getattr(_resolve_user, "_cache", {}).get(cache_key)
     if cached is not None:
@@ -150,7 +150,7 @@ async def list_accounts(
     Returns account metadata with holdings count and total value per account.
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
@@ -215,7 +215,7 @@ async def delete_account(
     Security: Ownership verified via account.user_id.
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
@@ -267,7 +267,7 @@ async def queue_import(
     Frontend polls GET /portfolio/import/{import_batch_id}/status for progress.
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         # Decode CSV content
@@ -331,7 +331,7 @@ async def get_import_status(
     - failed:    Error, details in 'error' field
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
@@ -398,7 +398,7 @@ async def get_account_holdings(
     - Realized gain/loss (from closed positions)
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
@@ -448,7 +448,7 @@ async def get_all_holdings(
     Useful for portfolio-wide analysis and top holdings display.
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
@@ -496,7 +496,7 @@ async def get_portfolio_overview(
     - Per-account breakdown
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         service = _get_portfolio_service()
@@ -552,7 +552,7 @@ async def get_account_transactions(
     - limit: Max transactions to return (default 100, max 1000)
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         # Cap limit
@@ -614,7 +614,7 @@ async def get_all_transactions(
     When account_ids is omitted, returns transactions for all user accounts.
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
@@ -668,7 +668,7 @@ async def get_account_dividends(
     - Monthly breakdown for last 12 months
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
@@ -727,7 +727,7 @@ async def get_all_dividends(
     - Monthly breakdown for last 12 months (aggregated)
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
@@ -776,7 +776,7 @@ async def get_account_dividend_history(
     - Account name and type
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         service = _get_portfolio_service()
@@ -836,7 +836,7 @@ async def add_manual_transaction(
     - Dividend extraction if type is DIVIDEND
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         service = _get_portfolio_service()
@@ -889,7 +889,7 @@ async def get_import_history(
     - Duplicate detection results
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
         
         repo = PortfolioRepository()
@@ -975,7 +975,7 @@ async def get_portfolio_performance(
     Returns time-series snapshots of portfolio value and cost basis.
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
@@ -1022,7 +1022,7 @@ async def get_performance_compare(
     Optional account_ids filter: ?account_ids=1,3,5 (empty = all accounts)
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         benchmark_symbols = [s.strip().upper() for s in benchmarks.split(",") if s.strip()]
@@ -1062,7 +1062,7 @@ async def get_portfolio_allocation(
     Optional account_ids filter: ?account_ids=1,3,5 (empty = all accounts)
     """
     try:
-        auth_id = user["uid"]
+        auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None

@@ -15,9 +15,10 @@ from api import super_investors
 from api.chat import router as chat_router
 from config import settings
 from database import supabase
-from auth import get_current_user, initialize_firebase_app
+from auth import get_current_user
 from dependencies import get_current_user_dep, limiter
 from api.portfolio import router as portfolio_router
+from api.stocks import router as stocks_router
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -39,24 +40,45 @@ async def background_price_monitor():
             from api.watchlists import symbol_subscribers, broadcast_stock_update
             active_symbols = list(symbol_subscribers.keys())
             if not active_symbols:
+                logger.warning("[PRICE-MONITOR-DIAG] No active symbol subscribers — sleeping 5s")
                 await asyncio.sleep(min(5, interval))
                 continue
             
+            logger.info(f"[PRICE-MONITOR-DIAG] Fetching prices for {len(active_symbols)} symbols: {active_symbols}")
             tickers = yf.Tickers(active_symbols)
+            updated_count = 0
+            skipped_count = 0
             for symbol in active_symbols:
                 ticker = tickers.tickers.get(symbol)
                 if not ticker:
+                    logger.warning(f"[PRICE-MONITOR-DIAG] {symbol}: ticker object is None")
+                    skipped_count += 1
                     continue
                 
                 info = getattr(ticker, "info", {}) or {}
+                if not info:
+                    logger.warning(f"[PRICE-MONITOR-DIAG] {symbol}: info dict is empty")
+                    skipped_count += 1
+                    continue
+                
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice")
                 prev_close = info.get("regularMarketPreviousClose")
+                
+                # Log ALL available close-related keys for diagnostics
+                close_keys = [k for k in info.keys() if 'close' in k.lower()]
+                current_keys = [k for k in info.keys() if 'price' in k.lower() or 'current' in k.lower()]
+                logger.info(f"[PRICE-MONITOR-DIAG] {symbol}: currentPrice={current_price}, prev_close={prev_close}, close_keys={close_keys}, current_keys={current_keys}")
                 
                 if current_price and prev_close:
                     change = float(current_price) - float(prev_close)
                     change_percent = (change / float(prev_close)) * 100
                     await broadcast_stock_update(symbol, current_price, change, change_percent)
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+                    logger.warning(f"[PRICE-MONITOR-DIAG] {symbol}: SKIPPED broadcast — current_price={current_price}, prev_close={prev_close}")
             
+            logger.info(f"[PRICE-MONITOR-DIAG] Cycle complete: {updated_count} updated, {skipped_count} skipped")
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             break  # graceful shutdown
@@ -75,7 +97,7 @@ async def lifespan(app: FastAPI):
     app.state.tasks: Dict[str, asyncio.Task] = {}
     
     # STARTUP ---------------------------------------------------------------
-    initialize_firebase_app()
+    # No Firebase initialization — Supabase JWT verification uses lazy JWKS fetch
     
     # SSE price monitor (stays in FastAPI - real-time user-facing)
     price_task = asyncio.create_task(background_price_monitor(), name="price_monitor")
@@ -208,3 +230,4 @@ app.include_router(chat_router)
 app.include_router(analysis.router)
 app.include_router(super_investors.router)
 app.include_router(portfolio_router)
+app.include_router(stocks_router)

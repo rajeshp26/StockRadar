@@ -3,18 +3,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 /**
- * SECURE BRIDGE (Proxy) — Production-ready
+ * SECURE BRIDGE (Proxy) — Cookie-only authentication
  *
- * Responsibilities:
- *  1) Identity Injection: Extract Firebase (or future OIDC) ID token from headers/cookies
- *     and inject a guaranteed `Authorization: Bearer <token>` header to the backend.
- *  2) CORS Avoidance: Keep backend private by routing via same-origin Next.js API.
- *  3) SSE Piping: Stream Server-Sent Events through to the browser.
+ * Design:
+ *  All authentication flows through a single httpOnly __session cookie.
+ *  The proxy reads the cookie and injects an `Authorization: Bearer <session>`
+ *  header for the backend — unifying auth across axios, fetch, and EventSource.
+ *
+ *  No `Authorization` headers from the client are accepted — only the cookie
+ *  is trusted. This eliminates the dual-path (ID token + session cookie) and
+ *  ensures EventSource (which cannot set custom headers) is treated identically.
+ *
+ * CSRF strategy:
+ *  - SameSite=Strict on the session cookie (browser-enforced CSRF prevention)
+ *  - X-Requested-With: XMLHttpRequest required on mutating requests (defense-in-depth)
+ *    The axios instance sends this header by default; EventSource (GET-only) is exempt.
+ *    This avoids the timing pitfalls of the Double-Submit Cookie pattern.
  *
  * Config (env):
  *  - BACKEND_ORIGIN               (default: "http://127.0.0.1:8001")
  *  - PROXY_IDTOKEN_COOKIE         (default: "__session")
- *  - PROXY_EXTRA_TOKEN_HEADERS    (default: "x-id-token,x-firebase-token")
  *  - PROXY_REQUIRE_AUTH           (default: "false") → set "true" in prod
  */
 
@@ -24,19 +32,18 @@ export const dynamic = "force-dynamic";
 
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN ?? "http://127.0.0.1:8001";
 const PROXY_IDTOKEN_COOKIE = process.env.PROXY_IDTOKEN_COOKIE ?? "__session";
-const EXTRA_TOKEN_HEADER_NAMES = (process.env.PROXY_EXTRA_TOKEN_HEADERS ??
-  "x-id-token,x-firebase-token")
-  .split(",")
-  .map((h) => h.trim().toLowerCase())
-  .filter(Boolean);
 
 // ✅ Recommend enabling this in .env for prod
 const REQUIRE_AUTH = (process.env.PROXY_REQUIRE_AUTH ?? "false").toLowerCase() === "true";
 
-/** Treat this path as SSE (EventSource will include cookies automatically). */
-function isSSEPath(path: string) {
-  // Extend if you add more SSE endpoints later:
-  return path.startsWith("watchlists/stream");
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function isSSERequest(req: NextRequest): boolean {
+  return (req.headers.get("accept") ?? "").includes("text/event-stream");
+}
+
+function isMutating(method: string): boolean {
+  return MUTATING_METHODS.has(method.toUpperCase());
 }
 
 function normalizeBearer(tokenOrHeader: string | null | undefined): string | null {
@@ -47,23 +54,7 @@ function normalizeBearer(tokenOrHeader: string | null | undefined): string | nul
   return `Bearer ${raw}`;
 }
 
-function extractTokenFromHeaders(req: NextRequest): string | null {
-  // 1) Standard Authorization header
-  const auth = req.headers.get("authorization");
-  if (auth && /^bearer\s+/i.test(auth)) return normalizeBearer(auth);
-
-  // 2) Any configured extra headers carrying a raw token (no "Bearer " needed)
-  for (const name of EXTRA_TOKEN_HEADER_NAMES) {
-    const v = req.headers.get(name);
-    if (v) {
-      const norm = normalizeBearer(v);
-      if (norm) return norm;
-    }
-  }
-  return null;
-}
-
-async function extractTokenFromCookies(): Promise<string | null> {
+async function extractToken(): Promise<string | null> {
   try {
     const jar = await cookies();
     // Primary cookie
@@ -71,7 +62,7 @@ async function extractTokenFromCookies(): Promise<string | null> {
     if (c) return normalizeBearer(c);
 
     // Optional fallbacks for other ecosystems
-    const fallbacks = ["firebase_id_token", "sb-access-token"];
+    const fallbacks = ["sb-access-token"];
     for (const name of fallbacks) {
       const v = jar.get(name)?.value;
       if (v) return normalizeBearer(v);
@@ -131,36 +122,53 @@ function buildUpstreamHeaders(
   return headers;
 }
 
+/** Attach standard security headers to every proxy response. */
+function attachSecurityHeaders(headers: Headers): void {
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+}
+
 async function proxy(request: NextRequest, method: string, pathParts: string[]) {
   const path = pathParts.join("/");
-  const isSSE = isSSEPath(path);
+  const sse = isSSERequest(request);
 
-  // Token resolution — cookie/headers only (no query token)
-  const tokenFromHeaders = extractTokenFromHeaders(request);
-  const tokenFromCookies = await extractTokenFromCookies();
-  const bearer = tokenFromHeaders ?? tokenFromCookies ?? null;
+  // CSRF defense-in-depth: require X-Requested-With on mutating requests.
+  // The axios client sends this header by default. fetch() and EventSource
+  // are GET-only and don't need it.
+  if (isMutating(method) && !request.headers.get("X-Requested-With")) {
+    console.warn(`[PROXY] Missing X-Requested-With header on ${method} /${path}`);
+    return NextResponse.json(
+      { detail: "CSRF protection: missing X-Requested-With header" },
+      { status: 403 }
+    );
+  }
+
+  // Token resolution — cookie only (no client-supplied Authorization header)
+  const bearer = await extractToken();
 
   const targetUrl = resolveTargetUrl(request, pathParts);
 
   // Minimal, privacy-safe logs (DO NOT log tokens or full URLs with query)
   const authPresent = !!bearer;
-  console.log(`[PROXY] ${method} /${path} | auth=${authPresent ? "present" : "absent"} sse=${isSSE}`);
+  console.log(`[PROXY] ${method} /${path} | auth=${authPresent ? "present" : "absent"} sse=${sse}`);
 
   console.log(`[PROXY-DEBUG] ${method} /${path} | headers:`, {
     authorization: request.headers.get("authorization") ? "present" : "absent",
     cookie: request.headers.get("cookie") ? "present" : "absent",
+    xRequestedWith: request.headers.get("x-requested-with") ? "present" : "absent",
   });
 
   // In secure deployments, block unauthenticated requests universally (SSE included).
   if (REQUIRE_AUTH && !bearer) {
     return NextResponse.json(
-      { detail: "Unauthorized: missing ID token at proxy." },
+      { detail: "Unauthorized: missing session cookie at proxy." },
       { status: 401 }
     );
   }
 
   const hasBody = !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
-  const upstreamHeaders = buildUpstreamHeaders(request, bearer, isSSE, hasBody);
+  const upstreamHeaders = buildUpstreamHeaders(request, bearer, sse, hasBody);
 
   // Buffer entire body to avoid Node.js ReadableStream / duplex issues with fetch
   let bodyBuffer: ArrayBuffer | undefined;
@@ -197,6 +205,7 @@ async function proxy(request: NextRequest, method: string, pathParts: string[]) 
     sseHeaders.set("Cache-Control", "no-cache");
     sseHeaders.set("Connection", "keep-alive");
     sseHeaders.set("X-Accel-Buffering", "no");
+    attachSecurityHeaders(sseHeaders);
 
     return new NextResponse(upstream.body, {
       status: upstream.status,
@@ -206,6 +215,7 @@ async function proxy(request: NextRequest, method: string, pathParts: string[]) 
 
   const passthroughHeaders = new Headers();
   if (contentType) passthroughHeaders.set("Content-Type", contentType);
+  attachSecurityHeaders(passthroughHeaders);
 
   return new NextResponse(upstream.body, {
     status: upstream.status,
@@ -263,7 +273,7 @@ export async function OPTIONS() {
   const h = new Headers();
   h.set("Access-Control-Allow-Origin", "*");
   h.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  h.set("Access-Control-Allow-Headers", "Authorization,Content-Type,Accept");
+  h.set("Access-Control-Allow-Headers", "Authorization,Content-Type,Accept,X-Requested-With");
   h.set("Access-Control-Max-Age", "86400");
   return new NextResponse(null, { status: 204, headers: h });
 }
