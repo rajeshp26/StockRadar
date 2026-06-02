@@ -5,13 +5,14 @@ import { usePathname } from "next/navigation";
 import { UserNav } from "@/components/user-nav";
 import { ErrorBoundary } from "react-error-boundary";
 import { Suspense } from "react";
-import { Eye, PieChart } from "lucide-react";
+import { Eye, PieChart, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ── Nav link definition ────────────────────────────────────── */
 const NAV_LINKS = [
   { href: "/dashboard", label: "Watchlist", icon: Eye },
   { href: "/portfolio", label: "Portfolio", icon: PieChart },
+  { href: "/super-investors", label: "Super Investors", icon: Users },
 ] as const;
 
 /* ── Skeleton for UserNav while loading ─────────────────────── */

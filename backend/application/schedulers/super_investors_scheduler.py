@@ -354,6 +354,39 @@ class SuperInvestorsRefreshScheduler:
             value_dollars = float(row.get("Value", 0) or 0)  # edgar returns in actual dollars
             weight = (value_dollars / total_value) if total_value > 0 else 0
 
+            # Look up the most recent prior quarter row for this
+            # (investor_id, company_id) pair so we can store the delta.
+            prev_result = (
+                supabase.table("institutional_holdings")
+                .select("shares_held, quarter_end_date")
+                .eq("investor_id", investor_id)
+                .eq("company_id", company_id)
+                .lt("quarter_end_date", str(period))   # strictly before current
+                .order("quarter_end_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            prev_row = prev_result.data[0] if prev_result.data else None
+            prev_shares = int(prev_row["shares_held"]) if prev_row else None
+
+            if prev_shares is None:
+                shares_change = 0
+                shares_change_pct = 0.0
+                change_type = "new"
+            else:
+                shares_change = shares - prev_shares
+                shares_change_pct = (
+                    round((shares_change / prev_shares) * 100, 4)
+                    if prev_shares != 0 else 0.0
+                )
+                abs_pct = abs(shares_change_pct)
+                if abs_pct < 1.0:
+                    change_type = "held"
+                elif shares_change > 0:
+                    change_type = "increased"
+                else:
+                    change_type = "decreased"
+
             # Check if holding exists
             existing = supabase.table("institutional_holdings").select(
                 "holding_id"
@@ -369,6 +402,9 @@ class SuperInvestorsRefreshScheduler:
                 "shares_held": int(shares),
                 "position_value": (value_dollars),  # ← Fixed: now in dollars
                 "portfolio_weight": float(weight),
+                "shares_change": shares_change,
+                "shares_change_pct": shares_change_pct,
+                "change_type": change_type,
                 "data_source": "edgar",
             }
 

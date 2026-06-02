@@ -178,27 +178,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             // Background-sync user profile — failure must NOT revert login.
             // The session cookie is already set; the user is authenticated.
             // If the backend is down or returns an error, log and continue.
-            if (!authState.user) {
-              exchangeTokenForUser({
-                email: session.user.email ?? '',
-                displayName: session.user.user_metadata?.display_name ?? null,
-              }).then((appUser) => {
-                try {
-                  perf.mark?.('auth-end');
-                  perf.measure?.('User Authentication', 'login-start', 'auth-end');
-                } catch { }
+            exchangeTokenForUser({
+              email: session.user.email ?? '',
+              displayName: session.user.user_metadata?.display_name ?? null,
+            }).then((appUser) => {
+              try {
+                perf.mark?.('auth-end');
+                perf.measure?.('User Authentication', 'login-start', 'auth-end');
+              } catch { }
 
-                setAuthState((prev) => ({
-                  ...prev,
-                  status: 'authenticated',
-                  user: appUser,
-                  session,
-                  error: null,
-                }));
-              }).catch((err) => {
-                console.warn('[AuthProvider] Profile sync failed (non-fatal):', err);
-              });
-            }
+              setAuthState((prev) => ({
+                ...prev,
+                status: 'authenticated',
+                user: appUser,
+                session,
+                error: null,
+              }));
+            }).catch((err) => {
+              console.warn('[AuthProvider] Profile sync failed (non-fatal):', err);
+            });
           } catch (error) {
             console.error('[AuthProvider] Error during session handling:', error);
             await clearSessionCookie();

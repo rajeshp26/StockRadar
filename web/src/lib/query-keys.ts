@@ -56,6 +56,21 @@ export const QK = {
   stockVsIndex: (symbol: string, benchmarkSymbols: string[], years: number) => ["stock-vs-index", symbol, ...benchmarkSymbols, years] as const,
   superInvestors: (symbol: string) =>
     ["analysis", "super-investors", symbol.toUpperCase()] as const,
+  // ── Standalone Super Investors page ─────────────────────────────────────
+  superInvestorsOverview: () =>
+    ["super-investors", "overview"] as const,
+  superInvestorsTopStocks: (sector?: string, style?: string, minInvestors?: number) =>
+    ["super-investors", "top-stocks", sector ?? "", style ?? "", minInvestors ?? 1] as const,
+  superInvestorsOverlap: (minInvestors?: number, sector?: string) =>
+    ["super-investors", "overlap", minInvestors ?? 3, sector ?? ""] as const,
+  superInvestorsActivity: (changeType?: string, investorTag?: string, quarters?: number) =>
+    ["super-investors", "activity", changeType ?? "", investorTag ?? "", quarters ?? 4] as const,
+  superInvestorsList: () =>
+    ["super-investors", "investors"] as const,
+  superInvestorPortfolio: (tag: string, quarters?: number) =>
+    ["super-investors", "investors", tag.toUpperCase(), quarters ?? 8] as const,
+  superInvestorsSectors: (style?: string) =>
+    ["super-investors", "sectors", style ?? ""] as const,
   riskAssessment: (symbol: string) =>
     ["analysis", "risk-assessment", symbol.toUpperCase()] as const,
   // Portfolio
