@@ -6,7 +6,7 @@ import { useAccountHoldings, useAllHoldings, useAggregatedHoldings, usePortfolio
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { AllocationDonutCard } from './AllocationDonutCard';
-import { ChevronDown, ChevronRight, ArrowLeft } from 'lucide-react';
+import { ChevronDown, ChevronRight, ArrowLeft, BarChart2 } from 'lucide-react';
 import type { AggregatedHolding } from '../types/portfolio.types';
 
 interface HoldingsTabProps {
@@ -160,11 +160,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                         return (
                             <div
                                 key={`${h.symbol}-${h.holding_id}`}
-                                className="glass-panel rounded-lg p-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.04] transition-colors"
-                                onClick={() => router.push(`/analysis/${h.symbol}`)}
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/analysis/${h.symbol}`); }}
+                                className="glass-panel rounded-lg p-4 flex items-center justify-between"
                             >
                                 <div className="flex items-center gap-3">
                                     <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-xs font-bold text-blue-400">
@@ -193,6 +189,13 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                                             </p>
                                         </div>
                                     )}
+                                    <button
+                                        onClick={() => router.push(`/analysis/${h.symbol}`)}
+                                        className="flex items-center justify-center w-7 h-7 rounded-lg hover:bg-white/10 transition-colors text-white/30 hover:text-blue-400"
+                                        title="View analysis"
+                                    >
+                                        <BarChart2 className="h-4 w-4" />
+                                    </button>
                                 </div>
                             </div>
                         );
@@ -203,7 +206,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                     {/* Column header row — visible on wider screens */}
                     <div className="hidden md:grid text-[11px] font-bold text-white/30 uppercase tracking-wider px-4 py-1"
                         style={{
-                            gridTemplateColumns: '32px 1fr 100px 90px 90px 130px 130px 20px',
+                            gridTemplateColumns: '32px 1fr 100px 90px 90px 130px 130px 32px 20px',
                             gap: '8px',
                         }}
                     >
@@ -214,6 +217,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                         <div className="text-right">Avg Cost</div>
                         <div className="text-right">Value</div>
                         <div className="text-right">Gain / Loss</div>
+                        <div />
                         <div />
                     </div>
 
@@ -234,7 +238,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                                     onKeyDown={(e) => { if (e.key === 'Enter') setExpandedSymbol(isExpanded ? null : h.symbol); }}
                                     style={{
                                         display: 'grid',
-                                        gridTemplateColumns: '32px 1fr 100px 90px 90px 130px 130px 20px',
+                                        gridTemplateColumns: '32px 1fr 100px 90px 90px 130px 130px 32px 20px',
                                         gap: '8px',
                                         alignItems: 'center',
                                     }}
@@ -290,6 +294,17 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                                         <p className={cn('text-xs', h.unrealized_gain_loss >= 0 ? 'text-green-400/60' : 'text-red-400/60')}>
                                             {h.unrealized_gain_loss >= 0 ? '+' : ''}{h.unrealized_gain_loss_pct.toFixed(2)}%
                                         </p>
+                                    </div>
+
+                                    {/* Analyze */}
+                                    <div className="flex justify-center">
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); router.push(`/analysis/${h.symbol}`); }}
+                                            className="flex items-center justify-center w-7 h-7 rounded-lg hover:bg-white/10 transition-colors text-white/30 hover:text-blue-400"
+                                            title="View analysis"
+                                        >
+                                            <BarChart2 className="h-4 w-4" />
+                                        </button>
                                     </div>
 
                                     {/* Chevron */}
