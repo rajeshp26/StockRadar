@@ -608,6 +608,26 @@ class HoldingPerformanceSnapshot(BaseModel):
     avg_cost_per_share: float = 0
 
 
+class MonthlyReturnSummary(BaseModel):
+    month: str
+    return_pct: float
+    label: str
+
+
+class DrawdownInfo(BaseModel):
+    dd_pct: float
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    duration_days: Optional[int] = None
+    is_ongoing: bool = False
+
+
+class DaysAboveCostBasis(BaseModel):
+    days_above: int
+    total_days: int
+    pct_above: float
+
+
 class HoldingPerformanceResponse(BaseModel):
     success: bool = True
     symbol: str
@@ -617,6 +637,13 @@ class HoldingPerformanceResponse(BaseModel):
     total_return_pct: float = 0
     total_dividends: float = 0
     total_dividends_pct: float = 0
+    combined_return: float = 0
+    best_month: Optional[MonthlyReturnSummary] = None
+    worst_month: Optional[MonthlyReturnSummary] = None
+    max_drawdown: Optional[DrawdownInfo] = None
+    longest_drawdown: Optional[DrawdownInfo] = None
+    volatility_30d: float = 0
+    days_above_cost_basis: Optional[DaysAboveCostBasis] = None
     error: Optional[str] = None
 
 

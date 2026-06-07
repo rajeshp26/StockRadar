@@ -453,6 +453,26 @@ export interface HoldingPerformanceSnapshot {
     avg_cost_per_share?: number;
 }
 
+export interface MonthlyReturnSummary {
+    month: string;
+    return_pct: number;
+    label: string;
+}
+
+export interface DrawdownInfo {
+    dd_pct: number;
+    start_date?: string;
+    end_date?: string;
+    duration_days?: number;
+    is_ongoing: boolean;
+}
+
+export interface DaysAboveCostBasis {
+    days_above: number;
+    total_days: number;
+    pct_above: number;
+}
+
 export interface HoldingPerformanceResponse {
     success: boolean;
     symbol: string;
@@ -462,6 +482,13 @@ export interface HoldingPerformanceResponse {
     total_return_pct: number;
     total_dividends: number;
     total_dividends_pct: number;
+    combined_return: number;
+    best_month?: MonthlyReturnSummary | null;
+    worst_month?: MonthlyReturnSummary | null;
+    max_drawdown?: DrawdownInfo | null;
+    longest_drawdown?: DrawdownInfo | null;
+    volatility_30d: number;
+    days_above_cost_basis?: DaysAboveCostBasis | null;
     error?: string;
 }
 

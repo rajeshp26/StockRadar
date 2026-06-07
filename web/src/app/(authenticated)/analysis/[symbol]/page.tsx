@@ -200,7 +200,7 @@ export default function AnalysisPage() {
       </div>
 
       {/* ── Top-level tab bar ───────────────────────────────── */}
-      <div className="glass-segmented overflow-x-auto no-scrollbar w-full">
+      <div className="glass-segmented overflow-x-auto w-full styled-scrollbar">
         {TOP_TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}

@@ -414,4 +414,19 @@
   select {
     @apply glass-input;
   }
+
+  /* Styled thin scrollbar for .glass-segmented tab bars */
+  .styled-scrollbar::-webkit-scrollbar {
+    height: 3px;
+  }
+  .styled-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .styled-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.1);
+    border-radius: 999px;
+  }
+  .styled-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.2);
+  }
 }

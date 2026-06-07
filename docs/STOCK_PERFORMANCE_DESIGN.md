@@ -1,8 +1,9 @@
 # Stock Performance Tab — Detailed Design Document
 
-> **Version:** 1.3
-> **Date:** 2026-06-06
+> **Version:** 1.4
+> **Date:** 2026-06-07
 > **Status:** Bugs fixed; proposed enhancements for completeness, correctness, and UX
+> **New in v1.4:** §12 — Performance Summary Card (return attribution, best/worst month, drawdown, days above cost basis, volatility) + Tab Overflow Fix
 > **Design Goals:** Professional grade, minimal complexity, maximum reuse, long-term extensibility
 
 ---
@@ -20,6 +21,8 @@
 8. [Assumptions](#8-assumptions)
 9. [Test Plan](#9-test-plan)
 10. [Appendix: Calculation Correctness Validation](#10-appendix-calculation-correctness-validation)
+11. [Proposed Enhancements — Implementation Plan](#11-proposed-enhancements--implementation-plan)
+12. [Performance Summary Card + Tab Overflow Fix](#12-performance-summary-card--tab-overflow-fix)
 
 ---
 
@@ -2143,4 +2146,501 @@ StockPerformancePanel [ENHANCED]
 | 5 | P-03: Holding-Level Benchmark Compare | High (new endpoint + hook) | P-02 |
 | 6 | P-04: Transaction History | Medium (new endpoint + table) | None |
 | 7 | P-05: Per-Account Breakdown | Medium (new endpoint + table) | None |
+
+---
+
+## 12. Performance Summary Card + Tab Overflow Fix
+
+> **Version:** 1.0
+> **Date:** 2026-06-07
+> **Status:** Proposed for review
+> **Design Goals:** Professional grade, maximum reuse, single source of truth, minimal frontend computation
+
+### 12.1 UI Mockup
+
+The summary card sits at the **top** of the Performance tab, replacing the existing 5 metric cards with a single unified card organized into clear sections:
+
 ```
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│  Gain/Loss  -$748.48  ·  -5.1%                                                     │
+│                                                                                     │
+│  ┌──────────────────────┐  ┌──────────────────────┐                                │
+│  │  Price change         │  │  Dividends            │                                │
+│  │  -$782.90             │  │  +$34.42              │                                │
+│  │  (from price movement)│  │  (received to date)   │                                │
+│  └──────────────────────┘  └──────────────────────┘                                │
+│                                                                                     │
+│  Avg Cost $182.40  ·  Last Price $195.70  ·  +7.3% from cost                       │
+│                                                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐  ┌────────────────────┐    │
+│  │  Best month   │  │  Worst month  │  │  Max drawdown  │  │  Volatility (30d)  │    │
+│  │  Jan 2026     │  │  Feb 2026     │  │  -44.1%        │  │  28.4% ANNUALIZED  │    │
+│  │  +4.2%        │  │  -18.7%       │  │  Peak → trough │  │                    │    │
+│  └──────────────┘  └──────────────┘  └────────────────┘  └────────────────────┘    │
+│                                                                                     │
+│  ┌──────────────────────────────────┐  ┌──────────────────────────────────────┐    │
+│  │  Days above cost basis           │  │  Longest drawdown                    │    │
+│  │  31 of 213 days                  │  │  14 weeks (Feb → now)                │    │
+│  │  Since Nov 2025                  │  │  Ongoing                             │    │
+│  └──────────────────────────────────┘  └──────────────────────────────────────┘    │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Organization rationale:**
+| Section | What | Why |
+|---------|------|-----|
+| **Header** | Gain/Loss $ · % | The single most important number — prominent, colored, immediately answers "am I up or down?" |
+| **Row 1** | Price change + Dividends | Attribution — answers "what caused it?" Two cards only, no clutter |
+| **Context line** | Avg Cost · Last Price · % diff | Cost basis context — not a full card row, compact single line with $\textcolor{var(--indigo-400)}{\longrightarrow}$ arrow visual |
+| **Row 2** | Best/Worst month + Max drawdown + Volatility | Risk & performance quadrants — uniform 4-column grid, all %-based metrics |
+| **Row 3** | Days above cost basis + Longest drawdown | Extended metrics — wider cards for text-heavy stats, duration-based |
+
+**What was removed and why:**
+| Removed from earlier draft | Reason |
+|---------------------------|--------|
+| "What's driving the ..." header title | Redundant with the breakdown below it. Gain/Loss is the headline, breakdown is the detail. |
+| Separate Gain/Loss line | Repeated the same combined_return. Now merged into the header. |
+| Avg Cost as a 3rd card in Row 1 | Out of place in the "return attribution" group. Moved to its own compact line. |
+| Longest drawdown in 4-column grid | Duration text is long ("Feb → now") — needs wider column. Moved to Row 3. |
+| Volatility in Row 3 | It's a % metric that fits a narrow card. Moved to the 4-column risk grid. |
+
+### 12.2 Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| **Where to compute metrics** | Backend (`get_holding_performance()`) | Avoids re-fetching price_history / re-running FIFO logic on frontend. Single source of truth. |
+| **New fields vs new endpoint** | New fields in `HoldingPerformanceResponse` | Represents summary OF the same performance data — not a separate concern. Zero extra network requests. |
+| **Reuse existing stats module** | `from backend.shared.portfolio_stats import ...` | `compute_max_drawdown`, `compute_drawdown_series`, `compute_annualized_volatility`, `compute_daily_returns` — all exist and are used by `PortfolioRiskService`. |
+| **Monthly returns computation** | Backend helper `_compute_monthly_returns()` | Groups position_value snapshots by calendar month; returns sorted list of `{month, return_pct}`. |
+| **Volatility data source** | `price_history` table (30 trailing days) | Snapshots may be weekly/monthly — too coarse for daily vol. Use separate daily price query. |
+| **Days above cost basis** | From snapshot position_value vs cost_basis | Only count days where position is held (cost_basis > 0). Gives fraction and raw count. |
+| **Avg cost vs current price** | From `snapshots[-1].avg_cost_per_share` + `useLivePrice(symbol)` hook | `current_price` does NOT exist in `HoldingPerformanceSnapshot`. Use `useLivePrice` instead — already called in the parent `AnalysisPage` and can be passed as prop or called inside `StockPerformancePanel`. % diff = (live_price − avg_cost) / avg_cost × 100. |
+| **Gain/Loss $ + % combined** | Single header: `-$748.48 · -5.1%` | Replaces two separate MetricItem cards and the redundant "What's driving" title. Combined return shown ONCE as the headline. Attribution (price vs dividends) shown below. |
+| **Monthly returns limitation** | Only computed for periods ≤1Y | For "ALL" period, snapshots are monthly → 1 data point per month → cannot compute monthly return. Show "—" for monthly metrics when period is "ALL". Fall back to "Period not available" label. |
+| **Tab overflow** | Visible thin scrollbar (custom CSS) | Removes `no-scrollbar` from tab container, adds themed thin scrollbar. Zero layout change, works at all widths. |
+
+### 12.3 Reuse Map
+
+Every metric reuses an existing function or data field:
+
+| Metric | Data Source | Computation | Reuses? |
+|--------|------------|-------------|---------|
+| Price return | `total_return` (already computed) | Direct field | ✅ Yes |
+| Dividend return | `total_dividends` (already computed) | Direct field | ✅ Yes |
+| Combined return | `total_return + total_dividends` | Simple sum | ✅ Yes (no new queries) |
+| Best/worst month | Snapshots' `position_value` | `_compute_monthly_returns()` — new helper, ~25 lines | ⚠ New, but uses already-in-memory snapshots |
+| Max drawdown | Snapshots' `position_value` | `portfolio_stats.compute_max_drawdown(values)` | ✅ Yes |
+| Drawdown duration | Drawdown series dates | `portfolio_stats.compute_drawdown_series()` + new duration calc | ✅ Yes (partially) |
+| Days above cost basis | Snapshots' `position_value > cost_basis` | Simple iteration | ✅ Yes (no new queries) |
+| Volatility | `price_history` table (30 trailing days) | `portfolio_stats.compute_annualized_volatility(daily_returns)` | ✅ Yes |
+| Avg cost vs current price | `snapshots[-1].avg_cost_per_share` + `useLivePrice(symbol)` | `avg_cost_per_share` is in snapshots; `current_price` is NOT — use existing `useLivePrice` hook from parent | ⚠ `current_price` not in schema; must use live price hook |
+| Gain/Loss $ + % combined | `total_return` + `total_return_pct` | Direct fields | ✅ Yes (already computed) |
+
+**What's truly new:** only `_compute_monthly_returns()` and `_compute_drawdown_duration()` — both are ~20-line helpers.
+
+**Known gap:** `total_return + total_dividends` = unrealized P&L + dividends only. Realized gains from sells during the period are not included. For a true total economic return (what brokerage statements show), realized gains need to be tracked. This is acceptable for v1 — the user's mockup treats "Price loss" as the unrealized component, which matches this design.
+
+### 12.4 Schema Changes
+
+**File:** `backend/schemas_portfolio.py`
+
+```python
+class MonthlyReturnSummary(BaseModel):
+    month: str          # "Jan 2026"
+    return_pct: float   # 4.2 or -18.7 (not percentage points — actual % return)
+
+class DrawdownInfo(BaseModel):
+    max_drawdown_pct: float              # -44.1
+    max_drawdown_peak_date: Optional[str] = None
+    max_drawdown_trough_date: Optional[str] = None
+    longest_drawdown_weeks: float = 0   # 14.0
+    longest_drawdown_start: Optional[str] = None
+    longest_drawdown_end: Optional[str] = None  # None if ongoing
+
+class DaysAboveCostBasis(BaseModel):
+    above_count: int     # 31
+    total_days: int      # 213
+    start_date: str      # "2025-11-01" (first purchase date)
+
+class HoldingPerformanceResponse(BaseModel):
+    success: bool = True
+    symbol: str
+    period: str
+    snapshots: List[HoldingPerformanceSnapshot] = []
+    total_return: float = 0
+    total_return_pct: float = 0
+    total_dividends: float = 0
+    total_dividends_pct: float = 0
+    # ── NEW ──
+    combined_return: float = 0                       # total_return + total_dividends
+    best_month: Optional[MonthlyReturnSummary] = None
+    worst_month: Optional[MonthlyReturnSummary] = None
+    drawdown: Optional[DrawdownInfo] = None
+    days_above_cost_basis: Optional[DaysAboveCostBasis] = None
+    volatility_30d: float = 0                        # annualized, e.g. 28.4
+    # ──────────
+    error: Optional[str] = None
+```
+
+**Note:** `current_price` is intentionally NOT added to the schema. The frontend reuses the existing `useLivePrice(symbol)` hook instead — it's already called in the `AnalysisPage` parent component and provides real-time price data. Keeps the backend response focused on historical performance data.
+
+### 12.5 Backend Implementation
+
+**File:** `backend/application/services/portfolio_service.py`
+
+In `get_holding_performance()`, after snapshots are computed (line ~2073), insert:
+
+```python
+# ── Compute summary metrics ─────────────────────────────────────
+summary = self._compute_performance_summary(
+    snapshots=result["snapshots"],
+    symbol=symbol,
+    user_id=user_id,
+    total_return=result["total_return"],
+    total_dividends=result["total_dividends"],
+)
+result.update(summary)
+```
+
+New helper methods:
+
+```python
+def _compute_performance_summary(self, snapshots, symbol, user_id, total_return, total_dividends):
+    """Compute all summary metrics from computed snapshots."""
+    import numpy as np
+    from backend.shared.portfolio_stats import (
+        compute_max_drawdown,
+        compute_drawdown_series,
+        compute_annualized_volatility,
+        compute_daily_returns,
+    )
+
+    values = np.array([s["position_value"] for s in snapshots], dtype=float)
+    cost_bases = np.array([s["cost_basis"] for s in snapshots], dtype=float)
+
+    # 1. Combined return
+    combined_return = round(total_return + total_dividends, 2)
+
+    # 2. Monthly returns
+    # ⚠ Only meaningful when snapshot interval ≤ 1 week (periods ≤ 1Y).
+    #    For "ALL"/"5Y" snapshots are monthly → 1 data point per month → 0% return.
+    #    Frontend uses showMonthlyMetrics flag to hide these for long periods.
+    monthly = self._compute_monthly_returns(snapshots)
+    best_month = max(monthly, key=lambda m: m["return_pct"]) if monthly else None
+    worst_month = min(monthly, key=lambda m: m["return_pct"]) if monthly else None
+
+    # 3. Drawdown
+    dd_value, dd_pct, peak_idx, trough_idx = compute_max_drawdown(values)
+    dd_series = compute_drawdown_series(values)
+    dates = [s["date"] for s in snapshots]
+    longest_dd = self._compute_longest_drawdown(dd_series, dates)
+
+    # 4. Days above cost basis
+    above = 0
+    total_days_with_cost = 0
+    for v, c in zip(values, cost_bases):
+        if c > 0:
+            total_days_with_cost += 1
+            if v > c:
+                above += 1
+    first_purchase = dates[0] if dates and cost_bases[0] > 0 else None
+
+    # 5. Volatility (30d annualized)
+    vol = self._compute_30d_volatility(user_id, symbol)
+
+    return {
+        "combined_return": combined_return,
+        "best_month": best_month,
+        "worst_month": worst_month,
+        "drawdown": {
+            "max_drawdown_pct": round(float(dd_pct * 100), 1),
+            "max_drawdown_peak_date": dates[peak_idx] if peak_idx < len(dates) else None,
+            "max_drawdown_trough_date": dates[trough_idx] if trough_idx < len(dates) else None,
+            "longest_drawdown_weeks": longest_dd["weeks"],
+            "longest_drawdown_start": longest_dd["start_date"],
+            "longest_drawdown_end": longest_dd["end_date"],
+        },
+        "days_above_cost_basis": {
+            "above_count": above,
+            "total_days": total_days_with_cost,
+            "start_date": first_purchase,
+        },
+        "volatility_30d": round(float(vol * 100), 1),
+    }
+
+
+def _compute_monthly_returns(self, snapshots):
+    """Group position_value by calendar month and compute % return per month.
+    NOTE: Requires at least 2 snapshots per month. For periods with monthly
+    snapshot granularity (ALL, 5Y), the result will be empty because each
+    month has only 1 data point. The frontend hides monthly metrics for
+    those periods via showMonthlyMetrics."""
+    from collections import OrderedDict
+    monthly = OrderedDict()
+    for s in snapshots:
+        dt = date.fromisoformat(s["date"])
+        key = (dt.year, dt.month)
+        if key not in monthly:
+            monthly[key] = {"first_value": None, "last_value": None}
+        if monthly[key]["first_value"] is None:
+            monthly[key]["first_value"] = s["position_value"]
+        monthly[key]["last_value"] = s["position_value"]
+
+    results = []
+    for (year, month), v in monthly.items():
+        if v["first_value"] and v["first_value"] > 0:
+            ret = (v["last_value"] - v["first_value"]) / v["first_value"] * 100
+            label = date(year, month, 1).strftime("%b %Y")
+            results.append({"month": label, "return_pct": round(ret, 1)})
+    return results
+
+
+def _compute_longest_drawdown(self, dd_series, dates):
+    """Find the longest drawdown in weeks from drawdown series."""
+    if len(dd_series) < 2:
+        return {"weeks": 0, "start_date": None, "end_date": None}
+
+    in_drawdown = False
+    start_idx = 0
+    longest_weeks = 0
+    longest_start = None
+    longest_end = None
+
+    for i, dd in enumerate(dd_series):
+        if dd < 0 and not in_drawdown:
+            in_drawdown = True
+            start_idx = i
+        elif dd == 0 and in_drawdown:
+            in_drawdown = False
+            weeks = (date.fromisoformat(dates[i]) - date.fromisoformat(dates[start_idx])).days / 7
+            if weeks > longest_weeks:
+                longest_weeks = weeks
+                longest_start = dates[start_idx]
+                longest_end = dates[i]
+
+    # Ongoing drawdown
+    if in_drawdown:
+        weeks = (date.fromisoformat(dates[-1]) - date.fromisoformat(dates[start_idx])).days / 7
+        if weeks > longest_weeks:
+            longest_weeks = weeks
+            longest_start = dates[start_idx]
+            longest_end = None
+
+    return {
+        "weeks": round(longest_weeks, 1),
+        "start_date": longest_start,
+        "end_date": longest_end,
+    }
+
+
+def _compute_30d_volatility(self, user_id, symbol):
+    """Fetch 30 trailing days of price_history and compute annualized vol."""
+    end = date.today()
+    start = end - timedelta(days=60)  # 60-day window to ensure 30 trading days
+    prices = self.portfolio_repo.get_price_history_for_symbol(
+        user_id, symbol, start.isoformat(), end.isoformat()
+    )
+    if len(prices) < 10:
+        return 0.0
+    close_values = np.array([float(p["close_price"]) for p in prices], dtype=float)
+    if len(close_values) < 2:
+        return 0.0
+    daily_ret = compute_daily_returns(close_values)
+    if len(daily_ret) < 2:
+        return 0.0
+    # Use last 30 trading days
+    last_30 = daily_ret[-30:] if len(daily_ret) >= 30 else daily_ret
+    vol = compute_annualized_volatility(last_30, periods_per_year=252)
+    return vol
+```
+
+### 12.6 Frontend Implementation
+
+**File:** `web/src/features/analysis/components/stock-performance-panel.tsx`
+
+**Approach — Replace existing 5 metric cards with the summary card (recommended):**
+- The existing 5 cards (Total Value, Total Invested, Gain/Loss $, Gain/Loss %, Dividends) are replaced by the new unified card
+- Gain/Loss $ and % are **combined** into a single headline — matches brokerage statement convention
+- Avg cost vs current price uses `useLivePrice()` hook (already available) — no backend schema change for `current_price`
+- Monthly returns are only shown for periods ≤1Y; hidden with fallback text for "ALL"/"5Y" where snapshot granularity is too coarse
+- Net result: **1 card replaces 5**, adds 8 new metrics, same vertical space, zero new endpoints, zero new hooks
+
+**Component structure:**
+```tsx
+function PerformanceSummaryCard({
+  perf,
+  symbol,
+}: {
+  perf: HoldingPerformanceResponse;
+  symbol: string;
+}) {
+  const { price: livePrice } = useLivePrice(symbol);
+  const lastSnapshot = perf.snapshots?.[perf.snapshots.length - 1];
+  const avgCost = lastSnapshot?.avg_cost_per_share;
+  const costVsPriceDiff = avgCost && livePrice
+    ? ((livePrice - avgCost) / avgCost * 100).toFixed(1)
+    : null;
+
+  const isLongPeriod = perf.period === 'ALL' || perf.period === '5Y';
+  const showMonthlyMetrics = !isLongPeriod;
+
+  return (
+    <div className="glass-panel rounded-lg p-5 space-y-5">
+
+      {/* Header: Combined Gain/Loss */}
+      <div className="flex items-baseline gap-3">
+        <span className="text-xs font-bold text-white/40 uppercase tracking-wider">Gain/Loss</span>
+        <span className={cn('text-2xl font-black tracking-tight', perf.combined_return >= 0 ? 'text-green-400' : 'text-red-400')}>
+          {perf.combined_return >= 0 ? '+' : ''}${Math.abs(perf.combined_return).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </span>
+        <span className={cn('text-lg font-bold', perf.total_return_pct >= 0 ? 'text-green-400/80' : 'text-red-400/80')}>
+          {perf.total_return_pct >= 0 ? '+' : ''}{perf.total_return_pct.toFixed(2)}%
+        </span>
+      </div>
+
+      {/* Row 1: Return Attribution (2 columns) */}
+      <div className="grid grid-cols-2 gap-4">
+        <AttributionBox
+          label={perf.total_return >= 0 ? 'Price Gain' : 'Price Loss'}
+          value={`${perf.total_return >= 0 ? '+' : ''}$${Math.abs(perf.total_return).toLocaleString()}`}
+          subtitle="from price movement"
+          isPositive={perf.total_return >= 0}
+        />
+        <AttributionBox
+          label="Dividends"
+          value={`+$${perf.total_dividends.toLocaleString()}`}
+          subtitle="received to date"
+          isPositive={true}
+        />
+      </div>
+
+      {/* Context line: Avg Cost vs Current Price */}
+      <div className="flex items-center gap-2 px-1 py-1.5 border-t border-white/5 text-xs">
+        <span className="text-white/40 font-medium">Avg Cost</span>
+        <span className="text-white font-bold">${avgCost?.toFixed(2) ?? '—'}</span>
+        <span className="text-white/20">→</span>
+        <span className="text-white/40 font-medium">Last Price</span>
+        <span className="text-white font-bold">${livePrice?.toFixed(2) ?? '—'}</span>
+        {costVsPriceDiff != null && (
+          <>
+            <span className="text-white/20 mx-1">·</span>
+            <span className={cn('font-bold', Number(costVsPriceDiff) >= 0 ? 'text-green-400' : 'text-red-400')}>
+              {Number(costVsPriceDiff) >= 0 ? '+' : ''}{costVsPriceDiff}%
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Row 2: 4-column Risk & Performance Quadrants */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {showMonthlyMetrics ? (
+          <>
+            <StatCol label="Best month" value={perf.best_month?.month} sub={perf.best_month?.return_pct} isPct positive />
+            <StatCol label="Worst month" value={perf.worst_month?.month} sub={perf.worst_month?.return_pct} isPct negative />
+          </>
+        ) : (
+          <>
+            <StatCol label="Best period" value="—" sub="unavailable for ALL" />
+            <StatCol label="Worst period" value="—" sub="unavailable for ALL" />
+          </>
+        )}
+        <StatCol label="Max drawdown"
+          value={`${perf.drawdown?.max_drawdown_pct}%`}
+          sub={perf.drawdown?.max_drawdown_peak_date ? `${perf.drawdown.max_drawdown_peak_date} → ${perf.drawdown.max_drawdown_trough_date || 'now'}` : '—'}
+          isPct negative />
+        <StatCol label="Volatility (30d)"
+          value={`${perf.volatility_30d}%`}
+          sub="annualized" />
+      </div>
+
+      {/* Row 3: 2-column Extended Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ExtendedStat
+          label="Days above cost basis"
+          main={`Since ${perf.days_above_cost_basis?.start_date ? new Date(perf.days_above_cost_basis.start_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—'}`}
+          value={`${perf.days_above_cost_basis?.above_count ?? 0} of ${perf.days_above_cost_basis?.total_days ?? 0} days`}
+        />
+        <ExtendedStat
+          label="Longest drawdown"
+          main={`${perf.drawdown?.longest_drawdown_start ?? '—'} → ${perf.drawdown?.longest_drawdown_end ?? 'now'}`}
+          value={`${perf.drawdown?.longest_drawdown_weeks ?? 0} weeks${perf.drawdown?.longest_drawdown_end == null ? ' · Ongoing' : ''}`}
+        />
+      </div>
+
+    </div>
+  );
+}
+```
+
+**Key frontend patterns:**
+| Pattern | Why |
+|---------|-----|
+| `useLivePrice(symbol)` for current price | Reuses existing hook. No backend change needed. Price updates live when SSE pushes new data. |
+| `showMonthlyMetrics` flag | Hides best/worst month for ALL/5Y periods where snapshot granularity is too coarse. Shows "unavailable" fallback. |
+| `combined_return` as headline | Single prominent number — no redundancy. Attribution below is the decomposition. |
+| `Avg Cost → Last Price` inline | Saves a full card row. Arrow visual (`→`) implies directionality. Color on % diff only. |
+| `4-column → 2-column` responsive grid | Best/worst month + drawdown + vol in a tight grid. Extended stats below in wider cards. |
+
+### 12.7 Tab Overflow Fix
+
+**Root cause:** `web/src/app/(authenticated)/analysis/[symbol]/page.tsx:203`
+
+```tsx
+<div className="glass-segmented overflow-x-auto no-scrollbar w-full">
+```
+
+- `BASE_TABS` has 9 items
+- When `isHeld=true`, "Performance" is **spliced at index 5**, making 10 tabs
+- On screens narrower than ~1100px, the tabs overflow the container's `w-full`
+- `no-scrollbar` hides the scrollbar **and the overflow** — last tab(s) are clipped with no user feedback
+
+**Fix — `page.tsx`:**
+
+```tsx
+<div className="glass-segmented overflow-x-auto w-full
+                scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10">
+```
+
+Alternatively, add custom CSS in `globals.css`:
+
+```css
+.glass-segmented {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+.glass-segmented::-webkit-scrollbar {
+  height: 4px;
+}
+.glass-segmented::-webkit-scrollbar-track {
+  background: transparent;
+}
+.glass-segmented::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.15);
+  border-radius: 99px;
+}
+```
+
+This gives a **subtle, themed thin scrollbar** — visible only when the tabs overflow. On Windows it's a thin bar, on Mac it auto-hides after scrolling. The glass-segmented container keeps its exact current appearance — only the scroll indicator is added.
+
+### 12.8 Files Changed Summary
+
+| File | Change Type | Lines Changed |
+|------|------------|---------------|
+| `backend/schemas_portfolio.py` | Add 3 new models + update `HoldingPerformanceResponse` | ~25 new lines |
+| `backend/application/services/portfolio_service.py` | Add `_compute_performance_summary()` + 3 helpers + call in `get_holding_performance()` | ~120 new lines |
+| `backend/infrastructure/repositories/portfolio_repository.py` | Optional: `get_price_history_for_symbol()` if not exists | ~15 lines |
+| `web/src/features/portfolio/types/portfolio.types.ts` | New frontend types for summary fields (MonthlyReturnSummary, DrawdownInfo, DaysAboveCostBasis, HoldingPerformanceResponse fields) | ~30 lines |
+| `web/src/features/analysis/components/stock-performance-panel.tsx` | Add `PerformanceSummaryCard` component (inline or separate), replace top 5 metric cards, import `useLivePrice` | ~130 lines |
+| `web/src/app/(authenticated)/analysis/[symbol]/page.tsx` | Remove `no-scrollbar` from tab container | 1 line |
+| `web/src/app/globals.css` | Add `.glass-segmented` thin scrollbar styles | ~10 lines |
+
+**Total:** ~295 lines added/modified across 6 files, zero new endpoints, zero new hooks, zero new queries.
+
+### 12.9 Verification
+
+After implementation, verify:
+
+1. **Backend tests:** Existing test suite passes (10 tests), plus new tests for `_compute_monthly_returns()`, `_compute_longest_drawdown()`, `_compute_30d_volatility()`
+2. **Frontend tests:** Existing 10 HoldingsTab tests pass, new tests for `PerformanceSummaryCard` rendering with mock data
+3. **Tab overflow:** Open analysis page for a held stock at 1024px width — all 10 tabs visible or scrollable with thin scrollbar
+4. **Empty states:** New summary fields gracefully handle missing data (no monthly data, no drawdown, zero volatility)

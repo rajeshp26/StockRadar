@@ -774,3 +774,148 @@ class TestGetUserAllHoldingsPipeline:
         # Original fields preserved
         assert result[0]["symbol"] == "AAPL"
         assert result[0]["holding_id"] == 1
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Performance Summary Metrics (combined_return, monthly, drawdown, etc.)
+# ═════════════════════════════════════════════════════════════════════
+
+@pytest.mark.anyio
+class TestPerformanceSummary:
+
+    @pytest.fixture
+    def basic_snapshots(self):
+        return [
+            {"date": "2024-01-15", "position_value": 1800, "cost_basis": 1800, "net_deposits": 1800},
+            {"date": "2024-02-15", "position_value": 1900, "cost_basis": 1800, "net_deposits": 1800},
+            {"date": "2024-07-15", "position_value": 2000, "cost_basis": 1800, "net_deposits": 1800},
+            {"date": "2024-12-31", "position_value": 2200, "cost_basis": 1800, "net_deposits": 1800},
+        ]
+
+    def test_combined_return(self, service, basic_snapshots):
+        result = service._compute_performance_summary(basic_snapshots, 400, 87, "1Y")
+        assert result["combined_return"] == 487.0
+
+    def test_combined_return_negative(self, service, basic_snapshots):
+        snapshots = [dict(s, position_value=s["position_value"] * 0.5) for s in basic_snapshots]
+        result = service._compute_performance_summary(snapshots, -900, 87, "1Y")
+        assert result["combined_return"] == -813.0
+
+    def test_best_and_worst_month_found(self, service, basic_snapshots):
+        result = service._compute_performance_summary(basic_snapshots, 400, 87, "1Y")
+        assert result["best_month"] is not None
+        assert result["worst_month"] is not None
+        assert result["best_month"]["return_pct"] >= result["worst_month"]["return_pct"]
+
+    def test_monthly_returns_none_for_single_snapshot(self, service):
+        snapshots = [{"date": "2024-12-31", "position_value": 2200, "cost_basis": 1800, "net_deposits": 1800}]
+        best, worst = service._compute_monthly_returns(snapshots)
+        assert best is None
+        assert worst is None
+
+    def test_monthly_returns_null_for_all_period(self, service, basic_snapshots):
+        result = service._compute_performance_summary(basic_snapshots, 400, 87, "ALL")
+        assert result["best_month"] is None
+        assert result["worst_month"] is None
+
+    def test_monthly_returns_null_for_5y_period(self, service, basic_snapshots):
+        result = service._compute_performance_summary(basic_snapshots, 400, 87, "5Y")
+        assert result["best_month"] is None
+        assert result["worst_month"] is None
+
+    def test_max_drawdown_computed(self, service, basic_snapshots):
+        result = service._compute_performance_summary(basic_snapshots, 400, 87, "1Y")
+        assert result["max_drawdown"] is not None
+        assert isinstance(result["max_drawdown"]["dd_pct"], float)
+        assert result["max_drawdown"]["duration_days"] >= 0
+
+    def test_max_drawdown_deep_drop(self, service, basic_snapshots):
+        snapshots = [
+            {"date": "2024-01-01", "position_value": 100, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-02-01", "position_value": 150, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-03-01", "position_value": 50, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-04-01", "position_value": 80, "cost_basis": 100, "net_deposits": 100},
+        ]
+        result = service._compute_performance_summary(snapshots, -20, 0, "1Y")
+        assert result["max_drawdown"] is not None
+        assert result["max_drawdown"]["dd_pct"] < -30
+
+    def test_volatility_with_sufficient_data(self, service, basic_snapshots):
+        result = service._compute_performance_summary(basic_snapshots, 400, 87, "1Y")
+        assert result["volatility_30d"] >= 0
+
+    def test_volatility_zero_for_insufficient_data(self, service):
+        snapshots = [
+            {"date": "2024-01-01", "position_value": 100, "cost_basis": 100, "net_deposits": 100},
+        ]
+        result = service._compute_performance_summary(snapshots, 0, 0, "1Y")
+        assert result["volatility_30d"] == 0
+
+    def test_days_above_cost_basis(self, service, basic_snapshots):
+        result = service._compute_performance_summary(basic_snapshots, 400, 87, "1Y")
+        assert result["days_above_cost_basis"] is not None
+        assert result["days_above_cost_basis"]["days_above"] > 0
+        assert result["days_above_cost_basis"]["pct_above"] > 0
+
+    def test_days_above_cost_basis_all_below(self, service):
+        snapshots = [
+            {"date": "2024-01-01", "position_value": 80, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-02-01", "position_value": 90, "cost_basis": 100, "net_deposits": 100},
+        ]
+        result = service._compute_performance_summary(snapshots, -20, 0, "1Y")
+        assert result["days_above_cost_basis"]["days_above"] == 0
+        assert result["days_above_cost_basis"]["pct_above"] == 0
+
+    def test_longest_drawdown_tracks_duration(self, service):
+        snapshots = [
+            {"date": "2024-01-01", "position_value": 100, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-01-02", "position_value": 90, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-01-03", "position_value": 80, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-01-04", "position_value": 85, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-01-05", "position_value": 110, "cost_basis": 100, "net_deposits": 100},
+            {"date": "2024-01-06", "position_value": 100, "cost_basis": 100, "net_deposits": 100},
+        ]
+        result = service._compute_performance_summary(snapshots, 0, 0, "1Y")
+        assert result["longest_drawdown"] is not None
+        assert result["longest_drawdown"]["duration_days"] >= 2
+
+    def test_empty_snapshots_returns_defaults(self, service):
+        result = service._compute_performance_summary([], 0, 0, "1Y")
+        assert result["combined_return"] == 0
+        assert result["max_drawdown"] is None
+        assert result["longest_drawdown"] is None
+        assert result["volatility_30d"] == 0
+        assert result["days_above_cost_basis"] is None
+        assert result["best_month"] is None
+        assert result["worst_month"] is None
+
+    async def test_holding_performance_includes_summary(self, service, mock_portfolio_repo):
+        """Verify the full get_holding_performance response includes all summary fields."""
+        mock_portfolio_repo.get_transactions_for_symbol.return_value = [
+            {"transaction_date": date(2024, 1, 15), "symbol": "AAPL",
+             "quantity": 10, "unit_price": 180, "commission": 0,
+             "activity_sub_type": "BUY", "company_id": 1, "account_id": 1},
+        ]
+        with (
+            patch.object(service, '_period_to_date_range', return_value=(date(2024, 1, 1), date(2024, 12, 31))),
+            patch.object(service, '_generate_snapshot_dates', return_value=["2024-01-15", "2024-12-31"]),
+            patch.object(service, '_compute_fifo_snapshots') as mock_fifo,
+        ):
+            mock_fifo.return_value = [
+                {"date": "2024-01-15", "value": 1800, "cost_basis": 1800, "net_deposits": 1800},
+                {"date": "2024-12-31", "value": 2200, "cost_basis": 1800, "net_deposits": 1800},
+            ]
+            mock_portfolio_repo.get_dividends_for_symbol.return_value = [
+                {"amount": 87.00, "payment_date": date(2024, 6, 15)},
+            ]
+            with patch('application.services.portfolio_service.supabase') as mock_supa:
+                mock_supa.table().select().gte().lte().order().execute.return_value.data = []
+                result = await service.get_holding_performance(1, "AAPL", "1Y")
+
+        assert result["combined_return"] == 487.0
+        assert "best_month" in result
+        assert "worst_month" in result
+        assert "max_drawdown" in result
+        assert "longest_drawdown" in result
+        assert "volatility_30d" in result
+        assert "days_above_cost_basis" in result

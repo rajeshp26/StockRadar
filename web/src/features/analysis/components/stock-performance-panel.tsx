@@ -15,14 +15,15 @@ import {
   Legend,
 } from 'recharts';
 import { useHoldingPerformance, useHoldingDividends, useBenchmarks, useBenchmarkCompare, useHoldingTransactions, useHoldingAccounts, useHoldingBenchmarkCompare } from '@/features/portfolio/hooks/usePortfolio';
+import { useLivePrice } from '@/features/analysis/hooks/useLivePrice';
 import { TimePeriodSelector } from '@/features/portfolio/components/TimePeriodSelector';
 import { BenchmarkSelector } from '@/components/ui/benchmark-selector';
 import { Metric } from '@/features/analysis/components/shared-ui';
 import { SectionHeader } from '@/features/analysis/components/shared-ui';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BENCHMARK_COLORS, FALLBACK_COLORS } from '@/lib/colors';
-import { TrendingUp, TrendingDown, DollarSign, Wallet, Receipt, PiggyBank } from 'lucide-react';
-import type { TimePeriod, HoldingPerformanceResponse, BenchmarkCompareResponse, HoldingTransaction, HoldingAccountBreakdown } from '@/features/portfolio/types/portfolio.types';
+import { TrendingUp, TrendingDown, DollarSign, Wallet, Receipt, PiggyBank, Calendar, Activity, ArrowUpRight, CalendarDays, BarChart3 } from 'lucide-react';
+import type { TimePeriod, HoldingPerformanceResponse, BenchmarkCompareResponse, HoldingTransaction, HoldingAccountBreakdown, MonthlyReturnSummary, DrawdownInfo, DaysAboveCostBasis } from '@/features/portfolio/types/portfolio.types';
 import { cn } from '@/lib/utils';
 
 interface StockPerformancePanelProps {
@@ -78,52 +79,8 @@ export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards (P-01, P-07) */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <MetricItem
-          label="Total Value"
-          value={perf.snapshots.length > 0
-            ? `$${perf.snapshots[perf.snapshots.length - 1].position_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            : '—'}
-          icon={DollarSign}
-          color="text-white"
-          subtitle={perf.snapshots.length > 0 && perf.snapshots[perf.snapshots.length - 1].shares_held
-            ? `${perf.snapshots[perf.snapshots.length - 1].shares_held} shares`
-            : undefined}
-        />
-        <MetricItem
-          label="Total Invested"
-          value={perf.snapshots.length > 0
-            ? `$${perf.snapshots[perf.snapshots.length - 1].cumulative_invested.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            : '—'}
-          icon={PiggyBank}
-          color="text-white"
-        />
-        <MetricItem
-          label="Gain/Loss ($)"
-          value={perf.total_return != null
-            ? `${perf.total_return >= 0 ? '+' : ''}$${perf.total_return.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            : '—'}
-          icon={perf.total_return != null && perf.total_return >= 0 ? TrendingUp : TrendingDown}
-          color={perf.total_return != null ? (perf.total_return >= 0 ? 'text-green-400' : 'text-red-400') : 'text-white/60'}
-        />
-        <MetricItem
-          label="Gain/Loss (%)"
-          value={perf.total_return_pct != null
-            ? `${perf.total_return_pct >= 0 ? '+' : ''}${perf.total_return_pct.toFixed(2)}%`
-            : '—'}
-          icon={perf.total_return_pct != null && perf.total_return_pct >= 0 ? TrendingUp : TrendingDown}
-          color={perf.total_return_pct != null ? (perf.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400') : 'text-white/60'}
-        />
-        <MetricItem
-          label="Dividends"
-          value={perf.total_dividends != null
-            ? `$${perf.total_dividends.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            : '—'}
-          icon={Wallet}
-          color="text-white"
-        />
-      </div>
+      {/* Performance Summary Card */}
+      <PerformanceSummaryCard perf={perf} symbol={symbol} />
 
       {/* Performance Chart */}
       <div className="glass-panel p-6">
@@ -394,29 +351,181 @@ export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
   );
 }
 
-function MetricItem({
-  label,
-  value,
-  icon: Icon,
-  color,
-  subtitle,
+function PerformanceSummaryCard({
+  perf,
+  symbol,
 }: {
-  label: string;
-  value: string;
-  icon: React.ElementType;
-  color: string;
-  subtitle?: string;
+  perf: HoldingPerformanceResponse;
+  symbol: string;
 }) {
+  const { price: livePrice } = useLivePrice(symbol);
+  const lastSnapshot = perf.snapshots[perf.snapshots.length - 1];
+  const avgCost = lastSnapshot?.avg_cost_per_share;
+  const showMonthlyMetrics = !['ALL', '5Y'].includes(perf.period?.toUpperCase() ?? '');
+  const perfColor = perf.combined_return >= 0 ? 'text-green-400' : 'text-red-400';
+
   return (
-    <div className="glass-panel rounded-lg p-4">
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs text-white/40 font-medium uppercase tracking-wider">{label}</p>
-        <Icon className={`h-4 w-4 ${color}`} />
+    <div className="glass-panel rounded-lg p-5 space-y-4">
+      {/* Header: Gain/Loss headline */}
+      <div className="flex items-baseline justify-between">
+        <div>
+          <p className="text-xs text-white/40 font-medium uppercase tracking-wider">Gain / Loss</p>
+          <p className={`text-2xl font-black tracking-tight ${perfColor}`}>
+            {perf.combined_return >= 0 ? '+' : ''}$
+            {Math.abs(perf.combined_return).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <span className={`text-sm font-bold ml-1.5 ${perfColor}`}>
+              {perf.total_return_pct >= 0 ? '+' : ''}{perf.total_return_pct.toFixed(2)}%
+            </span>
+          </p>
+        </div>
+        {lastSnapshot && (
+          <div className="text-right">
+            <p className="text-xs text-white/40 font-medium uppercase tracking-wider">Current Value</p>
+            <p className="text-lg font-bold text-white">
+              ${lastSnapshot.position_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          </div>
+        )}
       </div>
-      <p className={`text-xl font-bold mt-1 ${color}`}>{value}</p>
-      {subtitle && (
-        <p className="text-xs text-white/30 mt-0.5">{subtitle}</p>
+
+      {/* Row 1: Attribution — Price change + Dividends */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3.5 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <ArrowUpRight className="h-3 w-3" />
+            Price Change
+          </div>
+          <p className={`text-sm font-bold ${perf.total_return >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {perf.total_return >= 0 ? '+' : ''}${Math.abs(perf.total_return).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <span className="text-xs ml-1">({perf.total_return_pct >= 0 ? '+' : ''}{perf.total_return_pct.toFixed(2)}%)</span>
+          </p>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3.5 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <Wallet className="h-3 w-3" />
+            Dividends
+          </div>
+          <p className="text-sm font-bold text-green-400">
+            +${perf.total_dividends.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {perf.total_dividends_pct > 0 && (
+              <span className="text-xs ml-1">({perf.total_dividends_pct.toFixed(2)}%)</span>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* Context line: Avg Cost → Last Price */}
+      {avgCost != null && livePrice != null && (
+        <div className="flex items-center justify-center gap-2 text-xs text-white/50 border-t border-white/[0.06] pt-3">
+          <span>Avg Cost <span className="text-white font-medium">${avgCost.toFixed(2)}</span></span>
+          <span className="text-white/20">→</span>
+          <span>Last Price <span className="text-white font-medium">${livePrice.toFixed(2)}</span></span>
+          <span className={`font-medium ${livePrice >= avgCost ? 'text-green-400' : 'text-red-400'}`}>
+            {livePrice >= avgCost ? '+' : ''}{((livePrice - avgCost) / avgCost * 100).toFixed(2)}%
+          </span>
+        </div>
       )}
+
+      {/* Row 2: Risk quadrants (4-col) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Best Month */}
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <TrendingUp className="h-3 w-3 text-green-400" />
+            Best Month
+          </div>
+          {showMonthlyMetrics && perf.best_month ? (
+            <>
+              <p className="text-sm font-bold text-green-400">+{perf.best_month.return_pct.toFixed(2)}%</p>
+              <p className="text-[10px] text-white/30">{perf.best_month.label}</p>
+            </>
+          ) : (
+            <p className="text-sm text-white/30">—</p>
+          )}
+        </div>
+
+        {/* Worst Month */}
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <TrendingDown className="h-3 w-3 text-red-400" />
+            Worst Month
+          </div>
+          {showMonthlyMetrics && perf.worst_month ? (
+            <>
+              <p className="text-sm font-bold text-red-400">{perf.worst_month.return_pct.toFixed(2)}%</p>
+              <p className="text-[10px] text-white/30">{perf.worst_month.label}</p>
+            </>
+          ) : (
+            <p className="text-sm text-white/30">—</p>
+          )}
+        </div>
+
+        {/* Max Drawdown */}
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <TrendingDown className="h-3 w-3 text-red-400" />
+            Max Drawdown
+          </div>
+          {perf.max_drawdown ? (
+            <>
+              <p className="text-sm font-bold text-red-400">{perf.max_drawdown.dd_pct.toFixed(2)}%</p>
+              <p className="text-[10px] text-white/30">{perf.max_drawdown.duration_days}d</p>
+            </>
+          ) : (
+            <p className="text-sm text-white/30">—</p>
+          )}
+        </div>
+
+        {/* Volatility (30d) */}
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <Activity className="h-3 w-3 text-indigo-400" />
+            Volatility (30d)
+          </div>
+          <p className="text-sm font-bold text-indigo-400">
+            {perf.volatility_30d > 0 ? `${perf.volatility_30d.toFixed(2)}%` : '—'}
+          </p>
+        </div>
+      </div>
+
+      {/* Row 3: Extended metrics (2-col) */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* Days Above Cost Basis */}
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <CalendarDays className="h-3 w-3 text-white/50" />
+            Days Above Cost Basis
+          </div>
+          {perf.days_above_cost_basis ? (
+            <>
+              <p className="text-sm font-bold text-white">
+                {perf.days_above_cost_basis.days_above} / {perf.days_above_cost_basis.total_days} days
+              </p>
+              <p className="text-[10px] text-white/30">{perf.days_above_cost_basis.pct_above.toFixed(1)}% of time</p>
+            </>
+          ) : (
+            <p className="text-sm text-white/30">—</p>
+          )}
+        </div>
+
+        {/* Longest Drawdown */}
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs text-white/40 font-medium mb-1">
+            <BarChart3 className="h-3 w-3 text-red-400" />
+            Longest Drawdown
+          </div>
+          {perf.longest_drawdown ? (
+            <>
+              <p className="text-sm font-bold text-red-400">{perf.longest_drawdown.dd_pct.toFixed(2)}%</p>
+              <p className="text-[10px] text-white/30">
+                {perf.longest_drawdown.is_ongoing ? '→ now · Ongoing' : `${perf.longest_drawdown.duration_days}d`}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-white/30">—</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

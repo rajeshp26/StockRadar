@@ -26,10 +26,16 @@ vi.mock("@/components/ui/skeleton", () => ({
     },
 }));
 
+const mockUseLivePrice = vi.fn();
+
+vi.mock("@/features/analysis/hooks/useLivePrice", () => ({
+    useLivePrice: (...args: any[]) => mockUseLivePrice(...args),
+}));
+
 vi.mock("lucide-react", () => {
     const React = require("react");
     const mkIcon = () => () => React.createElement("svg", { "data-testid": "icon" });
-    return { TrendingUp: mkIcon(), TrendingDown: mkIcon(), DollarSign: mkIcon(), Wallet: mkIcon(), ChevronDown: mkIcon(), Check: mkIcon(), PiggyBank: mkIcon(), Receipt: mkIcon() };
+    return { TrendingUp: mkIcon(), TrendingDown: mkIcon(), DollarSign: mkIcon(), Wallet: mkIcon(), ChevronDown: mkIcon(), Check: mkIcon(), PiggyBank: mkIcon(), Receipt: mkIcon(), Calendar: mkIcon(), Activity: mkIcon(), ArrowUpRight: mkIcon(), CalendarDays: mkIcon(), BarChart3: mkIcon(), DollarSign: mkIcon(), PiggyBank: mkIcon() };
 });
 
 vi.mock("recharts", () => {
@@ -59,12 +65,19 @@ function makePerformanceData(overrides = {}) {
         snapshots: [
             { date: "2024-01-15", position_value: 1800, cost_basis: 1800, cumulative_invested: 1800 },
             { date: "2024-07-15", position_value: 2000, cost_basis: 1800, cumulative_invested: 1800 },
-            { date: "2024-12-31", position_value: 2200, cost_basis: 1800, cumulative_invested: 1800 },
+            { date: "2024-12-31", position_value: 2200, cost_basis: 1800, cumulative_invested: 1800, avg_cost_per_share: 180 },
         ],
         total_return: 400,
         total_return_pct: 22.22,
         total_dividends: 87.00,
         total_dividends_pct: 4.83,
+        combined_return: 487.00,
+        best_month: { month: "2024-07", return_pct: 11.11, label: "Jul 2024" },
+        worst_month: { month: "2024-01", return_pct: 5.56, label: "Jan 2024" },
+        max_drawdown: { dd_pct: -10.5, start_date: "2024-03-01", end_date: "2024-06-15", duration_days: 106, is_ongoing: false },
+        longest_drawdown: { dd_pct: -8.2, start_date: "2024-02-01", end_date: "2024-05-01", duration_days: 90, is_ongoing: false },
+        volatility_30d: 25.5,
+        days_above_cost_basis: { days_above: 200, total_days: 300, pct_above: 66.7 },
         ...overrides,
     };
 }
@@ -78,15 +91,57 @@ describe("StockPerformancePanel", () => {
         mockUseHoldingBenchmarkCompare.mockReturnValue({ data: null, isLoading: false });
         mockUseHoldingTransactions.mockReturnValue({ data: [], isLoading: false });
         mockUseHoldingAccounts.mockReturnValue({ data: [], isLoading: false });
+        mockUseLivePrice.mockReturnValue({ price: 220, change: 0, changePercent: 0, loading: false, error: null, lastUpdated: null, currency: null });
     });
 
-    it("renders 5 summary cards when data loaded", () => {
+    it("renders PerformanceSummaryCard with Gain/Loss headline", () => {
         render(<StockPerformancePanel symbol="AAPL" />);
-        expect(screen.getByText("Total Value")).toBeInTheDocument();
-        expect(screen.getByText("Total Invested")).toBeInTheDocument();
-        expect(screen.getByText("Gain/Loss ($)")).toBeInTheDocument();
-        expect(screen.getByText("Gain/Loss (%)")).toBeInTheDocument();
+        expect(screen.getByText("Gain / Loss")).toBeInTheDocument();
+        expect(screen.getByText("Current Value")).toBeInTheDocument();
+    });
+
+    it("renders combined return with $ and %", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText(/\$487\.00/)).toBeInTheDocument();
+        const pctElements = screen.getAllByText(/22\.22/);
+        expect(pctElements.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("renders attribution row: Price Change + Dividends", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText("Price Change")).toBeInTheDocument();
         expect(screen.getByText("Dividends")).toBeInTheDocument();
+    });
+
+    it("renders avg cost context line with live price", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText(/Avg Cost/)).toBeInTheDocument();
+        expect(screen.getByText(/Last Price/)).toBeInTheDocument();
+    });
+
+    it("renders risk quadrants", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText("Best Month")).toBeInTheDocument();
+        expect(screen.getByText("Worst Month")).toBeInTheDocument();
+        expect(screen.getByText("Max Drawdown")).toBeInTheDocument();
+        expect(screen.getByText(/Volatility/)).toBeInTheDocument();
+    });
+
+    it("renders extended metrics", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText("Days Above Cost Basis")).toBeInTheDocument();
+        expect(screen.getByText("Longest Drawdown")).toBeInTheDocument();
+    });
+
+    it("shows best and worst month labels", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText("Jul 2024")).toBeInTheDocument();
+        expect(screen.getByText("Jan 2024")).toBeInTheDocument();
+    });
+
+    it("shows drawdown duration in days", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText("106d")).toBeInTheDocument();
     });
 
     it("shows loading skeleton while fetching", () => {
@@ -156,7 +211,7 @@ describe("StockPerformancePanel", () => {
         expect(screen.getByText("+ Compare")).toBeInTheDocument();
     });
 
-    it("P-03: summary cards render correctly when benchmarks selected", () => {
+    it("P-03: performance summary card renders with benchmarks selected", () => {
         mockUseBenchmarks.mockReturnValue({
             data: [
                 { symbol: "SPY", name: "S&P 500", role: "benchmark", market: "US" },
@@ -167,8 +222,8 @@ describe("StockPerformancePanel", () => {
 
         render(<StockPerformancePanel symbol="AAPL" />);
 
-        expect(screen.getByText("Total Value")).toBeInTheDocument();
-        expect(screen.getByText("Total Invested")).toBeInTheDocument();
+        expect(screen.getByText("Gain / Loss")).toBeInTheDocument();
+        expect(screen.getByText("Current Value")).toBeInTheDocument();
     });
 
     // ═════════════════════════════════════════════════════════════════════
@@ -223,12 +278,85 @@ describe("StockPerformancePanel", () => {
     // P-01: Total Invested Summary Card
     // ═════════════════════════════════════════════════════════════════════
 
-    it("P-01: shows cumulative_invested as Total Invested card", () => {
-        const perfData = makePerformanceData();
-        perfData.snapshots[perfData.snapshots.length - 1].cumulative_invested = 2500;
+    it("P-01: shows accurate combined_return in headline", () => {
+        const perfData = makePerformanceData({ combined_return: 1234.56, total_return_pct: 15.5 });
         mockUseHoldingPerformance.mockReturnValue({ data: perfData, isLoading: false });
         render(<StockPerformancePanel symbol="AAPL" />);
-        expect(screen.getByText("$2,500.00")).toBeInTheDocument();
+        expect(screen.getByText(/\$1,234\.56/)).toBeInTheDocument();
+        const pctElements = screen.getAllByText(/15\.50/);
+        expect(pctElements.length).toBeGreaterThanOrEqual(1);
+    });
+
+    // ═════════════════════════════════════════════════════════════════════
+    // P-06: Pre-Purchase Period Indicator
+    // ═════════════════════════════════════════════════════════════════════
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Performance Summary Card — Edge Cases
+    // ═════════════════════════════════════════════════════════════════════
+
+    it("shows — for best/worst month when showMonthlyMetrics false (ALL period)", () => {
+        const perfData = makePerformanceData({ period: "ALL", best_month: null, worst_month: null });
+        mockUseHoldingPerformance.mockReturnValue({ data: perfData, isLoading: false });
+        render(<StockPerformancePanel symbol="AAPL" />);
+        const dashes = screen.getAllByText("—");
+        expect(dashes.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("shows — for best/worst month when showMonthlyMetrics false (5Y period)", () => {
+        const perfData = makePerformanceData({ period: "5Y", best_month: null, worst_month: null });
+        mockUseHoldingPerformance.mockReturnValue({ data: perfData, isLoading: false });
+        render(<StockPerformancePanel symbol="AAPL" />);
+        const dashes = screen.getAllByText("—");
+        expect(dashes.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("shows negative combined return in red", () => {
+        const perfData = makePerformanceData({ combined_return: -250, total_return: -300, total_return_pct: -15 });
+        mockUseHoldingPerformance.mockReturnValue({ data: perfData, isLoading: false });
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText(/\$250\.00/)).toBeInTheDocument();
+    });
+
+    it("hides avg cost line when no snapshot or live price missing", () => {
+        mockUseLivePrice.mockReturnValue({ price: null, change: null, changePercent: null, loading: false, error: null, lastUpdated: null, currency: null });
+        const perfData = makePerformanceData({
+            snapshots: [
+                { date: "2024-01-15", position_value: 1800, cost_basis: 1800, cumulative_invested: 1800 },
+                { date: "2024-12-31", position_value: 2200, cost_basis: 1800, cumulative_invested: 1800 },
+            ],
+        });
+        mockUseHoldingPerformance.mockReturnValue({ data: perfData, isLoading: false });
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.queryByText(/Avg Cost/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Last Price/)).not.toBeInTheDocument();
+    });
+
+    it("shows ongoing indicator for longest drawdown", () => {
+        const perfData = makePerformanceData({
+            longest_drawdown: { dd_pct: -5.0, start_date: "2024-01-01", duration_days: 30, is_ongoing: true },
+        });
+        mockUseHoldingPerformance.mockReturnValue({ data: perfData, isLoading: false });
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText(/Ongoing/)).toBeInTheDocument();
+    });
+
+    it("renders volatility as percentage when positive", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText("25.50%")).toBeInTheDocument();
+    });
+
+    it("shows — for volatility when zero", () => {
+        const perfData = makePerformanceData({ volatility_30d: 0 });
+        mockUseHoldingPerformance.mockReturnValue({ data: perfData, isLoading: false });
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText("—")).toBeInTheDocument();
+    });
+
+    it("shows days above cost basis stats", () => {
+        render(<StockPerformancePanel symbol="AAPL" />);
+        expect(screen.getByText(/200 \/ 300 days/)).toBeInTheDocument();
+        expect(screen.getByText(/66.7%/)).toBeInTheDocument();
     });
 
     // ═════════════════════════════════════════════════════════════════════

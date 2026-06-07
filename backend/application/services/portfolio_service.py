@@ -20,6 +20,9 @@ import hashlib
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
 import re
+import numpy as np
+
+from shared.portfolio_stats import compute_max_drawdown, compute_annualized_volatility, compute_daily_returns, compute_drawdown_series
 
 from application.parsers.portfolio_parser import (
     ParsedTransaction,
@@ -1919,6 +1922,148 @@ class PortfolioService:
         holdings = self.portfolio_repo.get_user_all_holdings(user_id)
         return any(h.get("symbol", "").upper() == symbol.upper() for h in holdings)
 
+    # ------------------------------------------------------------------
+    # Performance Summary helpers (used by get_holding_performance)
+    # ------------------------------------------------------------------
+
+    def _compute_monthly_returns(
+        self, snapshots: List[Dict[str, Any]],
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        if len(snapshots) < 2:
+            return None, None
+
+        monthly_map: Dict[str, List[float]] = {}
+        for i in range(1, len(snapshots)):
+            prev_val = snapshots[i - 1]["position_value"]
+            curr_val = snapshots[i]["position_value"]
+            if prev_val > 0:
+                ret_pct = (curr_val - prev_val) / prev_val * 100
+                month_key = snapshots[i]["date"][:7]
+                monthly_map.setdefault(month_key, []).append(ret_pct)
+
+        best: Optional[Dict[str, Any]] = None
+        worst: Optional[Dict[str, Any]] = None
+        for month_key, returns in monthly_map.items():
+            avg_ret = sum(returns) / len(returns)
+            dt = datetime.strptime(month_key + "-01", "%Y-%m-%d")
+            label = dt.strftime("%b %Y")
+            entry = {"month": month_key, "return_pct": round(avg_ret, 2), "label": label}
+            if best is None or avg_ret > best["return_pct"]:
+                best = entry
+            if worst is None or avg_ret < worst["return_pct"]:
+                worst = entry
+        return best, worst
+
+    def _compute_longest_drawdown(
+        self, snapshots: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if len(snapshots) < 2:
+            return None
+
+        values = np.array([s["position_value"] for s in snapshots], dtype=np.float64)
+        running_max = np.maximum.accumulate(values)
+        drawdown_series = (values - running_max) / running_max
+
+        longest_duration = 0
+        longest_start = 0
+        longest_end = 0
+
+        current_start = None
+        for i in range(len(drawdown_series)):
+            if drawdown_series[i] < 0 and current_start is None:
+                current_start = i
+            elif drawdown_series[i] >= 0 and current_start is not None:
+                duration = i - current_start
+                if duration > longest_duration:
+                    longest_duration = duration
+                    longest_start = current_start
+                    longest_end = i - 1
+                current_start = None
+
+        if current_start is not None:
+            duration = len(drawdown_series) - current_start
+            if duration > longest_duration:
+                longest_duration = duration
+                longest_start = current_start
+                longest_end = len(drawdown_series) - 1
+
+        if longest_duration == 0:
+            return None
+
+        dd_pct = float(drawdown_series[longest_end])
+        is_ongoing = current_start is not None and longest_start == current_start
+        return {
+            "dd_pct": round(dd_pct * 100, 2),
+            "start_date": snapshots[longest_start]["date"],
+            "end_date": snapshots[longest_end]["date"] if not is_ongoing else None,
+            "duration_days": longest_duration,
+            "is_ongoing": is_ongoing,
+        }
+
+    def _compute_30d_volatility(
+        self, snapshots: List[Dict[str, Any]],
+    ) -> float:
+        values = np.array([s["position_value"] for s in snapshots], dtype=np.float64)
+        daily_returns = compute_daily_returns(values)
+        if len(daily_returns) < 2:
+            return 0.0
+        return round(compute_annualized_volatility(daily_returns) * 100, 2)
+
+    def _compute_days_above_cost_basis(
+        self, snapshots: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        total_days = len(snapshots)
+        if total_days < 2:
+            return None
+        days_above = sum(
+            1 for s in snapshots
+            if s["cost_basis"] > 0 and s["position_value"] > s["cost_basis"]
+        )
+        return {
+            "days_above": days_above,
+            "total_days": total_days,
+            "pct_above": round(days_above / total_days * 100, 1),
+        }
+
+    def _compute_performance_summary(
+        self, snapshots: List[Dict[str, Any]], total_return: float, total_dividends: float, period: str,
+    ) -> Dict[str, Any]:
+        combined_return = round(total_return + total_dividends, 2)
+        best_month, worst_month = self._compute_monthly_returns(snapshots)
+        month_info = {}
+        if period.upper() in ("ALL", "5Y"):
+            month_info = {"best_month": None, "worst_month": None}
+        else:
+            month_info = {"best_month": best_month, "worst_month": worst_month}
+
+        max_dd = self._compute_max_drawdown_info(snapshots)
+        longest_dd = self._compute_longest_drawdown(snapshots)
+
+        return {
+            "combined_return": combined_return,
+            **month_info,
+            "max_drawdown": max_dd,
+            "longest_drawdown": longest_dd,
+            "volatility_30d": self._compute_30d_volatility(snapshots),
+            "days_above_cost_basis": self._compute_days_above_cost_basis(snapshots),
+        }
+
+    def _compute_max_drawdown_info(
+        self, snapshots: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if len(snapshots) < 2:
+            return None
+        values = np.array([s["position_value"] for s in snapshots], dtype=np.float64)
+        dd_value, dd_pct, peak_idx, trough_idx = compute_max_drawdown(values)
+        is_ongoing = trough_idx == len(snapshots) - 1 and dd_pct < 0
+        return {
+            "dd_pct": round(dd_pct * 100, 2),
+            "start_date": snapshots[peak_idx]["date"],
+            "end_date": snapshots[trough_idx]["date"],
+            "duration_days": trough_idx - peak_idx,
+            "is_ongoing": is_ongoing,
+        }
+
     async def get_holding_performance(
         self, user_id: int, symbol: str, period: str = "1Y",
     ) -> Dict[str, Any]:
@@ -1931,20 +2076,20 @@ class PortfolioService:
         accounts = self.portfolio_repo.get_user_accounts(user_id)
         account_ids = [a["account_id"] for a in accounts]
 
+        empty_result = {
+            "success": True, "symbol": symbol.upper(), "period": period,
+            "snapshots": [], "total_return": 0, "total_return_pct": 0,
+            "total_dividends": 0, "total_dividends_pct": 0,
+            "combined_return": 0, "best_month": None, "worst_month": None,
+            "max_drawdown": None, "longest_drawdown": None,
+            "volatility_30d": 0, "days_above_cost_basis": None,
+        }
         if not account_ids:
-            return {
-                "success": True, "symbol": symbol.upper(), "period": period,
-                "snapshots": [], "total_return": 0, "total_return_pct": 0,
-                "total_dividends": 0, "total_dividends_pct": 0,
-            }
+            return empty_result
 
         txns = self.portfolio_repo.get_transactions_for_symbol(user_id, symbol)
         if not txns:
-            return {
-                "success": True, "symbol": symbol.upper(), "period": period,
-                "snapshots": [], "total_return": 0, "total_return_pct": 0,
-                "total_dividends": 0, "total_dividends_pct": 0,
-            }
+            return empty_result
 
         # Normalize transaction dates first
         for t in txns:
@@ -2078,6 +2223,10 @@ class PortfolioService:
                 "snapshots": [], "total_return": 0, "total_return_pct": 0,
                 "total_dividends": round(total_dividends, 2),
                 "total_dividends_pct": 0,
+                "combined_return": round(total_dividends, 2),
+                "best_month": None, "worst_month": None,
+                "max_drawdown": None, "longest_drawdown": None,
+                "volatility_30d": 0, "days_above_cost_basis": None,
             }
 
         last_value = snapshots[-1]["position_value"]
@@ -2086,6 +2235,8 @@ class PortfolioService:
         total_return = last_value - last_cost_basis
         total_return_pct = (total_return / last_cost_basis * 100) if last_cost_basis > 0 else 0
         total_dividends_pct = (total_dividends / last_cumulative_invested * 100) if last_cumulative_invested > 0 else 0
+
+        summary = self._compute_performance_summary(snapshots, total_return, total_dividends, period)
 
         return {
             "success": True,
@@ -2096,6 +2247,13 @@ class PortfolioService:
             "total_return_pct": round(total_return_pct, 2),
             "total_dividends": round(total_dividends, 2),
             "total_dividends_pct": round(total_dividends_pct, 2),
+            "combined_return": summary["combined_return"],
+            "best_month": summary["best_month"],
+            "worst_month": summary["worst_month"],
+            "max_drawdown": summary["max_drawdown"],
+            "longest_drawdown": summary["longest_drawdown"],
+            "volatility_30d": summary["volatility_30d"],
+            "days_above_cost_basis": summary["days_above_cost_basis"],
         }
 
     async def get_holding_dividends(
