@@ -100,7 +100,8 @@ class YFinanceProvider(StockDataProvider, StockProvider):
                 fiscal_year_end_month=None,
                 description=info.get('longBusinessSummary'),
                 website=info.get('website'),
-                next_earnings_date=earnings_date
+                next_earnings_date=earnings_date,
+                quote_type=info.get('quoteType')
             )
 
             self._cache[ticker_upper] = details

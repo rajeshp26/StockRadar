@@ -31,11 +31,16 @@ def service(mock_alloc_repo, mock_financial_repo):
     return PortfolioService(mock_alloc_repo, mock_financial_repo)
 
 
-def _make_holding(symbol: str, sector: str, value: float, cost: float, account_id: int = 1, account_name: str = "TFSA"):
+def _make_holding(
+    symbol: str, sector: str, value: float, cost: float,
+    account_id: int = 1, account_name: str = "TFSA",
+    security_type: str = "stock",
+):
     return {
         "symbol": symbol,
         "company_id": 1,
         "sector": sector,
+        "security_type": security_type,
         "current_value": value,
         "total_cost": cost,
         "account_id": account_id,
@@ -55,14 +60,22 @@ MOCK_HOLDINGS = [
 @pytest.mark.anyio
 class TestGetPortfolioAllocation:
 
-    async def test_allocation_by_sector(self, service, mock_alloc_repo):
+    async def test_allocation_by_sector_returns_types(self, service, mock_alloc_repo):
         with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         assert result["success"]
-        assert len(result["segments"]) == 2
-        segments = {s["segment"]: s for s in result["segments"]}
-        assert "Technology" in segments
-        assert "Energy" in segments
+        assert "types" in result
+        assert len(result["types"]) == 1
+        assert result["types"][0]["type"] == "stock"
+        assert result["types"][0]["type_label"] == "Stocks"
+
+    async def test_allocation_by_sector_sectors_inside_type(self, service, mock_alloc_repo):
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+            result = await service.get_portfolio_allocation(1, group_by="sector")
+        stock_type = result["types"][0]
+        sector_names = {s["segment"] for s in stock_type["sectors"]}
+        assert "Technology" in sector_names
+        assert "Energy" in sector_names
 
     async def test_allocation_total_value(self, service, mock_alloc_repo):
         with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
@@ -70,11 +83,12 @@ class TestGetPortfolioAllocation:
         assert result["success"]
         assert result["total_value"] == 23000
 
-    async def test_allocation_by_account(self, service, mock_alloc_repo):
+    async def test_allocation_by_account_flat(self, service, mock_alloc_repo):
         with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_portfolio_allocation(1, group_by="account")
         assert result["success"]
         assert len(result["segments"]) > 0
+        assert "types" not in result or result["types"] == []
 
     async def test_allocation_filter_account_ids(self, service, mock_alloc_repo):
         filtered = [_make_holding("AAPL", "Technology", 10000, 8000)]
@@ -119,10 +133,38 @@ class TestGetPortfolioAllocationEdgeCases:
 
     async def test_allocation_with_missing_sector(self, service, mock_alloc_repo):
         no_sector = [
-            {"symbol": "UNKNOWN", "company_id": 999, "current_value": 1000, "total_cost": 900,
-             "account_id": 1, "account_name": "TFSA", "shares": 1, "currency": "USD"}
+            _make_holding("ETHY", None, 1000, 900, security_type="etf"),
         ]
         with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=no_sector)):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         assert result["success"]
-        assert result["segments"][0]["segment"] == "Unknown"
+        assert len(result["types"]) == 1
+        assert result["types"][0]["type"] == "etf"
+        assert result["types"][0]["type_label"] == "ETFs"
+        # The missing sector should appear as "Unknown" inside the ETF type
+        assert result["types"][0]["sectors"][0]["segment"] == "Unknown"
+        assert result["types"][0]["sectors"][0]["value"] == 1000
+
+    async def test_allocation_mixed_types(self, service, mock_alloc_repo):
+        mixed = [
+            _make_holding("AAPL", "Technology", 10000, 8000, security_type="stock"),
+            _make_holding("QQQ", None, 5000, 4500, security_type="etf"),
+            _make_holding("SPY", None, 3000, 2800, security_type="etf"),
+        ]
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=mixed)):
+            result = await service.get_portfolio_allocation(1, group_by="sector")
+        assert result["success"]
+        assert len(result["types"]) == 2
+        type_map = {t["type"]: t for t in result["types"]}
+        assert "stock" in type_map
+        assert "etf" in type_map
+        assert type_map["stock"]["value"] == 10000
+        assert type_map["etf"]["value"] == 8000
+        assert type_map["etf"]["count"] == 2
+
+    async def test_allocation_geography_still_flat(self, service, mock_alloc_repo):
+        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+            result = await service.get_portfolio_allocation(1, group_by="geography")
+        assert result["success"]
+        assert "types" not in result or result["types"] == []
+        assert len(result["segments"]) > 0

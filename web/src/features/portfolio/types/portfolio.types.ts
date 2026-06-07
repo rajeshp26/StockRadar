@@ -221,6 +221,40 @@ export const ACCOUNT_TYPE_COLORS: Record<string, string> = {
 };
 
 // ============================================================================
+// AGGREGATED HOLDING TYPES
+// ============================================================================
+
+export interface AccountHoldingBreakdown {
+    account_id: number;
+    account_name?: string | null;
+    account_type?: string | null;
+    quantity: number;
+    total_cost: number;
+    current_value: number;
+}
+
+export interface AggregatedHolding {
+    company_id: number;
+    symbol: string;
+    company_name: string;
+    sector: string | null;
+    industry: string | null;
+    exchange: string | null;
+    market_group: string | null;
+    security_type: string;
+    currency: string | null;
+    total_quantity: number;
+    average_cost: number;
+    total_cost: number;
+    current_price: number | null;
+    current_value: number;
+    unrealized_gain_loss: number;
+    unrealized_gain_loss_pct: number;
+    accounts_count: number;
+    account_breakdown: AccountHoldingBreakdown[];
+}
+
+// ============================================================================
 // ALLOCATION TYPES
 // ============================================================================
 
@@ -232,10 +266,29 @@ export interface AllocationSegment {
     gain_loss: number;
 }
 
+export interface SectorAllocationSegment {
+    segment: string;
+    value: number;
+    weight: number;
+    count: number;
+    gain_loss: number;
+}
+
+export interface TypeAllocationSegment {
+    type: string;
+    type_label: string;
+    value: number;
+    weight: number;
+    count: number;
+    gain_loss: number;
+    sectors: SectorAllocationSegment[];
+}
+
 export interface PortfolioAllocationResponse {
     success: boolean;
     group_by: string;
     segments: AllocationSegment[];
+    types: TypeAllocationSegment[];
     total_value: number;
     error?: string;
 }
@@ -380,6 +433,73 @@ export interface FactorExposureResponse {
     r_squared: number;
     error?: string | null;
     error_code?: string | null;
+}
+
+// ============================================================================
+// HOLDING PERFORMANCE TYPES (single-stock)
+// ============================================================================
+
+export interface HoldingExistsResponse {
+    symbol: string;
+    held: boolean;
+}
+
+export interface HoldingPerformanceSnapshot {
+    date: string;
+    position_value: number;
+    cost_basis: number;
+    cumulative_invested: number;
+    shares_held?: number;
+    avg_cost_per_share?: number;
+}
+
+export interface HoldingPerformanceResponse {
+    success: boolean;
+    symbol: string;
+    period: string;
+    snapshots: HoldingPerformanceSnapshot[];
+    total_return: number;
+    total_return_pct: number;
+    total_dividends: number;
+    total_dividends_pct: number;
+    error?: string;
+}
+
+export interface HoldingDividendSummary {
+    fiscal_year: number;
+    fiscal_quarter: number;
+    label: string;
+    total_amount: number;
+    payments_count: number;
+    amount_per_share: number;
+}
+
+// ============================================================================
+// HOLDING TRANSACTION + ACCOUNT BREAKDOWN TYPES
+// ============================================================================
+
+export interface HoldingTransaction {
+    transaction_id: number;
+    transaction_date: string;
+    activity_sub_type: string;
+    quantity: number;
+    unit_price: number;
+    commission: number;
+    net_cash_amount: number;
+    account_name: string;
+    account_type: string;
+}
+
+export interface HoldingAccountBreakdown {
+    account_id: number;
+    account_name: string;
+    account_type: string;
+    shares_held: number;
+    total_cost: number;
+    current_value: number;
+    unrealized_gain_loss: number;
+    unrealized_gain_loss_pct: number;
+    dividends_received: number;
 }
 
 // ============================================================================

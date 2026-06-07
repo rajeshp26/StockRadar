@@ -280,46 +280,73 @@ class PortfolioRepository:
     
     def get_account_holdings(self, account_id: int) -> List[Dict[str, Any]]:
         """Get all current holdings for an account, enriched with company data."""
-        try:
-            res = (
-                self.client.table("portfolio_holdings")
-                .select("*")
-                .eq("account_id", account_id)
-                .order("total_cost", desc=True)
-                .execute()
-            )
-            holdings = res.data or []
-            return self._enrich_holdings(holdings)
-        except Exception as e:
-            logger.error(f"Failed to get holdings for account {account_id}: {e}")
-            return []
-    
+        return self._get_holdings(account_id=account_id)
+
     def get_user_all_holdings(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all holdings across all user accounts (aggregated view)."""
         try:
-            # First get user's account IDs
             accounts = self.get_user_accounts(user_id, active_only=True)
             account_ids = [acc["account_id"] for acc in accounts]
-            
             if not account_ids:
                 return []
-            
-            res = (
+            return self._get_holdings(account_ids=account_ids)
+        except Exception as e:
+            logger.error(f"Failed to get all holdings for user {user_id}: {e}")
+            return []
+
+    def _get_holdings(
+        self,
+        *,
+        account_ids: Optional[List[int]] = None,
+        account_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Base method: fetch holdings with account_name/account_type via join.
+
+        Call with either ``account_ids`` (multi-account) or ``account_id`` (single).
+        Both are keyword-only for clarity.
+        """
+        try:
+            query = (
                 self.client.table("portfolio_holdings")
                 .select("""
                     *,
                     portfolio_accounts!fk_portfolio_holdings_account(account_name, account_type)
                 """)
-                .in_("account_id", account_ids)
-                .order("total_cost", desc=True)
-                .execute()
             )
+            if account_ids is not None:
+                query = query.in_("account_id", account_ids)
+            elif account_id is not None:
+                query = query.eq("account_id", account_id)
+
+            res = query.order("total_cost", desc=True).execute()
             holdings = res.data or []
+            holdings = self._flatten_joins(holdings)
             return self._enrich_holdings(holdings)
         except Exception as e:
-            logger.error(f"Failed to get all holdings for user {user_id}: {e}")
+            logger.error(f"Failed to fetch holdings: {e}")
             return []
     
+    def _flatten_joins(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Promote nested Supabase join objects to top-level fields.
+
+        PostgREST returns joined columns as nested dicts keyed by the
+        related table name, e.g.:
+          {"portfolio_accounts": {"account_name": "RRSP", "account_type": "RRSP"}}
+
+        This flattens those sub-keys to the top level so callers can
+        read ``h["account_name"]`` instead of ``h["portfolio_accounts"]["account_name"]``.
+        """
+        result = []
+        for row in rows:
+            flat = dict(row)
+            for value in row.values():
+                if isinstance(value, dict):
+                    for sub_key, sub_value in value.items():
+                        if sub_key not in flat:
+                            flat[sub_key] = sub_value
+            result.append(flat)
+        return result
+
     def _enrich_holdings(self, holdings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Add company info (name, sector, industry, exchange, market_group) to each holding."""
         company_ids = list(set(h.get("company_id") for h in holdings if h.get("company_id")))
@@ -328,7 +355,7 @@ class PortfolioRepository:
             try:
                 res = (
                     self.client.table("companies")
-                    .select("company_id, company_name, sector, industry, exchange")
+                    .select("company_id, company_name, sector, industry, exchange, security_type")
                     .in_("company_id", company_ids)
                     .execute()
                 )
@@ -346,12 +373,14 @@ class PortfolioRepository:
                 h["industry"] = c.get("industry")
                 h["exchange"] = c.get("exchange")
                 h["market_group"] = _exchange_to_market_group(c.get("exchange"))
+                h["security_type"] = c.get("security_type", "stock")
             else:
                 h["company_name"] = h.get("symbol", "Unknown")
                 h["sector"] = None
                 h["industry"] = None
                 h["exchange"] = None
                 h["market_group"] = "OTHER"
+                h["security_type"] = "stock"
 
         return holdings
     
@@ -510,6 +539,55 @@ class PortfolioRepository:
             logger.error(f"Failed to get monthly dividends for account {account_id}: {e}")
             return []
     
+    # ========================================================================
+    # HOLDING-LEVEL OPERATIONS (for single-stock performance)
+    # ========================================================================
+
+    def get_transactions_for_symbol(
+        self, user_id: int, symbol: str
+    ) -> List[Dict[str, Any]]:
+        """Get all Trade transactions for a symbol across user's accounts."""
+        accounts = self.get_user_accounts(user_id)
+        account_ids = [a["account_id"] for a in accounts]
+        if not account_ids:
+            return []
+        try:
+            res = (
+                self.client.table("portfolio_transactions")
+                .select("*")
+                .in_("account_id", account_ids)
+                .eq("symbol", symbol.upper())
+                .in_("activity_type", ["Trade"])
+                .order("transaction_date", desc=False)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get transactions for {symbol}: {e}")
+            return []
+
+    def get_dividends_for_symbol(
+        self, user_id: int, symbol: str
+    ) -> List[Dict[str, Any]]:
+        """Get ALL dividend payments for a symbol across user's accounts."""
+        accounts = self.get_user_accounts(user_id)
+        account_ids = [a["account_id"] for a in accounts]
+        if not account_ids:
+            return []
+        try:
+            res = (
+                self.client.table("portfolio_dividends")
+                .select("*")
+                .in_("account_id", account_ids)
+                .eq("symbol", symbol.upper())
+                .order("payment_date", desc=False)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get dividends for {symbol}: {e}")
+            return []
+
     # ========================================================================
     # IMPORT JOB OPERATIONS
     # ========================================================================

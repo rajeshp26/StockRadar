@@ -73,6 +73,18 @@ export const QK = {
     ["super-investors", "sectors", style ?? ""] as const,
   riskAssessment: (symbol: string) =>
     ["analysis", "risk-assessment", symbol.toUpperCase()] as const,
+  holdingExists: (symbol: string) =>
+    ["portfolio", "holding", "exists", symbol.toUpperCase()] as const,
+  holdingPerformance: (symbol: string, period: string) =>
+    ["portfolio", "holding", "performance", symbol.toUpperCase(), period] as const,
+  holdingDividends: (symbol: string) =>
+    ["portfolio", "holding", "dividends", symbol.toUpperCase()] as const,
+  holdingTransactions: (symbol: string) =>
+    ["portfolio", "holding", "transactions", symbol.toUpperCase()] as const,
+  holdingAccounts: (symbol: string) =>
+    ["portfolio", "holding", "accounts", symbol.toUpperCase()] as const,
+  holdingBenchmarkCompare: (symbol: string, period: string, benchmarks: string[]) =>
+    ["portfolio", "holding", "benchmark-compare", symbol.toUpperCase(), period, ...benchmarks] as const,
   // Portfolio
   portfolioOverview: () =>
     ["portfolio", "overview"] as const,

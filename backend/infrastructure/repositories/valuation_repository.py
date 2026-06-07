@@ -1450,10 +1450,9 @@ class ValuationRepository:
         try:
             is_ = (
                 supabase.table("income_statements")
-                .select("eps_diluted, net_income_to_common, shares_outstanding_diluted, fiscal_year, fiscal_quarter")
+                .select("eps_diluted, net_income_to_common, net_income, shares_outstanding_diluted, fiscal_year, fiscal_quarter")
                 .eq("company_id", company_id)
                 .is_("fiscal_quarter", None)
-                .not_.is_("net_income_to_common", "null")
                 .order("fiscal_year", desc=True)
                 .limit(1)
                 .execute()
@@ -1466,6 +1465,9 @@ class ValuationRepository:
                 return float(eps)
             ni = row.get("net_income_to_common")
             sh = row.get("shares_outstanding_diluted")
+            if ni is not None and sh is not None and float(sh) > 0:
+                return float(ni) / float(sh)
+            ni = row.get("net_income")
             if ni is not None and sh is not None and float(sh) > 0:
                 return float(ni) / float(sh)
             return None

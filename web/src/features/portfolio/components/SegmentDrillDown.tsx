@@ -1,6 +1,7 @@
 'use client';
 
 import { ArrowLeft } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import type { Holding } from '../types/portfolio.types';
 
@@ -11,6 +12,7 @@ interface SegmentDrillDownProps {
 }
 
 export function SegmentDrillDown({ segmentName, holdings, onBack }: SegmentDrillDownProps) {
+    const router = useRouter();
     const totalValue = holdings.reduce((sum, h) => sum + (h.current_value || 0), 0);
 
     return (
@@ -41,7 +43,11 @@ export function SegmentDrillDown({ segmentName, holdings, onBack }: SegmentDrill
                     return (
                         <div
                             key={`${h.symbol}-${h.holding_id}`}
-                            className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-white/[0.02] transition-colors"
+                            className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-white/[0.02] transition-colors cursor-pointer"
+                            onClick={() => router.push(`/analysis/${h.symbol}`)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/analysis/${h.symbol}`); }}
                         >
                             <div className="flex items-center gap-3 flex-1 min-w-0">
                                 <div className="h-8 w-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-[10px] font-black text-indigo-400 ring-1 ring-indigo-500/20 flex-shrink-0">

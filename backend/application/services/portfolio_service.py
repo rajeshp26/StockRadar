@@ -35,6 +35,22 @@ from database import supabase
 logger = logging.getLogger(__name__)
 
 
+def _map_quote_type(quote_type: Optional[str]) -> str:
+    """Map yfinance quoteType to the companies.security_type enum."""
+    if not quote_type:
+        return "stock"
+    mapping = {
+        "EQUITY": "stock",
+        "ETF": "etf",
+        "MUTUALFUND": "fund",
+        "INDEX": "index",
+        "CRYPTOCURRENCY": "crypto",
+        "CURRENCY": "currency",
+        "FUTURE": "stock",
+    }
+    return mapping.get(quote_type.upper(), "stock")
+
+
 class PortfolioService:
     """Service for portfolio operations following existing service patterns."""
     
@@ -597,7 +613,87 @@ class PortfolioService:
             })
         
         return result
-    
+
+    def aggregate_holdings(
+        self, holdings: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Group holdings by company_id, aggregating quantities and costs.
+
+        Returns one record per symbol with combined quantities, weighted
+        average cost, and a per-account breakdown.
+        """
+        groups: Dict[int, Dict[str, Any]] = {}
+
+        for h in holdings:
+            cid = h.get("company_id")
+            if cid is None:
+                continue
+
+            if cid not in groups:
+                groups[cid] = {
+                    "company_id": cid,
+                    "symbol": h.get("symbol"),
+                    "company_name": h.get("company_name") or h.get("symbol", "Unknown"),
+                    "sector": h.get("sector"),
+                    "industry": h.get("industry"),
+                    "exchange": h.get("exchange"),
+                    "market_group": h.get("market_group"),
+                    "security_type": h.get("security_type", "stock"),
+                    "currency": h.get("currency"),
+                    "total_quantity": 0.0,
+                    "total_cost": 0.0,
+                    "current_price": h.get("current_price"),
+                    "account_breakdown": [],
+                }
+
+            g = groups[cid]
+            qty = float(h.get("quantity") or 0)
+            cost = float(h.get("total_cost") or 0)
+            g["total_quantity"] += qty
+            g["total_cost"] += cost
+
+            # Keep the most recent non-null price
+            price = h.get("current_price")
+            if price is not None:
+                g["current_price"] = price
+
+            g["account_breakdown"].append({
+                "account_id": h.get("account_id"),
+                "account_name": h.get("account_name"),
+                "account_type": h.get("account_type"),
+                "quantity": qty,
+                "total_cost": cost,
+                "current_value": float(h.get("current_value") or 0),
+            })
+
+        result = []
+        for g in groups.values():
+            g["average_cost"] = round(
+                g["total_cost"] / g["total_quantity"], 4
+            ) if g["total_quantity"] > 0 else 0.0
+
+            price = g.get("current_price")
+            if price is not None:
+                g["current_value"] = round(price * g["total_quantity"], 2)
+            else:
+                g["current_value"] = round(
+                    sum(b["current_value"] for b in g["account_breakdown"]), 2
+                )
+
+            g["unrealized_gain_loss"] = round(
+                g["current_value"] - g["total_cost"], 2
+            )
+            g["unrealized_gain_loss_pct"] = round(
+                (g["unrealized_gain_loss"] / g["total_cost"] * 100), 2
+            ) if g["total_cost"] > 0 else 0.0
+
+            g["accounts_count"] = len(g["account_breakdown"])
+            result.append(g)
+
+        # Sort by current_value descending
+        result.sort(key=lambda x: x["current_value"], reverse=True)
+        return result
+
     def _calculate_symbol_holding_fifo(
         self,
         symbol: str,
@@ -1403,6 +1499,7 @@ class PortfolioService:
                     "currency": "USD",
                     "description": None,
                     "website": None,
+                    "security_type": "stock",
                 }
             else:
                 # Full company record from provider data
@@ -1417,6 +1514,7 @@ class PortfolioService:
                     "currency": sd.currency or "USD",
                     "description": sd.description,
                     "website": sd.website,
+                    "security_type": _map_quote_type(sd.quote_type),
                 }
 
             res = supabase.table("companies").insert(payload).execute()
@@ -1469,6 +1567,142 @@ class PortfolioService:
                     return start, end
             start = date(2000, 1, 1)
         return start, end
+
+    def _step_for_period(self, period: str) -> timedelta:
+        """Return the snapshot interval for a given period string."""
+        p = period.upper()
+        if p == "1D":
+            return timedelta(days=1)
+        elif p == "1W":
+            return timedelta(days=1)
+        elif p == "1M":
+            return timedelta(days=2)
+        elif p == "3M":
+            return timedelta(days=3)
+        elif p == "1Y":
+            return timedelta(days=7)
+        elif p == "5Y":
+            return timedelta(days=14)
+        else:
+            return timedelta(days=30)
+
+    def _generate_snapshot_dates(
+        self, period: str, start_date: date, end_date: date
+    ) -> List[str]:
+        """Generate snapshot date strings at intervals appropriate for the period."""
+        step = self._step_for_period(period)
+        dates: List[str] = []
+        current_d = start_date
+        while current_d <= end_date:
+            dates.append(current_d.isoformat())
+            current_d += step
+        end_str = end_date.isoformat()
+        if dates[-1] != end_str:
+            dates.append(end_str)
+        return dates
+
+    def _compute_fifo_snapshots(
+        self,
+        lots: Dict[tuple, list],
+        in_txns_sorted: List[Dict],
+        sorted_dates: List[str],
+        price_map: Dict[str, Dict[str, float]],
+        cumulative_invested_map: Optional[Dict[date, float]] = None,
+    ) -> List[Dict]:
+        """Core FIFO snapshot engine — used by both portfolio and single-stock.
+
+        Args:
+            lots: Opening FIFO lots per (account_id, symbol) key.
+            in_txns_sorted: In-period transactions sorted by date.
+            sorted_dates: Snapshot date strings in ascending order.
+            price_map: symbol -> {date_str: close_price}.
+            cumulative_invested_map: Optional date->cumulative_invested lookup.
+
+        Returns list of {date, value, cost_basis, net_deposits} dicts.
+        """
+        snapshots: List[Dict] = []
+        txn_index = 0
+
+        for d in sorted_dates:
+            current_date = date.fromisoformat(d)
+
+            while txn_index < len(in_txns_sorted) and in_txns_sorted[txn_index]["transaction_date"].isoformat() <= d:
+                t = in_txns_sorted[txn_index]
+                sym = t.get("symbol")
+                if sym:
+                    key = (t.get("account_id"), sym)
+                    qty = Decimal(str(t.get("quantity") or 0))
+                    price = Decimal(str(t.get("unit_price") or 0))
+                    commission = Decimal(str(t.get("commission") or 0))
+                    sub = (t.get("activity_sub_type") or "").upper()
+
+                    if sub == "BUY" or (sub == "" and qty > 0):
+                        cost_per_share = price + (commission / qty) if qty else price
+                        lots[key].append({
+                            "quantity": float(qty),
+                            "cost_per_share": float(cost_per_share),
+                            "date": d,
+                        })
+                    elif sub == "SELL" or (sub == "" and qty < 0):
+                        sell_qty = abs(float(qty))
+                        remaining = sell_qty
+                        while remaining > 0 and lots[key]:
+                            lot = lots[key][0]
+                            if lot["quantity"] <= remaining:
+                                remaining -= lot["quantity"]
+                                lots[key].pop(0)
+                            else:
+                                lot["quantity"] -= remaining
+                                remaining = 0
+                txn_index += 1
+
+            total_value = 0.0
+            total_cost = 0.0
+            total_shares = 0
+            for (_, sym), lot_list in lots.items():
+                qty_held = sum(l["quantity"] for l in lot_list)
+                if qty_held <= 0:
+                    continue
+                avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
+                total_cost += qty_held * avg_cost
+                total_shares += qty_held
+
+                price_map_for_sym = price_map.get(sym, {})
+                historical_price = None
+                if d in price_map_for_sym:
+                    historical_price = price_map_for_sym[d]
+                else:
+                    nearest = None
+                    for pd_str in sorted(price_map_for_sym.keys()):
+                        if pd_str <= d:
+                            nearest = pd_str
+                        else:
+                            break
+                    if nearest:
+                        historical_price = price_map_for_sym[nearest]
+
+                if historical_price is not None:
+                    total_value += qty_held * historical_price
+                else:
+                    total_value += qty_held * avg_cost
+
+            cumulative_invested = 0.0
+            if cumulative_invested_map:
+                for ci_date in sorted(cumulative_invested_map.keys()):
+                    if ci_date <= current_date:
+                        cumulative_invested = cumulative_invested_map[ci_date]
+                    else:
+                        break
+
+            snapshots.append({
+                "date": d,
+                "value": round(total_value, 2),
+                "cost_basis": round(total_cost, 2),
+                "net_deposits": round(cumulative_invested, 2),
+                "shares_held": total_shares,
+            })
+
+        return snapshots
 
     def _get_cashflow_deltas(self, account_ids: List[int]) -> List[Dict]:
         """Fetch MoneyMovement & BonusPayment transactions as sorted cash flow deltas.
@@ -1627,117 +1861,15 @@ class PortfolioService:
         # Sort in-period transactions by date for sequential processing
         in_txns_sorted = sorted(in_txns, key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
 
-        # ── Generate snapshot dates at regular intervals ──
-        p = period.upper()
-        if p == "1D":
-            step = timedelta(days=1)
-        elif p == "1W":
-            step = timedelta(days=1)
-        elif p == "1M":
-            step = timedelta(days=2)
-        elif p == "3M":
-            step = timedelta(days=3)
-        elif p == "1Y":
-            step = timedelta(days=7)
-        elif p == "5Y":
-            step = timedelta(days=14)
-        else:  # ALL
-            step = timedelta(days=30)
+        sorted_dates = self._generate_snapshot_dates(period, start_date, end_date)
 
-        sorted_dates: List[str] = []
-        current_d = start_date
-        while current_d <= end_date:
-            sorted_dates.append(current_d.isoformat())
-            current_d += step
-        end_str = end_date.isoformat()
-        if sorted_dates[-1] != end_str:
-            sorted_dates.append(end_str)
-
-        # Sort net deposits dates once for efficient lookup
-        sorted_nd_dates = sorted(net_deposits_at_date.keys())
-
-        def _cumulative_net_deposits(as_of: date) -> float:
-            nd = 0.0
-            for nd_date in sorted_nd_dates:
-                if nd_date <= as_of:
-                    nd = net_deposits_at_date[nd_date]
-                else:
-                    break
-            return nd
-
-        snapshots: List[Dict] = []
-        txn_index = 0  # pointer into in_txns_sorted
-
-        for d in sorted_dates:
-            current_date = date.fromisoformat(d)
-
-            # Process ALL transactions with date <= current snapshot date
-            while txn_index < len(in_txns_sorted) and in_txns_sorted[txn_index]["transaction_date"].isoformat() <= d:
-                t = in_txns_sorted[txn_index]
-                sym = t.get("symbol")
-                if sym:
-                    key = (t.get("account_id"), sym)
-                    qty = Decimal(str(t.get("quantity") or 0))
-                    price = Decimal(str(t.get("unit_price") or 0))
-                    commission = Decimal(str(t.get("commission") or 0))
-                    sub = (t.get("activity_sub_type") or "").upper()
-
-                    if sub == "BUY" or (sub == "" and qty > 0):
-                        cost_per_share = price + (commission / qty) if qty else price
-                        lots[key].append({
-                            "quantity": float(qty),
-                            "cost_per_share": float(cost_per_share),
-                            "date": d,
-                        })
-                    elif sub == "SELL" or (sub == "" and qty < 0):
-                        sell_qty = abs(float(qty))
-                        remaining = sell_qty
-                        while remaining > 0 and lots[key]:
-                            lot = lots[key][0]
-                            if lot["quantity"] <= remaining:
-                                remaining -= lot["quantity"]
-                                lots[key].pop(0)
-                            else:
-                                lot["quantity"] -= remaining
-                                remaining = 0
-                txn_index += 1
-
-            # Compute snapshot at this date
-            total_value = 0.0
-            total_cost = 0.0
-            for (_, sym), lot_list in lots.items():
-                qty_held = sum(l["quantity"] for l in lot_list)
-                if qty_held <= 0:
-                    continue
-                avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
-                total_cost += qty_held * avg_cost
-
-                # Look up historical price (nearest on or before snapshot date)
-                price_map_for_sym = price_map.get(sym, {})
-                historical_price = None
-                if d in price_map_for_sym:
-                    historical_price = price_map_for_sym[d]
-                else:
-                    nearest = None
-                    for pd_str in sorted(price_map_for_sym.keys()):
-                        if pd_str <= d:
-                            nearest = pd_str
-                        else:
-                            break
-                    if nearest:
-                        historical_price = price_map_for_sym[nearest]
-
-                if historical_price is not None:
-                    total_value += qty_held * historical_price
-                else:
-                    total_value += qty_held * avg_cost
-
-            snapshots.append({
-                "date": d,
-                "value": round(total_value, 2),
-                "cost_basis": round(total_cost, 2),
-                "net_deposits": round(_cumulative_net_deposits(current_date), 2),
-            })
+        snapshots = self._compute_fifo_snapshots(
+            lots=lots,
+            in_txns_sorted=in_txns_sorted,
+            sorted_dates=sorted_dates,
+            price_map=price_map,
+            cumulative_invested_map=net_deposits_at_date,
+        )
 
         if not snapshots:
             return {
@@ -1776,6 +1908,402 @@ class PortfolioService:
             "total_return_pct": round(total_return_pct, 2),
             "best_day": best_day,
             "worst_day": worst_day,
+        }
+
+    # ========================================================================
+    # SINGLE-HOLDING PERFORMANCE
+    # ========================================================================
+
+    def check_holding_exists(self, user_id: int, symbol: str) -> bool:
+        """Check if user holds a position in the given symbol."""
+        holdings = self.portfolio_repo.get_user_all_holdings(user_id)
+        return any(h.get("symbol", "").upper() == symbol.upper() for h in holdings)
+
+    async def get_holding_performance(
+        self, user_id: int, symbol: str, period: str = "1Y",
+    ) -> Dict[str, Any]:
+        """
+        Compute time-series performance for a single stock in user's portfolio.
+
+        Reuses the shared FIFO snapshot engine from _compute_fifo_snapshots()
+        but filtered to a single symbol across all user accounts.
+        """
+        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        account_ids = [a["account_id"] for a in accounts]
+
+        if not account_ids:
+            return {
+                "success": True, "symbol": symbol.upper(), "period": period,
+                "snapshots": [], "total_return": 0, "total_return_pct": 0,
+                "total_dividends": 0, "total_dividends_pct": 0,
+            }
+
+        txns = self.portfolio_repo.get_transactions_for_symbol(user_id, symbol)
+        if not txns:
+            return {
+                "success": True, "symbol": symbol.upper(), "period": period,
+                "snapshots": [], "total_return": 0, "total_return_pct": 0,
+                "total_dividends": 0, "total_dividends_pct": 0,
+            }
+
+        # Normalize transaction dates first
+        for t in txns:
+            d = t.get("transaction_date")
+            if isinstance(d, str):
+                t["transaction_date"] = date.fromisoformat(d)
+            elif isinstance(d, datetime):
+                t["transaction_date"] = d.date()
+
+        # P-02: Compute start date from the symbol's own transactions
+        symbol_first = min(t["transaction_date"] for t in txns)
+        period_start, end_date = self._period_to_date_range(period, account_ids)
+        start_date = max(period_start, symbol_first)
+
+        txns.sort(key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
+        pre_txns = [t for t in txns if t["transaction_date"] < start_date]
+        in_txns = [t for t in txns if start_date <= t["transaction_date"] <= end_date]
+
+        price_map: Dict[str, Dict[str, float]] = {}
+        try:
+            sym_up = symbol.upper()
+            resp = (
+                supabase.table("price_history")
+                .select("company_id, price_date, close_price")
+                .eq("company_id", txns[0].get("company_id")) if txns else None
+            )
+            if resp:
+                rows = (
+                    supabase.table("price_history")
+                    .select("price_date, close_price")
+                    .gte("price_date", (start_date - timedelta(days=7)).isoformat())
+                    .lte("price_date", end_date.isoformat())
+                    .order("price_date", desc=False)
+                    .execute()
+                )
+                if rows.data:
+                    for row in rows.data:
+                        price_map.setdefault(sym_up, {})[row["price_date"]] = float(row["close_price"])
+        except Exception as e:
+            logger.warning(f"Failed to fetch price_history for {symbol}: {e}")
+
+        lots: Dict[tuple, list] = defaultdict(list)
+        for t in pre_txns:
+            sym = t.get("symbol")
+            if not sym:
+                continue
+            key = (t.get("account_id"), sym)
+            qty = Decimal(str(t.get("quantity") or 0))
+            price = Decimal(str(t.get("unit_price") or 0))
+            commission = Decimal(str(t.get("commission") or 0))
+            sub = (t.get("activity_sub_type") or "").upper()
+
+            if sub == "BUY" or (sub == "" and qty > 0):
+                cost_per_share = price + (commission / qty) if qty else price
+                lots[key].append({
+                    "quantity": float(qty),
+                    "cost_per_share": float(cost_per_share),
+                    "date": t["transaction_date"].isoformat(),
+                })
+            elif sub == "SELL" or (sub == "" and qty < 0):
+                sell_qty = abs(float(qty))
+                remaining = sell_qty
+                while remaining > 0 and lots[key]:
+                    lot = lots[key][0]
+                    if lot["quantity"] <= remaining:
+                        remaining -= lot["quantity"]
+                        lots[key].pop(0)
+                    else:
+                        lot["quantity"] -= remaining
+                        remaining = 0
+
+        in_txns_sorted = sorted(in_txns, key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
+
+        sorted_dates = self._generate_snapshot_dates(period, start_date, end_date)
+
+        # Build cumulative_invested map: total $ put in (buys - sells) to date
+        cumulative_invested_map: Dict[date, float] = {}
+        running_ci = Decimal("0")
+        for t in txns:
+            d = t["transaction_date"]
+            qty = Decimal(str(t.get("quantity") or 0))
+            price = Decimal(str(t.get("unit_price") or 0))
+            commission = Decimal(str(t.get("commission") or 0))
+            sub = (t.get("activity_sub_type") or "").upper()
+            if sub == "BUY" or (sub == "" and qty > 0):
+                running_ci += qty * price + commission
+            elif sub == "SELL" or (sub == "" and qty < 0):
+                running_ci -= abs(qty) * price - commission
+            cumulative_invested_map[d] = float(running_ci)
+
+        base_snapshots = self._compute_fifo_snapshots(
+            lots=lots,
+            in_txns_sorted=in_txns_sorted,
+            sorted_dates=sorted_dates,
+            price_map=price_map,
+            cumulative_invested_map=cumulative_invested_map,
+        )
+
+        # Compute dividends
+        total_dividends = 0.0
+        try:
+            divs = self.portfolio_repo.get_dividends_for_symbol(user_id, symbol)
+            for d in divs:
+                amt = float(d.get("amount") or 0)
+                pd = d.get("payment_date")
+                if isinstance(pd, str):
+                    pd = date.fromisoformat(pd)
+                elif isinstance(pd, datetime):
+                    pd = pd.date()
+                if start_date <= pd <= end_date:
+                    total_dividends += amt
+        except Exception as e:
+            logger.warning(f"Failed to fetch dividends for {symbol}: {e}")
+
+        snapshots = []
+        for s in base_snapshots:
+            shares_held = s.get("shares_held", 0)
+            avg_cost_per_share = round(s["cost_basis"] / shares_held, 2) if shares_held > 0 else 0
+            snapshots.append({
+                "date": s["date"],
+                "position_value": s["value"],
+                "cost_basis": s["cost_basis"],
+                "cumulative_invested": s["net_deposits"],
+                "shares_held": shares_held,
+                "avg_cost_per_share": avg_cost_per_share,
+            })
+
+        if not snapshots:
+            return {
+                "success": True, "symbol": symbol.upper(), "period": period,
+                "snapshots": [], "total_return": 0, "total_return_pct": 0,
+                "total_dividends": round(total_dividends, 2),
+                "total_dividends_pct": 0,
+            }
+
+        last_value = snapshots[-1]["position_value"]
+        last_cost_basis = snapshots[-1]["cost_basis"]
+        last_cumulative_invested = snapshots[-1].get("cumulative_invested", 0)
+        total_return = last_value - last_cost_basis
+        total_return_pct = (total_return / last_cost_basis * 100) if last_cost_basis > 0 else 0
+        total_dividends_pct = (total_dividends / last_cumulative_invested * 100) if last_cumulative_invested > 0 else 0
+
+        return {
+            "success": True,
+            "symbol": symbol.upper(),
+            "period": period,
+            "snapshots": snapshots,
+            "total_return": round(total_return, 2),
+            "total_return_pct": round(total_return_pct, 2),
+            "total_dividends": round(total_dividends, 2),
+            "total_dividends_pct": round(total_dividends_pct, 2),
+        }
+
+    async def get_holding_dividends(
+        self, user_id: int, symbol: str,
+    ) -> List[Dict[str, Any]]:
+        """Get dividend history for a single held stock, aggregated by fiscal quarter."""
+        divs = self.portfolio_repo.get_dividends_for_symbol(user_id, symbol)
+        if not divs:
+            return []
+
+        quarterly: Dict[tuple, dict] = {}
+        for d in divs:
+            fy = d.get("fiscal_year") or date.fromisoformat(str(d.get("payment_date", "2000-01-01"))).year
+            fm = d.get("fiscal_month") or date.fromisoformat(str(d.get("payment_date", "2000-01-01"))).month
+            fq = (fm - 1) // 3 + 1
+            key = (fy, fq)
+            label = f"Q{fq} {fy}"
+            amt = float(d.get("amount") or 0)
+            aps = amt / float(d.get("shares_held") or 1) if d.get("shares_held") else 0
+
+            if key not in quarterly:
+                quarterly[key] = {
+                    "fiscal_year": fy,
+                    "fiscal_quarter": fq,
+                    "label": label,
+                    "total_amount": 0.0,
+                    "payments_count": 0,
+                    "amount_per_share": 0.0,
+                }
+            quarterly[key]["total_amount"] += amt
+            quarterly[key]["payments_count"] += 1
+            # Weighted average amount per share
+            if aps > 0:
+                prev_total = quarterly[key]["total_amount"] - amt
+                prev_count = quarterly[key]["payments_count"] - 1
+                if prev_count > 0:
+                    quarterly[key]["amount_per_share"] = (
+                        (prev_total / prev_count * prev_count + aps) / quarterly[key]["payments_count"]
+                    )
+                else:
+                    quarterly[key]["amount_per_share"] = aps
+
+        result = sorted(quarterly.values(), key=lambda x: (x["fiscal_year"], x["fiscal_quarter"]))
+        for r in result:
+            r["total_amount"] = round(r["total_amount"], 2)
+            r["amount_per_share"] = round(r["amount_per_share"], 4)
+
+        return result
+
+    # ------------------------------------------------------------------
+    # P-04: Transaction history for a single symbol
+    # ------------------------------------------------------------------
+
+    async def get_holding_transactions(
+        self, user_id: int, symbol: str,
+    ) -> List[Dict[str, Any]]:
+        """Return all BUY/SELL transactions for a symbol across user accounts."""
+        txns = self.portfolio_repo.get_transactions_for_symbol(user_id, symbol)
+        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        account_map = {a["account_id"]: a for a in accounts}
+
+        result = []
+        for t in txns:
+            sub = (t.get("activity_sub_type") or "").upper()
+            if sub not in ("BUY", "SELL"):
+                continue
+            td = t.get("transaction_date")
+            if isinstance(td, datetime):
+                td = td.date()
+            result.append({
+                "transaction_id": t["transaction_id"],
+                "transaction_date": td.isoformat() if isinstance(td, date) else str(td),
+                "activity_sub_type": sub,
+                "quantity": float(t.get("quantity") or 0),
+                "unit_price": float(t.get("unit_price") or 0),
+                "commission": float(t.get("commission") or 0),
+                "net_cash_amount": float(t.get("net_cash_amount") or 0),
+                "account_name": account_map.get(t.get("account_id"), {}).get("account_name", "Unknown"),
+                "account_type": account_map.get(t.get("account_id"), {}).get("account_type", ""),
+            })
+
+        result.sort(key=lambda x: x["transaction_date"], reverse=True)
+        return result
+
+    # ------------------------------------------------------------------
+    # P-05: Per-account breakdown for a single symbol
+    # ------------------------------------------------------------------
+
+    async def get_holding_accounts(
+        self, user_id: int, symbol: str,
+    ) -> List[Dict[str, Any]]:
+        """Return per-account breakdown of a single holding."""
+        symbol_up = symbol.upper()
+        holdings = self.portfolio_repo.get_user_all_holdings(user_id)
+        symbol_holdings = [h for h in holdings if h.get("symbol", "").upper() == symbol_up]
+
+        enriched = await self.enrich_holdings_with_prices(symbol_holdings)
+
+        divs = self.portfolio_repo.get_dividends_for_symbol(user_id, symbol)
+        divs_by_account: Dict[int, float] = {}
+        for d in divs:
+            aid = d.get("account_id")
+            if aid:
+                divs_by_account[aid] = divs_by_account.get(aid, 0) + float(d.get("amount") or 0)
+
+        result = []
+        for h in enriched:
+            shares = float(h.get("quantity") or 0)
+            cost = float(h.get("total_cost") or 0)
+            value = float(h.get("current_value") or 0)
+            gl = value - cost
+            gl_pct = (gl / cost * 100) if cost > 0 else 0
+            result.append({
+                "account_id": h["account_id"],
+                "account_name": h.get("account_name", "Unknown"),
+                "account_type": h.get("account_type", ""),
+                "shares_held": shares,
+                "total_cost": round(cost, 2),
+                "current_value": round(value, 2),
+                "unrealized_gain_loss": round(gl, 2),
+                "unrealized_gain_loss_pct": round(gl_pct, 2),
+                "dividends_received": round(divs_by_account.get(h["account_id"], 0), 2),
+            })
+
+        return result
+
+    # ------------------------------------------------------------------
+    # P-03: Holding-level benchmark comparison
+    # ------------------------------------------------------------------
+
+    async def get_holding_performance_compare(
+        self, user_id: int, symbol: str, period: str, benchmark_symbols: List[str],
+    ) -> Dict[str, Any]:
+        """Compare single-stock performance against benchmarks using the
+        symbol's own buy/sell cash flows (not portfolio-level deposits)."""
+        perf = await self.get_holding_performance(user_id, symbol, period)
+        if not perf.get("success") or not perf.get("snapshots"):
+            return {
+                "success": True, "period": period,
+                "portfolio": [], "benchmarks": [],
+            }
+
+        snapshots = perf["snapshots"]
+        start_date, end_date = self._period_to_date_range(period)
+
+        first_nonzero = next(
+            (i for i, s in enumerate(snapshots) if s["position_value"] > 0), 0
+        )
+        snapshots_subset = snapshots[first_nonzero:]
+        if not snapshots_subset:
+            return {
+                "success": True, "period": period,
+                "portfolio": snapshots, "benchmarks": [],
+            }
+
+        initial_value = snapshots_subset[0]["position_value"]
+        snapshot_dates = [s["date"] for s in snapshots_subset]
+
+        txns = self.portfolio_repo.get_transactions_for_symbol(user_id, symbol)
+        holding_cashflows = []
+        for t in txns:
+            qty = Decimal(str(t.get("quantity") or 0))
+            price = Decimal(str(t.get("unit_price") or 0))
+            commission = Decimal(str(t.get("commission") or 0))
+            td = t.get("transaction_date")
+            if isinstance(td, str):
+                td = date.fromisoformat(td)
+            elif isinstance(td, datetime):
+                td = td.date()
+            sub = (t.get("activity_sub_type") or "").upper()
+            if sub == "BUY" or (sub == "" and qty > 0):
+                amount = float(qty * price + commission)
+                holding_cashflows.append({"date": td, "amount": amount})
+            elif sub == "SELL" or (sub == "" and qty < 0):
+                amount = -(float(abs(qty) * price - commission))
+                holding_cashflows.append({"date": td, "amount": amount})
+        holding_cashflows.sort(key=lambda x: x["date"])
+
+        benchmark_series_list = []
+        if benchmark_symbols:
+            for sym in benchmark_symbols:
+                company = await self.financial_repo.get_company_by_symbol(sym)
+                if not company:
+                    logger.info("Holding benchmark %s not found — skipping", sym)
+                    continue
+                series = self._simulate_benchmark_value(
+                    benchmark_company_id=company["company_id"],
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_value=initial_value,
+                    cashflow_deltas=holding_cashflows,
+                    snapshot_dates=snapshot_dates,
+                )
+                if series:
+                    benchmark_series_list.append({
+                        "symbol": sym,
+                        "name": sym,
+                        "data": series,
+                    })
+
+        return {
+            "success": True,
+            "period": period,
+            "portfolio": [
+                {"date": s["date"], "value": s["position_value"]}
+                for s in snapshots_subset
+            ],
+            "benchmarks": benchmark_series_list,
         }
 
     # ------------------------------------------------------------------
@@ -1909,6 +2437,11 @@ class PortfolioService:
         """
         Get portfolio allocation breakdown grouped by sector, geography, or account.
 
+        When group_by='sector', returns a two-level hierarchy:
+          types[].sectors[] — grouped by security_type first, then by sector.
+
+        When group_by='geography' or 'account', returns flat segments.
+
         When account_ids is provided, only those accounts are included.
         None or empty list = all user accounts.
         """
@@ -1941,12 +2474,103 @@ class PortfolioService:
                 "total_value": 0,
             }
 
+        SECURITY_TYPE_LABELS = {
+            "stock": "Stocks",
+            "etf": "ETFs",
+            "fund": "Funds",
+            "index": "Indices",
+            "crypto": "Cryptocurrencies",
+            "currency": "Currencies",
+        }
+
+        if group_by == "sector":
+            return self._group_allocation_by_type(holdings, SECURITY_TYPE_LABELS)
+        else:
+            return self._group_allocation_flat(holdings, group_by)
+
+    def _group_allocation_by_type(
+        self, holdings: List[Dict[str, Any]],
+        type_labels: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Two-level grouping: security_type → sector."""
+        types: Dict[str, Dict[str, Any]] = {}
+
+        for h in holdings:
+            st = h.get("security_type") or "stock"
+            sector = h.get("sector") or "Unknown"
+
+            value = h.get("current_value") or 0
+            cost = h.get("total_cost") or 0
+
+            if st not in types:
+                types[st] = {"type": st, "value": 0, "cost": 0, "count": 0,
+                             "sectors": {}}
+
+            t = types[st]
+            t["value"] += value
+            t["cost"] += cost
+            t["count"] += 1
+
+            if sector not in t["sectors"]:
+                t["sectors"][sector] = {"value": 0, "cost": 0, "count": 0}
+            t["sectors"][sector]["value"] += value
+            t["sectors"][sector]["cost"] += cost
+            t["sectors"][sector]["count"] += 1
+
+        total_value = sum(t["value"] for t in types.values())
+
+        type_list = []
+        flat_segments = []
+        for st, t in sorted(types.items(), key=lambda x: x[1]["value"], reverse=True):
+            type_total = t["value"]
+            sector_list = [
+                {
+                    "segment": s_key,
+                    "value": round(s["value"], 2),
+                    "weight": round((s["value"] / type_total * 100), 2) if type_total > 0 else 0,
+                    "count": s["count"],
+                    "gain_loss": round(s["value"] - s["cost"], 2),
+                }
+                for s_key, s in sorted(t["sectors"].items(), key=lambda x: x[1]["value"], reverse=True)
+            ]
+
+            type_label = type_labels.get(st, st.capitalize())
+            type_list.append({
+                "type": st,
+                "type_label": type_label,
+                "value": round(t["value"], 2),
+                "weight": round((t["value"] / total_value * 100), 2) if total_value > 0 else 0,
+                "count": t["count"],
+                "gain_loss": round(t["value"] - t["cost"], 2),
+                "sectors": sector_list,
+            })
+
+            # Also populate flat segments for backward compat
+            for seg in sector_list:
+                flat_segments.append({
+                    "segment": f"{type_label} / {seg['segment']}",
+                    "value": seg["value"],
+                    "weight": round((seg["value"] / total_value * 100), 2) if total_value > 0 else 0,
+                    "count": seg["count"],
+                    "gain_loss": seg["gain_loss"],
+                })
+
+        return {
+            "success": True,
+            "group_by": "sector",
+            "segments": flat_segments,
+            "types": type_list,
+            "total_value": round(total_value, 2),
+        }
+
+    def _group_allocation_flat(
+        self, holdings: List[Dict[str, Any]], group_by: str,
+    ) -> Dict[str, Any]:
+        """Flat grouping for geography or account views."""
         segments: Dict[str, Dict[str, Any]] = {}
 
         for h in holdings:
-            if group_by == "sector":
-                key = h.get("sector") or "Unknown"
-            elif group_by == "geography":
+            if group_by == "geography":
                 key = h.get("market_group") or "OTHER"
             elif group_by == "account":
                 key = h.get("account_name") or "Unknown Account"

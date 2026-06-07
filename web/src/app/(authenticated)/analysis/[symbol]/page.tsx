@@ -5,7 +5,7 @@
 //   3. "Others" coming-soon panel no longer lists "Residual Income" (it ships now)
 // Everything else is IDENTICAL to the existing file.
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,8 @@ import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
 import { formatTimestamp } from "@/lib/time";
 import { prefetchAllValuations } from "@/features/analysis/utils/prefetch-valuations";
 import { AIChatBot } from "@/components/chat/ai-chat-bot";
+import { useHoldingExists } from "@/features/portfolio/hooks/usePortfolio";
+import { StockPerformancePanel } from "@/features/analysis/components/stock-performance-panel";
 import {
   MethodSelector,
   type IntrinsicMethod,
@@ -46,8 +48,9 @@ import {
 
 
 
-/* ── Tab definitions ──────────────────────────────────────────── */
-const TOP_TABS = [
+type OthersMethod = "magic_formula" | "canslim";
+
+const BASE_TABS = [
   { id: "intrinsic", label: "Intrinsic Value", icon: TrendingUp },
   { id: "health", label: "Financial Health", icon: Heart },
   { id: "moat", label: "Moat", icon: Shield },
@@ -59,9 +62,7 @@ const TOP_TABS = [
   { id: "others", label: "Others", icon: MoreHorizontal },
 ] as const;
 
-type OthersMethod = "magic_formula" | "canslim";
-
-type TopTab = (typeof TOP_TABS)[number]["id"];
+type TopTab = (typeof BASE_TABS)[number]["id"] | "performance";
 
 /* ── Coming-soon placeholder panel ───────────────────────────── */
 function ComingSoonPanel({
@@ -113,6 +114,17 @@ export default function AnalysisPage() {
   const [method, setMethod] = useState<IntrinsicMethod>("overview");
   const [tab, setTab] = useState<TopTab>("intrinsic");
   const [othersMethod, setOthersMethod] = useState<OthersMethod>("magic_formula");
+
+  const { data: holdingExists } = useHoldingExists(upperSymbol);
+  const isHeld = holdingExists?.held ?? false;
+
+  const TOP_TABS = useMemo(() => {
+    const tabs = [...BASE_TABS];
+    if (isHeld) {
+      tabs.splice(5, 0, { id: "performance", label: "Performance", icon: TrendingUp });
+    }
+    return tabs;
+  }, [isHeld]);
 
   const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
 
@@ -251,6 +263,11 @@ export default function AnalysisPage() {
         {tab === "comparison" && (
           <div className="animate-fade-up">
             <StockVsIndexPanel symbol={upperSymbol} />
+          </div>
+        )}
+        {tab === "performance" && (
+          <div className="animate-fade-up">
+            <StockPerformancePanel symbol={upperSymbol} />
           </div>
         )}
         {tab === "technical" && (

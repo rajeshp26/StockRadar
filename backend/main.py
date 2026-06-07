@@ -40,24 +40,24 @@ async def background_price_monitor():
             from api.watchlists import symbol_subscribers, broadcast_stock_update
             active_symbols = list(symbol_subscribers.keys())
             if not active_symbols:
-                logger.warning("[PRICE-MONITOR-DIAG] No active symbol subscribers — sleeping 5s")
+                logger.debug("[PRICE-MONITOR-DIAG] No active symbol subscribers — sleeping 5s")
                 await asyncio.sleep(min(5, interval))
                 continue
             
-            logger.info(f"[PRICE-MONITOR-DIAG] Fetching prices for {len(active_symbols)} symbols: {active_symbols}")
+            logger.debug(f"[PRICE-MONITOR-DIAG] Fetching prices for {len(active_symbols)} symbols: {active_symbols}")
             tickers = yf.Tickers(active_symbols)
             updated_count = 0
             skipped_count = 0
             for symbol in active_symbols:
                 ticker = tickers.tickers.get(symbol)
                 if not ticker:
-                    logger.warning(f"[PRICE-MONITOR-DIAG] {symbol}: ticker object is None")
+                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: ticker object is None")
                     skipped_count += 1
                     continue
                 
                 info = getattr(ticker, "info", {}) or {}
                 if not info:
-                    logger.warning(f"[PRICE-MONITOR-DIAG] {symbol}: info dict is empty")
+                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: info dict is empty")
                     skipped_count += 1
                     continue
                 
@@ -67,7 +67,7 @@ async def background_price_monitor():
                 # Log ALL available close-related keys for diagnostics
                 close_keys = [k for k in info.keys() if 'close' in k.lower()]
                 current_keys = [k for k in info.keys() if 'price' in k.lower() or 'current' in k.lower()]
-                logger.info(f"[PRICE-MONITOR-DIAG] {symbol}: currentPrice={current_price}, prev_close={prev_close}, close_keys={close_keys}, current_keys={current_keys}")
+                logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: currentPrice={current_price}, prev_close={prev_close}, close_keys={close_keys}, current_keys={current_keys}")
                 
                 if current_price and prev_close:
                     change = float(current_price) - float(prev_close)
@@ -76,9 +76,9 @@ async def background_price_monitor():
                     updated_count += 1
                 else:
                     skipped_count += 1
-                    logger.warning(f"[PRICE-MONITOR-DIAG] {symbol}: SKIPPED broadcast — current_price={current_price}, prev_close={prev_close}")
+                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: SKIPPED broadcast — current_price={current_price}, prev_close={prev_close}")
             
-            logger.info(f"[PRICE-MONITOR-DIAG] Cycle complete: {updated_count} updated, {skipped_count} skipped")
+            logger.debug(f"[PRICE-MONITOR-DIAG] Cycle complete: {updated_count} updated, {skipped_count} skipped")
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             break  # graceful shutdown

@@ -39,6 +39,10 @@ from schemas_portfolio import (
     BenchmarkCompareResponse,
     PortfolioAllocationResponse,
     DividendHistoryResponse,
+    HoldingExistsResponse,
+    HoldingPerformanceResponse,
+    HoldingTransactionInfo,
+    HoldingAccountBreakdown,
     RiskMetricsResponse,
     DrawdownResponse,
     CovarianceResponse,
@@ -441,24 +445,30 @@ async def get_account_holdings(
 async def get_all_holdings(
     request: Request,
     user: dict = Depends(get_current_user_dep),
+    aggregated: bool = Query(False, description="Group by symbol, aggregate quantities across accounts"),
 ):
     """
-    Get all holdings across all user accounts (aggregated view).
-    
-    Useful for portfolio-wide analysis and top holdings display.
+    Get all holdings across all user accounts.
+
+    When ``aggregated=true``, holdings with the same symbol across multiple
+    accounts are combined into a single row with weighted average cost,
+    total quantity, and a per-account breakdown.
     """
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         repo = PortfolioRepository()
         service = _get_portfolio_service()
         holdings = await service.enrich_holdings_with_prices(
             repo.get_user_all_holdings(db_user_id)
         )
-        
+
+        if aggregated:
+            holdings = service.aggregate_holdings(holdings)
+
         return {"holdings": holdings}
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -953,6 +963,157 @@ async def check_company_exists(
             "exists": False,
             "ticker_symbol": symbol.upper(),
         }
+
+
+# ============================================================================
+# HOLDING-LEVEL ENDPOINTS (single-stock performance)
+# ============================================================================
+
+@router.get("/portfolio/holdings/{symbol}/exists", tags=["Portfolio"], status_code=200)
+@limiter.limit("60/minute")
+async def check_holding_exists(
+    request: Request,
+    symbol: str,
+    user: dict = Depends(get_current_user_dep),
+) -> HoldingExistsResponse:
+    """Check if the current user holds a position in this symbol."""
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        service = _get_portfolio_service()
+        held = service.check_holding_exists(db_user_id, symbol)
+        return HoldingExistsResponse(symbol=symbol.upper(), held=held)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Check holding exists failed for {symbol}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to check holding exists")
+
+
+@router.get("/portfolio/holdings/{symbol}/performance", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_holding_performance(
+    request: Request,
+    symbol: str,
+    period: str = Query("1Y", pattern="^(1D|1W|1M|3M|1Y|5Y|YTD|ALL)$"),
+    user: dict = Depends(get_current_user_dep),
+) -> HoldingPerformanceResponse:
+    """Time-series performance for a single stock in user's portfolio."""
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        service = _get_portfolio_service()
+        result = await service.get_holding_performance(db_user_id, symbol, period)
+
+        if not result.get("success"):
+            return HoldingPerformanceResponse(
+                success=False,
+                symbol=symbol.upper(),
+                period=period,
+                snapshots=[],
+                total_return=0,
+                total_return_pct=0,
+                total_dividends=0,
+                total_dividends_pct=0,
+                error=result.get("error"),
+            )
+
+        return HoldingPerformanceResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get holding performance failed for {symbol}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get holding performance")
+
+
+@router.get("/portfolio/holdings/{symbol}/dividends", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_holding_dividends(
+    request: Request,
+    symbol: str,
+    user: dict = Depends(get_current_user_dep),
+) -> list[dict]:
+    """Quarterly-aggregated dividend history for a single held stock."""
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        service = _get_portfolio_service()
+        result = await service.get_holding_dividends(db_user_id, symbol)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get holding dividends failed for {symbol}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get holding dividends")
+
+
+@router.get("/portfolio/holdings/{symbol}/transactions", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_holding_transactions(
+    request: Request,
+    symbol: str,
+    user: dict = Depends(get_current_user_dep),
+) -> list[HoldingTransactionInfo]:
+    """Return all BUY/SELL transactions for a symbol across user accounts. (P-04)"""
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        service = _get_portfolio_service()
+        result = await service.get_holding_transactions(db_user_id, symbol)
+        return [HoldingTransactionInfo(**r) for r in result]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get holding transactions failed for {symbol}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get holding transactions")
+
+
+@router.get("/portfolio/holdings/{symbol}/accounts", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_holding_accounts(
+    request: Request,
+    symbol: str,
+    user: dict = Depends(get_current_user_dep),
+) -> list[HoldingAccountBreakdown]:
+    """Return per-account breakdown of a single holding. (P-05)"""
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        service = _get_portfolio_service()
+        result = await service.get_holding_accounts(db_user_id, symbol)
+        return [HoldingAccountBreakdown(**r) for r in result]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get holding accounts failed for {symbol}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get holding accounts")
+
+
+@router.get("/portfolio/holdings/{symbol}/performance/compare", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_holding_performance_compare(
+    request: Request,
+    symbol: str,
+    period: str = Query("1Y", pattern="^(1D|1W|1M|3M|1Y|5Y|YTD|ALL)$"),
+    benchmarks: str = "SPY",
+    user: dict = Depends(get_current_user_dep),
+) -> BenchmarkCompareResponse:
+    """Compare single-stock performance vs benchmarks using holding-level cash flows. (P-03)"""
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        benchmark_symbols = [s.strip().upper() for s in benchmarks.split(",") if s.strip()]
+        service = _get_portfolio_service()
+        result = await service.get_holding_performance_compare(
+            db_user_id, symbol, period, benchmark_symbols
+        )
+        return BenchmarkCompareResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get holding performance compare failed for {symbol}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to compare holding performance")
 
 
 # ============================================================================

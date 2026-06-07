@@ -1,6 +1,7 @@
 // web/src/features/analysis/services/moat.service.ts
 /**
  * Moat evidence & AI narrative service functions.
+ * Uses the shared axios instance (api) for all HTTP requests.
  */
 import { api } from "@/lib/api";
 
@@ -41,31 +42,11 @@ export interface MoatAiNarrativeData {
 }
 
 function apiPath(path: string): string {
-  return `/api/proxy${path}`;
+  return path;
 }
 
-async function doFetch(
-  input: RequestInfo,
-  init: RequestInit = {}
-): Promise<Response> {
-  return fetch(input, {
-    credentials: "include",
-    cache: "no-store",
-    ...init,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
-    },
-  });
-}
-
-async function readJsonSafe<T = Json>(res: Response): Promise<T | null> {
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
+function errMessage(err: unknown): string {
+  return (err as any)?.message || "Request failed";
 }
 
 /** GET — Moat keyword evidence. Optional refresh from EDGAR. */
@@ -74,13 +55,13 @@ export async function fetchMoatEvidence(
   refresh = false
 ): Promise<MoatEvidenceData> {
   const qs = refresh ? "?refresh=true" : "";
-  const url = apiPath(
-    `/analysis/${encodeURIComponent(symbol)}/moat/evidence${qs}`
-  );
-  const res = await doFetch(url, { method: "GET" });
-  if (res.ok) {
-    const body = await readJsonSafe<MoatEvidenceData>(res);
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/moat/evidence${qs}`);
+  try {
+    const resp = await api.get(url);
+    const body = resp.data as MoatEvidenceData;
     if (body) return body;
+  } catch (err: any) {
+    throw new Error(errMessage(err));
   }
   throw new Error("Failed to load moat evidence.");
 }
@@ -89,13 +70,13 @@ export async function fetchMoatEvidence(
 export async function fetchMoatAiNarrative(
   symbol: string
 ): Promise<MoatAiNarrativeData> {
-  const url = apiPath(
-    `/analysis/${encodeURIComponent(symbol)}/moat/ai`
-  );
-  const res = await doFetch(url, { method: "GET" });
-  if (res.ok) {
-    const body = await readJsonSafe<MoatAiNarrativeData>(res);
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/moat/ai`);
+  try {
+    const resp = await api.get(url);
+    const body = resp.data as MoatAiNarrativeData;
     if (body) return body;
+  } catch (err: any) {
+    throw new Error(errMessage(err));
   }
   throw new Error("Failed to load AI narrative.");
 }
@@ -104,13 +85,13 @@ export async function fetchMoatAiNarrative(
 export async function generateMoatAiNarrative(
   symbol: string
 ): Promise<MoatAiNarrativeData> {
-  const url = apiPath(
-    `/analysis/${encodeURIComponent(symbol)}/moat/ai`
-  );
-  const res = await doFetch(url, { method: "POST" });
-  if (res.ok) {
-    const body = await readJsonSafe<MoatAiNarrativeData>(res);
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/moat/ai`);
+  try {
+    const resp = await api.post(url, {});
+    const body = resp.data as MoatAiNarrativeData;
     if (body) return body;
+  } catch (err: any) {
+    throw new Error(errMessage(err));
   }
   throw new Error("Failed to generate AI narrative.");
 }

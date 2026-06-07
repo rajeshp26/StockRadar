@@ -103,6 +103,20 @@ vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
         reset: vi.fn(),
     }),
     useImportStatus: () => ({ data: null, isLoading: false }),
+    useAllHoldings: () => ({ data: [], isLoading: false }),
+    useAllDividends: () => ({ data: null, isLoading: false }),
+    useAllTransactions: () => ({ data: { transactions: [], total_count: 0 }, isLoading: false }),
+    useRiskMetrics: () => ({ data: null, isLoading: false }),
+    useDrawdown: () => ({ data: null, isLoading: false }),
+    useCovariance: () => ({ data: null, isLoading: false }),
+    useEfficientFrontier: () => ({ data: null, isLoading: false }),
+    useRollingSharpe: () => ({ data: null, isLoading: false }),
+    useRiskContribution: () => ({ data: null, isLoading: false }),
+    useMarketExposure: () => ({ data: null, isLoading: false }),
+    usePortfolioPerformance: (...args: any[]) => mockUsePortfolioPerformance(...args),
+    useHoldingExists: () => ({ data: { held: false }, isLoading: false }),
+    useHoldingPerformance: () => ({ data: null, isLoading: false }),
+    useHoldingDividends: () => ({ data: [], isLoading: false }),
 }));
 
 // ── Mock shared components ─────────────────────────────────────────────
@@ -414,11 +428,26 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
                     { segment: "Technology", value: 50000, weight: 62.5, count: 2, gain_loss: 10000 },
                     { segment: "Energy", value: 30000, weight: 37.5, count: 1, gain_loss: -2000 },
                 ],
+                types: [
+                    {
+                        type: "stock",
+                        type_label: "Stocks",
+                        value: 80000,
+                        weight: 100.0,
+                        count: 3,
+                        gain_loss: 8000,
+                        sectors: [
+                            { segment: "Technology", value: 50000, weight: 62.5, count: 2, gain_loss: 10000 },
+                            { segment: "Energy", value: 30000, weight: 37.5, count: 1, gain_loss: -2000 },
+                        ],
+                    },
+                ],
                 total_value: 80000,
             },
             isLoading: false,
         });
         render(<PortfolioTabShell />);
+        expect(screen.getByText("Stocks")).toBeInTheDocument();
         expect(screen.getByText("Technology")).toBeInTheDocument();
         expect(screen.getByText("Energy")).toBeInTheDocument();
     });

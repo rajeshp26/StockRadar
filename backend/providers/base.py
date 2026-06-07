@@ -34,6 +34,9 @@ class StockDetails(TickerInfo):
     website: Optional[str] = None
     next_earnings_date: Optional[date] = None
 
+    # Classification (from yfinance quoteType)
+    quote_type: Optional[str] = None
+
 class StockDataProvider(ABC):
     @abstractmethod
     def get_ticker_info(self, ticker_symbol: str) -> Optional[TickerInfo]:

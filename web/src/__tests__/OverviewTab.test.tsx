@@ -13,6 +13,7 @@ vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
     usePortfolioAccounts: (...args: any[]) => mockUsePortfolioAccounts(...args),
     useBenchmarks: (...args: any[]) => mockUseBenchmarks(...args),
     useBenchmarkCompare: () => ({ data: null, isLoading: false }),
+    useAllHoldings: () => ({ data: [], isLoading: false }),
 }));
 
 vi.mock("@/components/ui/skeleton", () => ({

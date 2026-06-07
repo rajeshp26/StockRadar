@@ -7,6 +7,7 @@ import type {
     PortfolioAccount,
     PortfolioOverview,
     Holding,
+    AggregatedHolding,
     Transaction,
     MonthlyDividendSummary,
     ImportTransactionsRequest,
@@ -28,6 +29,11 @@ import type {
     RollingSharpeResponse,
     RiskContributionResponse,
     FactorExposureResponse,
+    HoldingExistsResponse,
+    HoldingPerformanceResponse,
+    HoldingDividendSummary,
+    HoldingTransaction,
+    HoldingAccountBreakdown,
 } from "../types/portfolio.types";
 
 /**
@@ -124,9 +130,12 @@ export class PortfolioService {
         return res.data;
     }
 
-    async getAllHoldings(): Promise<Holding[]> {
-        const res = await this.api.get<{ holdings: Holding[] }>(
-            "/portfolio/holdings"
+    async getAllHoldings(aggregated?: boolean): Promise<Holding[] | AggregatedHolding[]> {
+        const params: Record<string, string> = {};
+        if (aggregated) params.aggregated = "true";
+        const res = await this.api.get<{ holdings: Holding[] | AggregatedHolding[] }>(
+            "/portfolio/holdings",
+            { params }
         );
         return res.data.holdings;
     }
@@ -213,6 +222,62 @@ export class PortfolioService {
         if (accountIds) params.account_ids = accountIds;
         const res = await this.api.get<PerformanceResponse>(
             "/portfolio/performance",
+            { params }
+        );
+        return res.data;
+    }
+
+    // ========================================================================
+    // HOLDING PERFORMANCE (single-stock)
+    // ========================================================================
+
+    async checkHoldingExists(symbol: string): Promise<HoldingExistsResponse> {
+        const res = await this.api.get<HoldingExistsResponse>(
+            `/portfolio/holdings/${symbol}/exists`
+        );
+        return res.data;
+    }
+
+    async getHoldingPerformance(
+        symbol: string,
+        period: string = "1Y"
+    ): Promise<HoldingPerformanceResponse> {
+        const res = await this.api.get<HoldingPerformanceResponse>(
+            `/portfolio/holdings/${symbol}/performance`,
+            { params: { period } }
+        );
+        return res.data;
+    }
+
+    async getHoldingDividends(symbol: string): Promise<HoldingDividendSummary[]> {
+        const res = await this.api.get<HoldingDividendSummary[]>(
+            `/portfolio/holdings/${symbol}/dividends`
+        );
+        return res.data;
+    }
+
+    async getHoldingTransactions(symbol: string): Promise<HoldingTransaction[]> {
+        const res = await this.api.get<HoldingTransaction[]>(
+            `/portfolio/holdings/${symbol}/transactions`
+        );
+        return res.data;
+    }
+
+    async getHoldingAccounts(symbol: string): Promise<HoldingAccountBreakdown[]> {
+        const res = await this.api.get<HoldingAccountBreakdown[]>(
+            `/portfolio/holdings/${symbol}/accounts`
+        );
+        return res.data;
+    }
+
+    async getHoldingBenchmarkCompare(
+        symbol: string,
+        period: string,
+        benchmarks: string[]
+    ): Promise<BenchmarkCompareResponse> {
+        const params: Record<string, string> = { period, benchmarks: benchmarks.join(",") };
+        const res = await this.api.get<BenchmarkCompareResponse>(
+            `/portfolio/holdings/${symbol}/performance/compare`,
             { params }
         );
         return res.data;

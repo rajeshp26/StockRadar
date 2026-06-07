@@ -16,7 +16,7 @@ vi.mock("@/components/ui/skeleton", () => ({
 
 import { AllocationTab } from "@/features/portfolio/components/AllocationTab";
 
-function makeSegments() {
+function makeFlatSegments() {
     return {
         success: true,
         group_by: "sector",
@@ -24,14 +24,49 @@ function makeSegments() {
             { segment: "Technology", value: 50000, weight: 62.5, count: 2, gain_loss: 10000 },
             { segment: "Energy", value: 30000, weight: 37.5, count: 1, gain_loss: -2000 },
         ],
+        types: [],
         total_value: 80000,
+    };
+}
+
+function makeHierarchicalData() {
+    return {
+        success: true,
+        group_by: "sector",
+        segments: [],
+        types: [
+            {
+                type: "stock",
+                type_label: "Stocks",
+                value: 80000,
+                weight: 80.0,
+                count: 3,
+                gain_loss: 5500,
+                sectors: [
+                    { segment: "Technology", value: 50000, weight: 62.5, count: 2, gain_loss: 10000 },
+                    { segment: "Energy", value: 30000, weight: 37.5, count: 1, gain_loss: -2000 },
+                ],
+            },
+            {
+                type: "etf",
+                type_label: "ETFs",
+                value: 20000,
+                weight: 20.0,
+                count: 2,
+                gain_loss: 1000,
+                sectors: [
+                    { segment: "Unknown", value: 20000, weight: 100.0, count: 2, gain_loss: 1000 },
+                ],
+            },
+        ],
+        total_value: 100000,
     };
 }
 
 describe("AllocationTab", () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUsePortfolioAllocation.mockReturnValue({ data: makeSegments(), isLoading: false });
+        mockUsePortfolioAllocation.mockReturnValue({ data: makeHierarchicalData(), isLoading: false });
     });
 
     it("renders all group-by toggle buttons", () => {
@@ -55,28 +90,38 @@ describe("AllocationTab", () => {
         expect(geoBtn.className).toContain("bg-blue-600");
     });
 
-    it("renders allocation segments with values and weights", () => {
+    it("renders hierarchical type labels", () => {
+        render(<AllocationTab />);
+        expect(screen.getByText("Stocks")).toBeInTheDocument();
+        expect(screen.getByText("ETFs")).toBeInTheDocument();
+    });
+
+    it("renders sector names inside type groups", () => {
         render(<AllocationTab />);
         expect(screen.getByText("Technology")).toBeInTheDocument();
         expect(screen.getByText("Energy")).toBeInTheDocument();
-        expect(screen.getByText("62.5%")).toBeInTheDocument();
-        expect(screen.getByText("37.5%")).toBeInTheDocument();
-        expect(screen.getByText("$50,000.00")).toBeInTheDocument();
-        expect(screen.getByText("$30,000.00")).toBeInTheDocument();
+    });
+
+    it("shows count in parentheses for types", () => {
+        render(<AllocationTab />);
+        expect(screen.getByText("(3)")).toBeInTheDocument();
+        const countTwos = screen.getAllByText("(2)");
+        expect(countTwos.length).toBeGreaterThanOrEqual(1);
     });
 
     it("shows positive gain_loss in green and negative in red", () => {
         render(<AllocationTab />);
         const posGain = screen.getByText("+$10,000.00");
         expect(posGain.className).toContain("text-green-400");
-        const negGain = screen.getByText(($) => $.includes("$") && $.includes("-2,000"));
+        const negGain = screen.getByText(($) => $.includes("2,000") && $.includes("-"));
         expect(negGain.className).toContain("text-red-400");
     });
 
-    it("shows segment count in parentheses", () => {
+    it("renders flat segments when no hierarchical data (geography/account)", () => {
+        mockUsePortfolioAllocation.mockReturnValue({ data: makeFlatSegments(), isLoading: false });
         render(<AllocationTab />);
-        expect(screen.getByText("(2)")).toBeInTheDocument();
-        expect(screen.getByText("(1)")).toBeInTheDocument();
+        expect(screen.getByText("Technology")).toBeInTheDocument();
+        expect(screen.getByText("Energy")).toBeInTheDocument();
     });
 
     it("shows loading skeletons while fetching", () => {
@@ -85,9 +130,9 @@ describe("AllocationTab", () => {
         expect(container.querySelectorAll("[data-testid='skeleton']").length).toBeGreaterThanOrEqual(1);
     });
 
-    it("shows empty state when no segments", () => {
+    it("shows empty state when no data", () => {
         mockUsePortfolioAllocation.mockReturnValue({
-            data: { success: true, group_by: "sector", segments: [], total_value: 0 },
+            data: { success: true, group_by: "sector", segments: [], types: [], total_value: 0 },
             isLoading: false,
         });
         render(<AllocationTab />);
@@ -96,6 +141,6 @@ describe("AllocationTab", () => {
 
     it("renders with account filter", () => {
         render(<AllocationTab accountIds={[1]} />);
-        expect(screen.getByText("Sector")).toBeInTheDocument();
+        expect(screen.getByText("Stocks")).toBeInTheDocument();
     });
 });

@@ -284,6 +284,20 @@ function buildAllocationResponse(): PortfolioAllocationResponse {
             { segment: "Technology", value: 50000, weight: 62.5, count: 2, gain_loss: 10000 },
             { segment: "Energy", value: 30000, weight: 37.5, count: 1, gain_loss: -2000 },
         ] as AllocationSegment[],
+        types: [
+            {
+                type: "stock",
+                type_label: "Stocks",
+                value: 80000,
+                weight: 100.0,
+                count: 3,
+                gain_loss: 8000,
+                sectors: [
+                    { segment: "Technology", value: 50000, weight: 62.5, count: 2, gain_loss: 10000 },
+                    { segment: "Energy", value: 30000, weight: 37.5, count: 1, gain_loss: -2000 },
+                ],
+            },
+        ],
         total_value: 80000,
     };
 }

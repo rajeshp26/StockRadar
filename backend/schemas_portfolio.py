@@ -350,12 +350,69 @@ class AllocationSegment(BaseModel):
     gain_loss: float = 0
 
 
+class SectorAllocationSegment(BaseModel):
+    """A sector segment within a security type group."""
+
+    segment: str
+    value: float
+    weight: float
+    count: int
+    gain_loss: float = 0
+
+
+class TypeAllocationSegment(BaseModel):
+    """A security type group (e.g. Stocks, ETFs) with nested sector segments."""
+
+    type: str
+    type_label: str
+    value: float
+    weight: float
+    count: int
+    gain_loss: float = 0
+    sectors: List[SectorAllocationSegment]
+
+
+class AccountHoldingBreakdown(BaseModel):
+    """Per-account breakdown within an aggregated holding."""
+
+    account_id: int
+    account_name: Optional[str] = None
+    account_type: Optional[str] = None
+    quantity: float = 0
+    total_cost: float = 0
+    current_value: float = 0
+
+
+class AggregatedHolding(BaseModel):
+    """A holding aggregated across all accounts (one row per symbol)."""
+
+    company_id: int
+    symbol: str
+    company_name: str
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    exchange: Optional[str] = None
+    market_group: Optional[str] = None
+    security_type: Optional[str] = None
+    currency: Optional[str] = None
+    total_quantity: float = 0
+    average_cost: float = 0
+    total_cost: float = 0
+    current_price: Optional[float] = None
+    current_value: float = 0
+    unrealized_gain_loss: float = 0
+    unrealized_gain_loss_pct: float = 0
+    accounts_count: int = 0
+    account_breakdown: List[AccountHoldingBreakdown] = []
+
+
 class PortfolioAllocationResponse(BaseModel):
     """Portfolio allocation breakdown response."""
 
     success: bool
     group_by: str
-    segments: List[AllocationSegment]
+    segments: List[AllocationSegment] = []
+    types: List[TypeAllocationSegment] = []
     total_value: float = 0
     error: Optional[str] = None
 
@@ -531,3 +588,66 @@ class FactorExposureResponse(BaseModel):
     r_squared: float = 0.0
     error: Optional[str] = None
     error_code: Optional[str] = None
+
+
+# ============================================================================
+# HOLDING PERFORMANCE SCHEMAS
+# ============================================================================
+
+class HoldingExistsResponse(BaseModel):
+    symbol: str
+    held: bool
+
+
+class HoldingPerformanceSnapshot(BaseModel):
+    date: str
+    position_value: float
+    cost_basis: float
+    cumulative_invested: float
+    shares_held: float = 0
+    avg_cost_per_share: float = 0
+
+
+class HoldingPerformanceResponse(BaseModel):
+    success: bool = True
+    symbol: str
+    period: str
+    snapshots: List[HoldingPerformanceSnapshot] = []
+    total_return: float = 0
+    total_return_pct: float = 0
+    total_dividends: float = 0
+    total_dividends_pct: float = 0
+    error: Optional[str] = None
+
+
+class HoldingDividendSummary(BaseModel):
+    fiscal_year: int
+    fiscal_quarter: int
+    label: str
+    total_amount: float
+    payments_count: int
+    amount_per_share: float
+
+
+class HoldingTransactionInfo(BaseModel):
+    transaction_id: int
+    transaction_date: str
+    activity_sub_type: str
+    quantity: float
+    unit_price: float
+    commission: float
+    net_cash_amount: float
+    account_name: str
+    account_type: str
+
+
+class HoldingAccountBreakdown(BaseModel):
+    account_id: int
+    account_name: str
+    account_type: str
+    shares_held: float = 0
+    total_cost: float = 0
+    current_value: float = 0
+    unrealized_gain_loss: float = 0
+    unrealized_gain_loss_pct: float = 0
+    dividends_received: float = 0

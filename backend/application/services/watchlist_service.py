@@ -35,6 +35,22 @@ from application.jobs.data_quality_audit_job import audit_company_data_quality
 logger = logging.getLogger(__name__)
 
 
+def _map_quote_type(quote_type: Optional[str]) -> str:
+    """Map yfinance quoteType to the companies.security_type enum."""
+    if not quote_type:
+        return "stock"
+    mapping = {
+        "EQUITY": "stock",
+        "ETF": "etf",
+        "MUTUALFUND": "fund",
+        "INDEX": "index",
+        "CRYPTOCURRENCY": "crypto",
+        "CURRENCY": "currency",
+        "FUTURE": "stock",
+    }
+    return mapping.get(quote_type.upper(), "stock")
+
+
 class WatchlistService:
     """
     Manages watchlist operations, including add flow with fast path (YF market price)
@@ -566,6 +582,7 @@ class WatchlistService:
                 "next_earnings_date": sd.next_earnings_date.isoformat() if sd.next_earnings_date else None,
                 "description": sd.description,
                 "website": sd.website,
+                "security_type": _map_quote_type(sd.quote_type),
             }
 
             res = supabase.table("companies").insert(payload).execute()

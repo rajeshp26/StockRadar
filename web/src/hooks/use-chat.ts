@@ -38,7 +38,10 @@ export function useChat(symbol: string) {
           `/api/proxy/valuations/${symbol}/chat`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+            },
             body: JSON.stringify({
               messages: updatedMessages.map((m) => ({
                 role: m.role,

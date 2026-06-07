@@ -10,6 +10,7 @@ import type {
     PortfolioAccount,
     PortfolioOverview,
     Holding,
+    AggregatedHolding,
     ImportTransactionsRequest,
     ImportStatusResponse,
     PerformanceResponse,
@@ -28,6 +29,12 @@ import type {
     RollingSharpeResponse,
     RiskContributionResponse,
     FactorExposureResponse,
+    HoldingExistsResponse,
+    HoldingPerformanceResponse,
+    HoldingDividendSummary,
+    HoldingTransaction,
+    HoldingAccountBreakdown,
+    TimePeriod,
 } from "../types/portfolio.types";
 
 /**
@@ -72,7 +79,26 @@ export function useAllHoldings() {
 
     return useQuery<Holding[], Error>({
         queryKey: QK.portfolioHoldings(),
-        queryFn: () => portfolioService.getAllHoldings(),
+        queryFn: () => portfolioService.getAllHoldings() as Promise<Holding[]>,
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+        refetchOnWindowFocus: true,
+    });
+}
+
+/**
+ * Hook for aggregated holdings (grouped by symbol across accounts)
+ *
+ * Returns one row per symbol with combined quantity, weighted avg cost,
+ * and per-account breakdown.
+ */
+export function useAggregatedHoldings() {
+    const { portfolioService } = useServices();
+
+    return useQuery<AggregatedHolding[], Error>({
+        queryKey: [...QK.portfolioHoldings(), "aggregated"],
+        queryFn: () => portfolioService.getAllHoldings(true) as Promise<AggregatedHolding[]>,
         staleTime: STALE.PORTFOLIO,
         gcTime: GC.PORTFOLIO,
         retry: 1,
@@ -235,6 +261,91 @@ export function useImportStatus(importBatchId: string | null) {
         },
         staleTime: 1000,
         gcTime: 0,
+    });
+}
+
+/**
+ * Hook: check if user holds a position in the given symbol
+ */
+export function useHoldingExists(symbol: string) {
+    const { portfolioService } = useServices();
+    return useQuery<HoldingExistsResponse, Error>({
+        queryKey: QK.holdingExists(symbol),
+        queryFn: () => portfolioService.checkHoldingExists(symbol),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+    });
+}
+
+/**
+ * Hook: time-series performance for a single held stock
+ */
+export function useHoldingPerformance(symbol: string, period: TimePeriod = "1Y") {
+    const { portfolioService } = useServices();
+    return useQuery<HoldingPerformanceResponse, Error>({
+        queryKey: QK.holdingPerformance(symbol, period),
+        queryFn: () => portfolioService.getHoldingPerformance(symbol, period),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        placeholderData: (previousData) => previousData,
+    });
+}
+
+/**
+ * Hook: dividend history for a single held stock (quarterly aggregates)
+ */
+export function useHoldingDividends(symbol: string) {
+    const { portfolioService } = useServices();
+    return useQuery<HoldingDividendSummary[], Error>({
+        queryKey: QK.holdingDividends(symbol),
+        queryFn: () => portfolioService.getHoldingDividends(symbol),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+    });
+}
+
+/**
+ * Hook: transaction history for a single held stock (P-04)
+ */
+export function useHoldingTransactions(symbol: string) {
+    const { portfolioService } = useServices();
+    return useQuery<HoldingTransaction[], Error>({
+        queryKey: QK.holdingTransactions(symbol),
+        queryFn: () => portfolioService.getHoldingTransactions(symbol),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+    });
+}
+
+/**
+ * Hook: per-account breakdown for a single held stock (P-05)
+ */
+export function useHoldingAccounts(symbol: string) {
+    const { portfolioService } = useServices();
+    return useQuery<HoldingAccountBreakdown[], Error>({
+        queryKey: QK.holdingAccounts(symbol),
+        queryFn: () => portfolioService.getHoldingAccounts(symbol),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+    });
+}
+
+/**
+ * Hook: holding-level benchmark comparison (P-03)
+ */
+export function useHoldingBenchmarkCompare(
+    symbol: string,
+    period: TimePeriod,
+    benchmarks: string[],
+) {
+    const { portfolioService } = useServices();
+    return useQuery<BenchmarkCompareResponse, Error>({
+        queryKey: QK.holdingBenchmarkCompare(symbol, period, benchmarks),
+        queryFn: () => portfolioService.getHoldingBenchmarkCompare(symbol, period, benchmarks),
+        enabled: benchmarks.length > 0,
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        placeholderData: (previousData) => previousData,
     });
 }
 
