@@ -22,7 +22,11 @@ from domain.exceptions import (
     CompanyNotFoundError,
 )
 
-from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
+from application.jobs.derived_financial_metrics_job import (
+    compute_and_upsert_derived_financial_metrics,
+    compute_and_upsert_quarterly_health_scores,
+    compute_and_upsert_quarterly_valuation_metrics,
+)
 from application.jobs.data_quality_audit_job import audit_company_data_quality
 
 logger = logging.getLogger(__name__)
@@ -310,7 +314,42 @@ class EarningsRefreshScheduler:
                         "[DERIVED] compute failed for %s: %s", symbol, de,
                         exc_info=True,
                     )
- 
+
+                # Quarterly health scores — Piotroski F, Altman Z, quarterly ratios
+                try:
+                    qh_result = await compute_and_upsert_quarterly_health_scores(
+                        company_id=company_id
+                    )
+                    if qh_result.get("upserted"):
+                        logger.info(
+                            "[QHLTH] %s: %d quarterly health rows written",
+                            symbol,
+                            qh_result.get("rows_changed", 0),
+                        )
+                except Exception as qe:
+                    logger.error(
+                        "[QHLTH] compute failed for %s: %s", symbol, qe,
+                        exc_info=True,
+                    )
+
+                # Quarterly valuation metrics — trailing P/E
+                try:
+                    vpe_result = await compute_and_upsert_quarterly_valuation_metrics(
+                        company_id=company_id
+                    )
+                    if vpe_result.get("upserted"):
+                        logger.info(
+                            "[VPE] %s: %d/%d quarterly trailing-PE rows written",
+                            symbol,
+                            vpe_result.get("rows_changed", 0),
+                            vpe_result.get("count", 0),
+                        )
+                except Exception as ve:
+                    logger.error(
+                        "[VPE] compute failed for %s: %s", symbol, ve,
+                        exc_info=True,
+                    )
+
                 # Data quality audit — only meaningful when data was written.
                 try:
                     await audit_company_data_quality(company_id=company_id)

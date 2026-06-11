@@ -34,6 +34,7 @@ import type {
   StockVsIndexResponse,
   MoatResponse,
   RiskAssessmentResponse,
+  FundamentalsResponse,
 } from "../types/analysis.types";
 
 import type { OverviewRecommendation } from "../hooks/useValuationOverview";
@@ -667,6 +668,21 @@ export async function fetchRiskAssessment(symbol: string, options?: { force?: bo
     const resp = await api.get(url, { timeout: DEFAULT_TIMEOUT_MS });
     const body = resp.data as RiskAssessmentResponse;
     if (!body || !body.composite) throw new Error("Invalid response.");
+    return body;
+  } catch (err: any) {
+    throw new Error(errMessage(err));
+  }
+}
+
+// ── Fundamentals ──
+
+export async function fetchFundamentals(symbol: string, frequency?: string): Promise<FundamentalsResponse> {
+  const freq = frequency ?? "quarterly";
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/fundamentals?frequency=${freq}`);
+  try {
+    const resp = await api.get(url, { timeout: DEFAULT_TIMEOUT_MS });
+    const body = resp.data as FundamentalsResponse;
+    if (!body || body.success === false) throw new Error(body?.error || "Invalid response.");
     return body;
   } catch (err: any) {
     throw new Error(errMessage(err));

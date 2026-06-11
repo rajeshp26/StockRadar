@@ -30,6 +30,17 @@ def _normalize(symbol: str) -> str:
     return s
 
 
+def _resolve_db_user_id(auth_id: str) -> int:
+    """Resolve Firebase auth_id (JWT sub) -> internal user_id. Raises 403 if not found."""
+    from database import supabase
+    from infrastructure.repositories.supabase_repository import SupabaseUserRepository
+    user_repo = SupabaseUserRepository(client=supabase)
+    user = user_repo.find_by_firebase_uid(auth_id)
+    if not user:
+        raise HTTPException(status_code=403, detail="User not found.")
+    return user["user_id"]
+
+
 def _get_dividend_service():
     from database import supabase
     from infrastructure.repositories.valuation_repository import ValuationRepository
@@ -458,3 +469,45 @@ async def list_benchmarks(
     except Exception as exc:
         logger.error("list_benchmarks failed: %s", exc, exc_info=True)
         return []
+
+
+# ── Fundamentals Tab ───────────────────────────────────────────────────────────
+
+def _get_fundamentals_service():
+    from infrastructure.repositories.fundamentals_repository import FundamentalsRepository
+    from application.services.fundamentals_service import FundamentalsService
+    repo = FundamentalsRepository()
+    return FundamentalsService(repo)
+
+
+@router.get(
+    "/{symbol}/fundamentals",
+    summary=(
+        "Fundamentals Tab: Quality, Growth, Health, Valuation, and Narrative "
+        "section scores with trend data and health metrics."
+    ),
+)
+@limiter.limit("30/minute")
+async def get_fundamentals(
+    request: Request,
+    symbol: str,
+    frequency: str = Query("quarterly", regex="^(quarterly|annual)$"),
+    user=Depends(get_current_user_dep),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        service = _get_fundamentals_service()
+        auth_id = user.get("sub") if isinstance(user, dict) else None
+        user_id = str(_resolve_db_user_id(auth_id)) if auth_id else None
+        result = await service.get_fundamentals(sym, user_id=user_id, frequency=frequency)
+        return result.model_dump()
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error("get_fundamentals failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Fundamentals analysis failed.",
+        )

@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
@@ -487,6 +487,646 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         len(changed_rows), len(out), company_id,
     )
     
+    return {"count": len(out), "rows_changed": len(changed_rows), "upserted": True}
+
+
+# ─── Health Score Helpers ──────────────────────────────────────────────────────
+# These are used by compute_and_upsert_quarterly_health_scores below.
+
+
+def _compute_piotroski_score(q: Dict[str, Any], prev_q: Dict[str, Any]) -> int:
+    """Compute Piotroski F-Score (0–9) for a quarterly period.
+
+    Nine binary criteria across three categories:
+      Profitability (4 pts):  ROA > 0, CFO > 0, change in ROA > 0, accrual ratio < 0
+      Leverage/Liquidity (3 pts): Δ leverage < 0, Δ current_ratio > 0, no new shares
+      Efficiency (2 pts):  Δ gross_margin > 0, Δ asset_turnover > 0
+    """
+    score = 0
+
+    # ── Profitability (4 pts) ─────────────────────────────────────────────
+    # 1. Positive ROA
+    roa = _f(q.get("roa"))
+    if roa is not None and roa > 0:
+        score += 1
+
+    # 2. Positive CFO (cash_from_operating_activities > 0)
+    cfo = _f(q.get("cash_from_operating_activities"))
+    if cfo is not None and cfo > 0:
+        score += 1
+
+    # 3. Change in ROA (current > prior)
+    prev_roa = _f(prev_q.get("roa"))
+    if roa is not None and prev_roa is not None and roa > prev_roa:
+        score += 1
+
+    # 4. Accrual (CFO / Total Assets) > ROA → negative accrual → good
+    ta = _f(q.get("total_assets"))
+    if cfo is not None and ta not in (None, 0) and roa is not None:
+        if (cfo / ta) > roa:
+            score += 1
+
+    # ── Leverage / Liquidity (3 pts) ──────────────────────────────────────
+    # 5. Δ long-term-debt-to-assets < 0 (less leverage)
+    prev_lt_debt_assets = _f(prev_q.get("long_term_debt_to_assets"))
+    lt_debt_assets = _f(q.get("long_term_debt_to_assets"))
+    if lt_debt_assets is not None and prev_lt_debt_assets is not None:
+        if lt_debt_assets < prev_lt_debt_assets:
+            score += 1
+
+    # 6. Δ current_ratio > 0
+    prev_cr = _f(prev_q.get("current_ratio"))
+    cr = _f(q.get("current_ratio"))
+    if cr is not None and prev_cr is not None and cr > prev_cr:
+        score += 1
+
+    # 7. No new shares (shares_outstanding ≤ previous)
+    prev_shares = _f(prev_q.get("shares_outstanding"))
+    shares = _f(q.get("shares_outstanding"))
+    if shares is not None and prev_shares is not None and shares <= prev_shares:
+        score += 1
+
+    # ── Efficiency (2 pts) ────────────────────────────────────────────────
+    # 8. Δ gross_margin > 0
+    prev_gm = _f(prev_q.get("gross_margin"))
+    gm = _f(q.get("gross_margin"))
+    if gm is not None and prev_gm is not None and gm > prev_gm:
+        score += 1
+
+    # 9. Δ asset_turnover > 0
+    prev_at = _f(prev_q.get("asset_turnover"))
+    at = _f(q.get("asset_turnover"))
+    if at is not None and prev_at is not None and at > prev_at:
+        score += 1
+
+    return score
+
+
+def _compute_altman_z_score(q: Dict[str, Any]) -> Optional[float]:
+    """Compute Altman Z-Score for a quarterly period.
+
+    Z = 1.2*A + 1.4*B + 3.3*C + 0.6*D + 1.0*E
+
+    A = working_capital / total_assets
+    B = retained_earnings / total_assets
+    C = EBIT / total_assets
+    D = market_value_of_equity / total_liabilities
+    E = revenue / total_assets
+
+    Z ≥ 3.0   → Safe zone
+    2.7–2.99  → Grey zone (caution)
+    1.8–2.69  → Grey zone (distress)
+    < 1.8     → Distress zone
+    """
+    ta = _f(q.get("total_assets"))
+    if ta is None or ta == 0:
+        return None
+
+    wc = _f(q.get("working_capital"))
+    re = _f(q.get("retained_earnings"))
+    ebit = _f(q.get("ebit"))
+    mkt_equity = _f(q.get("market_cap"))
+    total_liab = _f(q.get("total_liabilities"))
+    rev = _f(q.get("revenue"))
+
+    A = _safe_div(wc, ta) or 0.0
+    B = _safe_div(re, ta) or 0.0
+    C = _safe_div(ebit, ta) or 0.0
+    D = (
+        _safe_div(mkt_equity, total_liab)
+        if mkt_equity is not None and total_liab not in (None, 0.0)
+        else 0.0
+    )
+    E = _safe_div(rev, ta) or 0.0
+
+    return 1.2 * A + 1.4 * B + 3.3 * C + 0.6 * D + 1.0 * E
+
+
+# ─── Quarterly Health Scores ────────────────────────────────────────────────────
+
+
+def _fetch_quarterly_statements(
+    company_id: int, fiscal_year: int
+) -> Dict[str, List[Dict]]:
+    """Fetch income_statement, balance_sheet, cash_flow rows for a given fiscal year, quarterly.
+
+    Returns a dict with keys: is_rows, bs_rows, cf_rows.
+    Each value is a list of rows, sorted by fiscal_quarter ascending.
+    """
+    out: Dict[str, List[Dict]] = {"is_rows": [], "bs_rows": [], "cf_rows": []}
+
+    for table, key in [
+        ("income_statements", "is_rows"),
+        ("balance_sheets", "bs_rows"),
+        ("cash_flow_statements", "cf_rows"),
+    ]:
+        resp = (
+            supabase.table(table)
+            .select("*")
+            .eq("company_id", company_id)
+            .eq("fiscal_year", fiscal_year)
+            .neq("fiscal_quarter", None)
+            .order("fiscal_quarter", desc=False)
+            .execute()
+        )
+        out[key] = resp.data or []
+    return out
+
+
+def _find_prior_year_row(lookup_rows: List[Dict], fy: int, q: int) -> Optional[Dict]:
+    """Find the same-quarter row from the previous fiscal year.
+
+    Used to provide prior-period values for the 9 Piotroski criteria that
+    require year-over-year comparison (e.g. Δ ROA, Δ gross_margin).
+    """
+    for r in lookup_rows:
+        if r.get("fiscal_year") == fy - 1 and r.get("fiscal_quarter") == q:
+            return r
+    return None
+
+
+async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[str, Any]:
+    """Compute and upsert quarterly Piotroski F-Score + Altman Z-Score for a company.
+
+    Orchestration:
+      1. Determine which fiscal years have quarterly IS/BS/CF data.
+      2. For each (year, quarter), compute the standard ratio set (reuses same
+         formulas as compute_and_upsert_derived_financial_metrics).
+      3. Compute health scores — Piotroski F (needs prior-year same-quarter for
+         YoY deltas) and Altman Z (cross-sectional, no prior needed).
+      4. Include computed_at field so freshness is tracked per-quarter.
+      5. Upsert on (company_id, fiscal_year, fiscal_quarter).
+
+    Returns same shape as compute_and_upsert_derived_financial_metrics:
+      {"count": int, "rows_changed": int, "upserted": bool}
+    """
+    # ── Step 1: find all fiscal years that have quarterly data ──────────
+    qis_resp = (
+        supabase.table("income_statements")
+        .select("fiscal_year")
+        .eq("company_id", company_id)
+        .neq("fiscal_quarter", None)
+        .execute()
+    )
+    quarters = qis_resp.data or []
+    fiscal_years = sorted(set(r["fiscal_year"] for r in quarters if r.get("fiscal_year")))
+
+    if not fiscal_years:
+        logger.info(
+            "[HLTH] No quarterly data found for company_id=%s", company_id
+        )
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    # Pre-fetch the *previous* year's annual ratios for prior-period lookups.
+    # This avoids hitting the DB per-row in the innermost loop.
+    min_year = min(fiscal_years)
+    prior_annual: List[Dict] = []
+    if min_year > 2010:
+        try:
+            resp = (
+                supabase.table("financial_ratios")
+                .select("*")
+                .eq("company_id", company_id)
+                .eq("fiscal_year", min_year - 1)
+                .is_("fiscal_quarter", None)
+                .execute()
+            )
+            prior_annual = resp.data or []
+        except Exception:
+            prior_annual = []
+
+    all_quarterly_ratios: List[Dict] = []
+
+    for fy in fiscal_years:
+        stmts = _fetch_quarterly_statements(company_id, fy)
+        is_rows: List[Dict] = stmts["is_rows"]
+        bs_rows: List[Dict] = stmts["bs_rows"]
+        cf_rows: List[Dict] = stmts["cf_rows"]
+
+        if not is_rows and not bs_rows and not cf_rows:
+            continue
+
+        quarters_set = sorted(set(
+            r.get("fiscal_quarter")
+            for lst in (is_rows, bs_rows, cf_rows)
+            for r in lst
+            if r.get("fiscal_quarter") is not None
+        ))
+
+        # Fetch the same-quarter prior-year data for Piotroski YoY deltas.
+        prior_ratios: List[Dict] = []
+        if fy > min_year or True:
+            try:
+                prior_resp = (
+                    supabase.table("financial_ratios")
+                    .select("*")
+                    .eq("company_id", company_id)
+                    .eq("fiscal_year", fy - 1)
+                    .neq("fiscal_quarter", None)
+                    .execute()
+                )
+                prior_ratios = prior_resp.data or []
+            except Exception:
+                prior_ratios = prior_annual
+
+        # Build lookup maps for fast access
+        is_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in is_rows if r.get("fiscal_quarter")}
+        bs_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in bs_rows if r.get("fiscal_quarter")}
+        cf_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in cf_rows if r.get("fiscal_quarter")}
+        prior_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in prior_ratios if r.get("fiscal_quarter")}
+
+        for q in quarters_set:
+            isr = is_by_q.get(q) or {}
+            bsr = bs_by_q.get(q) or {}
+            cfr = cf_by_q.get(q) or {}
+
+            # ── Extract raw values ─────────────────────────────────────
+            revenue        = _f(isr.get("revenue"))
+            cogs           = _f(isr.get("cost_of_goods_sold"))
+            gross_profit   = _f(isr.get("gross_profit"))
+            op_inc         = _f(isr.get("operating_income"))
+            net_inc        = _f(isr.get("net_income"))
+            net_inc_common = _f(isr.get("net_income_to_common")) or net_inc
+            ebit           = _f(isr.get("ebit"))
+            interest_exp   = _f(isr.get("interest_expense"))
+            pretax         = _f(isr.get("pretax_income"))
+            tax            = _f(isr.get("tax_expense"))
+
+            total_assets   = _f(bsr.get("total_assets"))
+            current_assets = _f(bsr.get("current_assets"))
+            current_liab   = _f(bsr.get("current_liabilities"))
+            total_debt     = _f(bsr.get("total_debt"))
+            lt_debt        = _f(bsr.get("long_term_debt"))
+            equity         = _f(bsr.get("shareholders_equity"))
+            cash           = _f(bsr.get("cash_and_cash_equivalents"))
+            inventory      = _f(bsr.get("inventory"))
+            intangibles    = _f(bsr.get("intangible_assets"))
+            goodwill       = _f(bsr.get("goodwill"))
+            shares         = _f(bsr.get("shares_outstanding"))
+
+            cfo            = _f(cfr.get("cash_from_operating_activities"))
+            capex          = _f(cfr.get("capital_expenditures"))
+            div_paid       = _f(cfr.get("dividends_paid"))
+            div_paid_abs   = abs(div_paid) if div_paid is not None else None
+
+            fcf = _fcf(cfo, capex)
+
+            # ── Computed ratios ────────────────────────────────────────
+            tax_rate = None
+            if pretax is not None and pretax != 0 and tax is not None:
+                tax_rate = max(0.0, min(1.0, tax / pretax))
+
+            nopat = None
+            if ebit is not None:
+                nopat = ebit * (1.0 - (tax_rate if tax_rate is not None else 0.21))
+
+            invested_capital = None
+            if total_debt is not None and equity is not None:
+                invested_capital = total_debt + equity - (cash or 0.0)
+
+            roic = _safe_div(nopat, invested_capital) if nopat is not None and invested_capital not in (None, 0.0) else None
+            roe  = _safe_div(net_inc_common, equity) if net_inc_common is not None and equity not in (None, 0.0) else None
+            roa  = _safe_div(net_inc, total_assets) if net_inc is not None and total_assets not in (None, 0.0) else None
+
+            gross_margin     = _safe_div(gross_profit, revenue)
+            operating_margin = _safe_div(op_inc, revenue)
+            net_margin       = _safe_div(net_inc, revenue)
+            fcf_margin       = _safe_div(fcf, revenue)
+
+            debt_to_equity = _safe_div(total_debt, equity) if total_debt is not None and equity not in (None, 0.0) else None
+            lt_debt_assets = _safe_div(lt_debt, total_assets) if lt_debt is not None and total_assets not in (None, 0.0) else None
+
+            current_ratio = _safe_div(current_assets, current_liab) if current_assets is not None and current_liab not in (None, 0.0) else None
+            asset_turnover = _safe_div(revenue, total_assets) if revenue is not None and total_assets not in (None, 0.0) else None
+
+            working_capital = (current_assets - current_liab) if current_assets is not None and current_liab is not None else None
+
+            # ── Health scores ──────────────────────────────────────────
+            # Build a flat dict for the _compute helpers to consume.
+            period_dict: Dict[str, Any] = {
+                "roa": roa,
+                "cash_from_operating_activities": cfo,
+                "total_assets": total_assets,
+                "long_term_debt_to_assets": lt_debt_assets,
+                "current_ratio": current_ratio,
+                "shares_outstanding": shares,
+                "gross_margin": gross_margin,
+                "asset_turnover": asset_turnover,
+                "working_capital": working_capital,
+                "retained_earnings": _f(bsr.get("retained_earnings")),
+                "ebit": ebit,
+                "market_cap": _f(bsr.get("market_cap")),
+                "total_liabilities": _f(bsr.get("total_liabilities")),
+                "revenue": revenue,
+            }
+
+            # Prior-period ratios for YoY Piotroski deltas.
+            prior_q = prior_by_q.get(q) or {}
+            piotroski = _compute_piotroski_score(period_dict, prior_q)
+
+            altman_z = _compute_altman_z_score(period_dict)
+
+            # ── Assemble output row ────────────────────────────────────
+            period_end = (
+                isr.get("period_end_date")
+                or bsr.get("period_end_date")
+                or cfr.get("period_end_date")
+            )
+
+            source_payload = {
+                "is": {k: isr.get(k) for k in [
+                    "revenue", "gross_profit", "operating_income", "net_income",
+                    "ebit", "pretax_income", "tax_expense", "interest_expense",
+                    "net_income_to_common",
+                ]},
+                "bs": {k: bsr.get(k) for k in [
+                    "total_assets", "current_assets", "current_liabilities",
+                    "total_debt", "long_term_debt", "shareholders_equity",
+                    "cash_and_cash_equivalents", "inventory", "intangible_assets",
+                    "goodwill", "shares_outstanding", "retained_earnings",
+                    "market_cap", "total_liabilities",
+                ]},
+                "cf": {k: cfr.get(k) for k in [
+                    "cash_from_operating_activities", "capital_expenditures",
+                    "dividends_paid",
+                ]},
+            }
+
+            all_quarterly_ratios.append({
+                "company_id":       company_id,
+                "fiscal_year":      fy,
+                "fiscal_quarter":   q,
+                "period_end_date":  period_end,
+                "roic": roic,
+                "roe":  roe,
+                "roa":  roa,
+                "gross_margin":     gross_margin,
+                "operating_margin": operating_margin,
+                "net_margin":       net_margin,
+                "fcf_margin":       fcf_margin,
+                "free_cash_flow":   fcf,
+                "debt_to_equity":           debt_to_equity,
+                "long_term_debt_to_assets": lt_debt_assets,
+                "current_ratio":    current_ratio,
+                "asset_turnover":   asset_turnover,
+                "working_capital":  working_capital,
+                "piotroski_score":  piotroski,
+                "altman_z_score":   altman_z,
+                "computed_at":      datetime.utcnow().isoformat(),
+                "source_version_tag": _version_tag(source_payload),
+                "data_source":      "derived",
+                "confidence_score": float(
+                    getattr(settings, "DERIVED_METRICS_CONFIDENCE_SCORE", 1.0)
+                ),
+            })
+
+    if not all_quarterly_ratios:
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    # ── Step 4: version-gated upsert ────────────────────────────────────
+    existing_tags: Dict[tuple, str] = {}
+    try:
+        fiscal_quarters_paris = [
+            (row["fiscal_year"], row["fiscal_quarter"])
+            for row in all_quarterly_ratios
+        ]
+        # Batch fetch existing tags
+        tags_resp = (
+            supabase.table("financial_ratios")
+            .select("fiscal_year, fiscal_quarter, source_version_tag")
+            .eq("company_id", company_id)
+            .neq("fiscal_quarter", None)
+            .execute()
+        )
+        for r in tags_resp.data or []:
+            fy = r.get("fiscal_year")
+            fq = r.get("fiscal_quarter")
+            tag = r.get("source_version_tag")
+            if fy is not None and fq is not None and tag:
+                existing_tags[(int(fy), int(fq))] = tag
+    except Exception as e:
+        logger.warning(
+            "[HLTH] Tag pre-fetch failed for company_id=%s; "
+            "falling back to full upsert: %s",
+            company_id, e,
+        )
+
+    changed_rows = [
+        row for row in all_quarterly_ratios
+        if existing_tags.get((row["fiscal_year"], row["fiscal_quarter"]))
+           != row["source_version_tag"]
+    ]
+
+    if not changed_rows:
+        logger.debug(
+            "[HLTH] All %d quarterly rows unchanged for company_id=%s",
+            len(all_quarterly_ratios), company_id,
+        )
+        return {"count": len(all_quarterly_ratios), "rows_changed": 0, "upserted": False}
+
+    supabase.table("financial_ratios").upsert(
+        changed_rows, on_conflict="company_id,fiscal_year,fiscal_quarter"
+    ).execute()
+
+    logger.info(
+        "[HLTH] Upserted %d/%d health-score rows for company_id=%s",
+        len(changed_rows), len(all_quarterly_ratios), company_id,
+    )
+    return {"count": len(all_quarterly_ratios), "rows_changed": len(changed_rows), "upserted": True}
+
+
+# ─── Quarterly Valuation Metrics ────────────────────────────────────────────────────
+
+
+async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dict[str, Any]:
+    """
+    Computes quarterly trailing P/E from income_statements + price_history and
+    writes to financial_ratios (on_conflict: company_id, fiscal_year, fiscal_quarter).
+
+    Formula per quarter:
+      1. EPS_q = net_income_to_common / shares_outstanding_diluted
+      2. TTM_EPS = EPS_q + EPS(q-1) + EPS(q-2) + EPS(q-3)
+      3. quarter_end_price = close_price from price_history nearest to period_end_date
+      4. trailing_pe = quarter_end_price / TTM_EPS   (NULL if TTM_EPS ≤ 0)
+
+    Version-gated: only upserts when source data changed.
+
+    Returns: {"count": int, "rows_changed": int, "upserted": bool}
+    """
+    # ── 1. Fetch quarterly income statements ──────────────────────────────
+    is_resp = (
+        supabase.table("income_statements")
+        .select("fiscal_year, fiscal_quarter, period_end_date, net_income_to_common, shares_outstanding_diluted")
+        .eq("company_id", company_id)
+        .not_.is_("fiscal_quarter", "null")
+        .order("fiscal_year", desc=False)
+        .order("fiscal_quarter", desc=False)
+        .execute()
+    )
+    is_rows = is_resp.data or []
+    if not is_rows:
+        logger.info("[VPE] No quarterly income data for company_id=%s", company_id)
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    # Build a chronologically ordered list of (fy, fq, eps, period_end)
+    quarters: List[Dict] = []
+    for r in is_rows:
+        fy = r.get("fiscal_year")
+        fq = r.get("fiscal_quarter")
+        net_inc = _f(r.get("net_income_to_common"))
+        shares = _f(r.get("shares_outstanding_diluted"))
+        end_date = r.get("period_end_date")
+        if fy is None or fq is None or end_date is None:
+            continue
+        eps = _safe_div(net_inc, shares)
+        quarters.append({
+            "fiscal_year": int(fy),
+            "fiscal_quarter": int(fq),
+            "eps": eps,
+            "period_end_date": str(end_date)[:10],
+        })
+    quarters.sort(key=lambda x: (x["fiscal_year"], x["fiscal_quarter"]))
+
+    if len(quarters) < 4:
+        logger.info("[VPE] Need at least 4 quarters of data for TTM EPS (got %d)", len(quarters))
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    # ── 2. Compute TTM EPS per quarter ────────────────────────────────────
+    for i, q in enumerate(quarters):
+        if i >= 3:
+            ttm = sum(
+                quarters[j]["eps"] or 0 for j in range(i - 3, i + 1)
+                if quarters[j]["eps"] is not None
+            )
+            q["ttm_eps"] = ttm
+            # trailing_pe is computed after we match price below
+        else:
+            q["ttm_eps"] = None  # not enough history for first 3 quarters
+        q["trailing_pe"] = None
+
+    # ── 3. Fetch price_history for quarter-end close prices ──────────────
+    ph_resp = (
+        supabase.table("price_history")
+        .select("price_date, close_price")
+        .eq("company_id", company_id)
+        .order("price_date", desc=False)
+        .execute()
+    )
+    ph_rows = ph_resp.data or []
+
+    # Build a date → close_price lookup for the ±45 day window
+    price_by_date: Dict[str, float] = {}
+    for r in ph_rows:
+        d = r.get("price_date")
+        cp = _f(r.get("close_price"))
+        if d and cp is not None:
+            price_by_date[str(d)[:10]] = cp
+
+    if price_by_date:
+        price_dates_sorted = sorted(price_by_date.keys())
+
+        for q in quarters:
+            end = q["period_end_date"]
+            if not end or q["ttm_eps"] is None:
+                continue
+            try:
+                end_dt = datetime.strptime(end, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            # Find the closest price_date within ±45 days
+            best_price = None
+            best_diff = timedelta(days=46)
+            for pd in price_dates_sorted:
+                try:
+                    pd_dt = datetime.strptime(pd, "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    continue
+                diff = abs((pd_dt - end_dt).days)
+                if diff < best_diff.days:
+                    best_diff = timedelta(days=diff)
+                    best_price = price_by_date[pd]
+            if best_price is not None and best_diff.days <= 45:
+                q["quarter_end_price"] = best_price
+                q["trailing_pe"] = round(best_price / q["ttm_eps"], 2)
+
+    # ── 4. Assemble rows for upsert ───────────────────────────────────────
+    out: List[Dict[str, Any]] = []
+    for q in quarters:
+        source_payload = {
+            "is": {"net_income_to_common": None, "shares_outstanding_diluted": None},
+            "price": {"close_price": q.get("quarter_end_price")},
+        }
+        # Find the original income row for version tag
+        for r in is_rows:
+            if r.get("fiscal_year") == q["fiscal_year"] and r.get("fiscal_quarter") == q["fiscal_quarter"]:
+                source_payload["is"] = {
+                    "net_income_to_common": r.get("net_income_to_common"),
+                    "shares_outstanding_diluted": r.get("shares_outstanding_diluted"),
+                }
+                break
+
+        out.append({
+            "company_id":      company_id,
+            "fiscal_year":     q["fiscal_year"],
+            "fiscal_quarter":  q["fiscal_quarter"],
+            "period_end_date": q["period_end_date"],
+            "trailing_pe":     q["trailing_pe"],
+            "quarter_end_price": q.get("quarter_end_price"),
+            "computed_at":     datetime.utcnow().isoformat(),
+            "source_version_tag": _version_tag(source_payload),
+            "data_source":     "derived",
+            "confidence_score": float(
+                getattr(settings, "DERIVED_METRICS_CONFIDENCE_SCORE", 1.0)
+            ),
+        })
+
+    if not out:
+        return {"count": 0, "rows_changed": 0, "upserted": False}
+
+    # ── 5. Version-gated upsert ───────────────────────────────────────────
+    existing_tags: Dict[tuple, str] = {}
+    try:
+        tags_resp = (
+            supabase.table("financial_ratios")
+            .select("fiscal_year, fiscal_quarter, source_version_tag")
+            .eq("company_id", company_id)
+            .not_.is_("fiscal_quarter", "null")
+            .execute()
+        )
+        for r in tags_resp.data or []:
+            fy = r.get("fiscal_year")
+            fq = r.get("fiscal_quarter")
+            tag = r.get("source_version_tag")
+            if fy is not None and fq is not None and tag:
+                existing_tags[(int(fy), int(fq))] = tag
+    except Exception as e:
+        logger.warning(
+            "[VPE] Tag pre-fetch failed for company_id=%s; "
+            "falling back to full upsert: %s",
+            company_id, e,
+        )
+
+    changed_rows = [
+        row for row in out
+        if existing_tags.get((row["fiscal_year"], row["fiscal_quarter"]))
+           != row["source_version_tag"]
+    ]
+
+    if not changed_rows:
+        logger.debug(
+            "[VPE] All %d rows unchanged for company_id=%s",
+            len(out), company_id,
+        )
+        return {"count": len(out), "rows_changed": 0, "upserted": False}
+
+    supabase.table("financial_ratios").upsert(
+        changed_rows, on_conflict="company_id,fiscal_year,fiscal_quarter"
+    ).execute()
+
+    logger.info(
+        "[VPE] Upserted %d/%d trailing-PE rows for company_id=%s",
+        len(changed_rows), len(out), company_id,
+    )
     return {"count": len(out), "rows_changed": len(changed_rows), "upserted": True}
 
 

@@ -1102,34 +1102,37 @@ class DefeatBetaProvider(StockDataProvider):
 
     async def fetch_company_summary(self, symbol: str, company_id: int) -> Optional[Dict[str, Any]]:
         """
-        One row for public.company_summary; snapshot_date defaults to today
+        One row for public.company_summary; snapshot_date defaults to today.
+
+        Uses individual Ticker data methods (ttm_pe, enterprise_value, etc.)
+        since Ticker.summary() does not exist in defeatbeta-api.
         """
         try:
             t = Ticker(symbol)
-            obj = await self._timeout_fetch(lambda: t.summary(), f"summary for {symbol}")
-            df = obj.df() if hasattr(obj, 'df') else obj
-            if df is None or df.empty:
-                return None
-            r = df.iloc[0] if hasattr(df, 'iloc') else pd.Series(df)
+
+            pe_df = await self._timeout_fetch(lambda: t.ttm_pe(), f"ttm_pe for {symbol}")
+            ev_df = await self._timeout_fetch(lambda: t.enterprise_value(), f"ev for {symbol}")
+            ev_ebitda_df = await self._timeout_fetch(lambda: t.enterprise_to_ebitda(), f"ev_ebitda for {symbol}")
+            mcap_df = await self._timeout_fetch(lambda: t.market_capitalization(), f"mcap for {symbol}")
+            peg_df = await self._timeout_fetch(lambda: t.peg_ratio(), f"peg for {symbol}")
+            shares_df = await self._timeout_fetch(lambda: t.shares(), f"shares for {symbol}")
+
             return {
                 "company_id": company_id,
                 "snapshot_date": date.today(),
-                "market_cap": self._safe_decimal(r.get('market_cap')),
-                "enterprise_value": self._safe_decimal(r.get('enterprise_value')),
-                "shares_outstanding": self._safe_decimal(r.get('shares_outstanding')),
-                "implied_shares_outstanding": self._safe_decimal(r.get('implied_shares_outstanding')),
-                "beta": self._safe_decimal(r.get('beta')),
-                "trailing_pe": self._safe_decimal(r.get('trailing_pe')),
-                "forward_pe": self._safe_decimal(r.get('forward_pe')),
-                # FIX: prefer 'trailing_eps'; keep old key as fallback just in case
-                "trailing_eps": self._safe_decimal(
-                    r.get('trailing_eps') if r.get('trailing_eps') is not None else r.get('tailing_eps')
-                ),
-                "forward_eps": self._safe_decimal(r.get('forward_eps')),
-                "enterprise_to_ebitda": self._safe_decimal(r.get('enterprise_to_ebitda')),
-                "enterprise_to_revenue": self._safe_decimal(r.get('enterprise_to_revenue')),
-                "peg_ratio": self._safe_decimal(r.get('peg_ratio')),
-                "currency": (r.get('currency') or 'USD'),
+                "market_cap": self._safe_decimal(self._extract_latest_metric(mcap_df, 'market_capitalization')),
+                "enterprise_value": self._safe_decimal(self._extract_latest_metric(ev_df, 'enterprise_value')),
+                "shares_outstanding": self._safe_decimal(self._extract_latest_metric(shares_df, 'shares_outstanding')),
+                "implied_shares_outstanding": None,
+                "beta": None,
+                "trailing_pe": self._safe_decimal(self._extract_latest_metric(pe_df, 'ttm_pe')),
+                "forward_pe": None,
+                "trailing_eps": self._safe_decimal(self._extract_latest_metric(pe_df, 'ttm_eps')),
+                "forward_eps": None,
+                "enterprise_to_ebitda": self._safe_decimal(self._extract_latest_metric(ev_ebitda_df, 'ev_to_ebitda')),
+                "enterprise_to_revenue": None,
+                "peg_ratio": self._safe_decimal(self._extract_latest_metric(peg_df, 'peg_ratio')),
+                "currency": "USD",
                 "provider": "defeatbeta",
             }
         except Exception as e:
@@ -1612,6 +1615,9 @@ class DefeatBetaProvider(StockDataProvider):
                     pd.to_numeric(gv(['DilutedAverageShares', 'Diluted Average Shares', 'BasicAverageShares', 'Basic Average Shares']), errors='coerce')
                 ),
 
+                eps_basic=self._safe_decimal(pd.to_numeric(gv(['Basic EPS', 'BasicEps']), errors='coerce')),
+                eps_diluted=self._safe_decimal(pd.to_numeric(gv(['Diluted EPS', 'DilutedEps']), errors='coerce')),
+
                 last_validated_at=None,
 
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
@@ -1904,6 +1910,17 @@ class DefeatBetaProvider(StockDataProvider):
         try:
             return int(float(val))
         except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _extract_latest_metric(df, column: str):
+        """Extract latest value from a time-series DataFrame."""
+        if df is None or (hasattr(df, 'empty') and df.empty):
+            return None
+        try:
+            row = df.iloc[-1] if hasattr(df, 'iloc') else df
+            return row.get(column) if hasattr(row, 'get') else None
+        except (IndexError, KeyError, TypeError):
             return None
 
     def _log_debug_once(self, msg: str):

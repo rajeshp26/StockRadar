@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 # ── Label translation: Macrotrends names → _parse_yf_* expected names ───
 # Macrotrends uses different label strings than yfinance/edgar. This map
 # renames rows so that _parse_yf_*'s gv() helper can find the values.
+_PER_SHARE_LABELS: set = {"Basic EPS", "Diluted EPS"}
+
 _LABEL_MAP: Dict[str, str] = {
     # Balance Sheet
     "Cash On Hand": "Cash And Cash Equivalents",
@@ -258,4 +260,14 @@ class StockdexMacrotrendsProvider:
         result = pd.DataFrame(data, index=all_periods).T
         result.index.name = None
         result.columns.name = None
+
+        # Macrotrends reports financial values in millions of USD.
+        # Multiply all rows by 1,000,000 to convert to full dollars,
+        # except per-share labels (EPS etc.) which are already in dollars.
+        for label in result.index:
+            if label not in _PER_SHARE_LABELS:
+                result.loc[label] = result.loc[label].apply(
+                    lambda v: v * 1_000_000 if not pd.isna(v) else v
+                )
+
         return result

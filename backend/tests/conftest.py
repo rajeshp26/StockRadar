@@ -31,6 +31,7 @@ def mock_supabase_client():
     table.in_.return_value = table
     table.or_.return_value = table
     table.is_.return_value = table
+    table.order.return_value = table
     table.limit.return_value = table
     table.execute.return_value = MagicMock(data=[], count=None)
     return client

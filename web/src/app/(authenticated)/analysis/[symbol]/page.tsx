@@ -33,6 +33,7 @@ import { MoatPanel } from "@/features/analysis/components/moat-panel";
 import { RiskPanel } from "@/features/analysis/components/risk-panel";
 import { SuperInvestorsTab } from "@/features/analysis/components/SuperInvestorsTab";
 import { StockVsIndexPanel } from "@/features/analysis/components/stock-vs-index-panel";
+import { FundamentalsPanel } from "@/features/analysis/components/fundamentals-panel";
 
 import {
   TrendingUp,
@@ -52,7 +53,7 @@ type OthersMethod = "magic_formula" | "canslim";
 
 const BASE_TABS = [
   { id: "intrinsic", label: "Intrinsic Value", icon: TrendingUp },
-  { id: "health", label: "Financial Health", icon: Heart },
+  { id: "health", label: "Fundamentals", icon: Heart },
   { id: "moat", label: "Moat", icon: Shield },
   { id: "dividend", label: "Dividend", icon: TrendingDown },
   { id: "comparison", label: "Market Comparison", icon: BarChart2 },
@@ -238,12 +239,9 @@ export default function AnalysisPage() {
         )}
 
         {tab === "health" && (
-          <ComingSoonPanel
-            title="Financial Health"
-            description="Balance sheet quality, leverage, cash flows, and risk indicators."
-            items={["Altman Z-Score", "Piotroski F-Score", "Ohlson O-Score", "Leverage Trends"]}
-            icon={Heart}
-          />
+          <div className="animate-fade-up">
+            <FundamentalsPanel symbol={upperSymbol} />
+          </div>
         )}
         {tab === "moat" && (
           <div className="animate-fade-up">

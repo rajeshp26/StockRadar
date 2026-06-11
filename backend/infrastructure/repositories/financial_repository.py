@@ -868,20 +868,24 @@ class SupabaseFinancialRepository:
     async def upsert_derived_financial_metrics(
         self, rows: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Upsert annual derived metrics (unique by company_id, fiscal_year)."""
+        """Upsert derived metrics (unique by company_id, fiscal_year, fiscal_quarter).
+
+        Supports both annual (fiscal_quarter=None) and quarterly (fiscal_quarter=1..4) rows.
+        The 3-column conflict key allows annual and quarterly rows to coexist.
+        """
         if not rows:
             return {"count": 0}
         try:
             seen = {}
             for r in rows:
-                key = (r.get("company_id"), r.get("fiscal_year"))
+                key = (r.get("company_id"), r.get("fiscal_year"), r.get("fiscal_quarter"))
                 seen[key] = r
             dedup = list(seen.values())
 
             count = await self._chunked_upsert(
                 table="financial_ratios",
                 rows=dedup,
-                on_conflict="company_id,fiscal_year",
+                on_conflict="company_id,fiscal_year,fiscal_quarter",
             )
             return {"count": count}
         except Exception as e:

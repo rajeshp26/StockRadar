@@ -29,7 +29,10 @@ if TYPE_CHECKING:
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from application.services.recompute_guard import RecomputeGuard
 from application.services.valuation_service import ValuationService
-from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
+from application.jobs.derived_financial_metrics_job import (
+    compute_and_upsert_derived_financial_metrics,
+    compute_and_upsert_quarterly_health_scores,
+)
 from application.jobs.data_quality_audit_job import audit_company_data_quality
 
 logger = logging.getLogger(__name__)
@@ -477,6 +480,13 @@ class WatchlistService:
             except Exception as de:
                 logger.error("[DERIVED] compute failed after on-demand refresh for %s: %s", symbol, de)
 
+            # Quarterly health scores — Piotroski F, Altman Z, quarterly ratios
+            try:
+                await compute_and_upsert_quarterly_health_scores(company_id=company_id)
+                logger.info("[QHLTH] quarterly health scores computed after on-demand refresh for %s", symbol)
+            except Exception as qe:
+                logger.error("[QHLTH] compute failed after on-demand refresh for %s: %s", symbol, qe)
+
             # PHASE 8: Data quality audit (non-blocking)
             try:
                 await audit_company_data_quality(company_id=company_id)
@@ -732,6 +742,13 @@ class WatchlistService:
                 logger.info("[DERIVED] metrics computed after fundamentals ingestion for %s", symbol)
             except Exception as de:
                 logger.error("[DERIVED] compute failed after fundamentals ingestion for %s: %s", symbol, de)
+
+            # Quarterly health scores — Piotroski F, Altman Z, quarterly ratios
+            try:
+                await compute_and_upsert_quarterly_health_scores(company_id=company_id)
+                logger.info("[QHLTH] quarterly health scores computed after fundamentals ingestion for %s", symbol)
+            except Exception as qe:
+                logger.error("[QHLTH] compute failed after fundamentals ingestion for %s: %s", symbol, qe)
                 
             # PHASE 8: Data quality audit (non-blocking)
             try:

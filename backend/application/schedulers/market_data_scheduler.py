@@ -45,6 +45,8 @@ from database import supabase
 from application.jobs.derived_financial_metrics_job import (
     compute_and_upsert_derived_financial_metrics,
     compute_and_upsert_dividend_metrics,
+    compute_and_upsert_quarterly_health_scores,
+    compute_and_upsert_quarterly_valuation_metrics,
 )
 
 logger = logging.getLogger(__name__)
@@ -371,6 +373,42 @@ class MarketDataRefreshScheduler:
             except Exception as exc:
                 logger.error("[RATIOS] %s failed: %s", symbol, exc)
 
+        # 6b) QUARTERLY HEALTH SCORES — Piotroski F, Altman Z, quarterly ratios
+        # Runs after annual ratios to reuse any prior-year annual data for
+        # Piotroski YoY deltas. Writes quarterly rows to financial_ratios.
+        if is_stock:
+            try:
+                qh_result = await compute_and_upsert_quarterly_health_scores(
+                    company_id=company_id
+                )
+                if qh_result.get("upserted"):
+                    logger.info(
+                        "[QHLTH] %s: %d quarterly health rows written",
+                        symbol,
+                        qh_result.get("rows_changed", 0),
+                    )
+            except Exception as exc:
+                logger.error("[QHLTH] %s failed: %s", symbol, exc)
+
+        # 6c) QUARTERLY VALUATION METRICS — trailing P/E per quarter
+        # Pre-computes trailing P/E from income_statements + price_history.
+        # Version-gated: only writes when source data changed.
+        vpe_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
+        if is_stock:
+            try:
+                vpe_result = await compute_and_upsert_quarterly_valuation_metrics(
+                    company_id=company_id
+                )
+                if vpe_result.get("upserted"):
+                    logger.info(
+                        "[VPE] %s: %d/%d quarterly trailing-PE rows written",
+                        symbol,
+                        vpe_result.get("rows_changed", 0),
+                        vpe_result.get("count", 0),
+                    )
+            except Exception as exc:
+                logger.error("[VPE] %s failed: %s", symbol, exc)
+
         # 7) DIVIDEND METRICS — stocks only
         # Exits early with no DB writes if no dividend_history rows exist.
         # Safe to call unconditionally for every company.
@@ -409,6 +447,7 @@ class MarketDataRefreshScheduler:
             "company_summary":       1 if summary else 0,
             "ratios_changed":        ratios_result.get("rows_changed", 0),
             "dividend_metrics":      div_result.get("rows_changed", 0),
+            "valuation_pe":          vpe_result.get("rows_changed", 0),
         }
 
     # -------------------------------------------------------------------------

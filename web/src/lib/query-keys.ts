@@ -71,6 +71,8 @@ export const QK = {
     ["super-investors", "investors", tag.toUpperCase(), quarters ?? 8] as const,
   superInvestorsSectors: (style?: string) =>
     ["super-investors", "sectors", style ?? ""] as const,
+  fundamentals: (symbol: string, frequency?: string) =>
+    ["analysis", "fundamentals", symbol.toUpperCase(), frequency ?? "quarterly"] as const,
   riskAssessment: (symbol: string) =>
     ["analysis", "risk-assessment", symbol.toUpperCase()] as const,
   holdingExists: (symbol: string) =>

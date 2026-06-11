@@ -1096,3 +1096,69 @@ export interface RiskAssessmentResponse {
   ai_narrative?: RiskAiNarrative | null;
   data_quality: RiskDataQuality;
 }
+
+// ── Fundamentals Tab Types ─────────────────────────────────────────────────────
+
+export interface MetricComponent {
+  label: string;
+  value: number | null;
+  highlight?: "positive" | "negative" | "driver" | null;
+}
+
+export interface QuarterDataPoint {
+  fiscal_year: number;
+  fiscal_quarter: number;
+  label: string;
+  value: number | null;
+  narrative_label?: string;
+  status?: "normal" | "not_applicable" | "insufficient_data";
+  ttm_eps?: number | null;
+  components?: MetricComponent[];
+  quarter_end_price?: number | null;
+}
+
+export interface MetricQuarterSeries {
+  metric_id: string;
+  label: string;
+  unit: string;
+  quarters: QuarterDataPoint[];
+  buy_quarter_index: number | null;
+  trend_direction: "up" | "down" | "stable";
+  change_pct: number | null;
+  change_label: string;
+}
+
+export interface SectionStatus {
+  label: "Intact" | "Watch" | "Concern";
+}
+
+export interface MetricSection {
+  section_id: string;
+  title: string;
+  metrics: MetricQuarterSeries[];
+  status: SectionStatus;
+  score: number | null;
+}
+
+export interface FundamentalsDataQuality {
+  sources: string[];
+  staleness_days: number | null;
+  earliest_data_year: number | null;
+  quarterly_data_count: number | null;
+}
+
+export interface FundamentalsResponse {
+  success: boolean;
+  symbol: string;
+  company_name?: string;
+  currency: string;
+  has_portfolio_position: boolean;
+  purchase_date?: string;
+  purchase_period?: string;
+  quarters: string[];
+  buy_quarter_index: number | null;
+  composite_score: number | null;
+  sections: MetricSection[];
+  data_quality: FundamentalsDataQuality | null;
+  error?: string;
+}
