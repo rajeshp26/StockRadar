@@ -1,8 +1,8 @@
 # Fundamentals Tab — Design & Implementation
 
-> **Version:** 3.1  
-> **Status:** Implemented with TradingView-style vertical bar charts  
-> **Date:** 2026-06-10
+> **Version:** 3.3  
+> **Status:** Implemented with TradingView-style vertical bar charts + range slider widget  
+> **Date:** 2026-06-11
 
 ---
 
@@ -83,16 +83,18 @@ Each metric renders as a **separate vertical bar chart** with:
 | State | `status` value | Condition | Visual | Label |
 |-------|----------------|-----------|--------|-------|
 | **Normal** | `"normal"` | TTM EPS > 0 | Filled coloured bar (green/red based on value) | `10.3×` |
-| **Not applicable** | `"not_applicable"` | TTM EPS ≤ 0 (but 4 quarters of data exist) | **Hollow grey outline bar** at baseline | `N/A` |
-| **Insufficient data** | `"insufficient_data"` | < 4 quarters of income data available | **Dashed grey outline bar** at baseline | `N/A` |
+| **Not applicable** | `"not_applicable"` | TTM EPS ≤ 0 (but 4 quarters of data exist) | **Filled red bar** at baseline | `N/A` |
+| **Insufficient data** | `"insufficient_data"` | < 4 quarters of income data available | **Dashed red outline bar** at baseline | `N/A` |
 
-The hollow/dashed bars sit on the zero baseline so the chart axis remains clean. Two distinct outline styles (solid grey vs dashed grey) let users differentiate "negative EPS" from "not enough data" at a glance without needing to read labels.
+The `not_applicable` bars use a filled `bg-rose-500` with `opacity-70` and a matching border, making negative-P/E quarters clearly visible as downward red bars. The `insufficient_data` bars use a dashed red border with transparent fill and lower opacity. Both sit on the zero baseline (or below it for mixed-sign charts).
 
 ```
-Normal bar (filled):      ████  (green if positive, red if negative)
-Not applicable (outline): ┌────┐ (solid grey border, transparent fill)
-Insufficient data:        ╔════╗ (dashed grey border, transparent fill)
+Normal bar (filled):            ████  (green if positive, red if negative)
+Not applicable (filled red):    ████  (bg-rose-500, opacity-70)
+Insufficient data (dashed):    ╔════╗ (dashed border-rose-500, transparent fill)
 ```
+
+The `not_applicable` bars extend below the zero line (downward from zero) when the chart has mixed positive/negative values, making the negative sign unambiguous. The `insufficient_data` bars sit on the zero baseline.
 
 **Reusability:** The `status` field is generic — any metric can use it. For example:
 - `pe_ratio` → `"not_applicable"` when TTM EPS ≤ 0
@@ -118,7 +120,7 @@ On hover over any bar (normal or N/A), a tooltip shows:
 └─────────────────────────────────────────────┘
 ```
 
-For `status="not_applicable"` bars (hollow outline):
+For `status="not_applicable"` bars (filled red):
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -150,18 +152,13 @@ For `status="insufficient_data"` bars (dashed outline):
 
 The `components` array in this case only has 1 entry. The service fills in `null` for the missing 3 quarters, and the frontend displays them as "Missing" rows.
 
-#### 2.1.3 Header Area
+#### 2.1.3 Range Slider Widget
 
-- The summary PE number at the top of the Valuation section shows `N/A` when the latest quarter has `status="not_applicable"` (never `0.0×`)
-- A small `ⓘ` icon next to the "P/E" header hints: *"Trailing P/E is shown as N/A for quarters with negative earnings — P/E is not meaningful when a company loses money"*
+Replaces the old inline stats text. Each metric chart has a `MetricRangeSlider` between the metric label and the chart body (see §5.4 for full design). The slider shows a horizontal range track with avg and current markers, computed from **positive values only**.
 
 #### 2.1.4 Chart Legend
 
-A subtle legend below the chart:
-
-```
-■ Trailing P/E    ━ N/A (not applicable)    - - N/A (insufficient data)
-```
+The chart legend is **not currently implemented**. Bar states are self-evident from their visual treatment (filled green/red, filled red with N/A label, dashed border). The tooltip on hover provides the detailed status explanation for each bar.
 
 ```
 ┌── Growth ── [ Intact ] ──────────────────────────────────────────────────┐
@@ -299,7 +296,7 @@ class QuarterDataPoint(BaseModel):
     status: Optional[Literal["normal", "not_applicable", "insufficient_data"]] = None
     """Generic display hint for any metric. Drives bar rendering:
        - normal: filled coloured bar
-       - not_applicable: hollow outline (e.g. negative TTM EPS)
+       - not_applicable: filled red bar (e.g. negative TTM EPS)
        - insufficient_data: dashed outline (e.g. < 4 quarters)"""
     components: Optional[List[MetricComponent]] = None
     """Breakdown details. PE-specific: 4 trailing EPS values.
@@ -649,7 +646,7 @@ for r in qratios:
     ))
 ```
 
-`status` drives the frontend's bar rendering (filled, hollow outline, dashed outline). The `components` array is generic — if other metrics need breakdowns (Piotroski F-Score sub-scores, ROIC decomposition), they use the same `MetricComponent` type and `QuarterDataPoint.components` field.
+`status` drives the frontend's bar rendering (filled green/red, filled red with N/A label, dashed outline). The `components` array is generic — if other metrics need breakdowns (Piotroski F-Score sub-scores, ROIC decomposition), they use the same `MetricComponent` type and `QuarterDataPoint.components` field.
 
 **Compute triggers** (two paths):
   1. **24h batch** — runs inside `compute_and_upsert_quarterly_health_scores` path in the market data scheduler. Catches price changes and routine updates.
@@ -836,7 +833,37 @@ function MetricChartSection({
 }
 ```
 
-### 5.4 MetricBarChart Component — TradingView-Style Vertical Bars
+### 5.4 MetricRangeSlider — Range Track Widget
+
+A compact two-row widget between the metric label and the bar chart, replacing the old inline stats text:
+
+```
+Metric Label
+
+Range    6.8× ├────────●──▲──────┤ 19.0×   2/5 N/A
+                    avg    cur
+                   12.9×  15.4×
+```
+
+The range track spans from min to max of **positive values only** (professional convention). Two markers appear on the track:
+- **Avg marker** (`●`): white circle at the mean position
+- **Current marker** (`▲`): white diamond at the latest quarter's value
+
+**Edge cases:**
+| Scenario | Behavior |
+|----------|----------|
+| All values identical | Track collapses; markers overlap with offset labels |
+| Single data point | Same as above |
+| No positive data (all N/A) | Hidden text: "All quarters have negative earnings — not meaningful" |
+| Current = min or max | Markers overlap; current marker renders on top layer |
+| Current outside range | `◄` arrow at track edge + "cur -6.3× ← outside positive range" label below |
+
+**Data inputs:**
+- `positiveValues: number[]` — values from `normal`-status quarters only
+- `naCount / totalCount` — shown as rose badge when any N/A quarters exist
+- `currentValue` — latest quarter's value (from `value` field, always sent by backend)
+
+### 5.5 MetricBarChart Component — TradingView-Style Vertical Bars
 
 Each metric renders as a standalone vertical bar chart:
 
@@ -855,13 +882,15 @@ Each metric renders as a standalone vertical bar chart:
 **Dimensions:**
 - Chart width: 100% of container (responsive)
 - Chart height: 200px per metric
-- Bar width: flex-1 (equal width per quarter)
+- Bar width: 48px per quarter (w-12), 4px gap (gap-1)
 
 **Y-axis:**
 - Auto-scaled to min/max of metric values
+- **IQR-based outlier clipping** — when ≥4 values exist, the y-range is clipped to `[Q1 - 1.5×IQR, Q3 + 1.5×IQR]` so extreme outliers (e.g., PE=76.5) don't compress normal bars. Values outside the clipped range are still drawn at full height (their bars extend beyond the visible y-axis bounds), preserving their existence while preventing visual compression.
 - 4 horizontal grid lines with labels
 - Zero line highlighted (thicker, brighter)
 - Labels on left side (9px, 30% opacity)
+- Mixed-sign charts (both positive and negative values) use symmetric scaling: `±max(|min|, |max|)`
 
 **X-axis:**
 - Quarter labels below each bar (9px, 30% opacity)
@@ -869,13 +898,19 @@ Each metric renders as a standalone vertical bar chart:
 
 **Bars:**
 - Color: `bg-emerald-500` for positive, `bg-rose-500` for negative
-- Opacity: 80% (hover: 100%)
+- Opacity: 85% normal bars, 70% not_applicable bars, 50% insufficient_data bars (hover: 100% + brightness-110)
 - Border-radius: 2px on top corners
 - Hover: tooltip showing exact value
 
 **Buy marker:**
 - Blue ring (`ring-blue-400`) on purchase quarter bar
 - Arrow indicator below bar
+
+**Scroll indicators:**
+- Charts with more quarters than fit in the container show chevron-left/right buttons on hover
+- Gradient overlays fade the chart edges into the background
+- Clicking scrolls by 156px (4 bar widths) with smooth animation
+- Scroll position detection via `ResizeObserver` and scroll event listener
 
 ### 5.5 Single-Snapshot vs Multi-Quarter Metrics
 
@@ -893,8 +928,8 @@ For metrics with only one data point:
 |---------|-------|-------|
 | Positive bar | `bg-emerald-500` (80% opacity) | Bar fill for positive values (`status="normal"`) |
 | Negative bar | `bg-rose-500` (80% opacity) | Bar fill for negative values (`status="normal"`) |
-| **Not applicable** | `border-white/30 bg-transparent` (solid outline) | Hollow grey outline for `status="not_applicable"` |
-| **Insufficient data** | `border-white/20 bg-transparent border-dashed` (dashed outline) | Dashed grey outline for `status="insufficient_data"` |
+| **Not applicable** | `bg-rose-500 opacity-70 border-rose-500 border-[1.5px]` (filled) | Filled red bar for `status="not_applicable"` |
+| **Insufficient data** | `border-rose-500 border-[1.5px] border-dashed opacity-50 bg-transparent` (dashed outline) | Dashed red outline for `status="insufficient_data"` |
 | Zero line | `border-white/20` | Horizontal line at y=0 |
 | Grid lines | `border-white/5` | Horizontal reference lines |
 | Y-axis labels | `text-white/30` | Left-side scale labels |
@@ -971,7 +1006,7 @@ User                        FundamentalsPanel         useFundamentals()         
 | Quarterly ratios newly computed | Existing companies need backfill | One-time backfill script |
 | `company_summary` irregular snapshots | EV/EBITDA and P/FCF are current-period only | No historical enterprise_value stored |
 | `price_history` available for only ~10 companies | Cannot compute historical trailing P/E for most companies | Backfill script fetches historical close prices on-the-fly |
-| Negative TTM EPS | P/E ratio is mathematically negative | Store real value; frontend renders hollow outline bar + tooltip explaining the loss components |
+| Negative TTM EPS | P/E ratio is mathematically negative | Store real value; frontend renders filled red bar + tooltip explaining the loss components |
 | No analyst consensus | Cannot show consensus metric | Dropped from design |
 | YoY growth needs 8 quarters | Newer companies have fewer points | Show available data |
 
@@ -1102,9 +1137,9 @@ User                        FundamentalsPanel         useFundamentals()         
 |------|-------|------------|
 | Read `status` field from each `QuarterDataPoint` | `fundamentals-panel.tsx` | `✓` Status is available per bar |
 | Render filled bar (green/red) for `status="normal"` | Same file | `✓` Bars display correctly |
-| Render hollow grey outline bar with `N/A` label for `status="not_applicable"` | Same file | `✓` Hollow bar at baseline |
-| Render dashed grey outline bar with `N/A` label for `status="insufficient_data"` | Same file | `✓` Dashed bar at baseline |
-| Chart legend: `■ Trailing P/E    ━ N/A (not applicable)    - - N/A (insufficient data)` | Same file | `✓` Legend visible |
+| Render filled red bar (`bg-rose-500 opacity-70`) for `status="not_applicable"` | Same file | `✓` Red bar with `N/A` label |
+| Render dashed red outline bar for `status="insufficient_data"` | Same file | `✓` Dashed bar at baseline |
+| Chart legend — **not implemented** | Same file | `—` Not needed; bar states are self-evident |
 
 **Step 8.7 — Frontend: Add hover tooltip with EPS breakdown**
 
@@ -1115,12 +1150,13 @@ User                        FundamentalsPanel         useFundamentals()         
 | `insufficient_data` tooltip: `Only X of 4 quarters` + available EPS values + missing list | Same file | `✓` Partial data explained |
 | Quarter-end price in tooltip footer | Same file | `✓` Price present |
 
-**Step 8.8 — Frontend: Update header summary PE**
+**Step 8.8 — Frontend: Add stats header (replaced summary PE)**
 
 | Task | Files | Validation |
 |------|-------|------------|
-| Summary PE header shows `N/A` when latest quarter has `status != "normal"` (never `0.0×`) | `fundamentals-panel.tsx` | `✓` `10.3×` for profitable, `N/A` for loss-making |
-| `ⓘ` tooltip on P/E header explains N/A convention | Same file | `✓` Tooltip matches design |
+| Add stats line below metric label showing `Avg X× (Y – Z)` computed from positive values only | `fundamentals-panel.tsx` | `✓` Avg 10.3× (8.0× – 19.0×) |
+| Add N/A count when `not_applicable` quarters exist in view | Same file | `✓` · 3/12 N/A |
+| Stats recalculate reactively with view filter changes | Same file | `✓` Correct per-filter stats |
 
 **Step 8.9 — Frontend: Update tests**
 
@@ -1262,8 +1298,8 @@ Both paths call the same `compute_and_upsert_quarterly_valuation_metrics()` func
 | Situation | DB storage | Computed `status` | Frontend rendering |
 |-----------|-----------|-------------------|--------------------|
 | TTM EPS > 0 | `trailing_pe = price / eps` | `"normal"` | Filled coloured bar |
-| TTM EPS ≤ 0 (4 quarters exist) | `trailing_pe = price / eps` (negative) | `"not_applicable"` | Hollow grey outline bar, `N/A` label |
-| < 4 quarters of income data | `trailing_pe = NULL` | `"insufficient_data"` | Dashed grey outline bar, `N/A` label |
+| TTM EPS ≤ 0 (4 quarters exist) | `trailing_pe = price / eps` (negative) | `"not_applicable"` | Filled red bar, `N/A` label |
+| < 4 quarters of income data | `trailing_pe = NULL` | `"insufficient_data"` | Dashed red outline bar, `N/A` label |
 
 The `status` field is set by `_compute_valuation_metrics` in the service layer (not pre-computed, not stored). The `components` array is built by zipping `income_statements` data (already fetched) with the quarter's date range. The scoring function handles all three states — only `"normal"` bars contribute to the valuation score.
 
@@ -1419,11 +1455,11 @@ curl -s "http://localhost:8001/api/proxy/analysis/F/fundamentals" | python -m js
 | `backend/application/services/fundamentals_service.py` | Core service (5 sections + scores) |
 | `backend/application/jobs/derived_financial_metrics_job.py` | Quarterly ratio computation |
 | `backend/api/analysis.py` | API endpoint |
-| `backend/tests/test_fundamentals_service.py` | 31 backend tests |
+| `backend/tests/test_fundamentals_service.py` | 39 backend tests |
 | `web/src/features/analysis/types/analysis.types.ts` | TypeScript interfaces |
 | `web/src/features/analysis/hooks/useFundamentals.ts` | Data fetching hook |
 | `web/src/features/analysis/components/fundamentals-panel.tsx` | UI components |
-| `web/src/__tests__/FundamentalsPanel.test.tsx` | 17 frontend tests |
+| `web/src/__tests__/FundamentalsPanel.test.tsx` | 30 frontend tests |
 | `web/src/__tests__/useFundamentals.test.ts` | 5 hook tests |
 | `web/src/lib/query-keys.ts` | Query key definitions |
 | `backend/application/jobs/derived_financial_metrics_job.py` | Quarterly valuation metric pre-computation |

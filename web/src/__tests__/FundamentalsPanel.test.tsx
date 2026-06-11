@@ -347,7 +347,7 @@ describe("FundamentalsPanel", () => {
 
   // ── New PE bar states and EPS tooltip tests ────────────────────────────────
 
-  it("renders P/E with normal status (filled bar, value shown)", () => {
+  it("renders P/E with normal status (filled bar, range slider shows avg + cur)", () => {
     const data = makeData();
     data.sections[3].metrics[0].quarters = [
       { fiscal_year: 2025, fiscal_quarter: 3, label: "Q3 2025", value: 10.25, status: "normal", ttm_eps: 1.16, components: [
@@ -360,12 +360,13 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    // Header shows 10.3× (appears in header and tooltip, so check for at least 1)
-    const matches = screen.getAllByText("10.3×");
-    expect(matches.length).toBeGreaterThanOrEqual(1);
+    // Range slider shows avg marker
+    expect(screen.getByText(/avg 10.3/)).toBeTruthy();
+    // Current marker shown
+    expect(screen.getByText(/cur 10.3/)).toBeTruthy();
   });
 
-  it("renders P/E with not_applicable status (hollow bar, N/A header, tooltip shows -6.3× + breakdown)", () => {
+  it("renders P/E with not_applicable status (filled bar, fallback text, tooltip shows -6.3× + breakdown)", () => {
     const data = makeData();
     data.sections[3].metrics[0].quarters = [
       { fiscal_year: 2025, fiscal_quarter: 4, label: "Q4 2025", value: -6.35, status: "not_applicable", ttm_eps: -2.78, components: [
@@ -378,11 +379,11 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    // Header shows N/A (based on status), value is the actual PE
-    const peMetric = screen.getByText("P/E").closest(".flex-1")!;
-    expect(within(peMetric).getAllByText("N/A").length).toBeGreaterThanOrEqual(1);
+    // All quarters have negative earnings — fallback message shown
+    expect(screen.getByText(/not meaningful/)).toBeTruthy();
 
     // Hover over the bar to show tooltip with PE, EPS breakdown, and driver flag
+    const peMetric = screen.getByText("P/E").closest(".flex-1")!;
     const bar = within(peMetric).getByTestId("bar-0");
     fireEvent.mouseEnter(bar);
     expect(screen.getByText("-6.3×")).toBeTruthy();

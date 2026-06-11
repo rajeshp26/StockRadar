@@ -23,6 +23,116 @@ function SectionError({ message }: { message: string }) {
   );
 }
 
+// ── MetricRangeSlider (range track with avg and current markers) ─────────────
+
+function MetricRangeSlider({
+  unit,
+  positiveValues,
+  naCount,
+  totalCount,
+  currentValue,
+}: {
+  unit: string;
+  positiveValues: number[];
+  naCount: number;
+  totalCount: number;
+  currentValue: number | null;
+}) {
+  if (positiveValues.length === 0) {
+    if (naCount > 0) {
+      return (
+        <div className="mb-3 text-[11px] text-white/30 italic">
+          All quarters have negative earnings — not meaningful
+        </div>
+      );
+    }
+    return null;
+  }
+
+  const min = Math.min(...positiveValues);
+  const max = Math.max(...positiveValues);
+  const avg = positiveValues.reduce((a, b) => a + b, 0) / positiveValues.length;
+  const range = max - min || 1;
+
+  const avgPos = ((avg - min) / range) * 100;
+
+  let currentPos: number | null = null;
+  let currentOutside = false;
+
+  if (currentValue != null) {
+    if (currentValue >= min && currentValue <= max) {
+      currentPos = ((currentValue - min) / range) * 100;
+    } else {
+      currentOutside = true;
+      currentPos = currentValue < min ? 0 : 100;
+    }
+  }
+
+  const markersOverlap = currentPos !== null && Math.abs(currentPos - avgPos) < 5;
+
+  return (
+    <div className="mb-3">
+      <div className="flex items-center gap-1.5 text-[11px]">
+        <span className="text-white/50 tabular-nums">{formatMetricValue(min, unit)}</span>
+        <div className="relative flex-1 h-4 mx-1">
+          <div className="absolute top-1/2 left-0 right-0 h-[3px] bg-white/20 -translate-y-1/2 rounded-full" />
+          <div
+            className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-2 h-2 rounded-full bg-white/60"
+            style={{ left: `${avgPos}%` }}
+          />
+          {currentPos !== null && (
+            <div
+              className={cn(
+                "absolute top-1/2 -translate-x-1/2 -translate-y-1/2",
+                currentOutside ? "z-20" : markersOverlap ? "z-20" : "z-10",
+              )}
+              style={{ left: `${currentPos}%` }}
+            >
+              {currentOutside ? (
+                <span className="text-[11px] text-rose-400/70 leading-none">◄</span>
+              ) : (
+                <div className="w-2 h-2 rotate-45 bg-white/80" />
+              )}
+            </div>
+          )}
+        </div>
+        <span className="text-white/50 tabular-nums">{formatMetricValue(max, unit)}</span>
+        {naCount > 0 && (
+          <span className="text-rose-400/50 tabular-nums ml-1.5">
+            {naCount}/{totalCount} N/A
+          </span>
+        )}
+      </div>
+
+      <div className="relative h-4 text-[10px] mt-0.5">
+        <span
+          className="absolute -translate-x-1/2 text-white/40"
+          style={{ left: `${avgPos}%` }}
+        >
+          avg {formatMetricValue(avg, unit)}
+        </span>
+        {currentPos !== null && !currentOutside && (
+          <span
+            className={cn(
+              "absolute -translate-x-1/2 text-white/60 font-medium",
+              markersOverlap && "translate-y-3.5",
+            )}
+            style={{ left: `${currentPos}%` }}
+          >
+            cur {formatMetricValue(currentValue!, unit)}
+          </span>
+        )}
+      </div>
+
+      {currentOutside && currentValue != null && (
+        <div className="text-[11px] text-rose-400/70 mt-0.5">
+          cur {formatMetricValue(currentValue, unit)} ← outside positive range
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MetricBarChart (TradingView-style vertical bars) ─────────────────────────
 
 function formatQuarterLabel(label: string): string {
@@ -60,6 +170,11 @@ function MetricBarChart({
     .map((q) => q.value)
     .filter((v): v is number => v !== null);
 
+  const normalValues = activeQuarters
+    .filter((q) => q.status === "normal" && q.value != null)
+    .map((q) => q.value as number);
+  const naCount = activeQuarters.filter((q) => q.status === "not_applicable").length;
+
   const hasAnyNonNormal = activeQuarters.some((q) => q.status && q.status !== "normal");
   const hasAnyQuarterData = activeQuarters.some((q) => q.ttm_eps != null || (q.components && q.components.length > 0));
 
@@ -79,19 +194,33 @@ function MetricBarChart({
   const hasNegative = rawMin < 0;
   const hasPositive = rawMax > 0;
 
+  // IQR-based outlier clipping so extreme values don't compress the chart
+  let clipMin = rawMin;
+  let clipMax = rawMax;
+  if (values.length >= 4) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const q1 = sorted[Math.floor(sorted.length * 0.25)];
+    const q3 = sorted[Math.floor(sorted.length * 0.75)];
+    const iqr = q3 - q1;
+    const lowerFence = q1 - 1.5 * iqr;
+    const upperFence = q3 + 1.5 * iqr;
+    if (lowerFence > rawMin) clipMin = lowerFence;
+    if (upperFence < rawMax) clipMax = upperFence;
+  }
+
   let yMin: number;
   let yMax: number;
 
   if (hasNegative && hasPositive) {
-    const halfRange = Math.max(Math.abs(rawMin), Math.abs(rawMax)) || 1;
+    const halfRange = Math.max(Math.abs(clipMin), Math.abs(clipMax)) || 1;
     yMin = -halfRange;
     yMax = halfRange;
   } else if (hasNegative) {
-    yMin = rawMin * 1.2;
+    yMin = clipMin * 1.2;
     yMax = 0;
   } else {
     yMin = 0;
-    yMax = rawMax * 1.2 || 1;
+    yMax = clipMax * 1.2 || 1;
   }
 
   const chartHeight = 200;
@@ -149,7 +278,7 @@ function MetricBarChart({
   }, [activeQuarters.length, updateScroll]);
 
   const scrollBy = (dir: "left" | "right") => {
-    scrollRef.current?.scrollBy({ left: dir === "left" ? -156 : 156, behavior: "smooth" });
+    scrollRef.current?.scrollBy({ left: dir === "left" ? -208 : 208, behavior: "smooth" });
   };
 
   const showLeft = hovering && (scrollState === "left" || scrollState === "both");
@@ -157,12 +286,17 @@ function MetricBarChart({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center mb-2 gap-2">
         <span className="text-[13px] font-medium text-white/70">{metric.label}</span>
-        <span className={cn("text-[12px] tabular-nums font-medium", activeQuarters[activeQuarters.length - 1]?.status === "not_applicable" ? "text-rose-400/60" : "text-white/50")}>
-          {activeQuarters[activeQuarters.length - 1]?.status === "not_applicable" ? "N/A" : formatMetricValue(values[values.length - 1], metric.unit)}
-        </span>
       </div>
+
+      <MetricRangeSlider
+        unit={metric.unit}
+        positiveValues={normalValues}
+        naCount={naCount}
+        totalCount={activeQuarters.length}
+        currentValue={activeQuarters.length > 0 ? activeQuarters[activeQuarters.length - 1].value ?? null : null}
+      />
 
       <div className="flex items-start">
         <div className="w-12 flex-shrink-0 relative" style={{ height: chartHeight }}>
@@ -181,7 +315,7 @@ function MetricBarChart({
           onMouseLeave={() => { setHovering(false); setHoveredBar(null); }}
         >
           <div ref={scrollRef} className="overflow-x-auto">
-            <div className="inline-flex flex-col" style={{ minWidth: `${activeQuarters.length * 39}px` }}>
+            <div className="inline-flex flex-col" style={{ minWidth: `${activeQuarters.length * 52}px` }}>
               <div className="relative" style={{ height: chartHeight }}>
                 {gridSteps.map((g, i) => (
                   <div
@@ -198,13 +332,13 @@ function MetricBarChart({
                   />
                 )}
 
-              <div className="absolute left-0 right-0 top-0 bottom-0 flex items-end gap-[3px]">
+              <div className="absolute left-0 right-0 top-0 bottom-0 flex items-end gap-1">
                   {activeQuarters.map((qp, i) => {
                     const qpStatus = qp.status ?? "normal";
 
                     if (qp.value === null && qpStatus === "normal") {
                       return (
-                        <div key={i} className="w-[36px] flex-shrink-0 flex justify-center items-end h-full">
+                        <div key={i} className="w-12 flex-shrink-0 flex justify-center items-end h-full">
                           <div className="w-full h-px bg-white/5" />
                         </div>
                       );
@@ -220,27 +354,36 @@ function MetricBarChart({
                     const isDashed = qpStatus === "insufficient_data";
                     const hasValue = qp.value !== null;
 
+                    const isMixed = hasNegative && hasPositive;
+                    const barPosStyle = isMixed && qp.value != null
+                      ? qp.value >= 0
+                        ? { bottom: `${chartHeight - zeroY}px` }
+                        : { top: `${zeroY}px` }
+                      : { bottom: 0 };
+
                     return (
                       <div
                         key={i}
                         data-testid={`bar-${i}`}
-                        className="w-[36px] flex-shrink-0 flex justify-center items-end h-full relative"
+                        className="w-12 flex-shrink-0 relative"
+                        style={{ height: chartHeight }}
                         onMouseEnter={() => setHoveredBar({ index: i, qp })}
                         onMouseLeave={() => setHoveredBar(null)}
                       >
                         {hasValue || isHollow || isDashed ? (
                           <div
                             className={cn(
-                              "w-full rounded-[3px] transition-all duration-200",
+                              "absolute left-0 w-full rounded-[3px] transition-all duration-200",
                               hasValue && "opacity-85 hover:opacity-100 hover:brightness-110",
                               isHollow && "border-[1.5px] opacity-70",
                               isDashed && "border-[1.5px] border-dashed opacity-50",
                               isHollow && barColor.replace("bg-", "border-"),
                               isDashed && barColor.replace("bg-", "border-"),
+                              isHollow && barColor,
                               !isHollow && !isDashed && barColor,
                               isBuy && "ring-1 ring-blue-400",
                             )}
-                            style={{ height: `${Math.max(barHeight, isHollow || isDashed ? 4 : 2)}px` }}
+                            style={{ height: `${Math.max(barHeight, isHollow || isDashed ? 4 : 2)}px`, ...barPosStyle }}
                           />
                         ) : (
                           <div className="w-full h-px bg-white/5" />
@@ -256,9 +399,9 @@ function MetricBarChart({
                 </div>
               </div>
 
-              <div className="flex gap-[3px] mt-1">
+              <div className="flex gap-1 mt-1">
                 {activeQuarters.map((qp, i) => (
-                  <div key={i} className="w-[36px] flex-shrink-0 text-center">
+                  <div key={i} className="w-12 flex-shrink-0 text-center">
                     <span className="text-[10px] text-white/50 tabular-nums leading-none font-medium">
                       {formatQuarterLabel(qp.label)}
                     </span>
@@ -311,7 +454,7 @@ function MetricBarChart({
           <div
             className="absolute bg-gray-900/90 backdrop-blur-lg px-2.5 py-1 rounded-md text-[11px] whitespace-nowrap shadow-lg border border-white/10"
             style={{
-              left: Math.max(36, hoveredBar.index * 39 + 18 - scrollLeft),
+              left: Math.max(48, hoveredBar.index * 52 + 24 - scrollLeft),
               transform: "translateX(-50%)",
             }}
           >
