@@ -425,6 +425,39 @@ function StatusBadge({ label }: { label: string }) {
   );
 }
 
+// ── BenchmarkToggle ──────────────────────────────────────────────────────────
+
+function BenchmarkToggle({
+  value,
+  onChange,
+}: {
+  value: "history" | "sector";
+  onChange: (v: "history" | "sector") => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 bg-white/5 rounded-lg p-0.5 w-fit">
+      <button
+        onClick={() => onChange("history")}
+        className={cn(
+          "text-[10px] font-semibold px-2.5 py-1.5 rounded-md transition-colors",
+          value === "history" ? "bg-white/10 text-white/80" : "text-white/40 hover:text-white/60",
+        )}
+      >
+        vs History
+      </button>
+      <button
+        onClick={() => onChange("sector")}
+        className={cn(
+          "text-[10px] font-semibold px-2.5 py-1.5 rounded-md transition-colors",
+          value === "sector" ? "bg-white/10 text-white/80" : "text-white/40 hover:text-white/60",
+        )}
+      >
+        vs Sector
+      </button>
+    </div>
+  );
+}
+
 // ── FrequencyToggle ───────────────────────────────────────────────────────────
 
 function FrequencyToggle({
@@ -702,6 +735,7 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
   const { data, loading, error, refetch } = useFundamentals(symbol);
   const [valViewMode, setValViewMode] = useState<"all" | "from_purchase">("all");
   const [valFrequency, setValFrequency] = useState<"quarterly" | "annual">("quarterly");
+  const [valBenchmark, setValBenchmark] = useState<"history" | "sector">("history");
 
   if (loading) {
     return (
@@ -769,6 +803,7 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
                   {section.status.label}
                 </span>
                 <div className="flex items-center gap-2 ml-auto">
+                  <BenchmarkToggle value={valBenchmark} onChange={setValBenchmark} />
                   <QuarterToggle value={valViewMode} onChange={setValViewMode} showFromPurchase={data.has_portfolio_position} />
                   <FrequencyToggle value={valFrequency} onChange={setValFrequency} />
                 </div>
@@ -797,6 +832,7 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
                         label={m.label}
                         metricId={m.metric_id}
                         quarters={displayQuarters}
+                        benchmark={valBenchmark}
                       />
                     );
                   })}

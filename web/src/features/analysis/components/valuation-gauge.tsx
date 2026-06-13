@@ -452,9 +452,10 @@ export function ValuationGauge({ config, unit, label }: ValuationGaugeProps) {
 
 // ── MiniGauge: compact arc gauge matching Design 4 reference ────────────────
 
-function MiniGauge({ current, min, max, avg, bandLow, bandHigh }: {
-  current: number; min: number; max: number; avg: number;
-  bandLow: number; bandHigh: number;
+function MiniGauge({ current, min, max, bandLow, bandHigh, percentile, mode }: {
+  current: number; min: number; max: number;
+  bandLow: number; bandHigh: number; percentile?: number;
+  mode: "history" | "sector";
 }) {
   const cx = 70;
   const cy = 65;
@@ -463,17 +464,35 @@ function MiniGauge({ current, min, max, avg, bandLow, bandHigh }: {
   const startAngle = 180;
   const endAngle = 360;
 
-  const pct = max - min > 0 ? (current - min) / (max - min) : 0.5;
+  const [pct, leftLabel, rightLabel] = mode === "history"
+    ? [
+        percentile != null
+          ? Math.max(0, Math.min(100, percentile)) / 100
+          : max > min
+            ? Math.max(0, Math.min(1, (current - min) / (max - min)))
+            : 0.5,
+        fmt(min),
+        fmt(max),
+      ]
+    : [
+        bandHigh > bandLow
+          ? Math.max(0, Math.min(1, (current - bandLow) / (bandHigh - bandLow)))
+          : 0.5,
+        fmt(bandLow),
+        fmt(bandHigh),
+      ];
+
   const valueAngle = startAngle + pct * sweep;
-
   const needleEnd = polarToCartesian(cx, cy, r, valueAngle);
-
-  const gradId = `gaugeGrad_${current}_${min}_${max}`.replace(/[^a-zA-Z0-9_]/g, "_");
-
+  const gradId = `gaugeGrad_${mode}_${current}`.replace(/[^a-zA-Z0-9_]/g, "_");
   const arcLen = Math.PI * r * (sweep / 180);
   const offset = arcLen * (1 - pct);
 
-  const valuation = getValuation(current, bandLow, bandHigh);
+  const valColor = mode === "history"
+    ? percentile != null
+      ? percentile >= 66 ? "#ff6565" : percentile >= 33 ? "#ffc700" : "#00c875"
+      : "#ffc700"
+    : current < bandLow ? "#00c875" : current > bandHigh ? "#ff6565" : "#ffc700";
 
   return (
     <svg className="w-[140px] h-[90px] mx-auto" viewBox="0 0 140 90" aria-label={`Gauge: ${fmt(current)}`}>
@@ -501,8 +520,14 @@ function MiniGauge({ current, min, max, avg, bandLow, bandHigh }: {
         strokeDashoffset={offset}
         style={{ transition: "stroke-dashoffset 0.6s cubic-bezier(0.4,0,0.2,1)" }}
       />
-      <circle cx={needleEnd.x} cy={needleEnd.y} r="6" fill={valuation.label === "Undervalued" ? "#00c875" : valuation.label === "Overvalued" ? "#ff6565" : "#ffc700"} />
-      <line x1={needleEnd.x} y1={needleEnd.y} x2={cx} y2={cy + 5} stroke={valuation.label === "Undervalued" ? "#00c875" : valuation.label === "Overvalued" ? "#ff6565" : "#ffc700"} strokeWidth="2" />
+      <text x="20" y="83" textAnchor="middle" fill="rgba(255,255,255,0.55)" fontSize="10" fontWeight="700" fontFamily="inherit" letterSpacing="-0.3">
+        {leftLabel}
+      </text>
+      <text x="120" y="83" textAnchor="middle" fill="rgba(255,255,255,0.55)" fontSize="10" fontWeight="700" fontFamily="inherit" letterSpacing="-0.3">
+        {rightLabel}
+      </text>
+      <circle cx={needleEnd.x} cy={needleEnd.y} r="6" fill={valColor} />
+      <line x1={needleEnd.x} y1={needleEnd.y} x2={cx} y2={cy + 5} stroke={valColor} strokeWidth="2" />
     </svg>
   );
 }
@@ -551,34 +576,6 @@ function MiniSparkline({ values, firstYear, delta, unit }: {
         <span className="font-semibold text-white/60">Now</span>
       </div>
     </div>
-  );
-}
-
-// ── PercentileBadge ──────────────────────────────────────────────────────────
-
-function PercentileBadge({ percentile }: { percentile?: number }) {
-  if (percentile == null) return null;
-  const cls =
-    percentile >= 80 ? "bg-[rgba(255,101,101,0.15)] text-[#ff6565]" :
-    percentile >= 50 ? "bg-[rgba(255,199,0,0.15)] text-[#ffc700]" :
-                       "bg-[rgba(0,200,117,0.15)] text-[#00c875]";
-  return (
-    <span className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold", cls)}>
-      <span className="w-2 h-2 rounded-full" style={{ background: "currentColor" }} />
-      {Math.round(percentile)}th percentile
-    </span>
-  );
-}
-
-// ── VsAvgDelta ───────────────────────────────────────────────────────────────
-
-function VsAvgDelta({ delta }: { delta?: number | null }) {
-  if (delta == null) return null;
-  const isAbove = delta >= 0;
-  return (
-    <span className={cn("text-[12px]", isAbove ? "text-[#ff6565]" : "text-[#00c875]")}>
-      {isAbove ? "▲" : "▼"} {Math.abs(delta).toFixed(0)}% {isAbove ? "above" : "below"} 5-year average
-    </span>
   );
 }
 
@@ -710,34 +707,74 @@ function HistoryTable({
 // ── MetricCard: gauge card matching Design 4 reference ───────────────────────
 
 export function MetricCard({
-  config, unit, label, metricId, quarters,
+  config, unit, label, metricId, quarters, benchmark = "history",
 }: {
   config: GaugeConfig;
   unit: string;
   label: string;
   metricId: string;
   quarters: { label: string; value: number | null; status?: string }[];
+  benchmark?: "history" | "sector";
 }) {
   const firstYear = quarters.length > 0 ? quarters[0].label.split(" ")[0] : undefined;
 
+  const valLabel = benchmark === "sector"
+    ? (config.current_value != null && config.band_low != null && config.band_high != null
+        ? getValuation(config.current_value, config.band_low, config.band_high).label : null)
+    : config.percentile != null
+      ? config.percentile >= 66 ? "Overvalued" : config.percentile >= 33 ? "Fairly valued" : "Undervalued"
+      : null;
+
+  const valClass = benchmark === "sector"
+    ? (config.current_value != null && config.band_low != null && config.band_high != null
+        ? getValuation(config.current_value, config.band_low, config.band_high).className : "")
+    : config.percentile != null
+      ? config.percentile >= 66
+        ? "bg-rose-500/15 text-rose-400 border-rose-500/25"
+        : config.percentile >= 33
+          ? "bg-amber-500/15 text-amber-400 border-amber-500/25"
+          : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
+      : "";
+
+  if (config.display_mode === "disabled") {
+    return (
+      <div className="flex-1 min-w-[280px] bg-[#1c2023] border border-[#2f3336] rounded-xl p-5 text-center">
+        <div className="text-[11px] text-white/50 italic">{config.warnings[0] ?? "Not applicable"}</div>
+      </div>
+    );
+  }
+
+  const showGauge = benchmark === "sector" || config.percentile != null ||
+    config.display_mode === "gauge" || config.display_mode === "compact_gauge";
+
   return (
     <div className="flex-1 min-w-[280px] bg-[#1c2023] border border-[#2f3336] rounded-xl p-5 text-center">
-      <div className="text-[10px] text-[#71767b] font-semibold uppercase tracking-wider mb-3">
-        {label}
+      <div className="flex items-center justify-center gap-2 mb-3">
+        <span className="text-[10px] text-[#71767b] font-semibold uppercase tracking-wider">{label}</span>
+        <span className={cn(
+          "text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded",
+          benchmark === "history" ? "bg-white/5 text-white/30" : "bg-[rgba(29,155,240,0.15)] text-[#1d9bf0]",
+        )}>
+          {benchmark === "history" ? "HIST" : "SCTR"}
+        </span>
       </div>
 
-      {config.display_mode === "gauge" || config.display_mode === "compact_gauge" ? (
+      {showGauge ? (
         <>
-          {config.current_value != null && config.min_value != null && config.max_value != null &&
-           config.avg_value != null && config.band_low != null && config.band_high != null ? (
-            <MiniGauge
-              current={config.current_value}
-              min={config.min_value}
-              max={config.max_value}
-              avg={config.avg_value}
-              bandLow={config.band_low}
-              bandHigh={config.band_high}
-            />
+          {config.current_value != null && config.min_value != null && config.max_value != null ? (
+            benchmark === "sector" && (config.band_low == null || config.band_high == null) ? (
+              <div className="text-[11px] text-white/40 italic py-4">No sector benchmark</div>
+            ) : (
+              <MiniGauge
+                current={config.current_value}
+                min={config.min_value}
+                max={config.max_value}
+                bandLow={config.band_low ?? 0}
+                bandHigh={config.band_high ?? 0}
+                percentile={config.percentile}
+                mode={benchmark}
+              />
+            )
           ) : (
             <div className="text-[11px] text-white/50 italic py-4">Insufficient data</div>
           )}
@@ -746,13 +783,24 @@ export function MetricCard({
             {config.current_value != null ? fmtValue(config.current_value, unit) : "—"}
           </div>
 
-          {config.current_value != null && config.band_low != null && config.band_high != null && (
+          {valLabel && (
             <div className="mt-1">
+              <span className={cn("inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold", valClass)}>
+                {valLabel}
+              </span>
+            </div>
+          )}
+
+          {benchmark === "history" && config.percentile != null && (
+            <div className="mt-3 flex items-center justify-center gap-2">
               <span className={cn(
-                "inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold",
-                getValuation(config.current_value, config.band_low, config.band_high).className,
+                "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold",
+                config.percentile >= 66 ? "bg-[rgba(255,101,101,0.15)] text-[#ff6565]" :
+                config.percentile >= 33 ? "bg-[rgba(255,199,0,0.15)] text-[#ffc700]" :
+                                          "bg-[rgba(0,200,117,0.15)] text-[#00c875]",
               )}>
-                {getValuation(config.current_value, config.band_low, config.band_high).label}
+                <span className="w-2 h-2 rounded-full" style={{ background: "currentColor" }} />
+                {Math.round(config.percentile)}th percentile
               </span>
             </div>
           )}
@@ -767,12 +815,6 @@ export function MetricCard({
       ) : (
         <ValuationGauge config={config} unit={unit} label={label} metricId={metricId} />
       )}
-
-      <div className="flex items-center justify-center gap-3 mt-3 flex-wrap">
-        <PercentileBadge percentile={config.percentile} />
-      </div>
-
-      <VsAvgDelta delta={config.vs_avg_delta} />
 
       <HistoryTable
         quarters={quarters}
