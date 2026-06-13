@@ -424,6 +424,43 @@ def _na_count(quarters: List[QuarterDataPoint]) -> int:
     return sum(1 for q in quarters if q.status == "not_applicable")
 
 
+def _compute_sparkline_values(
+    quarters: List[QuarterDataPoint],
+    max_points: int = 8,
+) -> Optional[List[Optional[float]]]:
+    if not quarters:
+        return None
+    recent = quarters[-max_points:]
+    return [q.value for q in recent]
+
+
+def _compute_percentile(
+    positive_values: List[float],
+    current: Optional[float],
+) -> Optional[int]:
+    if current is None or len(positive_values) < 12:
+        return None
+    sorted_vals = sorted(positive_values)
+    count_less = sum(1 for v in sorted_vals if v < current)
+    count_equal = sum(1 for v in sorted_vals if v == current)
+    pct = (count_less + 0.5 * count_equal) / len(sorted_vals) * 100
+    return round(pct)
+
+
+def _find_recent_positive_label(
+    quarters: List[QuarterDataPoint],
+    raw_current: Optional[float],
+) -> Optional[str]:
+    if not quarters:
+        return None
+    if raw_current is not None and raw_current > 0:
+        return quarters[-1].label if quarters[-1].label else None
+    for q in reversed(quarters):
+        if q.value is not None and q.value > 0:
+            return q.label
+    return None
+
+
 def _compute_metric_gauge_config(
     metric_id: str,
     quarters: List[QuarterDataPoint],
@@ -442,6 +479,24 @@ def _compute_metric_gauge_config(
     avg_v = sum(positive) / pos_count if pos_count > 0 else None
     warnings: List[str] = []
 
+    # ── Design 4: Sparkline / Percentile / Delta ──
+    sparkline_values = _compute_sparkline_values(quarters)
+    percentile = _compute_percentile(positive, current)
+    historical_avg = avg_v
+    vs_avg_delta = (current - avg_v) if current is not None and avg_v is not None else None
+    recent_quarter_label = _find_recent_positive_label(quarters, raw_current)
+
+    def _cfg(**extra: Any) -> GaugeConfig:
+        """Build GaugeConfig with Design 4 fields automatically attached."""
+        return GaugeConfig(
+            sparkline_values=sparkline_values,
+            percentile=percentile,
+            historical_avg=historical_avg,
+            vs_avg_delta=vs_avg_delta,
+            recent_quarter_label=recent_quarter_label,
+            **extra,
+        )
+
     if raw_current is not None and raw_current <= 0 and current is not None:
         for q in reversed(quarters):
             if q.value is not None and q.value > 0:
@@ -453,7 +508,7 @@ def _compute_metric_gauge_config(
         sector_threshold = SECTOR_THRESHOLDS[sector][metric_id]
 
     if cov is not None and cov > 1.5:
-        return GaugeConfig(
+        return _cfg(
             display_mode="slider", benchmark="none",
             current_value=current, current_quarter_raw=raw_current,
             min_value=min_v, max_value=max_v, avg_value=avg_v,
@@ -463,7 +518,7 @@ def _compute_metric_gauge_config(
 
     if metric_id == "pe":
         if pos_count >= 16 and cov is not None and cov < 0.5:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="gauge", benchmark="historical",
                 benchmark_value=avg_v,
                 band_low=avg_v * 0.85 if avg_v else None,
@@ -474,7 +529,7 @@ def _compute_metric_gauge_config(
                 na_count=na,
             )
         if pos_count >= 12 and cov is not None and cov < 0.5:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="historical",
                 benchmark_value=avg_v,
                 band_low=avg_v * 0.85 if avg_v else None,
@@ -486,7 +541,7 @@ def _compute_metric_gauge_config(
                 warnings=["Limited history — bands based on 3 years"],
             )
         if pos_count >= 12 and cov is not None and cov < 0.75:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="historical",
                 benchmark_value=avg_v,
                 band_low=avg_v * 0.85 if avg_v else None,
@@ -498,7 +553,7 @@ def _compute_metric_gauge_config(
                 warnings=["Moderate variance — bands are wider"],
             )
         if current is not None and sector_threshold is not None:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="sector",
                 benchmark_value=sector_threshold,
                 band_low=sector_threshold * 0.85,
@@ -509,7 +564,7 @@ def _compute_metric_gauge_config(
                 na_count=na,
                 warnings=["Limited history or high variance — showing sector benchmark"],
             )
-        return GaugeConfig(
+        return _cfg(
             display_mode="slider", benchmark="none",
             current_value=current, current_quarter_raw=raw_current,
             min_value=min_v, max_value=max_v, avg_value=avg_v,
@@ -519,14 +574,14 @@ def _compute_metric_gauge_config(
 
     if metric_id == "ev_ebitda":
         if sector == "Financial Services":
-            return GaugeConfig(
+            return _cfg(
                 display_mode="disabled", benchmark="none",
                 current_value=current, current_quarter_raw=raw_current,
                 positive_count=pos_count, total_quarters=total, na_count=na,
                 warnings=["EV/EBITDA not meaningful for financials — use P/E or P/B"],
             )
         if pos_count >= 16 and cov is not None and cov < 0.5:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="historical",
                 benchmark_value=avg_v,
                 band_low=avg_v * 0.80 if avg_v else None,
@@ -537,7 +592,7 @@ def _compute_metric_gauge_config(
                 na_count=na,
             )
         if pos_count >= 12 and cov is not None and cov < 0.75:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="historical",
                 benchmark_value=avg_v,
                 band_low=avg_v * 0.80 if avg_v else None,
@@ -550,7 +605,7 @@ def _compute_metric_gauge_config(
             )
         if pos_count >= 12 and cov is not None and cov >= 0.75:
             if sector_threshold is not None:
-                return GaugeConfig(
+                return _cfg(
                     display_mode="compact_gauge", benchmark="sector",
                     benchmark_value=sector_threshold,
                     band_low=sector_threshold * 0.80,
@@ -561,7 +616,7 @@ def _compute_metric_gauge_config(
                     na_count=na,
                     warnings=["High own-stock variance — showing sector benchmark"],
                 )
-            return GaugeConfig(
+            return _cfg(
                 display_mode="slider", benchmark="none",
                 current_value=current, current_quarter_raw=raw_current,
                 min_value=min_v, max_value=max_v, avg_value=avg_v,
@@ -569,7 +624,7 @@ def _compute_metric_gauge_config(
                 na_count=na,
             )
         if pos_count < 12 and sector_threshold is not None:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="sector",
                 benchmark_value=sector_threshold,
                 band_low=sector_threshold * 0.80,
@@ -580,7 +635,7 @@ def _compute_metric_gauge_config(
                 na_count=na,
                 warnings=["Limited history — showing sector benchmark"],
             )
-        return GaugeConfig(
+        return _cfg(
             display_mode="slider", benchmark="none",
             current_value=current, current_quarter_raw=raw_current,
             min_value=min_v, max_value=max_v, avg_value=avg_v,
@@ -590,7 +645,7 @@ def _compute_metric_gauge_config(
 
     if metric_id == "pfcf":
         if pos_count >= 16 and cov is not None and cov < 0.5:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="historical",
                 benchmark_value=avg_v,
                 band_low=avg_v * 0.75 if avg_v else None,
@@ -601,7 +656,7 @@ def _compute_metric_gauge_config(
                 na_count=na,
             )
         if pos_count >= 16 and cov is not None and cov < 0.75:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="historical",
                 benchmark_value=avg_v,
                 band_low=avg_v * 0.75 if avg_v else None,
@@ -613,7 +668,7 @@ def _compute_metric_gauge_config(
                 warnings=["Higher variance — bands wider than P/E"],
             )
         if current is not None and sector_threshold is not None and pos_count >= 12:
-            return GaugeConfig(
+            return _cfg(
                 display_mode="compact_gauge", benchmark="sector",
                 benchmark_value=sector_threshold,
                 band_low=sector_threshold * 0.75,
@@ -624,7 +679,7 @@ def _compute_metric_gauge_config(
                 na_count=na,
                 warnings=["Limited history — showing sector benchmark"],
             )
-        return GaugeConfig(
+        return _cfg(
             display_mode="slider", benchmark="none",
             current_value=current, current_quarter_raw=raw_current,
             min_value=min_v, max_value=max_v, avg_value=avg_v,
@@ -633,7 +688,7 @@ def _compute_metric_gauge_config(
             warnings=["Insufficient data or high variance for banded display"] if pos_count < 16 else [],
         )
 
-    return GaugeConfig(
+    return _cfg(
         display_mode="slider", benchmark="none",
         current_value=current, current_quarter_raw=raw_current,
         positive_count=pos_count, total_quarters=total,

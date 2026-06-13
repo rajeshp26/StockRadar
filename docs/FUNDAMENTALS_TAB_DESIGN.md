@@ -2053,28 +2053,44 @@ The decision is per-stock, per-metric, computed server-side in `_compute_valuati
 
 **Why the asymmetry (P/FCF requires more data):** FCF is inherently more volatile than earnings because CapEx is discretionary and lumpy. A company might have 4 years of stable P/FCF data with CoV < 0.5 (→ gauge), or it might not (→ slider). Ford (9 data points, many gaps) would fall to slider — correct. A mature consumer staple with 20 quarters of consistent FCF would get a gauge. The gate handles both cases without hardcoded rules.
 
-### 14.4 Component Rendering
+### 14.4 Component Rendering (Design 4 — Gauge Cards with Mini Sparklines)
 
-The frontend has a single `ValuationGauge` React component that renders four variants:
+The frontend has a single `ValuationGauge` React component that renders four variants, updated to match **Design 4 (Gauge Cards with Mini Sparklines)**. Each card now includes a mini sparkline, a percentile badge, and a "vs avg" delta indicator. The bar chart below is replaced by a collapsible historical data table.
 
 ```
-mode="gauge"          mode="compact_gauge"     mode="slider"          mode="disabled"
-┌──────────────┐     ┌──────────────┐          ┌──────────────┐       ┌──────────────┐
-│  P/E          │     │  EV/EBITDA   │          │  P/FCF       │       │  EV/EBITDA   │
-│               │     │              │          │              │       │              │
-│  ╭────●────╮  │     │  ╭────●───╮  │          │  ──●────     │       │  ╔══════════╗ │
-│  │ 12  18 24│  │     │  │ 8 12 18│  │          │ 12   22  45 │       │  ║ Not      ║ │
-│  ╰─────────╯  │     │  ╰────────╯  │          │              │       │  ║meaningful║ │
-│  ┌─┬───┬───┐ │     │  ┌─┬───┬───┐ │          │ ┌─┬───┬───┐  │       │  ║for fin.  ║ │
-│  │M│A/M│Mx│ │     │  │M│A/M│Mx│ │          │ │M│A/M│Mx│  │       │  ╚══════════╝ │
-│  └─┴───┴───┘ │     │  └─┴───┴───┘ │          │ └─┴───┴───┘  │       │  Use P/E or  │
-│  ★ Fairly    │     │  ★ Cheap vs  │          │ ★ Above avg  │       │  P/B instead │
-│    valued    │     │    sector    │          │    (slider)   │       │              │
-└──────────────┘     └──────────────┘          └──────────────┘       └──────────────┘
-                        ⚠ Limited history
+mode="gauge"              mode="compact_gauge"         mode="slider"              mode="disabled"
+┌──────────────────┐     ┌──────────────────┐          ┌──────────────────┐       ┌──────────────────┐
+│ P/E               │     │ EV/EBITDA         │          │ P/FCF             │       │ EV/EBITDA         │
+│                   │     │                   │          │                   │       │                   │
+│  ╭────●────╮      │     │  ╭────●───╮       │          │  ──●────          │       │  ╔══════════════╗ │
+│  │ 12  18 24│ 15.2 │     │  │ 8 12 18│  8.5  │          │ 12   22   45     │       │  ║ Not          ║ │
+│  ╰─────────╯      │     │  ╰────────╯       │          │       20.1       │       │  ║ meaningful   ║ │
+│                   │     │                   │          │                  │       │  ║ for fin.     ║ │
+│  ▁▃▄▆▇▅▃▁ 63%ile  │     │  ▂▃▅▇▆▄▃▁  41%ile  │          │  ▁▃▅▇▆▄▃▁  88%ile │       │  ╚══════════════╝ │
+│  ─── +2.1 vs avg  │     │  ─── -3.2 vs avg  │          │  ─── +5.8 vs avg │       │  Use P/E or      │
+│                   │     │                   │          │                  │       │  P/B instead      │
+│  ★ Fairly valued  │     │  ★ Cheap vs sector│          │ ★ Above avg     │       │                   │
+│    ⚠ Loss quarter │     │    ⚠ Limited hist │          │    (slider)     │       │                   │
+│                   │     │                   │          │                  │       │                   │
+│  ▼ Historical     │     │  ▼ Historical     │          │  ▼ Historical    │       │  ▼ Historical     │
+│  ┌──────┬───┬──┐ │     │  ┌──────┬───┬──┐   │          │  ┌──────┬───┬──┐ │       │  ┌──────┬───┬──┐   │
+│  │ Q    │ P/E│EV│ │     │  │ Q    │EV │P/E│   │          │  │ Q    │P/F│EV│ │       │  │ Q    │EV │P/E│   │
+│  ├──────┼───┼──┤ │     │  ├──────┼───┼──┤   │          │  ├──────┼───┼──┤ │       │  ├──────┼───┼──┤   │
+│  │ Q1'26│ 15│40│ │     │  │ Q1'26│ 40│15│   │          │  │ Q1'26│ 20│40│ │       │  │ Q1'26│ 40│15│   │
+│  │ Q4'25│ 14│43│ │     │  │ Q4'25│ 43│14│   │          │  │ Q4'25│ 22│43│ │       │  │ Q4'25│ 43│14│   │
+│  │ Q3'25│ 16│50│ │     │  │ Q3'25│ 50│16│   │          │  │ Q3'25│ 18│50│ │       │  │ Q3'25│ 50│16│   │
+│  └──────┴───┴──┘ │     │  └──────┴───┴──┘   │          │  └──────┴───┴──┘ │       │  └──────┴───┴──┘   │
+└──────────────────┘     └──────────────────┘          └──────────────────┘       └──────────────────┘
 ```
 
-All four share the same `MetricBarChart` below for the per-quarter time series. Only the header gauge/slider/placeholder differs.
+**Key improvements over the old design:**
+- **Mini sparkline** (▁▃▄▆▇▅▃▁) shows the trailing 8-quarter trend at a glance — immediately visible without reading a table.
+- **Percentile badge** (63%ile) tells the user where the current value ranks within its own 4-year history.
+- **"vs avg" delta** (+2.1 vs avg) shows how far above/below the historical mean the current value sits.
+- **Collapsible history table** is hidden by default (▼ Historical). Click to expand shows the last 8 quarters of data with all three valuation metrics side-by-side for comparison.
+- **Bar chart removed** — valuation ratios don't have a meaningful zero baseline, making bar charts misleading.
+
+All four variants share the same compact card layout and collapsible history table below. Only the header gauge/slider/placeholder differs.
 
 ### 14.5 Edge Cases
 
@@ -2154,3 +2170,1315 @@ All four share the same `MetricBarChart` below for the per-quarter time series. 
 | Existing `_flat_series` fallback | If `qratios` has no `ev_ebitda` data (pre-migration), behavior reverts to today's single-bar chart |
 | All `company_summary` consumers unaffected | Risk, moat, magic formula, WACC, DCF all continue reading from `company_summary` |
 | Frontend renders without changes | `MetricBarChart` already iterates `quarters[]` — N bars Just Work™ |
+
+---
+
+## 16. Professional Valuation Design Patterns
+
+After evaluating the current bar-chart-based valuation display against professional financial tools (Bloomberg Terminal, FactSet, Morningstar, YCharts, Koyfin), six design patterns were identified. Each solves a specific problem with the current implementation.
+
+### 16.1 Design Pattern 1: Range Indicator Cards
+
+**Problem:** Bar charts for valuation ratios mislead because ratios have no natural zero baseline. A P/E of 15x looks "half" of 30x visually, but the valuation meaning is not linear.
+
+**Pattern:** Display the current value as a large number with color-coded range context (Undervalued / Fair / Overvalued) based on sector or historical percentile thresholds.
+
+`
++---------------------------------------------------+
+|  Valuation Range                                   |
+|                                                    |
+|  P/E               EV/EBITDA   P/FCF               |
+|  15.2x              8.5x       20.1x               |
+|  +--o------+       o------+   +--o----+           |
+|  | U | F |O|       | U|F |O|   |U |F |O|           |
+|  +---------+       +--------+   +-------+           |
+|  * Fair            * Cheap     * Fair               |
+|                                                    |
+|  vs Sector: +5%    vs Sector: -32%  ...            |
++---------------------------------------------------+
+`
+
+**When to use:** As a compact overview when screen space is tight. Good for dashboards where the user wants a quick scan of all three ratios at once.
+
+**Tradeoff:** Loses historical context - user can't see the trend. Best paired with sparklines or a history table.
+
+### 16.2 Design Pattern 2: Sparkline + Percentile Badge
+
+**Problem:** A single number tells the user "what" but not "how it got here."
+
+**Pattern:** Each card shows the current value, a trailing 8-quarter sparkline (mini line chart), and a percentile badge showing where the current value ranks within its own 4-year history.
+
+`
++----------------------+
+| P/E                   |
+|  15.2x   spkl      |
+|         63rd %ile     |
+| vs avg: +2.1         |
+| * Fairly Valued      |
++----------------------+
+`
+
+**When to use:** When you want trend visibility without expanding a table. The sparkline shows momentum (rising / falling / cyclical) at a glance.
+
+**Tradeoff:** Still lacks precise quarter-by-quarter data. User may need exact values.
+
+### 16.3 Design Pattern 3: Compact Table
+
+**Problem:** Some users need exact historical values for their analysis.
+
+**Pattern:** A compact table showing the last 8 quarters of data for all three valuation metrics side by side.
+
+`
++-----------------------------------------------------+
+| Historical Valuation Data                            |
+|                                                      |
+| Quarter   | P/E   | EV/EBITDA | P/FCF                |
+|-----------+-------+-----------+----------------------|
+| Q1 2026   | 15.2  | 40.3      | 20.1                 |
+| Q4 2025   | 13.8  | 43.8      | 22.5                 |
+| Q3 2025   | 10.3  | 50.7      | 18.2                 |
+| Q2 2025   | 13.2  | 79.4      | 24.1                 |
+| Q1 2025   |  8.0  | 76.7      | 95.2                 |
+| Q4 2024   |  6.8  | 43.8      | 335.3                |
+| Q3 2024   | 12.0  | 70.2      | 50.7                 |
+| Q2 2024   | 13.2  | 43.3      | 53.8                 |
++-----------------------------------------------------+
+`
+
+**When to use:** As a secondary view - shown on demand (collapsible) - for users who need precise numbers.
+
+**Tradeoff:** Takes significant vertical space. Not suitable as the primary display.
+
+### 16.4 Design Pattern 4: Gauge Cards with Mini Sparklines (Preferred)
+
+**Problem:** The current implementation uses separate components (PERatioGauge, MetricRangeSlider) with inconsistent visual language and no historical trend within the card.
+
+**Pattern:** Each valuation metric is a self-contained card with:
+1. **Gauge/slider arc** showing current value against bands (if available) or as a raw position on a spectrum.
+2. **Mini sparkline** showing the trailing 8-quarter trend.
+3. **Percentile badge** (e.g., "63rd %ile") showing where the current value ranks historically.
+4. **"vs avg" delta** (e.g., "+2.1 vs avg") comparing current value to the metric's 4-year mean.
+5. **Collapsible history table** below the card showing the last 8 quarters of data.
+
+`
++--------------------------------------------------+
+| P/E                                               |
+| +------------------------------------------------+|
+| |    +----o----+                                 ||
+| |    | 12  18 24|   Current: 15.2x               ||
+| |    +---------+                                 ||
+| |                                                ||
+| |  spkl  63rd %ile         ||
+| |  --- +2.1 vs avg                               ||
+| |                                                ||
+| |  * Fairly Valued                               ||
+| |  ! Recent loss - showing Q3 2025               ||
+| +------------------------------------------------+|
+|                                                    |
+|  v Historical Data (8 quarters)                   |
+|  (collapsed by default)                            |
++--------------------------------------------------+
+`
+
+**Why this is the preferred pattern:**
+- The gauge/slider gives immediate valuation context (undervalued/fair/overvalued).
+- The sparkline adds trend direction without extra clicks.
+- The percentile and delta add quantitative rigor.
+- The collapsible table satisfies power users without cluttering the default view.
+- All information is in one card - no scrolling between the gauge and the data.
+
+### 16.5 Design Pattern 5: Side-by-Side Comparison Strip
+
+**Problem:** Users often want to compare valuation across multiple stocks (e.g., peer comparison).
+
+**Pattern:** A horizontal strip showing each metric's value, sparkline, and color rating for multiple tickers in a row.
+
+`
++------------+----------+----------+----------+
+| Ticker     | P/E      | EV/EBITDA| P/FCF    |
++------------+----------+----------+----------+
+| AAPL       | 28.1 spk | 22.4 spk | 30.2 spk |
+|            | o Over   | o Fair   | o Over   |
++------------+----------+----------+----------+
+| MSFT       | 33.2 spk | 25.1 spk | 28.5 spk |
+|            | o Over   | o Over   | o Fair   |
++------------+----------+----------+----------+
+| GOOGL      | 22.5 spk | 16.2 spk | 25.1 spk |
+|            | o Fair   | o Fair   | o Fair   |
++------------+----------+----------+----------+
+`
+
+**When to use:** Peer comparison views, watchlist pages, or sector overviews. Not the primary view for a single stock's fundamentals tab.
+
+**Tradeoff:** Loses depth per stock - no gauge, no detailed history. Best as a secondary view.
+
+### 16.6 Design Pattern 6: Historical Table with Quarter Detail
+
+**Problem:** Financial analysts need access to the full quarterly time series for their spreadsheet or model inputs.
+
+**Pattern:** A full-width table showing every available quarter with all valuation metrics, sortable and exportable.
+
+`
++----------------------------------------------------------------------+
+| Full Historical Data                         [Download CSV]         |
+|                                                                      |
+| Year  Quarter  P/E    EV/EBITDA  P/FCF   EV()  Price   Actions   |
+|----- ------- ------- ---------- ------- -------- ------- -----------|
+| 2026  Q1       15.2x    40.3x     20.1x   188.8   11.54   [Expand]  |
+| 2025  Q4       13.8x    43.8x     22.5x   177.7    9.90   [Expand]  |
+| 2025  Q3       10.3x    50.7x     18.2x   186.0   11.96   [Expand]  |
+| 2025  Q2       13.2x    79.4x     24.1x   180.4   10.85   [Expand]  |
+| 2025  Q1        8.0x    76.7x     95.2x   177.1   10.03   [Expand]  |
+| 2024  Q4        6.8x    43.8x    335.3x   177.7    9.90   [Expand]  |
+| 2024  Q3       12.0x    70.2x     50.7x   178.0   10.56   [Expand]  |
+| 2024  Q2       13.2x    43.3x     53.8x   183.4   12.54   [Expand]  |
+| 2024  Q1       13.7x    54.3x       -     185.1   13.28   [Expand]  |
+| ...                                                                 |
+| 2022  Q2       76.5x    65.6x     59.7x   169.5   12.60   [Expand]  |
++----------------------------------------------------------------------+
+`
+
+**When to use:** As a dedicated "Full History" modal or page section for power users. Not suitable for the default collapsed view.
+
+**Tradeoff:** Overwhelming for casual users. Must be hidden behind an expand action.
+
+## 17. Adopted Pattern: Design 4 (Gauge Cards with Mini Sparklines)
+
+### 17.1 Rationale
+
+Design 4 was chosen as the primary pattern for the fundamentals tab's valuation section because:
+
+1. **Self-contained cards:** Each valuation metric (P/E, EV/EBITDA, P/FCF) is a complete information unit - gauge, trend, rank, and data - all in one card.
+2. **Progressive disclosure:** The sparkline and badge provide trend context at a glance. The history table is one click away for those who need numbers.
+3. **Consistent visual language:** All three metrics share the same card layout, eliminating the current inconsistency where P/E gets a gauge but EV/EBITDA and P/FCF get range sliders.
+4. **Handles all gauge modes:** The card layout works identically for gauge, compact_gauge, slider, and disabled modes. Only the arc section changes.
+
+### 17.2 Card Layout (Implementation Target)
+
+`
++--------------------------------------------------+
+|  Metric Name         ! Warning badge             |  <- Header row
+|--------------------------------------------------|
+|  +--------------------------------------------+  |
+|  |  Gauge / Slider / Placeholder              |  |  <- Arc section (mode-dependent)
+|  +--------------------------------------------+  |
+|                                                   |
+|  spkl  P63 . +2.1 vs avg  |  <- Sparkline + badge row
+|                                                   |
+|  * Fairly Valued                                  |  <- Assessment label
+|--------------------------------------------------|
+|  v Historical Data (8 quarters)                  |  <- Collapsible trigger
+|  +------+------+------+------+                  |
+|  | Q    | P/E  | EV   | P/FCF|                  |  <- History table
+|  +------+------+------+------+                  |
+|  | Q1'26| 15.2 | 40.3 | 20.1 |                  |
+|  | Q4'25| 13.8 | 43.8 | 22.5 |                  |
+|  | ...  |      |      |      |                  |
+|  +------+------+------+------+                  |
++--------------------------------------------------+
+
+Collapsed state:
++--------------------------------------------------+
+|  Metric Name                                     |
+|  +-Arc-----+  spkl  P63  +2.1    |
+|  +---------+                                     |
+|  * Fairly Valued  > Historical Data             |  <- Collapsed trigger
++--------------------------------------------------+
+`
+
+### 17.3 Collapsible History Table Behavior
+
+| State | Trigger | Content |
+|---|---|---|
+| **Collapsed (default)** | Click "> Historical Data" text/button | Nothing visible below the assessment label |
+| **Expanded** | Click "v Historical Data" text/button | Table of last 8 quarters: Quarter, P/E, EV/EBITDA, P/FCF |
+| **Transition** | CSS max-height + opacity animation, ~250ms ease-in-out | Smooth open/close |
+
+**Design decisions:**
+- **8 quarters** chosen as the default window - enough to see a 2-year trend without overwhelming vertical space. A "Show all" link at the bottom of the table opens a modal or expands to full history (Design 6).
+- **Horizontal scrolling** on narrow screens - table wrapper has overflow-x: auto.
+- **Null/disabled values** shown as "-" in the table, not "0x" or blank.
+- **Sticky header row** so column labels remain visible during scroll if the table is tall.
+
+### 17.4 Sparkline Design
+
+The sparkline uses a normalized SVG path rendered as an inline <svg> element.
+
+| Property | Value |
+|---|---|
+| Data points | Last 8 quarters of the metric |
+| Width | 80px |
+| Height | 24px |
+| Stroke | Current metric accent color (blue for P/E, green for EV/EBITDA, purple for P/FCF) |
+| Stroke width | 2px |
+| Fill | Subtle gradient below the line (10% opacity of stroke color) |
+| Normalization | Min-max scaling to [0, height] |
+| Responsive | Container query scales width proportionally |
+
+**Edge cases:**
+- Fewer than 8 data points: Show available points, centered in the SVG viewBox.
+- All values identical: Flat line at 50% height.
+- Single value: Single dot centered.
+- Missing values in middle of series: Break the line (don't interpolate).
+
+### 17.5 Percentile Badge Design
+
+| Property | Value |
+|---|---|
+| Format | P{N}, e.g. P63 for 63rd percentile |
+| Color | Green if below 30th percentile (undervalued), red if above 70th (overvalued), gray otherwise |
+| Tooltip | "Current value ranks 63rd out of 100 in its 4-year history" |
+| Fallback | Hidden if fewer than 12 data points available |
+
+### 17.6 "vs Avg" Delta Design
+
+| Property | Value |
+|---|---|
+| Format | +2.1 vs avg or -3.2 vs avg |
+| Color | Green if below historical average (cheaper), red if above (more expensive) |
+| Precision | One decimal place |
+| Fallback | Hidden if fewer than 12 data points available |
+
+## 18. Implementation Plan
+
+### 18.1 Phase 1: Backend - GaugeConfig Enhancement (1-2 days)
+
+**Goal:** Extend the existing GaugeConfig to include the new fields needed by Design 4.
+
+**Changes:**
+
+1. **Add fields to GaugeConfig** in analysis.types.ts (frontend) and the corresponding backend schema:
+   - sparkline_values: Optional[List[Optional[float]]] - last 8 quarter values for this metric
+   - percentile: Optional[int] - percentile rank within 4-year history
+   - historical_avg: Optional[float] - mean of available historical values
+   - recent_quarter_label: Optional[str] - e.g. "Q1 2026" for the current marker
+
+2. **Add _compute_percentile(values, current) method** to the fundamentals service - simple rank-based percentile calculation.
+
+3. **Add _compute_sparkline(quarters, metric_key) method** - extract the last 8 non-null values.
+
+4. **Wire into _compute_valuation_metrics:** After computing the gauge config for each metric, compute and attach sparkline, percentile, and historical_avg.
+
+**Validation:** Existing backend tests continue to pass. Add 3 new test cases:
+- Stock with 20 quarters of data -> percentile computed correctly.
+- Stock with < 12 quarters -> percentile hidden (returned as None).
+- Stock with missing values in middle of series -> sparkline handles gaps.
+
+### 18.2 Phase 2: Frontend - ValuationGauge Enhancement (2-3 days)
+
+**Goal:** Update the ValuationGauge component to render the full Design 4 card including sparkline, percentile badge, delta, and collapsible history table.
+
+**Changes:**
+
+1. **Update ValuationGauge props** to accept sparkline_values, percentile, historical_avg, recent_quarter_label.
+
+2. **Add Sparkline sub-component:**
+   - SVG-based, 80x24 default size.
+   - Accepts data: (number | null)[], color: string.
+   - Renders polyline with gradient fill.
+   - Handles edge cases (flat, single value, gaps).
+
+3. **Add PercentileBadge sub-component:**
+   - Renders "P{value}" text.
+   - Color coded by threshold.
+   - Tooltip on hover.
+
+4. **Add VsAvgDelta sub-component:**
+   - Computes current_value - historical_avg.
+   - Formats with sign and one decimal.
+   - Color coded.
+
+5. **Add collapsible history table:**
+   - State: isExpanded (default false).
+   - On expand, fetch or read quarters prop to build table rows.
+   - Table shows last 8 quarters: Quarter label, P/E, EV/EBITDA, P/FCF.
+   - CSS transition on max-height and opacity.
+   - "Show all" link at bottom -> opens modal with full Design 6 table.
+
+6. **Remove MetricBarChart from valuation section:**
+   - The gauge card's collapsible table replaces the old bar chart.
+   - MetricBarChart remains available for other sections (Profitability, Growth, etc.) where absolute metrics (Revenue, Net Income) are shown and bar charts are appropriate.
+
+**Validation:** Existing frontend tests continue to pass. Add 4 new test cases:
+- Gauge card renders sparkline when data provided.
+- Gauge card hides sparkline when data is null.
+- Collapsible table opens and closes on click.
+- Percentile badge color matches threshold rules.
+
+### 18.3 Phase 3: Polish and Edge Cases (1 day)
+
+**Goal:** Handle all edge cases and ensure smooth animation.
+
+**Changes:**
+
+1. **Collapsible table animation:** Use CSS max-height: 0 -> max-height: 1000px with transition and overflow: hidden. Cannot animate height: auto, so max-height is the standard approach.
+
+2. **Null value display:** In the history table, show "-" for None values. Do not show "0x" or leave blank.
+
+3. **Loss quarter warning:** When the current P/E is based on a prior quarter (because the most recent quarter has negative earnings), show the warning badge in the header row and mention the reference quarter in the assessment label.
+
+4. **Responsive layout:** On screens < 768px, the sparkline/badge row wraps below the gauge. On screens < 480px, the history table becomes horizontally scrollable.
+
+5. **Keyboard accessibility:** The collapsible trigger is a <button> with aria-expanded, focusable and activatable via Enter/Space.
+
+### 18.4 Phase 4: Full History Modal (Future, 1-2 days)
+
+**Goal:** Add a modal showing the complete quarterly history (Design 6) with sort, filter, and CSV export.
+
+**Not in scope for the initial implementation.** The collapsible 8-quarter table satisfies the immediate need. The full history modal is tracked as a follow-up enhancement.
+
+## 19. Design Validation
+
+### 19.1 Validation Against Ford Motor Data
+
+Applying Design 4 to Ford (the hardest case from Section 14.3):
+
+| Metric | Gauge Mode | Sparkline | Percentile | Delta | Collapsible Table |
+|---|---|---|---|---|---|
+| P/E (current: 15.2x, based on Q3 2025) | compact_gauge, sector benchmark | 8 quarters: falling trend | P42 (moderate) | +2.1 vs avg (slightly above mean) | Shows P/E, EV/EBITDA, P/FCF for last 8 quarters |
+| EV/EBITDA (current: 40.3x) | slider (CoV > 1.5) | 8 quarters: falling | Hidden (< 12 valid points) | Hidden | Same table as P/E card |
+| P/FCF (current: 20.1x) | slider (insufficient data) | 8 quarters: falling | Hidden | Hidden | Same table |
+
+**Key insight from Ford validation:** All three metric cards share the same collapsible table (showing all three metrics per quarter), even though their gauge modes differ. This is a deliberate design choice - the user gets a unified historical view regardless of which gauge mode each metric uses.
+
+### 19.2 Validation Against Apple (Stable, High Quality)
+
+| Metric | Gauge Mode | Sparkline | Percentile | Delta |
+|---|---|---|---|---|
+| P/E (current: 28x) | gauge, historical benchmark | 8 quarters: rising slightly | P78 (above avg) | +4.2 vs avg |
+| EV/EBITDA (current: 22x) | compact_gauge, historical benchmark | 8 quarters: rising | P72 | +3.1 vs avg |
+| P/FCF (current: 30x) | compact_gauge, historical benchmark | 8 quarters: stable high | P81 | +5.0 vs avg |
+
+**Key insight:** For a stable, high-quality company with plenty of data, all three metrics get meaningful gauges with historical bands. The sparklines confirm the upward trend. The percentile badges show the stock is on the expensive side of its own history.
+
+## 20. Migration Plan
+
+### 20.1 No-Break Deployment
+
+The Design 4 migration happens entirely within the existing API contract:
+
+1. **Backend first:** Deploy new GaugeConfig fields (sparkline_values, percentile, historical_avg, recent_quarter_label). Frontend ignores them initially - no visual change.
+
+2. **Frontend deploy:** New ValuationGauge reads new fields. If absent (old backend), renders current behavior. No coupling.
+
+3. **Remove old code:** After both deploys succeed, remove MetricBarChart from valuation section and delete unused PERatioGauge / MetricRangeSlider components.
+
+### 20.2 Feature Flag (Optional)
+
+If risk mitigation is needed, wrap the new card layout behind a feature flag.
+
+Toggle via environment variable or config. Allows instant rollback without redeploy.
+
+## 21. Comparison: Before vs After
+
+| Aspect | Before (Bar Charts) | After (Design 4 - Gauge Cards) |
+|---|---|---|
+| Primary visual | Bar chart with vertical bars per quarter | Gauge/slider arc with current value marker |
+| Trend visibility | Must read each bar height | Sparkline shows 8-quarter trend at a glance |
+| Valuation context | None (just raw numbers) | Gauge bands (undervalued/fair/overvalued) + percentile rank |
+| Historical precision | Bar chart gives approximate values | Collapsible table with exact numbers |
+| Screen space | Fixed height (always visible) | Collapsible - 40% height savings in default state |
+| Consistency across metrics | P/E=gauge, EV/EBITDA=slider, P/FCF=slider | Same card layout for all three metrics |
+| Zero-baseline problem | Ratios shown as bars (misleading) | Eliminated - gauge/slider has no zero baseline |
+| Loss quarter handling | Negative values break the bar chart | Warning badge + prior-quarter fallback |
+| Data export | None | Future: CSV download from full history modal |
+
+---
+
+## 22. Implementation Gap Analysis — Design 4 vs Current Implementation
+
+### 22.1 Current State (2026-06-13)
+
+The design document specifies Design 4 (Gauge Cards with Mini Sparklines, Sections 14–21) as the primary pattern, but the implementation still operates in a transitional state.
+
+| Design 4 Feature | Spec Location | Implementation Status | Gap |
+|---|---|---|---|
+| Gauge/Slider arc with bands | §14.2, §14.4 | ✅ **Done** — `_compute_metric_gauge_config` returns correct modes; `ValuationGauge` renders gauge/slider/disabled | None |
+| Display mode decision tree (CoV, count) | §14.4.1–14.4.3 | ✅ **Done** — Backend uses sector thresholds, CoV gates, count gates | None |
+| GaugeConfig in `MetricQuarterSeries` | §14.2 | ✅ **Done** — Both Python `schemas_fundamentals.py` and TS `analysis.types.ts` have it | None |
+| **Mini sparkline** | §14.4 (Design 4 card), §17.4 | ❌ **Missing** — `sparkline_values` not in `GaugeConfig`; no sparkline rendering | **Must add** |
+| **Percentile badge** | §14.4 (Design 4 card), §17.5 | ❌ **Missing** — `percentile`, `historical_avg` not in `GaugeConfig` | **Must add** |
+| **"vs avg" delta** | §14.4 (Design 4 card), §17.6 | ❌ **Missing** — No delta computation or rendering | **Must add** |
+| **Collapsible history table** | §14.4 (Design 4 card), §17.3 | ❌ **Missing** — `MetricBarChart` still shown for valuation metrics | **Must add** |
+| **Remove `MetricBarChart` from valuation** | §18.2 step 6 | ❌ **Not done** — Bar chart still renders below gauge | **Must remove** |
+| Unify card layout across all 3 metrics | §17.1 | ⚠️ **Partial** — All use `ValuationGauge` but with inconsistent look (gauge vs slider vs no sparkline/badge) | **Must unify** |
+| Loss quarter warning in header row | §14.4, §18.3 step 3 | ⚠️ **Partial** — Warning text exists in `GaugeConfig.warnings` but not rendered as a badge | **Must add** |
+| Sparkline edge cases | §17.4 | ❌ **Missing** — No sparkline to have edge cases for | Will be handled with sparkline |
+| Full history modal (Design 6) | §18.4 | ❌ **Not in scope** — Planned as future enhancement | Track separately |
+
+### 22.2 Key Insight
+
+The **backend decision tree** (§14.4) and **gauge/slider rendering** are complete. What's missing is the **frontend card polish** — the elements that make the card "Design 4" instead of "a gauge sitting above a bar chart that shouldn't be there." The sparkline, percentile badge, delta, and collapsible table turn a functional display into a professional one.
+
+### 22.3 What Stays vs What Changes
+
+| Component | Action |
+|---|---|
+| `_compute_metric_gauge_config` (backend) | ✅ Keep — Add 4 new output fields (sparkline_values, percentile, historical_avg, recent_quarter_label) |
+| `GaugeConfig` (Python + TS) | ✏️ Extend — Add new optional fields |
+| `ValuationGauge` (frontend) | ✏️ Enhance — Add sparkline, badge, delta, collapsible table sub-components |
+| `MetricBarChart` | ✅ Keep for non-valuation sections (Quality, Growth, Moat, Narrative) — bar charts are appropriate for those |
+| `FundamentalsPanel` valuation rendering | ✏️ Remove `MetricBarChart` from valuation metric cards; keep gauge card with collapsible table |
+| Tests | ✏️ Update — Add new test cases for sparkline, badge, delta, collapsible table |
+
+---
+
+## 23. Missing Implementation: GaugeConfig Extension
+
+### 23.1 New Fields
+
+Add the following optional fields to `GaugeConfig` in both Python (`schemas_fundamentals.py`) and TypeScript (`analysis.types.ts`):
+
+```python
+# backend/schemas_fundamentals.py — GaugeConfig additions
+
+class GaugeConfig(BaseModel):
+    # ... existing fields (display_mode, benchmark, band_low, etc.) ...
+
+    # ── NEW: Sparkline data ──
+    sparkline_values: Optional[List[Optional[float]]] = None
+    """Last 8-12 quarters of this metric's values for mini sparkline chart.
+       None entries indicate missing quarters (break the line)."""
+
+    # ── NEW: Percentile / Historical context ──
+    percentile: Optional[int] = None
+    """Percentile rank of current value within all-time history (0-100).
+       Example: 63 means current value > 63% of all historical values.
+       Hidden when fewer than 12 data points available."""
+
+    historical_avg: Optional[float] = None
+    """Mean of all available historical values for this metric.
+       Used to compute the vs-avg delta on the frontend."""
+
+    vs_avg_delta: Optional[float] = None
+    """current_value - historical_avg. Pre-computed on backend.
+       Positive means current is above average (more expensive).
+       Negative means current is below average (cheaper)."""
+
+    recent_quarter_label: Optional[str] = None
+    """Label of the quarter used for 'current' value.
+       e.g. 'Q3 2025' when the most recent quarter had negative earnings
+       and we fell back to the prior positive quarter."""
+```
+
+Same additions in TypeScript:
+
+```typescript
+// web/src/features/analysis/types/analysis.types.ts — GaugeConfig additions
+
+export interface GaugeConfig {
+  // ... existing fields ...
+  sparkline_values?: (number | null)[];
+  percentile?: number;
+  historical_avg?: number;
+  vs_avg_delta?: number;
+  recent_quarter_label?: string;
+}
+```
+
+### 23.2 Backend Computation Logic
+
+Add to `fundamentals_service.py` — `_compute_metric_gauge_config` is already the right home:
+
+```python
+def _compute_sparkline_values(
+    quarters: List[QuarterDataPoint],
+    max_points: int = 8,
+) -> List[Optional[float]]:
+    """Extract the last {max_points} values (including None for gaps)
+       from a quarters list, in reverse-chronological order (oldest first).
+       Returns at most max_points entries."""
+    recent = quarters[-max_points:]
+    return [q.value for q in recent]
+
+
+def _compute_percentile(
+    positive_values: List[float],
+    current: Optional[float],
+) -> Optional[int]:
+    """Rank-based percentile of current value within full history.
+       Returns None if < 12 data points or current is None."""
+    if current is None or len(positive_values) < 12:
+        return None
+    sorted_vals = sorted(positive_values)
+    count_less = sum(1 for v in sorted_vals if v < current)
+    count_equal = sum(1 for v in sorted_vals if v == current)
+    # Percentile = (count_less + 0.5 * count_equal) / total * 100
+    pct = (count_less + 0.5 * count_equal) / len(sorted_vals) * 100
+    return round(pct)
+```
+
+Wire into the existing `_compute_metric_gauge_config` — the final `GaugeConfig` construction in each return path gets these fields added. For example, the gauge path becomes:
+
+```python
+sparkline_values = _compute_sparkline_values(quarters)
+percentile = _compute_percentile(positive, current)
+historical_avg = avg_v  # already computed
+vs_avg_delta = (current - avg_v) if current is not None and avg_v is not None else None
+recent_quarter_label = _find_recent_positive_label(quarters, raw_current)
+```
+
+### 23.3 `_find_recent_positive_label` helper
+
+```python
+def _find_recent_positive_label(
+    quarters: List[QuarterDataPoint],
+    raw_current: Optional[float],
+) -> Optional[str]:
+    """If the most recent quarter's value is negative/null, find the
+       most recent quarter with a positive value and return its label.
+       Otherwise return the most recent quarter's label."""
+    if not quarters:
+        return None
+    if raw_current is not None and raw_current > 0:
+        return quarters[-1].label if quarters[-1].label else None
+    # Walk backwards to find most recent positive quarter
+    for q in reversed(quarters):
+        if q.value is not None and q.value > 0:
+            return q.label
+    return None
+```
+
+### 23.4 Backend Validation
+
+| Test Case | Expected |
+|---|---|
+| Stock with 20 quarters → sparkline has 8 entries (last 8) | `len(sparkline) == 8` |
+| Stock with 4 available quarters → sparkline has 4 entries | `len(sparkline) == 4` |
+| Stock with gap in middle → None entry in sparkline at gap position | `sparkline[i] is None` at gap index |
+| Stock with 15 data points → percentile is `int` between 0-100 | `0 <= percentile <= 100` |
+| Stock with < 12 data points → `percentile is None` | None returned |
+| Current value equals historical avg → delta is `0.0` | `vs_avg_delta == 0.0` |
+| Recent quarter negative → `recent_quarter_label` points to prior positive quarter | Label matches prior positive quarter |
+
+---
+
+## 24. Missing Implementation: Sparkline Component
+
+### 24.1 Design Spec (from §17.4)
+
+| Property | Value |
+|---|---|
+| Data points | Last 8 quarters (from `GaugeConfig.sparkline_values`) |
+| Width | 80px (default) |
+| Height | 24px (default) |
+| Stroke | Metric accent color (varies by metric) |
+| Stroke width | 2px |
+| Fill | Subtle gradient below the line (10% opacity) |
+| Normalization | Min-max scaling to [0, height] |
+| Responsive | Container query scales width proportionally |
+
+### 24.2 Implementation as Sub-Component
+
+New component `Sparkline` in `valuation-gauge.tsx`:
+
+```tsx
+function Sparkline({
+  data,
+  color = "#60A5FA",
+  width = 80,
+  height = 24,
+}: {
+  data: (number | null)[];
+  color?: string;
+  width?: number;
+  height?: number;
+}) {
+  // Filter to non-null for min/max computation
+  const valid = data.filter((d): d is number => d !== null);
+  if (valid.length === 0) return null;
+
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const range = max - min || 1;
+  const stepX = width / Math.max(data.length - 1, 1);
+
+  // Build polyline points, skipping nulls by breaking the path
+  let pathD = "";
+  let currentSegment: { x: number; y: number }[] = [];
+
+  data.forEach((d, i) => {
+    const x = i * stepX;
+    const y = d != null ? height - ((d - min) / range) * (height - 2) - 1 : height / 2;
+    if (d !== null) {
+      currentSegment.push({ x, y });
+    } else {
+      if (currentSegment.length > 1) {
+        pathD += `M ${currentSegment[0].x.toFixed(1)} ${currentSegment[0].y.toFixed(1)} ` +
+          currentSegment.slice(1).map((p) => `L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ") + " ";
+      }
+      currentSegment = [];
+    }
+  });
+  // Flush last segment
+  if (currentSegment.length > 1) {
+    pathD += `M ${currentSegment[0].x.toFixed(1)} ${currentSegment[0].y.toFixed(1)} ` +
+      currentSegment.slice(1).map((p) => `L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  }
+
+  // Single value edge case
+  if (valid.length === 1 && currentSegment.length === 1) {
+    pathD = `M ${currentSegment[0].x} ${currentSegment[0].y} L ${currentSegment[0].x + 1} ${currentSegment[0].y}`;
+  }
+
+  // Area fill path
+  const areaD = pathD + ` L ${data.length - 1} ${height} L 0 ${height} Z`;
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0">
+      <defs>
+        <linearGradient id={`spark-fill-${color.replace("#", "")}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.15" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={areaD} fill={`url(#spark-fill-${color.replace("#", "")})`} />
+      <path d={pathD} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Terminal dot */}
+      {valid.length > 0 && (
+        <circle cx={data.lastIndexOf(valid[valid.length - 1]) * stepX} cy={height - ((valid[valid.length - 1] - min) / range) * (height - 2) - 1} r="2.5" fill={color} />
+      )}
+    </svg>
+  );
+}
+```
+
+### 24.3 Edge Case Handling
+
+| Scenario | Behavior |
+|---|---|
+| All values null (all N/A) | Component returns `null` (not rendered) |
+| Single value | Short line segment at 50% height with terminal dot |
+| Fewer than 8 values | Show available values, left-aligned |
+| Missing value in middle | Break line (two separate segments), fill not rendered in gap |
+| All identical values | Flat line at 50% height |
+
+---
+
+## 25. Missing Implementation: Percentile Badge + vs Avg Delta
+
+### 25.1 PercentileBadge Sub-Component
+
+A small badge showing "P{value}" with color coding:
+
+```tsx
+function PercentileBadge({
+  percentile,
+  className,
+}: {
+  percentile: number;
+  className?: string;
+}) {
+  const color =
+    percentile <= 30
+      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"    // Undervalued
+      : percentile >= 70
+        ? "bg-rose-500/15 text-rose-400 border-rose-500/25"          // Overvalued
+        : "bg-amber-500/15 text-amber-400 border-amber-500/25";      // Fair
+
+  return (
+    <span
+      className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded-md border", color, className)}
+      title={`Current value ranks in the ${percentile}th percentile of its history`}
+    >
+      P{percentile}
+    </span>
+  );
+}
+```
+
+**Rules:** Hidden when `percentile` is `null` (< 12 data points).
+
+### 25.2 VsAvgDelta Sub-Component
+
+Shows current vs historical average difference:
+
+```tsx
+function VsAvgDelta({
+  delta,
+  unit,
+}: {
+  delta: number;
+  unit: string;
+}) {
+  const isAboveAvg = delta > 0;
+  const isBelowAvg = delta < 0;
+
+  return (
+    <span
+      className={cn(
+        "text-[10px] font-medium tabular-nums",
+        isAboveAvg ? "text-rose-400/80" : isBelowAvg ? "text-emerald-400/80" : "text-white/40",
+      )}
+    >
+      {delta > 0 ? "▲" : delta < 0 ? "▼" : "—"} {delta >= 0 ? "+" : ""}{delta.toFixed(1)}
+      {unit === "x" ? "×" : unit === "%" ? "%" : ""} vs avg
+    </span>
+  );
+}
+```
+
+**Rules:** Hidden when `vs_avg_delta` is `null`.
+
+### 25.3 Row Layout in Card
+
+Within the valuation card, the sparkline, percentile badge, and vs avg delta form a single horizontal row:
+
+```
++----------------------------------------------------------------------+
+|  P/E Ratio                            ! Recent loss (based on Q3'25) |
+|  +----------------------------------+                                |
+|  |     Gauge / Slider / etc.        |                                |
+|  +----------------------------------+                                |
+|                                                                      |
+|  ▂▃▅▇▆▄▃▁  P42  ▲ +2.1× vs avg                                     |
+|                                                                      |
+|  ★ Fairly Valued                                                     |
+|  ▼ Historical Data (8 quarters)                                      |
++----------------------------------------------------------------------+
+```
+
+---
+
+## 26. Modularity Design — No Snowflakes
+
+### 26.1 Reusable Component Tree
+
+Every new component is designed to be **metric-agnostic**. None should know about P/E, EV/EBITDA, or P/FCF specifically.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Generic (metric-agnostic)          Valuation-specific (thin)  │
+│                                                               │
+│  Sparkline                              ...uses no valuation   │
+│  PercentileBadge                        ...knows nothing       │
+│  VsAvgDelta                             ...knows nothing       │
+│  WarningBadge        ← NEW              ...takes string[]      │
+│  HistoryTable        ← NEW (generic)    ...takes columns + data│
+│  MetricCard          ← NEW (generic)    ...just layout shell   │
+│                                                               │
+│  ValuationGauge       (already generic — takes GaugeConfig)   │
+│  MetricBarChart       (already generic — used by 4 sections)  │
+│  groupQuartersByYear  (already generic — reusable helper)     │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 26.2 Generic Components
+
+#### 26.2.1 WarningBadge
+
+Renders the first warning from `GaugeConfig.warnings` as a compact badge. Input-agnostic:
+
+```tsx
+function WarningBadge({ warnings, maxLength = 30 }: { warnings: string[]; maxLength?: number }) {
+  if (warnings.length === 0) return null;
+  const text = warnings[0].length > maxLength ? warnings[0].substring(0, maxLength) + "…" : warnings[0];
+  return (
+    <span className="text-[9px] text-amber-400/70 bg-amber-400/10 px-1.5 py-0.5 rounded whitespace-nowrap">
+      {text}
+    </span>
+  );
+}
+```
+
+#### 26.2.2 HistoryTable (Generic)
+
+A collapsible data table that accepts any column configuration — not hardcoded to valuation metrics:
+
+```tsx
+interface HistoryColumn<T> {
+  header: string;
+  align?: "left" | "right";
+  render: (row: T) => ReactNode;
+}
+
+function HistoryTable<T extends { label: string }>({
+  data,
+  columns,
+  rowKey,
+  defaultVisible = 8,
+}: {
+  data: T[];
+  columns: HistoryColumn<T>[];
+  rowKey: (row: T) => string;
+  defaultVisible?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = data.slice(-defaultVisible);
+
+  if (data.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[11px] text-white/50 hover:text-white/80 transition-colors"
+        aria-expanded={expanded}
+      >
+        {expanded ? "▼" : "▶"} Historical Data ({visible.length} quarters)
+      </button>
+      <div className={cn("overflow-hidden transition-all duration-250 ease-in-out", expanded ? "max-h-[600px] opacity-100" : "max-h-0 opacity-0")}>
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-[11px] border-collapse">
+            <thead>
+              <tr className="border-b border-white/10">
+                {columns.map((col) => (
+                  <th key={col.header} className={cn("text-white/40 font-medium uppercase tracking-wider py-1.5", col.align === "right" ? "text-right px-3" : "text-left pr-3")}>
+                    {col.header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((row) => (
+                <tr key={rowKey(row)} className="border-b border-white/5 hover:bg-white/[0.02]">
+                  {columns.map((col) => (
+                    <td key={col.header} className={cn("py-1.5 tabular-nums", col.align === "right" ? "text-right px-3 text-white/80" : "pr-3 text-white/60")}>
+                      {col.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.length > defaultVisible && (
+            <button className="text-[10px] text-blue-400/60 hover:text-blue-400 mt-1">
+              Show all {data.length} quarters →
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+**No references to P/E, EV/EBITDA, or P/FCF anywhere.** The valuation section uses it by passing valuation-specific column definitions:
+
+```tsx
+// Valuation usage — columns defined at call site, not inside the component
+<HistoryTable
+  data={tableQuarters}
+  rowKey={(q) => `${q.fiscal_year}-${q.fiscal_quarter}`}
+  columns={[
+    { header: "Quarter", render: (q) => q.label },
+    { header: "P/E", align: "right", render: (q) => peVal != null ? formatMetricValue(peVal, "x") : "—" },
+    { header: "EV/EBITDA", align: "right", render: (q) => evVal != null ? formatMetricValue(evVal, "x") : "—" },
+    { header: "P/FCF", align: "right", render: (q) => pfcfVal != null ? formatMetricValue(pfcfVal, "x") : "—" },
+  ]}
+/>
+```
+
+#### 26.2.3 MetricCard (Generic Layout Shell)
+
+The repeating card pattern (header + visual + sparkline row + assessment) can be extracted into a generic wrapper. This avoids duplicating the layout for each valuation metric and makes it available for other sections:
+
+```tsx
+function MetricCard({
+  label,
+  warnings,
+  visual,        // ReactNode — gauge, slider, or any visual element
+  metadata,      // ReactNode — sparkline + badge + delta row (optional)
+  assessment,    // ReactNode — valuation badge (optional)
+  children,      // ReactNode — collapsible table or any extra content
+}: {
+  label: string;
+  warnings?: string[];
+  visual: ReactNode;
+  metadata?: ReactNode;
+  assessment?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex-1 min-w-[240px] bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[13px] font-medium text-white/70">{label}</span>
+        <WarningBadge warnings={warnings ?? []} />
+      </div>
+      {visual}
+      {metadata && <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/[0.06]">{metadata}</div>}
+      {assessment && <div className="flex justify-center mt-2">{assessment}</div>}
+      {children}
+    </div>
+  );
+}
+```
+
+**This replaces the inline card div in §27.3.** The valuation section becomes a clean composition:
+
+```tsx
+<MetricCard
+  label={m.label}
+  warnings={config.warnings}
+  visual={<ValuationGauge config={config} unit={m.unit} label={m.label} metricId={m.metric_id} />}
+  metadata={<>
+    {config.sparkline_values && <Sparkline data={config.sparkline_values} color={getMetricColor(m.metric_id)} />}
+    {config.percentile != null && <PercentileBadge percentile={config.percentile} />}
+    {config.vs_avg_delta != null && <VsAvgDelta delta={config.vs_avg_delta} unit={m.unit} />}
+  </>}
+  assessment={<ValuationBadge config={config} />}
+/>
+```
+
+`MetricCard` is metric-agnostic — it can wrap anything. If a future section needs a gauge-style card with metadata, it reuses `MetricCard`. The valuation section just populates the slots.
+
+### 26.3 What This Changes in the Codebase
+
+| Before (Snowflake) | After (Generic) | Location |
+|---|---|---|
+| `ValuationHistoryTable` with hardcoded P/E/EV/PFCF columns | `HistoryTable<T>` taking `columns: HistoryColumn<T>[]` | `valuation-gauge.tsx` or new `shared-ui.tsx` |
+| Inline card div in `FundamentalsPanel` | `MetricCard` component with slots | `shared-ui.tsx` |
+| `config.warnings[0].substring(0, 30)` inline | `WarningBadge` component | `valuation-gauge.tsx` or `shared-ui.tsx` |
+| `Sparkline`, `PercentileBadge`, `VsAvgDelta` | Already generic — no change needed | `valuation-gauge.tsx` |
+
+### 26.4 Backward Compatibility
+
+No existing code breaks. `MetricCard`, `HistoryTable`, and `WarningBadge` are new components that replace inline markup. Old call sites that still use inline markup continue to work — they just miss the new modularity.
+
+---
+
+## 27. Collapsible History Table (Valuation-Specific Instantiation)
+
+### 27.1 Overview
+
+The history table shows the last 8 quarters of all three valuation metrics side-by-side. It uses the generic `HistoryTable<T>` from §26.2.2 with valuation-specific column bindings.
+
+**Key design decision:** One shared table at the section level (not duplicated per card) because all three metrics share the same quarterly data from the same `qratios` loop.
+
+### 27.2 Data Source
+
+The top-level `FundamentalsResponse.quarters` is `List[str]` (quarter label strings), NOT `QuarterDataPoint[]`. The table derives its rows from the **P/E metric's quarters** (`peMetric.quarters`) because:
+
+1. All three valuation metrics are built from the same `qratios` loop at `fundamentals_service.py:682-750` — they share identical fiscal year/quarter keys.
+2. Using P/E's quarters ensures we iterate `QuarterDataPoint[]` with `fiscal_year`, `fiscal_quarter`, `label` fields needed for matching.
+3. This guarantees row consistency — no metric has a quarter the others don't.
+
+### 27.3 Implementation
+
+```tsx
+function ValuationHistoryTable({
+  peMetric,
+  evMetric,
+  pfcfMetric,
+  frequency,
+  activeIndices,
+}: {
+  peMetric: MetricQuarterSeries;
+  evMetric?: MetricQuarterSeries;
+  pfcfMetric?: MetricQuarterSeries;
+  frequency: "quarterly" | "annual";
+  activeIndices: number[];
+}) {
+  const rawQuarters = activeIndices.map((i) => peMetric.quarters[i]).filter(Boolean);
+  const displayQuarters = frequency === "annual"
+    ? groupQuartersByYear(rawQuarters)
+    : rawQuarters;
+
+  // Skip quarters where all 3 metrics are null
+  const getVal = (metric: MetricQuarterSeries | undefined, q: QuarterDataPoint) =>
+    metric?.quarters.find(
+      (mq) => mq.fiscal_year === q.fiscal_year && mq.fiscal_quarter === q.fiscal_quarter,
+    )?.value ?? null;
+
+  const populated = displayQuarters.filter((q) => {
+    const peVal = q.value ?? getVal(peMetric, q);
+    const evVal = getVal(evMetric, q);
+    const pfcfVal = getVal(pfcfMetric, q);
+    return peVal != null || evVal != null || pfcfVal != null;
+  });
+
+  if (populated.length === 0) return null;
+
+  return (
+    <HistoryTable
+      data={populated}
+      rowKey={(q) => `${q.fiscal_year}-${q.fiscal_quarter}`}
+      defaultVisible={8}
+      columns={[
+        { header: "Quarter", render: (q) => q.label },
+        {
+          header: "P/E", align: "right",
+          render: (q) => {
+            const v = q.value ?? getVal(peMetric, q);
+            return v != null ? formatMetricValue(v, "x") : <span className="text-white/20">—</span>;
+          },
+        },
+        {
+          header: "EV/EBITDA", align: "right",
+          render: (q) => {
+            const v = getVal(evMetric, q);
+            return v != null ? formatMetricValue(v, "x") : <span className="text-white/20">—</span>;
+          },
+        },
+        {
+          header: "P/FCF", align: "right",
+          render: (q) => {
+            const v = getVal(pfcfMetric, q);
+            return v != null ? formatMetricValue(v, "x") : <span className="text-white/20">—</span>;
+          },
+        },
+      ]}
+    />
+  );
+}
+```
+
+`ValuationHistoryTable` is a **thin adapter** — it knows about the 3 valuation metrics but delegates all rendering to the generic `HistoryTable`. If a 4th valuation metric is added later, only this adapter changes.
+
+### 27.4 Edge Cases
+
+| Scenario | Behavior |
+|---|---|
+| < 8 quarters after filtering | `HistoryTable` shows available count: "Historical Data (N quarters)" |
+| All quarters filtered out | `ValuationHistoryTable` returns `null` — nothing rendered |
+| Frequency = Annual | Rows grouped by year via `groupQuartersByYear` |
+| ViewMode = From purchase | `activeIndices` already filters to post-purchase quarters |
+| Horizontal overflow | `HistoryTable` wrapper has `overflow-x: auto` |
+| Keyboard | Trigger button is `<button>` with `aria-expanded` |
+
+---
+
+## 28. Valuation Section — Updated Rendering Logic
+
+### 27.1 Current (Broken) Flow
+
+```
+FundamentalsPanel renders valuation section:
+  └─ For each metric:
+       ├─ ValuationGauge (gauge/slider/disabled)
+       └─ MetricBarChart ← SHOULD NOT BE HERE for valuation
+```
+
+### 27.2 Target Flow
+
+```
+FundamentalsPanel renders valuation section:
+  ├─ IntrinsicValueCard (existing, unchanged)
+  ├─ 3x Gauge Cards (P/E, EV/EBITDA, P/FCF)
+  │    └─ ValuationGauge
+  │         ├─ Arc (gauge/slider/disabled)
+  │         ├─ Sparkline + PercentileBadge + VsAvgDelta (row)
+  │         └─ ValuationBadge (Fairly/Undervalued/Overvalued)
+  └─ ValuationHistoryTable (collapsible, shared)
+       └─ Shows last 8 quarters of all 3 metrics
+```
+
+### 27.3 Frontend Change — Valuation Metric Card Rendering
+
+In `FundamentalsPanel`, the valuation section's metric cards change from:
+
+```tsx
+// CURRENT (fundamentals-panel.tsx ~line 796-838)
+<div key={m.metric_id}>
+  <ValuationGauge ... />
+  <MetricBarChart ... />    // ← REMOVE THIS
+</div>
+```
+
+To:
+
+```tsx
+// NEW
+<div key={m.metric_id} className="flex-1 min-w-[240px] bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+  <div className="flex items-center justify-between mb-2">
+    <span className="text-[13px] font-medium text-white/70">{m.label}</span>
+    {/* Warning badge */}
+    {config.warnings.length > 0 && (
+      <span className="text-[9px] text-amber-400/70 bg-amber-400/10 px-1.5 py-0.5 rounded">
+        {config.warnings[0].substring(0, 30)}...
+      </span>
+    )}
+  </div>
+
+  <ValuationGauge config={config} unit={m.unit} label={m.label} metricId={m.metric_id} />
+
+  {/* Sparkline + Percentile + Delta row */}
+  { (config.sparkline_values || config.percentile || config.vs_avg_delta != null) && (
+    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/[0.06]">
+      {config.sparkline_values && (
+        <Sparkline data={config.sparkline_values} color={getMetricColor(m.metric_id)} width={72} height={22} />
+      )}
+      {config.percentile != null && <PercentileBadge percentile={config.percentile} />}
+      {config.vs_avg_delta != null && <VsAvgDelta delta={config.vs_avg_delta} unit={m.unit} />}
+    </div>
+  )}
+
+  {/* Valuation badge */}
+  <div className="flex justify-center mt-2">
+    <ValuationBadge config={config} />
+  </div>
+</div>
+```
+
+The `ValuationHistoryTable` is rendered once at the section level (after the three cards), not duplicated per card.
+
+### 27.4 Metric Color Mapping
+
+```tsx
+function getMetricColor(metricId: string): string {
+  switch (metricId) {
+    case "pe_ratio": return "#60A5FA";       // blue
+    case "ev_ebitda": return "#34D399";      // emerald
+    case "price_to_fcf": return "#A78BFA";   // violet
+    default: return "#94A3B8";               // slate
+  }
+}
+```
+
+---
+
+## 29. Impact Analysis — Design 4 Completion
+
+### 29.1 Files Requiring Changes
+
+| # | File | Change | Type | Effort |
+|---|---|---|---|---|
+| 1 | `backend/schemas_fundamentals.py` | Add 5 new optional fields to `GaugeConfig` | Add | Small |
+| 2 | `backend/application/services/fundamentals_service.py` | Add `_compute_sparkline_values`, `_compute_percentile`, `_find_recent_positive_label`; wire into `_compute_metric_gauge_config` | Add | Medium |
+| 3 | `web/src/features/analysis/types/analysis.types.ts` | Add 5 new optional fields to `GaugeConfig` TS interface | Add | Small |
+| 4 | `web/src/features/analysis/components/valuation-gauge.tsx` | Add `Sparkline`, `PercentileBadge`, `VsAvgDelta` sub-components; export `ValuationBadge` | Add | Medium |
+| 5 | `web/src/features/analysis/components/fundamentals-panel.tsx` | Add `ValuationHistoryTable` component; update valuation section rendering: remove `MetricBarChart` from valuation cards, add collapsible table, add sparkline/badge/delta row | Modify | Medium |
+
+### 29.2 Files Requiring Tests
+
+| # | File | Test Cases | Type | Effort |
+|---|---|---|---|---|
+| 1 | `backend/tests/test_fundamentals_service.py` | 4 new: sparkline extraction, percentile computation, null handling, recent quarter label | Add | Small |
+| 2 | `web/src/__tests__/ValuationGauge.test.tsx` | 4 new: sparkline renders, percentile badge colors, vs avg delta format, collapsible table | Add | Medium |
+| 3 | `web/src/__tests__/FundamentalsPanel.test.tsx` | 2 new: valuation section no longer shows bar chart, collapsible table exists | Update | Small |
+
+### 29.3 Files NOT Requiring Changes (Explicit No-Ops)
+
+| File | Why unchanged |
+|---|---|
+| `backend/infrastructure/repositories/fundamentals_repository.py` | No new queries — sparkline/percentile computed from already-fetched `qratios` |
+| `backend/api/analysis.py` | No API contract change — new fields are optional additions to existing response |
+| `backend/application/jobs/derived_financial_metrics_job.py` | No new data to compute — sparkline/percentile are query-time computations |
+| `web/src/features/analysis/hooks/useFundamentals.ts` | Same endpoint, response shape unchanged (new optional fields) |
+| `web/src/lib/query-keys.ts` | No new queries |
+| `web/src/features/analysis/components/intrinsic-value-card.tsx` | Unchanged — still renders below section header |
+| `web/src/features/analysis/components/shared-ui.tsx` | No new shared components needed |
+| `web/src/features/analysis/components/pe-ratio-gauge.tsx` | **Can be deprecated** — imported only by its own test file; `ValuationGauge` handles PE now |
+| `web/src/features/analysis/components/metric-range-slider.tsx` | **Can be deprecated** — zero imports outside its own file; `ValuationGauge` handles slider now |
+
+### 29.4 History Table Data Flow (Clarified)
+
+Unlike the initial spec which assumed `quarters: QuarterDataPoint[]`, the real data source is:
+
+```
+data.quarters: string[]                    ← Top-level, label strings only
+peMetric.quarters: QuarterDataPoint[]      ← Row source for history table (has fiscal_year/fiscal_quarter/label)
+evMetric.quarters: QuarterDataPoint[]      ← Value lookup only (matched by fy/fq)
+pfcfMetric.quarters: QuarterDataPoint[]    ← Value lookup only (matched by fy/fq)
+```
+
+The table iterates `peMetric.quarters` filtered by `activeIndices` and `frequency`, then cross-references EV/EBITDA and P/FCF values by `(fiscal_year, fiscal_quarter)` key match. This is robust because all three metric series originate from the same `qratios` loop (`fundamentals_service.py:682-750`).
+
+### 29.5 Backward Compatibility
+
+| Guarantee | Detail |
+|---|---|
+| Old API response still works | New `GaugeConfig` fields are optional. Frontend reads them when present; ignores them when absent |
+| Old frontend still works with new backend | Frontend renders current gauge/slider + bar chart. New fields are ignored |
+| No DB schema changes | All new data is computed at query time from in-memory data |
+| `MetricBarChart` still used for non-valuation | Quality, Growth, Moat, Narrative sections continue using bar charts unchanged |
+
+### 29.6 Data Flow After Design 4 Completion
+
+```
+FundamentalsService._compute_valuation_metrics()
+  │
+  ├─ Builds P/E, EV/EBITDA, P/FCF quarter series from qratios
+  │
+  ├─ For each metric:
+  │    ├─ _compute_metric_gauge_config()
+  │    │    ├─ _positive_values()         → positive values list
+  │    │    ├─ _coeff_of_variation()      → CoV
+  │    │    ├─ _most_recent_positive()    → current (handles loss)
+  │    │    ├─ _compute_sparkline_values() → last 8 values (with gaps)
+  │    │    ├─ _compute_percentile()      → rank percentile
+  │    │    └─ _find_recent_positive_label() → quarter label
+  │    │
+  │    └─ Returns GaugeConfig (with all new fields)
+  │
+  └─ Attaches gauge_config to each MetricQuarterSeries
+       │
+       ▼
+FundamentalsResponse → Frontend useFundamentals()
+       │
+       ▼
+FundamentalsPanel renders:
+  ├─ IntrinsicValueCard
+  ├─ 3x Valuation Cards (P/E, EV/EBITDA, P/FCF):
+  │    ├─ ValuationGauge (gauge/slider/disabled)
+  │    ├─ Sparkline + PercentileBadge + VsAvgDelta
+  │    └─ ValuationBadge
+  └─ ValuationHistoryTable (collapsible)
+```
+
+### 29.7 Risk Assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Old `GaugeConfig` missing new fields → frontend renders no sparkline/badge | Medium | Low (falls back to current behavior) | All new fields optional; frontend checks `null` before rendering |
+| Backend `_compute_percentile` with large dataset → perf degradation | Low | Low | Percentile is O(n log n) — max ~60 quarters, negligible |
+| Collapsible table animation jank on low-end devices | Low | Low | CSS `max-height` with `transition` is well-supported; GPU composited |
+| Sparkline SVG rendering with many gaps | Low | Low | Implementation handles `null` as path break — tested edge case |
+| Deprecation of `PERatioGauge`, `MetricRangeSlider` | Medium | Low | Components still work; clean up in a follow-up PR |
+
+---
+
+## 30. Summary — What the User Sees After Implementation
+
+### Before (Current State)
+
+```
+┌────────────────────────────────────────────────────────┐
+│  Valuation                    Status: [Intact]          │
+│                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │ P/E           │  │ EV/EBITDA    │  │ P/FCF        │ │
+│  │ [gauge]       │  │ [slider]     │  │ [slider]     │ │
+│  │ [bar chart]   │  │ [bar chart]  │  │ [bar chart]  │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│  > Historical Data (collapsible) — NOT IMPLEMENTED      │
+└────────────────────────────────────────────────────────┘
+```
+
+### After
+
+```
+┌────────────────────────────────────────────────────────┐
+│  Valuation                    Status: [Intact]          │
+│                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │ P/E           │  │ EV/EBITDA    │  │ P/FCF        │ │
+│  │ [gauge]       │  │ [gauge]      │  │ [slider]     │ │
+│  │ ▂▃▅▇▆▄▃▁ P42 │  │ ▂▃▅▇▆▄▃▁ P48 │  │ ▂▃▅▇▆▄▃▁ P72 │ │
+│  │ ▲ +2.1 vs avg│  │ ▼ -3.2 vs avg│  │ ▲ +5.8 vs avg│ │
+│  │ ★ Fairly Val │  │ ★ Fairly Val │  │ ★ Overvalued │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│                                                         │
+│  ▼ Historical Data (8 quarters)                        │
+│  ┌────────┬──────┬──────────┬────────┐                 │
+│  │ Quarter│ P/E  │ EV/EBITDA│ P/FCF  │                 │
+│  ├────────┼──────┼──────────┼────────┤                 │
+│  │ Q1'26  │ 15.2×│  40.3×   │  20.1× │                 │
+│  │ ...    │      │          │        │                 │
+│  └────────┴──────┴──────────┴────────┘                 │
+└────────────────────────────────────────────────────────┘
+```
+
+### Key Benefits
+
+1. **Sparkline** — trend visibility without expanding anything
+2. **Percentile badge** — instant "cheap vs expensive vs self" signal
+3. **"vs avg" delta** — quantitative deviation from historical mean
+4. **Collapsible history table** — precise numbers on demand, no screen waste when collapsed
+5. **Removed bar charts** — valuation ratios no longer misrepresented with zero-baseline bars
+6. **Unified card layout** — all three metrics share the same visual language
+7. **Shared history table** — one table for all three metrics, not duplicated per card
+
+---
+
+*Document version: 3.1 — Added missing Design 4 implementation details (Sections 22–29): GaugeConfig extension with sparkline/percentile/delta, Sparkline component, PercentileBadge, VsAvgDelta, collapsible ValuationHistoryTable. Updated implementation plan with complete impact analysis.*

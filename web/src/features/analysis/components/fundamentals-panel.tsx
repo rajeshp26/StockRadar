@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Info, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { useFundamentals } from "../hooks/useFundamentals";
 import { SectionHeader } from "./shared-ui";
-import { ValuationGauge } from "./valuation-gauge";
+import { MetricCard, ValuationGauge } from "./valuation-gauge";
 import { IntrinsicValueCard, IntrinsicValueEmptyState } from "./intrinsic-value-card";
 import type {
   FundamentalsResponse,
@@ -788,53 +788,16 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
                     const displayQuarters = valFrequency === "annual"
                       ? groupQuartersByYear(rawQuarters)
                       : rawQuarters.map((q) => ({ label: q.label ?? "", value: q.value, status: q.status, ttm_eps: q.ttm_eps, components: q.components, quarter_end_price: q.quarter_end_price }));
-                    const normalValues = displayQuarters
-                      .filter((q) => q.status === "normal" && q.value != null)
-                      .map((q) => q.value as number);
-                    const naCount = displayQuarters.filter((q) => q.status === "not_applicable").length;
-                    const currentValue = displayQuarters.length > 0 ? displayQuarters[displayQuarters.length - 1].value ?? null : null;
+                    if (!m.gauge_config) return null;
                     return (
-                      <div key={m.metric_id} className="flex-1 min-w-[340px] bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-                        <div className="flex items-center mb-2 gap-2">
-                          <span className="text-[13px] font-medium text-white/70">{m.label}</span>
-                        </div>
-                        {m.gauge_config ? (
-                          <ValuationGauge
-                            config={m.gauge_config}
-                            unit={m.unit}
-                            label={m.label}
-                            metricId={m.metric_id}
-                          />
-                        ) : (
-                          <ValuationGauge
-                            config={{
-                              display_mode: "slider",
-                              benchmark: "none",
-                              benchmark_value: null,
-                              band_low: null,
-                              band_high: null,
-                              current_value: currentValue,
-                              current_quarter_raw: currentValue,
-                              min_value: normalValues.length > 0 ? Math.min(...normalValues) : null,
-                              max_value: normalValues.length > 0 ? Math.max(...normalValues) : null,
-                              avg_value: normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : null,
-                              positive_count: normalValues.length,
-                              total_quarters: displayQuarters.length,
-                              na_count: naCount,
-                              warnings: [],
-                            }}
-                            unit={m.unit}
-                            label={m.label}
-                            metricId={m.metric_id}
-                          />
-                        )}
-                        <MetricBarChart
-                          metric={m}
-                          activeQuarters={displayQuarters}
-                          activeIndices={valActiveIndices}
-                          buyQuarterIndex={data.buy_quarter_index}
-                        />
-                      </div>
+                      <MetricCard
+                        key={m.metric_id}
+                        config={m.gauge_config}
+                        unit={m.unit}
+                        label={m.label}
+                        metricId={m.metric_id}
+                        quarters={displayQuarters}
+                      />
                     );
                   })}
                 </div>

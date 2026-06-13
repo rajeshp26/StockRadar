@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { ChevronDown, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import type { GaugeConfig } from "../types/analysis.types";
 
 const G = "#1D9E75";
@@ -56,6 +57,8 @@ function fmtValue(v: number | null | undefined, unit: string): string {
   if (unit === "score") return v.toFixed(0);
   return `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
 }
+
+export { fmtValue };
 
 function StatPill({ label, value, highlighted }: { label: string; value: string; highlighted: boolean }) {
   return (
@@ -444,5 +447,339 @@ export function ValuationGauge({ config, unit, label }: ValuationGaugeProps) {
       currentValue={config.current_value}
       warnings={config.warnings}
     />
+  );
+}
+
+// ── MiniGauge: compact arc gauge matching Design 4 reference ────────────────
+
+function MiniGauge({ current, min, max, avg, bandLow, bandHigh }: {
+  current: number; min: number; max: number; avg: number;
+  bandLow: number; bandHigh: number;
+}) {
+  const cx = 70;
+  const cy = 65;
+  const r = 50;
+  const sweep = 180;
+  const startAngle = 180;
+  const endAngle = 360;
+
+  const pct = max - min > 0 ? (current - min) / (max - min) : 0.5;
+  const valueAngle = startAngle + pct * sweep;
+
+  const needleEnd = polarToCartesian(cx, cy, r, valueAngle);
+
+  const gradId = `gaugeGrad_${current}_${min}_${max}`.replace(/[^a-zA-Z0-9_]/g, "_");
+
+  const arcLen = Math.PI * r * (sweep / 180);
+  const offset = arcLen * (1 - pct);
+
+  const valuation = getValuation(current, bandLow, bandHigh);
+
+  return (
+    <svg className="w-[140px] h-[90px] mx-auto" viewBox="0 0 140 90" aria-label={`Gauge: ${fmt(current)}`}>
+      <defs>
+        <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#00c875" />
+          <stop offset="50%" stopColor="#ffc700" />
+          <stop offset="100%" stopColor="#ff6565" />
+        </linearGradient>
+      </defs>
+      <path
+        d={describeArc(cx, cy, r, startAngle, endAngle)}
+        fill="none"
+        stroke="#2f3336"
+        strokeWidth="10"
+        strokeLinecap="round"
+      />
+      <path
+        d={describeArc(cx, cy, r, startAngle, endAngle)}
+        fill="none"
+        stroke={`url(#${gradId})`}
+        strokeWidth="10"
+        strokeLinecap="round"
+        strokeDasharray={arcLen}
+        strokeDashoffset={offset}
+        style={{ transition: "stroke-dashoffset 0.6s cubic-bezier(0.4,0,0.2,1)" }}
+      />
+      <circle cx={needleEnd.x} cy={needleEnd.y} r="6" fill={valuation.label === "Undervalued" ? "#00c875" : valuation.label === "Overvalued" ? "#ff6565" : "#ffc700"} />
+      <line x1={needleEnd.x} y1={needleEnd.y} x2={cx} y2={cy + 5} stroke={valuation.label === "Undervalued" ? "#00c875" : valuation.label === "Overvalued" ? "#ff6565" : "#ffc700"} strokeWidth="2" />
+    </svg>
+  );
+}
+
+// ── MiniSparkline: centered full-width sparkline matching Design 4 reference ─
+
+function MiniSparkline({ values, firstYear, delta, unit }: {
+  values?: number[]; firstYear?: string; delta?: number | null; unit: string;
+}) {
+  if (!values || values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(max - min, 1);
+  const last = values[values.length - 1];
+  const first = values[0];
+  const color = last >= first ? "#00c875" : "#ff6565";
+
+  const pts = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * 100;
+    const y = 100 - ((v - min) / range) * 80 - 10;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+
+  const areaPts = `0,100 ${pts} 100,100`;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-[#2f3336]">
+      <svg className="w-full h-[40px]" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="sparkFill" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <polygon points={areaPts} fill="url(#sparkFill)" />
+        <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx="100" cy={parseFloat(pts.split(" ").pop()!.split(",")[1])} r="3" fill={color} stroke="#1c2023" strokeWidth="1.5" />
+      </svg>
+      <div className="flex justify-between mt-1 text-[10px] text-[#71767b]">
+        <span>{firstYear ?? ""}</span>
+        {delta != null && (
+          <span className={cn("font-semibold", delta >= 0 ? "text-[#ff6565]" : "text-[#00c875]")}>
+            {delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toFixed(0)}% vs avg
+          </span>
+        )}
+        <span className="font-semibold text-white/60">Now</span>
+      </div>
+    </div>
+  );
+}
+
+// ── PercentileBadge ──────────────────────────────────────────────────────────
+
+function PercentileBadge({ percentile }: { percentile?: number }) {
+  if (percentile == null) return null;
+  const cls =
+    percentile >= 80 ? "bg-[rgba(255,101,101,0.15)] text-[#ff6565]" :
+    percentile >= 50 ? "bg-[rgba(255,199,0,0.15)] text-[#ffc700]" :
+                       "bg-[rgba(0,200,117,0.15)] text-[#00c875]";
+  return (
+    <span className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold", cls)}>
+      <span className="w-2 h-2 rounded-full" style={{ background: "currentColor" }} />
+      {Math.round(percentile)}th percentile
+    </span>
+  );
+}
+
+// ── VsAvgDelta ───────────────────────────────────────────────────────────────
+
+function VsAvgDelta({ delta }: { delta?: number | null }) {
+  if (delta == null) return null;
+  const isAbove = delta >= 0;
+  return (
+    <span className={cn("text-[12px]", isAbove ? "text-[#ff6565]" : "text-[#00c875]")}>
+      {isAbove ? "▲" : "▼"} {Math.abs(delta).toFixed(0)}% {isAbove ? "above" : "below"} 5-year average
+    </span>
+  );
+}
+
+// ── HistoryTable: rich table matching Design 6 reference ─────────────────────
+
+function HistoryTable({
+  quarters,
+  unit,
+  avgValue,
+  vsAvgDelta,
+}: {
+  quarters: { label: string; value: number | null; status?: string }[];
+  unit: string;
+  avgValue: number | null;
+  vsAvgDelta?: number | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const reversed = [...quarters].reverse();
+  const allValues = quarters
+    .filter((q) => q.status === "normal" && q.value != null)
+    .map((q) => q.value as number);
+  if (allValues.length === 0) return null;
+
+  const qMin = Math.min(...allValues);
+  const qMax = Math.max(...allValues);
+
+  function pctile(v: number): number {
+    const below = allValues.filter((x) => x <= v).length;
+    return Math.round((below / allValues.length) * 100);
+  }
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/70 transition-colors"
+      >
+        <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
+        History ({allValues.length} quarters)
+      </button>
+      {open && (
+        <div className="mt-2 max-h-[260px] overflow-y-auto">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="text-[#71767b] border-b border-[#2f3336]">
+                <th className="text-left py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">Quarter</th>
+                <th className="text-right py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">Value</th>
+                <th className="text-right py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">Change</th>
+                <th className="text-right py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">vs Avg</th>
+                <th className="text-right py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">%ile</th>
+                <th className="text-left py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reversed.map((q, i) => {
+                const next = i < reversed.length - 1 ? reversed[i + 1] : null;
+                const nextVal = next?.status === "normal" ? next.value : null;
+                const change = (q.value != null && nextVal != null) ? ((q.value - nextVal) / nextVal) * 100 : null;
+                const isNa = !q.value || q.status === "not_applicable";
+                const isFirst = i === 0;
+                const isOutlier = q.value != null && (q.value === qMax || q.value === qMin);
+                const v = q.value;
+
+                return (
+                  <tr
+                    key={i}
+                    className={cn(
+                      "border-b border-[rgba(47,51,54,0.4)]",
+                      isFirst && "bg-[rgba(29,155,240,0.08)]",
+                      isOutlier && v === qMax && "bg-[rgba(255,101,101,0.06)]",
+                      isOutlier && v === qMin && "bg-[rgba(0,200,117,0.06)]",
+                    )}
+                  >
+                    <td className="py-1.5 px-2 text-white/60">{q.label}</td>
+                    <td className={cn(
+                      "py-1.5 px-2 text-right tabular-nums font-semibold",
+                      isNa ? "text-[#71767b] italic" : isFirst ? "text-[#00c875]" : "text-white/80",
+                    )}>
+                      {isNa ? "N/A" : fmtValue(v, unit)}
+                    </td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">
+                      {change != null ? (
+                        <span className={cn(
+                          "inline-flex items-center gap-0.5",
+                          change > 0 ? "text-[#ff6565]" : change < 0 ? "text-[#00c875]" : "text-[#71767b]",
+                        )}>
+                          {change > 0 ? <TrendingUp size={10} /> : change < 0 ? <TrendingDown size={10} /> : <Minus size={10} />}
+                          {Math.abs(change).toFixed(0)}%
+                        </span>
+                      ) : (
+                        <span className="text-[#71767b]">—</span>
+                      )}
+                    </td>
+                    <td className={cn(
+                      "py-1.5 px-2 text-right tabular-nums",
+                      !isNa && avgValue != null && v != null
+                        ? v > avgValue ? "text-[#ff6565]" : "text-[#00c875]"
+                        : "text-[#71767b]",
+                    )}>
+                      {!isNa && avgValue != null && v != null
+                        ? `${v > avgValue ? "+" : ""}${((v - avgValue) / avgValue * 100).toFixed(0)}%`
+                        : "—"}
+                    </td>
+                    <td className="py-1.5 px-2 text-right tabular-nums text-white/60">
+                      {!isNa && v != null ? `${pctile(v)}th` : "—"}
+                    </td>
+                    <td className="py-1.5 px-2 text-[10px]">
+                      {isFirst ? (
+                        <span className="font-semibold text-white/70">Current</span>
+                      ) : isNa && q.status === "not_applicable" ? (
+                        <span className="text-[#71767b] italic">Net loss</span>
+                      ) : isOutlier && v === qMax ? (
+                        <span className="text-[#ff6565] font-semibold">Outlier</span>
+                      ) : isOutlier && v === qMin ? (
+                        <span className="text-[#00c875] font-semibold">Near 5Y low</span>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── MetricCard: gauge card matching Design 4 reference ───────────────────────
+
+export function MetricCard({
+  config, unit, label, metricId, quarters,
+}: {
+  config: GaugeConfig;
+  unit: string;
+  label: string;
+  metricId: string;
+  quarters: { label: string; value: number | null; status?: string }[];
+}) {
+  const firstYear = quarters.length > 0 ? quarters[0].label.split(" ")[0] : undefined;
+
+  return (
+    <div className="flex-1 min-w-[280px] bg-[#1c2023] border border-[#2f3336] rounded-xl p-5 text-center">
+      <div className="text-[10px] text-[#71767b] font-semibold uppercase tracking-wider mb-3">
+        {label}
+      </div>
+
+      {config.display_mode === "gauge" || config.display_mode === "compact_gauge" ? (
+        <>
+          {config.current_value != null && config.min_value != null && config.max_value != null &&
+           config.avg_value != null && config.band_low != null && config.band_high != null ? (
+            <MiniGauge
+              current={config.current_value}
+              min={config.min_value}
+              max={config.max_value}
+              avg={config.avg_value}
+              bandLow={config.band_low}
+              bandHigh={config.band_high}
+            />
+          ) : (
+            <div className="text-[11px] text-white/50 italic py-4">Insufficient data</div>
+          )}
+
+          <div className="text-[24px] font-bold text-white mt-2">
+            {config.current_value != null ? fmtValue(config.current_value, unit) : "—"}
+          </div>
+
+          {config.current_value != null && config.band_low != null && config.band_high != null && (
+            <div className="mt-1">
+              <span className={cn(
+                "inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold",
+                getValuation(config.current_value, config.band_low, config.band_high).className,
+              )}>
+                {getValuation(config.current_value, config.band_low, config.band_high).label}
+              </span>
+            </div>
+          )}
+
+          <MiniSparkline
+            values={config.sparkline_values}
+            firstYear={firstYear}
+            delta={config.vs_avg_delta}
+            unit={unit}
+          />
+        </>
+      ) : (
+        <ValuationGauge config={config} unit={unit} label={label} metricId={metricId} />
+      )}
+
+      <div className="flex items-center justify-center gap-3 mt-3 flex-wrap">
+        <PercentileBadge percentile={config.percentile} />
+      </div>
+
+      <VsAvgDelta delta={config.vs_avg_delta} />
+
+      <HistoryTable
+        quarters={quarters}
+        unit={unit}
+        avgValue={config.historical_avg ?? config.avg_value}
+        vsAvgDelta={config.vs_avg_delta}
+      />
+    </div>
   );
 }

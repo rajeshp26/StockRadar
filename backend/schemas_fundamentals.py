@@ -39,6 +39,19 @@ class GaugeConfig(BaseModel):
     total_quarters: int = 0
     na_count: int = 0
     warnings: List[str] = Field(default_factory=list)
+    # ── Design 4: Sparkline / Percentile / Delta ──
+    sparkline_values: Optional[List[Optional[float]]] = None
+    """Last 8-12 quarters of this metric's values for mini sparkline chart.
+       None entries indicate missing quarters (break the line)."""
+    percentile: Optional[int] = None
+    """Percentile rank of current value within all-time history (0-100)."""
+    historical_avg: Optional[float] = None
+    """Mean of all available historical values for this metric."""
+    vs_avg_delta: Optional[float] = None
+    """current_value - historical_avg. Positive = above avg (more expensive)."""
+    recent_quarter_label: Optional[str] = None
+    """Label of the quarter used for 'current' value.
+       e.g. 'Q3 2025' when the most recent quarter had negative earnings."""
 
 
 class MetricQuarterSeries(BaseModel):

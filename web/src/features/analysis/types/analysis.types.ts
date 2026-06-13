@@ -1132,6 +1132,11 @@ export interface GaugeConfig {
   total_quarters: number;
   na_count: number;
   warnings: string[];
+  sparkline_values?: number[];
+  percentile?: number;
+  historical_avg?: number;
+  vs_avg_delta?: number;
+  recent_quarter_label?: string;
 }
 
 export interface MetricQuarterSeries {
