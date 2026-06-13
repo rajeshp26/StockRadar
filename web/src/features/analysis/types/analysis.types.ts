@@ -1117,6 +1117,23 @@ export interface QuarterDataPoint {
   quarter_end_price?: number | null;
 }
 
+export interface GaugeConfig {
+  display_mode: "gauge" | "compact_gauge" | "slider" | "disabled";
+  benchmark: "historical" | "sector" | "none";
+  benchmark_value: number | null;
+  band_low: number | null;
+  band_high: number | null;
+  current_value: number | null;
+  current_quarter_raw: number | null;
+  min_value: number | null;
+  max_value: number | null;
+  avg_value: number | null;
+  positive_count: number;
+  total_quarters: number;
+  na_count: number;
+  warnings: string[];
+}
+
 export interface MetricQuarterSeries {
   metric_id: string;
   label: string;
@@ -1126,10 +1143,16 @@ export interface MetricQuarterSeries {
   trend_direction: "up" | "down" | "stable";
   change_pct: number | null;
   change_label: string;
+  gauge_config?: GaugeConfig;
 }
 
 export interface SectionStatus {
   label: "Intact" | "Watch" | "Concern";
+}
+
+export interface IntrinsicValuation {
+  method: string;
+  intrinsic_value: number;
 }
 
 export interface MetricSection {
@@ -1138,6 +1161,8 @@ export interface MetricSection {
   metrics: MetricQuarterSeries[];
   status: SectionStatus;
   score: number | null;
+  intrinsic_valuations?: IntrinsicValuation[] | null;
+  current_price?: number | null;
 }
 
 export interface FundamentalsDataQuality {

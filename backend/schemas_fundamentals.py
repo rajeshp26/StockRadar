@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,23 @@ class QuarterDataPoint(BaseModel):
     quarter_end_price: Optional[float] = None
 
 
+class GaugeConfig(BaseModel):
+    display_mode: Literal["gauge", "compact_gauge", "slider", "disabled"]
+    benchmark: Literal["historical", "sector", "none"]
+    benchmark_value: Optional[float] = None
+    band_low: Optional[float] = None
+    band_high: Optional[float] = None
+    current_value: Optional[float] = None
+    current_quarter_raw: Optional[float] = None
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    avg_value: Optional[float] = None
+    positive_count: int = 0
+    total_quarters: int = 0
+    na_count: int = 0
+    warnings: List[str] = Field(default_factory=list)
+
+
 class MetricQuarterSeries(BaseModel):
     metric_id: str
     label: str
@@ -33,10 +50,16 @@ class MetricQuarterSeries(BaseModel):
     trend_direction: Literal["up", "down", "stable"]
     change_pct: Optional[float] = None
     change_label: str = "stable"
+    gauge_config: Optional[GaugeConfig] = None
 
 
 class SectionStatus(BaseModel):
     label: Literal["Intact", "Watch", "Concern"]
+
+
+class IntrinsicValuation(BaseModel):
+    method: str
+    intrinsic_value: float
 
 
 class MetricSection(BaseModel):
@@ -45,6 +68,8 @@ class MetricSection(BaseModel):
     metrics: List[MetricQuarterSeries]
     status: SectionStatus
     score: Optional[float] = None
+    intrinsic_valuations: Optional[List[IntrinsicValuation]] = None
+    current_price: Optional[float] = None
 
 
 class DataQuality(BaseModel):

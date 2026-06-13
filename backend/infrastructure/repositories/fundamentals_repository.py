@@ -28,7 +28,7 @@ class FundamentalsRepository:
     async def get_company_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
         resp = (
             supabase.table("companies")
-            .select("company_id, company_name, sector, industry, exchange, ticker_symbol")
+            .select("company_id, company_name, sector, industry, exchange, ticker_symbol, security_type")
             .ilike("ticker_symbol", symbol)
             .execute()
         )
@@ -260,6 +260,24 @@ class FundamentalsRepository:
             .execute()
         )
         return resp.data or []
+
+    async def get_valuation_snapshots(self, company_id: int) -> Dict[str, Any]:
+        """Get the latest output_snapshot for each valuation method."""
+        methods = ["dcf", "rule1", "ddm_gordon", "ddm_two_stage", "owner_earnings", "residual_income"]
+        resp = (
+            supabase.table("valuation_runs")
+            .select("method, output_snapshot, run_at")
+            .eq("company_id", company_id)
+            .in_("method", methods)
+            .order("run_at", desc=True)
+            .execute()
+        )
+        latest_by_method = {}
+        for row in (resp.data or []):
+            m = row.get("method")
+            if m and m not in latest_by_method:
+                latest_by_method[m] = row.get("output_snapshot")
+        return latest_by_method
 
     async def get_current_market_price(self, company_id: int) -> Optional[float]:
         """Get the latest current_price from current_market_data."""

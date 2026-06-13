@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from schemas_fundamentals import (
     DataQuality,
     FundamentalsResponse,
+    GaugeConfig,
+    IntrinsicValuation,
     MetricComponent,
     MetricQuarterSeries,
     MetricSection,
@@ -367,20 +369,302 @@ def _compute_moat_metrics(
     )
 
 
+# ── Sector-aware valuation thresholds ──────────────────────────────────
+
+SECTOR_THRESHOLDS: Dict[str, Dict[str, Optional[float]]] = {
+    "Technology":                     {"pe": 28, "ev_ebitda": 20, "pfcf": 28},
+    "Communication Services":        {"pe": 22, "ev_ebitda": 15, "pfcf": 22},
+    "Consumer Cyclical":             {"pe": 18, "ev_ebitda": 12, "pfcf": 18},
+    "Consumer Defensive":            {"pe": 22, "ev_ebitda": 14, "pfcf": 20},
+    "Energy":                        {"pe": 11, "ev_ebitda": 5,  "pfcf": 12},
+    "Basic Materials":               {"pe": 16, "ev_ebitda": 9,  "pfcf": 16},
+    "Industrials":                   {"pe": 20, "ev_ebitda": 13, "pfcf": 20},
+    "Financial Services":            {"pe": 13, "ev_ebitda": None, "pfcf": 14},
+    "Healthcare":                    {"pe": 22, "ev_ebitda": 15, "pfcf": 22},
+    "Real Estate":                   {"pe": 18, "ev_ebitda": 17, "pfcf": 18},
+    "Utilities":                     {"pe": 19, "ev_ebitda": 12, "pfcf": 19},
+}
+DEFAULT_THRESHOLDS: Dict[str, Optional[float]] = {"pe": 15, "ev_ebitda": 10, "pfcf": 15}
+
+
+def _median_of_recent(values: List[Optional[float]], n: int = 4) -> Optional[float]:
+    clean = [v for v in values[-n:] if v is not None and v > 0]
+    if not clean:
+        return None
+    if len(clean) >= 3:
+        return sorted(clean)[len(clean) // 2]
+    return clean[-1]
+
+
+# ── Gauge Config Decision Tree ───────────────────────────────────────────
+
+def _coeff_of_variation(values: List[Optional[float]]) -> Optional[float]:
+    clean = [v for v in values if v is not None and v > 0]
+    if len(clean) < 3:
+        return None
+    mean = sum(clean) / len(clean)
+    if mean == 0:
+        return None
+    variance = sum((v - mean) ** 2 for v in clean) / len(clean)
+    return (variance ** 0.5) / abs(mean)
+
+
+def _most_recent_positive(quarters: List[QuarterDataPoint]) -> Optional[float]:
+    for q in reversed(quarters):
+        if q.value is not None and q.value > 0:
+            return q.value
+    return None
+
+
+def _positive_values(quarters: List[QuarterDataPoint]) -> List[float]:
+    return [q.value for q in quarters if q.status == "normal" and q.value is not None and q.value > 0]
+
+
+def _na_count(quarters: List[QuarterDataPoint]) -> int:
+    return sum(1 for q in quarters if q.status == "not_applicable")
+
+
+def _compute_metric_gauge_config(
+    metric_id: str,
+    quarters: List[QuarterDataPoint],
+    sector: Optional[str] = None,
+    security_type: str = "stock",
+) -> GaugeConfig:
+    positive = _positive_values(quarters)
+    pos_count = len(positive)
+    total = len(quarters)
+    na = _na_count(quarters)
+    raw_current = quarters[-1].value if quarters else None
+    current = _most_recent_positive(quarters)
+    cov = _coeff_of_variation([q.value for q in quarters])
+    min_v = min(positive) if positive else None
+    max_v = max(positive) if positive else None
+    avg_v = sum(positive) / pos_count if pos_count > 0 else None
+    warnings: List[str] = []
+
+    if raw_current is not None and raw_current <= 0 and current is not None:
+        for q in reversed(quarters):
+            if q.value is not None and q.value > 0:
+                warnings.append(f"Recent losses — {metric_id.upper()} based on {q.label}")
+                break
+
+    sector_threshold = DEFAULT_THRESHOLDS.get(metric_id, None)
+    if sector and sector in SECTOR_THRESHOLDS and metric_id in SECTOR_THRESHOLDS[sector]:
+        sector_threshold = SECTOR_THRESHOLDS[sector][metric_id]
+
+    if cov is not None and cov > 1.5:
+        return GaugeConfig(
+            display_mode="slider", benchmark="none",
+            current_value=current, current_quarter_raw=raw_current,
+            min_value=min_v, max_value=max_v, avg_value=avg_v,
+            positive_count=pos_count, total_quarters=total,
+            na_count=na, warnings=["Extreme variance — may be unreliable"],
+        )
+
+    if metric_id == "pe":
+        if pos_count >= 16 and cov is not None and cov < 0.5:
+            return GaugeConfig(
+                display_mode="gauge", benchmark="historical",
+                benchmark_value=avg_v,
+                band_low=avg_v * 0.85 if avg_v else None,
+                band_high=avg_v * 1.25 if avg_v else None,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+            )
+        if pos_count >= 12 and cov is not None and cov < 0.5:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="historical",
+                benchmark_value=avg_v,
+                band_low=avg_v * 0.85 if avg_v else None,
+                band_high=avg_v * 1.25 if avg_v else None,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+                warnings=["Limited history — bands based on 3 years"],
+            )
+        if pos_count >= 12 and cov is not None and cov < 0.75:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="historical",
+                benchmark_value=avg_v,
+                band_low=avg_v * 0.85 if avg_v else None,
+                band_high=avg_v * 1.25 if avg_v else None,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+                warnings=["Moderate variance — bands are wider"],
+            )
+        if current is not None and sector_threshold is not None:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="sector",
+                benchmark_value=sector_threshold,
+                band_low=sector_threshold * 0.85,
+                band_high=sector_threshold * 1.25,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+                warnings=["Limited history or high variance — showing sector benchmark"],
+            )
+        return GaugeConfig(
+            display_mode="slider", benchmark="none",
+            current_value=current, current_quarter_raw=raw_current,
+            min_value=min_v, max_value=max_v, avg_value=avg_v,
+            positive_count=pos_count, total_quarters=total,
+            na_count=na,
+        )
+
+    if metric_id == "ev_ebitda":
+        if sector == "Financial Services":
+            return GaugeConfig(
+                display_mode="disabled", benchmark="none",
+                current_value=current, current_quarter_raw=raw_current,
+                positive_count=pos_count, total_quarters=total, na_count=na,
+                warnings=["EV/EBITDA not meaningful for financials — use P/E or P/B"],
+            )
+        if pos_count >= 16 and cov is not None and cov < 0.5:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="historical",
+                benchmark_value=avg_v,
+                band_low=avg_v * 0.80 if avg_v else None,
+                band_high=avg_v * 1.30 if avg_v else None,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+            )
+        if pos_count >= 12 and cov is not None and cov < 0.75:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="historical",
+                benchmark_value=avg_v,
+                band_low=avg_v * 0.80 if avg_v else None,
+                band_high=avg_v * 1.30 if avg_v else None,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+                warnings=["Moderate variance — bands are wider"],
+            )
+        if pos_count >= 12 and cov is not None and cov >= 0.75:
+            if sector_threshold is not None:
+                return GaugeConfig(
+                    display_mode="compact_gauge", benchmark="sector",
+                    benchmark_value=sector_threshold,
+                    band_low=sector_threshold * 0.80,
+                    band_high=sector_threshold * 1.30,
+                    current_value=current, current_quarter_raw=raw_current,
+                    min_value=min_v, max_value=max_v, avg_value=avg_v,
+                    positive_count=pos_count, total_quarters=total,
+                    na_count=na,
+                    warnings=["High own-stock variance — showing sector benchmark"],
+                )
+            return GaugeConfig(
+                display_mode="slider", benchmark="none",
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+            )
+        if pos_count < 12 and sector_threshold is not None:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="sector",
+                benchmark_value=sector_threshold,
+                band_low=sector_threshold * 0.80,
+                band_high=sector_threshold * 1.30,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+                warnings=["Limited history — showing sector benchmark"],
+            )
+        return GaugeConfig(
+            display_mode="slider", benchmark="none",
+            current_value=current, current_quarter_raw=raw_current,
+            min_value=min_v, max_value=max_v, avg_value=avg_v,
+            positive_count=pos_count, total_quarters=total,
+            na_count=na,
+        )
+
+    if metric_id == "pfcf":
+        if pos_count >= 16 and cov is not None and cov < 0.5:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="historical",
+                benchmark_value=avg_v,
+                band_low=avg_v * 0.75 if avg_v else None,
+                band_high=avg_v * 1.35 if avg_v else None,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+            )
+        if pos_count >= 16 and cov is not None and cov < 0.75:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="historical",
+                benchmark_value=avg_v,
+                band_low=avg_v * 0.75 if avg_v else None,
+                band_high=avg_v * 1.35 if avg_v else None,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+                warnings=["Higher variance — bands wider than P/E"],
+            )
+        if current is not None and sector_threshold is not None and pos_count >= 12:
+            return GaugeConfig(
+                display_mode="compact_gauge", benchmark="sector",
+                benchmark_value=sector_threshold,
+                band_low=sector_threshold * 0.75,
+                band_high=sector_threshold * 1.35,
+                current_value=current, current_quarter_raw=raw_current,
+                min_value=min_v, max_value=max_v, avg_value=avg_v,
+                positive_count=pos_count, total_quarters=total,
+                na_count=na,
+                warnings=["Limited history — showing sector benchmark"],
+            )
+        return GaugeConfig(
+            display_mode="slider", benchmark="none",
+            current_value=current, current_quarter_raw=raw_current,
+            min_value=min_v, max_value=max_v, avg_value=avg_v,
+            positive_count=pos_count, total_quarters=total,
+            na_count=na,
+            warnings=["Insufficient data or high variance for banded display"] if pos_count < 16 else [],
+        )
+
+    return GaugeConfig(
+        display_mode="slider", benchmark="none",
+        current_value=current, current_quarter_raw=raw_current,
+        positive_count=pos_count, total_quarters=total,
+        na_count=na,
+    )
+
+
 # ── Valuation Section ────────────────────────────────────────────────────
 
 def _compute_valuation_metrics(
     company_summary: Optional[Dict[str, Any]],
-    latest_valuation: Optional[Dict[str, Any]],
+    valuation_snapshots: Optional[Dict[str, Any]],
     current_price: Optional[float],
     fcf_data: List[Dict[str, Any]],
     qratios: Optional[List[Dict[str, Any]]] = None,
     income_data: Optional[List[Dict[str, Any]]] = None,
     buy_idx: Optional[int] = None,
+    security_type: str = "stock",
+    sector: Optional[str] = None,
 ) -> MetricSection:
+    if security_type != "stock":
+        return MetricSection(
+            section_id="valuation",
+            title="Valuation",
+            metrics=[],
+            status=_compute_section_status(None),
+            score=None,
+        )
+
     ev_ebitda_current = _f(company_summary.get("enterprise_to_ebitda")) if company_summary else None
 
-    # ── Build EPS lookup from income_statements (already fetched for Growth) ──
     eps_lookup: Dict[Tuple[int, int], float] = {}
     if income_data:
         for row in income_data:
@@ -391,25 +675,20 @@ def _compute_valuation_metrics(
             if fy is not None and fq is not None and eps is not None:
                 eps_lookup[(int(fy), int(fq))] = eps
 
-    # ── P/E, EV/EBITDA, P/FCF from pre-computed financial_ratios ──
     pe_quarters: List[QuarterDataPoint] = []
     ev_quarters: List[QuarterDataPoint] = []
     pfcf_quarters: List[QuarterDataPoint] = []
-    latest_pe: Optional[float] = None
-    latest_ev_ebitda: Optional[float] = None
-    latest_pfcf: Optional[float] = None
 
     if qratios:
         for r in qratios:
             fq = r.get("fiscal_quarter")
             if fq is None:
-                continue  # skip annual rows
+                continue
             fy = r.get("fiscal_year")
             if fy is None or fq is None:
                 continue
             fy_i, fq_i = int(fy), int(fq)
 
-            # P/E
             pe_val = _f(r.get("trailing_pe"))
             price = _f(r.get("quarter_end_price"))
             ttm, components = _align_ttm_components(fy_i, fq_i, eps_lookup)
@@ -426,36 +705,49 @@ def _compute_valuation_metrics(
                 ttm_eps=ttm, components=components or None,
                 quarter_end_price=price,
             ))
-            if pe_val is not None:
-                latest_pe = pe_val
 
-            # EV/EBITDA
             ev_val = _f(r.get("ev_ebitda"))
+            ev_ebitda = _f(r.get("ebitda"))
+            ev = _f(r.get("enterprise_value"))
+            ev_components = []
+            if ev is not None:
+                ev_components.append(MetricComponent(label="Enterprise Value", value=ev))
+            if ev_ebitda is not None:
+                ev_components.append(MetricComponent(
+                    label="EBITDA", value=ev_ebitda,
+                    highlight="negative" if ev_ebitda <= 0 else None,
+                ))
             ev_status: str = "normal" if ev_val is not None else (
-                "not_applicable" if _f(r.get("ebitda")) is not None and _f(r.get("ebitda")) <= 0
+                "not_applicable" if ev_ebitda is not None and ev_ebitda <= 0
                 else "insufficient_data"
             )
             ev_quarters.append(QuarterDataPoint(
                 fiscal_year=fy_i, fiscal_quarter=fq_i,
                 label=_quarter_label(fy_i, fq_i),
                 value=ev_val, status=ev_status,
+                components=ev_components or None,
             ))
-            if ev_val is not None:
-                latest_ev_ebitda = ev_val
 
-            # P/FCF
             pfcf_val = _f(r.get("price_to_fcf"))
+            fcf = _f(r.get("free_cash_flow"))
+            pfcf_components = []
+            if ev is not None:
+                pfcf_components.append(MetricComponent(label="Enterprise Value", value=ev))
+            if fcf is not None:
+                pfcf_components.append(MetricComponent(
+                    label="Free Cash Flow", value=fcf,
+                    highlight="negative" if fcf <= 0 else None,
+                ))
             pfcf_status: str = "normal" if pfcf_val is not None else (
-                "not_applicable" if _f(r.get("free_cash_flow")) is not None and _f(r.get("free_cash_flow")) <= 0
+                "not_applicable" if fcf is not None and fcf <= 0
                 else "insufficient_data"
             )
             pfcf_quarters.append(QuarterDataPoint(
                 fiscal_year=fy_i, fiscal_quarter=fq_i,
                 label=_quarter_label(fy_i, fq_i),
                 value=pfcf_val, status=pfcf_status,
+                components=pfcf_components or None,
             ))
-            if pfcf_val is not None:
-                latest_pfcf = pfcf_val
 
     pe_values = [q.value for q in pe_quarters]
     pe_dir, pe_pct, pe_label = _determine_trend(pe_values, False)
@@ -464,6 +756,7 @@ def _compute_valuation_metrics(
         quarters=pe_quarters, buy_quarter_index=buy_idx,
         trend_direction=pe_dir, change_pct=pe_pct,
         change_label=pe_label if pe_quarters else "current snapshot",
+        gauge_config=_compute_metric_gauge_config("pe", pe_quarters, sector, security_type),
     )
     ev_values = [q.value for q in ev_quarters]
     ev_dir, ev_pct, ev_label = _determine_trend(ev_values, False)
@@ -472,6 +765,7 @@ def _compute_valuation_metrics(
         quarters=ev_quarters, buy_quarter_index=buy_idx,
         trend_direction=ev_dir, change_pct=ev_pct,
         change_label=ev_label if ev_quarters else "current snapshot",
+        gauge_config=_compute_metric_gauge_config("ev_ebitda", ev_quarters, sector, security_type),
     )
     pfcf_values = [q.value for q in pfcf_quarters]
     pfcf_dir, pfcf_pct, pfcf_label = _determine_trend(pfcf_values, False)
@@ -480,25 +774,45 @@ def _compute_valuation_metrics(
         quarters=pfcf_quarters, buy_quarter_index=buy_idx,
         trend_direction=pfcf_dir, change_pct=pfcf_pct,
         change_label=pfcf_label if pfcf_quarters else "current snapshot",
+        gauge_config=_compute_metric_gauge_config("pfcf", pfcf_quarters, sector, security_type),
     )
 
-    # ── price_vs_intrinsic — single snapshot from latest DCF valuation ──
+    intrinsic_valuations: List[Dict[str, Any]] = []
+    if valuation_snapshots:
+        METHOD_KEYS = {
+            "dcf":              ["valuation", "intrinsicValuePerShare"],
+            "owner_earnings":   ["valuation", "intrinsicValuePerShare"],
+            "residual_income":  ["valuation", "intrinsicValuePerShare"],
+            "ddm_gordon":       ["valuation", "intrinsicValue"],
+            "ddm_two_stage":    ["valuation", "intrinsicValue"],
+            "rule1":            ["valuation", "stickerPrice"],
+        }
+        METHOD_LABELS = {
+            "dcf": "DCF", "owner_earnings": "Owner Earnings",
+            "residual_income": "Residual Income", "ddm_gordon": "DDM (Gordon)",
+            "ddm_two_stage": "DDM (Two-Stage)", "rule1": "Rule #1",
+        }
+        for method, keys in METHOD_KEYS.items():
+            snap = valuation_snapshots.get(method)
+            if not snap:
+                continue
+            if isinstance(snap, str):
+                import json
+                try:
+                    snap = json.loads(snap)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            val = _f(snap.get(keys[0], {}).get(keys[1])) if len(keys) == 2 else _f(snap.get(keys[0]))
+            if val is not None and val > 0:
+                intrinsic_valuations.append({
+                    "method": METHOD_LABELS.get(method, method),
+                    "intrinsic_value": val,
+                })
+
     price_vs_intrinsic = None
-    if latest_valuation:
-        snap = latest_valuation.get("output_snapshot") or {}
-        if isinstance(snap, str):
-            import json
-            try:
-                snap = json.loads(snap)
-            except (json.JSONDecodeError, TypeError):
-                snap = {}
-        intrinsic = (
-            _f(snap.get("valuation", {}).get("intrinsicValuePerShare"))
-            or _f(snap.get("intrinsic_value"))
-            or _f(snap.get("intrinsicValue"))
-        )
-        if intrinsic is not None and intrinsic > 0 and current_price is not None:
-            price_vs_intrinsic = round(((current_price - intrinsic) / intrinsic) * 100, 2)
+    if intrinsic_valuations and current_price is not None:
+        avg_iv = sum(v["intrinsic_value"] for v in intrinsic_valuations) / len(intrinsic_valuations)
+        price_vs_intrinsic = round(((current_price - avg_iv) / avg_iv) * 100, 2)
 
     def _flat_series(mid: str, label: str, unit: str, val: Optional[float], higher_is_better: bool) -> MetricQuarterSeries:
         q = QuarterDataPoint(fiscal_year=0, fiscal_quarter=0, label="Current", value=val)
@@ -515,7 +829,13 @@ def _compute_valuation_metrics(
         _flat_series("price_vs_intrinsic", "Price vs intrinsic", "%", price_vs_intrinsic, False),
     ]
 
-    # Fallback: if job hasn't populated qratios yet, use company_summary snapshot
+    pe_values = [q.value for q in pe_quarters]
+    ev_values = [q.value for q in ev_quarters]
+    pfcf_values = [q.value for q in pfcf_quarters]
+    med_pe = _median_of_recent(pe_values) if pe_quarters else None
+    med_ev = _median_of_recent(ev_values) if ev_quarters else None
+    med_pfcf = _median_of_recent(pfcf_values) if pfcf_quarters else None
+
     if not qratios and company_summary:
         ev_ebitda_current = _f(company_summary.get("enterprise_to_ebitda"))
         ev_current = _f(company_summary.get("enterprise_value"))
@@ -533,20 +853,28 @@ def _compute_valuation_metrics(
             _flat_series("price_to_fcf", "P/FCF", "x", pfcf_current, False),
             _flat_series("price_vs_intrinsic", "Price vs intrinsic", "%", price_vs_intrinsic, False),
         ]
-        if latest_pe is None:
-            latest_pe = _f(company_summary.get("trailing_pe"))
-        latest_ev_ebitda = ev_ebitda_current
-        latest_pfcf = pfcf_current
+        if med_pe is None:
+            med_pe = _f(company_summary.get("trailing_pe"))
+        if med_ev is None:
+            med_ev = ev_ebitda_current
+        if med_pfcf is None:
+            med_pfcf = pfcf_current
+
+    thresh = DEFAULT_THRESHOLDS.copy()
+    if sector and sector in SECTOR_THRESHOLDS:
+        thresh = SECTOR_THRESHOLDS[sector]
 
     score_parts = 0
     score_total = 0
-    for metric_val, threshold in [(latest_pe, 15), (latest_ev_ebitda, 10), (latest_pfcf, 15)]:
-        if metric_val is not None and metric_val > 0:
-            score_total += 25
-            if metric_val <= threshold:
-                score_parts += 25
-            elif metric_val <= threshold * 1.67:
-                score_parts += 12
+    for metric_val, key in [(med_pe, "pe"), (med_ev, "ev_ebitda"), (med_pfcf, "pfcf")]:
+        threshold = thresh.get(key)
+        if threshold is None or metric_val is None or metric_val <= 0:
+            continue
+        score_total += 25
+        if metric_val <= threshold:
+            score_parts += 25
+        elif metric_val <= threshold * 1.67:
+            score_parts += 12
     if price_vs_intrinsic is not None:
         score_total += 25
         if price_vs_intrinsic <= 0:
@@ -560,8 +888,10 @@ def _compute_valuation_metrics(
         section_id="valuation",
         title="Valuation",
         metrics=metrics,
-        status=_compute_section_status(float(score) if score is not None else None),
-        score=float(score) if score is not None else None,
+        status=_compute_section_status(score),
+        score=score,
+        intrinsic_valuations=[IntrinsicValuation(**v) for v in intrinsic_valuations] if intrinsic_valuations else None,
+        current_price=current_price,
     )
 
 
@@ -694,6 +1024,8 @@ class FundamentalsService:
 
         company_id = company["company_id"]
         company_name = company.get("company_name")
+        security_type = company.get("security_type", "stock")
+        sector = company.get("sector")
 
         is_annual = frequency == "annual"
         if is_annual:
@@ -705,7 +1037,7 @@ class FundamentalsService:
             income_q = await self.repo.get_quarterly_income_statements(company_id)
             cash_q = await self.repo.get_quarterly_cash_flows(company_id)
         company_summary = await self.repo.get_company_summary_history(company_id)
-        latest_valuation = await self.repo.get_latest_valuation_overview(company_id)
+        valuation_snapshots = await self.repo.get_valuation_snapshots(company_id)
         earnings = await self.repo.get_earnings_history(company_id)
         current_price = await self.repo.get_current_market_price(company_id)
 
@@ -776,7 +1108,7 @@ class FundamentalsService:
         quality = _compute_quality_metrics(qratios, buy_quarter_index, is_annual=is_annual)
         growth = _compute_growth_metrics(income_q, cash_q, buy_quarter_index, is_annual=is_annual)
         moat = _compute_moat_metrics(qratios, buy_quarter_index, is_annual=is_annual)
-        valuation = _compute_valuation_metrics(summary_row, latest_valuation, current_price, cash_q, qratios, income_q, buy_quarter_index)
+        valuation = _compute_valuation_metrics(summary_row, valuation_snapshots, current_price, cash_q, qratios, income_q, buy_quarter_index, security_type=security_type, sector=sector)
         narrative = _compute_narrative_metrics(earnings, buy_quarter_index)
 
         sections = [quality, growth, moat, valuation, narrative]

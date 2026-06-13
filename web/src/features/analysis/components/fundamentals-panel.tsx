@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 import { Info, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { useFundamentals } from "../hooks/useFundamentals";
 import { SectionHeader } from "./shared-ui";
-import { MetricRangeSlider } from "./metric-range-slider";
+import { ValuationGauge } from "./valuation-gauge";
+import { IntrinsicValueCard, IntrinsicValueEmptyState } from "./intrinsic-value-card";
 import type {
   FundamentalsResponse,
   MetricQuarterSeries,
@@ -578,13 +579,36 @@ function MetricChartSection({
                 <div className="flex items-center mb-2 gap-2">
                   <span className="text-[13px] font-medium text-white/70">{m.label}</span>
                 </div>
-                <MetricRangeSlider
-                  unit={m.unit}
-                  positiveValues={normalValues}
-                  naCount={naCount}
-                  totalCount={displayQuarters.length}
-                  currentValue={currentValue}
-                />
+                {m.gauge_config ? (
+                  <ValuationGauge
+                    config={m.gauge_config}
+                    unit={m.unit}
+                    label={m.label}
+                    metricId={m.metric_id}
+                  />
+                ) : (
+                  <ValuationGauge
+                    config={{
+                      display_mode: "slider",
+                      benchmark: "none",
+                      benchmark_value: null,
+                      band_low: null,
+                      band_high: null,
+                      current_value: currentValue,
+                      current_quarter_raw: currentValue,
+                      min_value: normalValues.length > 0 ? Math.min(...normalValues) : null,
+                      max_value: normalValues.length > 0 ? Math.max(...normalValues) : null,
+                      avg_value: normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : null,
+                      positive_count: normalValues.length,
+                      total_quarters: displayQuarters.length,
+                      na_count: naCount,
+                      warnings: [],
+                    }}
+                    unit={m.unit}
+                    label={m.label}
+                    metricId={m.metric_id}
+                  />
+                )}
                 <MetricBarChart
                   metric={m}
                   activeQuarters={displayQuarters}
@@ -676,6 +700,8 @@ function DataQualityFooter({
 
 export function FundamentalsPanel({ symbol }: { symbol: string }) {
   const { data, loading, error, refetch } = useFundamentals(symbol);
+  const [valViewMode, setValViewMode] = useState<"all" | "from_purchase">("all");
+  const [valFrequency, setValFrequency] = useState<"quarterly" | "annual">("quarterly");
 
   if (loading) {
     return (
@@ -716,17 +742,118 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
         />
       </div>
 
-      {data.sections.map((section) => (
-        <MetricChartSection
-          key={section.section_id}
-          title={section.title}
-          status={section.status.label}
-          metrics={section.metrics}
-          quarters={data.quarters}
-          buyQuarterIndex={data.buy_quarter_index}
-          hasPortfolioPosition={data.has_portfolio_position}
-        />
-      ))}
+      {data.sections.map((section) => {
+        if (
+          section.section_id === "valuation" &&
+          section.current_price != null
+        ) {
+          const otherMetrics = section.metrics.filter(
+            (m) => m.metric_id !== "price_vs_intrinsic",
+          );
+          const valAllIndices = data.quarters.map((_, i) => i);
+          const valActiveIndices = valViewMode === "from_purchase" && data.buy_quarter_index != null
+            ? valAllIndices.slice(data.buy_quarter_index)
+            : valAllIndices;
+          return (
+            <div key={section.section_id} className="glass-panel rounded-2xl p-5 space-y-4">
+              <div className="flex items-center gap-3 flex-wrap">
+                <h3 className="text-[16px] font-semibold text-white/90">{section.title}</h3>
+                <span className={cn(
+                  "text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border",
+                  section.status.label === "Intact"
+                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
+                    : section.status.label === "Watch"
+                      ? "bg-amber-500/15 text-amber-400 border-amber-500/25"
+                      : "bg-rose-500/15 text-rose-400 border-rose-500/25",
+                )}>
+                  {section.status.label}
+                </span>
+                <div className="flex items-center gap-2 ml-auto">
+                  <QuarterToggle value={valViewMode} onChange={setValViewMode} showFromPurchase={data.has_portfolio_position} />
+                  <FrequencyToggle value={valFrequency} onChange={setValFrequency} />
+                </div>
+              </div>
+              {section.intrinsic_valuations && section.intrinsic_valuations.length > 0 ? (
+                <IntrinsicValueCard
+                  intrinsicValuations={section.intrinsic_valuations}
+                  currentPrice={section.current_price}
+                />
+              ) : (
+                <IntrinsicValueEmptyState currentPrice={section.current_price} />
+              )}
+              {otherMetrics.length > 0 && (
+                <div className="flex flex-wrap gap-4">
+                  {otherMetrics.map((m) => {
+                    const rawQuarters = valActiveIndices.map((i) => m.quarters[i]).filter(Boolean);
+                    const displayQuarters = valFrequency === "annual"
+                      ? groupQuartersByYear(rawQuarters)
+                      : rawQuarters.map((q) => ({ label: q.label ?? "", value: q.value, status: q.status, ttm_eps: q.ttm_eps, components: q.components, quarter_end_price: q.quarter_end_price }));
+                    const normalValues = displayQuarters
+                      .filter((q) => q.status === "normal" && q.value != null)
+                      .map((q) => q.value as number);
+                    const naCount = displayQuarters.filter((q) => q.status === "not_applicable").length;
+                    const currentValue = displayQuarters.length > 0 ? displayQuarters[displayQuarters.length - 1].value ?? null : null;
+                    return (
+                      <div key={m.metric_id} className="flex-1 min-w-[340px] bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
+                        <div className="flex items-center mb-2 gap-2">
+                          <span className="text-[13px] font-medium text-white/70">{m.label}</span>
+                        </div>
+                        {m.gauge_config ? (
+                          <ValuationGauge
+                            config={m.gauge_config}
+                            unit={m.unit}
+                            label={m.label}
+                            metricId={m.metric_id}
+                          />
+                        ) : (
+                          <ValuationGauge
+                            config={{
+                              display_mode: "slider",
+                              benchmark: "none",
+                              benchmark_value: null,
+                              band_low: null,
+                              band_high: null,
+                              current_value: currentValue,
+                              current_quarter_raw: currentValue,
+                              min_value: normalValues.length > 0 ? Math.min(...normalValues) : null,
+                              max_value: normalValues.length > 0 ? Math.max(...normalValues) : null,
+                              avg_value: normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : null,
+                              positive_count: normalValues.length,
+                              total_quarters: displayQuarters.length,
+                              na_count: naCount,
+                              warnings: [],
+                            }}
+                            unit={m.unit}
+                            label={m.label}
+                            metricId={m.metric_id}
+                          />
+                        )}
+                        <MetricBarChart
+                          metric={m}
+                          activeQuarters={displayQuarters}
+                          activeIndices={valActiveIndices}
+                          buyQuarterIndex={data.buy_quarter_index}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        }
+        return (
+          <MetricChartSection
+            key={section.section_id}
+            title={section.title}
+            status={section.status.label}
+            metrics={section.metrics}
+            quarters={data.quarters}
+            buyQuarterIndex={data.buy_quarter_index}
+            hasPortfolioPosition={data.has_portfolio_position}
+          />
+        );
+      })}
 
       <DataQualityFooter dataQuality={data.data_quality} onRefresh={refetch} />
     </div>
