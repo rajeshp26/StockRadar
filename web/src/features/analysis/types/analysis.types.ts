@@ -1110,6 +1110,7 @@ export interface QuarterDataPoint {
   fiscal_quarter: number;
   label: string;
   value: number | null;
+  raw_value?: number | null;
   narrative_label?: string;
   status?: "normal" | "not_applicable" | "insufficient_data";
   ttm_eps?: number | null;

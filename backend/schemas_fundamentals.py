@@ -17,6 +17,9 @@ class QuarterDataPoint(BaseModel):
     fiscal_quarter: int
     label: str
     value: Optional[float] = None
+    raw_value: Optional[float] = None
+    """Absolute value of the underlying metric (e.g. revenue in $B for revenue_yoy).
+       Populated for growth metrics so the frontend can toggle between YoY% and absolute views."""
     narrative_label: Optional[str] = None
     status: Optional[Literal["normal", "not_applicable", "insufficient_data"]] = None
     components: Optional[List[MetricComponent]] = None

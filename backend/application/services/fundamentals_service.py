@@ -257,6 +257,7 @@ def _compute_growth_metrics(
                 fiscal_quarter=fq_key,
                 label=_quarter_label(fy, fq_label),
                 value=yoy_pct,
+                raw_value=val,
             ))
 
         vals = [q.value for q in quarters]
