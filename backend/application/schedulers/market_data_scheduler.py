@@ -390,8 +390,8 @@ class MarketDataRefreshScheduler:
             except Exception as exc:
                 logger.error("[QHLTH] %s failed: %s", symbol, exc)
 
-        # 6c) QUARTERLY VALUATION METRICS — trailing P/E per quarter
-        # Pre-computes trailing P/E from income_statements + price_history.
+        # 6c) QUARTERLY VALUATION METRICS — trailing P/E, EV/EBITDA, P/FCF per quarter
+        # Pre-computes from income_statements + balance_sheets + cash_flow_statements + price_history.
         # Version-gated: only writes when source data changed.
         vpe_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
         if is_stock:
@@ -401,7 +401,7 @@ class MarketDataRefreshScheduler:
                 )
                 if vpe_result.get("upserted"):
                     logger.info(
-                        "[VPE] %s: %d/%d quarterly trailing-PE rows written",
+                        "[VPE] %s: %d/%d quarterly valuation-ratio rows written",
                         symbol,
                         vpe_result.get("rows_changed", 0),
                         vpe_result.get("count", 0),

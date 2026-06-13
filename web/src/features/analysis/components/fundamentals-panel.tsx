@@ -1,9 +1,10 @@
 "use client";
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Info, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { useFundamentals } from "../hooks/useFundamentals";
 import { SectionHeader } from "./shared-ui";
+import { MetricRangeSlider } from "./metric-range-slider";
 import type {
   FundamentalsResponse,
   MetricQuarterSeries,
@@ -19,116 +20,6 @@ function SectionError({ message }: { message: string }) {
   return (
     <div className="glass-panel p-6 text-center">
       <p className="text-xs text-rose-400/80">{message}</p>
-    </div>
-  );
-}
-
-// ── MetricRangeSlider (range track with avg and current markers) ─────────────
-
-function MetricRangeSlider({
-  unit,
-  positiveValues,
-  naCount,
-  totalCount,
-  currentValue,
-}: {
-  unit: string;
-  positiveValues: number[];
-  naCount: number;
-  totalCount: number;
-  currentValue: number | null;
-}) {
-  if (positiveValues.length === 0) {
-    if (naCount > 0) {
-      return (
-        <div className="mb-3 text-[11px] text-white/30 italic">
-          All quarters have negative earnings — not meaningful
-        </div>
-      );
-    }
-    return null;
-  }
-
-  const min = Math.min(...positiveValues);
-  const max = Math.max(...positiveValues);
-  const avg = positiveValues.reduce((a, b) => a + b, 0) / positiveValues.length;
-  const range = max - min || 1;
-
-  const avgPos = ((avg - min) / range) * 100;
-
-  let currentPos: number | null = null;
-  let currentOutside = false;
-
-  if (currentValue != null) {
-    if (currentValue >= min && currentValue <= max) {
-      currentPos = ((currentValue - min) / range) * 100;
-    } else {
-      currentOutside = true;
-      currentPos = currentValue < min ? 0 : 100;
-    }
-  }
-
-  const markersOverlap = currentPos !== null && Math.abs(currentPos - avgPos) < 5;
-
-  return (
-    <div className="mb-3">
-      <div className="flex items-center gap-1.5 text-[11px]">
-        <span className="text-white/50 tabular-nums">{formatMetricValue(min, unit)}</span>
-        <div className="relative flex-1 h-4 mx-1">
-          <div className="absolute top-1/2 left-0 right-0 h-[3px] bg-white/20 -translate-y-1/2 rounded-full" />
-          <div
-            className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-2 h-2 rounded-full bg-white/60"
-            style={{ left: `${avgPos}%` }}
-          />
-          {currentPos !== null && (
-            <div
-              className={cn(
-                "absolute top-1/2 -translate-x-1/2 -translate-y-1/2",
-                currentOutside ? "z-20" : markersOverlap ? "z-20" : "z-10",
-              )}
-              style={{ left: `${currentPos}%` }}
-            >
-              {currentOutside ? (
-                <span className="text-[11px] text-rose-400/70 leading-none">◄</span>
-              ) : (
-                <div className="w-2 h-2 rotate-45 bg-white/80" />
-              )}
-            </div>
-          )}
-        </div>
-        <span className="text-white/50 tabular-nums">{formatMetricValue(max, unit)}</span>
-        {naCount > 0 && (
-          <span className="text-rose-400/50 tabular-nums ml-1.5">
-            {naCount}/{totalCount} N/A
-          </span>
-        )}
-      </div>
-
-      <div className="relative h-4 text-[10px] mt-0.5">
-        <span
-          className="absolute -translate-x-1/2 text-white/40"
-          style={{ left: `${avgPos}%` }}
-        >
-          avg {formatMetricValue(avg, unit)}
-        </span>
-        {currentPos !== null && !currentOutside && (
-          <span
-            className={cn(
-              "absolute -translate-x-1/2 text-white/60 font-medium",
-              markersOverlap && "translate-y-3.5",
-            )}
-            style={{ left: `${currentPos}%` }}
-          >
-            cur {formatMetricValue(currentValue!, unit)}
-          </span>
-        )}
-      </div>
-
-      {currentOutside && currentValue != null && (
-        <div className="text-[11px] text-rose-400/70 mt-0.5">
-          cur {formatMetricValue(currentValue, unit)} ← outside positive range
-        </div>
-      )}
     </div>
   );
 }
@@ -153,6 +44,7 @@ type DisplayQuarter = {
   status?: "normal" | "not_applicable" | "insufficient_data";
   ttm_eps?: number | null;
   components?: MetricComponent[];
+  quarter_end_price?: number | null;
 };
 
 function MetricBarChart({
@@ -169,11 +61,6 @@ function MetricBarChart({
   const values = activeQuarters
     .map((q) => q.value)
     .filter((v): v is number => v !== null);
-
-  const normalValues = activeQuarters
-    .filter((q) => q.status === "normal" && q.value != null)
-    .map((q) => q.value as number);
-  const naCount = activeQuarters.filter((q) => q.status === "not_applicable").length;
 
   const hasAnyNonNormal = activeQuarters.some((q) => q.status && q.status !== "normal");
   const hasAnyQuarterData = activeQuarters.some((q) => q.ttm_eps != null || (q.components && q.components.length > 0));
@@ -239,7 +126,6 @@ function MetricBarChart({
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<HTMLDivElement>(null);
   const [scrollState, setScrollState] = useState<"none" | "left" | "right" | "both">("none");
   const [hovering, setHovering] = useState(false);
   const [hoveredBar, setHoveredBar] = useState<{
@@ -278,7 +164,7 @@ function MetricBarChart({
   }, [activeQuarters.length, updateScroll]);
 
   const scrollBy = (dir: "left" | "right") => {
-    scrollRef.current?.scrollBy({ left: dir === "left" ? -208 : 208, behavior: "smooth" });
+    scrollRef.current?.scrollBy({ left: dir === "left" ? -156 : 156, behavior: "smooth" });
   };
 
   const showLeft = hovering && (scrollState === "left" || scrollState === "both");
@@ -286,21 +172,9 @@ function MetricBarChart({
 
   return (
     <div>
-      <div className="flex items-center mb-2 gap-2">
-        <span className="text-[13px] font-medium text-white/70">{metric.label}</span>
-      </div>
-
-      <MetricRangeSlider
-        unit={metric.unit}
-        positiveValues={normalValues}
-        naCount={naCount}
-        totalCount={activeQuarters.length}
-        currentValue={activeQuarters.length > 0 ? activeQuarters[activeQuarters.length - 1].value ?? null : null}
-      />
-
       <div className="flex items-start">
-        <div className="w-12 flex-shrink-0 relative" style={{ height: chartHeight }}>
-          <div className="absolute left-0 top-0 bottom-0 w-full flex flex-col justify-between py-[8px]">
+        <div className="w-12 flex-shrink-0 relative overflow-hidden" style={{ height: chartHeight }}>
+          <div className="absolute left-0 right-0 top-0 bottom-0 flex flex-col justify-between py-[8px]">
             {gridSteps.map((g, i) => (
               <span key={i} className="text-[10px] text-white/50 tabular-nums text-right leading-none font-medium">
                 {formatAxisValue(g.val, metric.unit)}
@@ -389,7 +263,7 @@ function MetricBarChart({
                           <div className="w-full h-px bg-white/5" />
                         )}
                         {isBuy && (
-                          <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] text-blue-400 font-bold drop-shadow-lg pointer-events-none">
+                          <span className="absolute left-1/2 -translate-x-1/2 -bottom-3 text-[9px] text-blue-400 font-bold drop-shadow-lg pointer-events-none">
                             ▲
                           </span>
                         )}
@@ -462,28 +336,34 @@ function MetricBarChart({
               const qp = hoveredBar.qp;
               const qpStatus = qp.status ?? "normal";
               const hasValue = qp.value !== null;
+              const availableComponents = qp.components?.filter((c) => c.value != null) ?? [];
+              const missingComponents = qp.components?.filter((c) => c.value == null) ?? [];
               return (
                 <>
                   <div className="flex items-center gap-1.5">
                     <span className="text-white/80">{formatQuarterLabel(qp.label)}</span>
+                    <span className={cn("font-semibold", qp.value != null && qp.value >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                      {hasValue ? formatMetricValue(qp.value!, metric.unit) : "—"}
+                    </span>
                     {qpStatus === "not_applicable" && (
                       <span className="text-rose-400/70 text-[10px] font-medium">N/A</span>
                     )}
                     {qpStatus === "insufficient_data" && (
                       <span className="text-white/30 text-[10px] italic">insufficient data</span>
                     )}
-                    {qpStatus === "not_applicable" && hasValue && (
-                      <span className={cn("ml-0.5 font-semibold", qp.value! >= 0 ? "text-emerald-400" : "text-rose-400")}>
-                        {formatMetricValue(qp.value!, metric.unit)}
-                      </span>
-                    )}
                   </div>
-                  {hasValue && qpStatus === "normal" && (
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className={cn("font-semibold", qp.value! >= 0 ? "text-emerald-400" : "text-rose-400")}>
-                        {formatMetricValue(qp.value!, metric.unit)}
-                      </span>
+                  {qpStatus === "insufficient_data" && qp.components && qp.components.length > 0 && (
+                    <div className="text-[10px] text-white/30 mt-0.5">
+                      Only {availableComponents.length} of {qp.components.length} quarters on record
                     </div>
+                  )}
+                  {qpStatus === "insufficient_data" && missingComponents.length > 0 && (
+                    <div className="text-[10px] text-white/20 mt-0.5">
+                      Missing: {missingComponents.map((c) => c.label).join(", ")}
+                    </div>
+                  )}
+                  {qpStatus === "not_applicable" && (
+                    <div className="text-[10px] text-rose-400/60 mt-0.5">Negative earnings</div>
                   )}
                   {qp.components && qp.components.length > 0 && qp.ttm_eps != null && (
                     <div className="mt-1.5 pt-1.5 border-t border-white/10 space-y-0.5">
@@ -505,8 +385,10 @@ function MetricBarChart({
                       ))}
                     </div>
                   )}
-                  {qpStatus === "not_applicable" && (
-                    <div className="text-[10px] text-rose-400/60 mt-0.5">Negative earnings</div>
+                  {qp.quarter_end_price != null && (
+                    <div className="mt-1.5 pt-1.5 border-t border-white/10 text-[10px] text-white/30">
+                      Quarter-end price: ${qp.quarter_end_price.toFixed(2)}
+                    </div>
                   )}
                 </>
               );
@@ -626,16 +508,16 @@ function formatMetricValue(v: number | null | undefined, unit: string): string {
 function groupQuartersByYear(
   quarters: QuarterDataPoint[],
 ): DisplayQuarter[] {
-  const byYear = new Map<number, { label: string; value: number | null; maxQ: number; status?: "normal" | "not_applicable" | "insufficient_data"; ttm_eps?: number | null; components?: MetricComponent[] }>();
+  const byYear = new Map<number, { label: string; value: number | null; maxQ: number; status?: "normal" | "not_applicable" | "insufficient_data"; ttm_eps?: number | null; components?: MetricComponent[]; quarter_end_price?: number | null }>();
   for (const q of quarters) {
     const existing = byYear.get(q.fiscal_year);
     if (!existing || q.fiscal_quarter > existing.maxQ) {
-      byYear.set(q.fiscal_year, { label: String(q.fiscal_year), value: q.value, maxQ: q.fiscal_quarter, status: q.status, ttm_eps: q.ttm_eps, components: q.components });
+      byYear.set(q.fiscal_year, { label: String(q.fiscal_year), value: q.value, maxQ: q.fiscal_quarter, status: q.status, ttm_eps: q.ttm_eps, components: q.components, quarter_end_price: q.quarter_end_price });
     }
   }
   return Array.from(byYear.entries())
     .sort(([a], [b]) => a - b)
-    .map(([, v]) => ({ label: v.label, value: v.value, status: v.status, ttm_eps: v.ttm_eps, components: v.components }));
+    .map(([, v]) => ({ label: v.label, value: v.value, status: v.status, ttm_eps: v.ttm_eps, components: v.components, quarter_end_price: v.quarter_end_price }));
 }
 
 // ── MetricChartSection ───────────────────────────────────────────────────────
@@ -682,12 +564,27 @@ function MetricChartSection({
             const rawQuarters = activeIndices.map((i) => m.quarters[i]).filter(Boolean);
             const displayQuarters = frequency === "annual"
               ? groupQuartersByYear(rawQuarters)
-              : rawQuarters.map((q) => ({ label: q.label ?? "", value: q.value, status: q.status, ttm_eps: q.ttm_eps, components: q.components }));
+              : rawQuarters.map((q) => ({ label: q.label ?? "", value: q.value, status: q.status, ttm_eps: q.ttm_eps, components: q.components, quarter_end_price: q.quarter_end_price }));
+            const normalValues = displayQuarters
+              .filter((q) => q.status === "normal" && q.value != null)
+              .map((q) => q.value as number);
+            const naCount = displayQuarters.filter((q) => q.status === "not_applicable").length;
+            const currentValue = displayQuarters.length > 0 ? displayQuarters[displayQuarters.length - 1].value ?? null : null;
             return (
               <div
                 key={m.metric_id}
                 className="flex-1 min-w-[340px] bg-white/[0.03] border border-white/[0.06] rounded-xl p-4"
               >
+                <div className="flex items-center mb-2 gap-2">
+                  <span className="text-[13px] font-medium text-white/70">{m.label}</span>
+                </div>
+                <MetricRangeSlider
+                  unit={m.unit}
+                  positiveValues={normalValues}
+                  naCount={naCount}
+                  totalCount={displayQuarters.length}
+                  currentValue={currentValue}
+                />
                 <MetricBarChart
                   metric={m}
                   activeQuarters={displayQuarters}

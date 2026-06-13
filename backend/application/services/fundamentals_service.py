@@ -378,8 +378,7 @@ def _compute_valuation_metrics(
     income_data: Optional[List[Dict[str, Any]]] = None,
     buy_idx: Optional[int] = None,
 ) -> MetricSection:
-    ev_ebitda = _f(company_summary.get("enterprise_to_ebitda")) if company_summary else None
-    ev = _f(company_summary.get("enterprise_value")) if company_summary else None
+    ev_ebitda_current = _f(company_summary.get("enterprise_to_ebitda")) if company_summary else None
 
     # ── Build EPS lookup from income_statements (already fetched for Growth) ──
     eps_lookup: Dict[Tuple[int, int], float] = {}
@@ -392,9 +391,14 @@ def _compute_valuation_metrics(
             if fy is not None and fq is not None and eps is not None:
                 eps_lookup[(int(fy), int(fq))] = eps
 
-    # ── P/E from pre-computed financial_ratios (historical per quarter) ──
+    # ── P/E, EV/EBITDA, P/FCF from pre-computed financial_ratios ──
     pe_quarters: List[QuarterDataPoint] = []
+    ev_quarters: List[QuarterDataPoint] = []
+    pfcf_quarters: List[QuarterDataPoint] = []
     latest_pe: Optional[float] = None
+    latest_ev_ebitda: Optional[float] = None
+    latest_pfcf: Optional[float] = None
+
     if qratios:
         for r in qratios:
             fq = r.get("fiscal_quarter")
@@ -404,46 +408,81 @@ def _compute_valuation_metrics(
             if fy is None or fq is None:
                 continue
             fy_i, fq_i = int(fy), int(fq)
-            val = _f(r.get("trailing_pe"))
+
+            # P/E
+            pe_val = _f(r.get("trailing_pe"))
             price = _f(r.get("quarter_end_price"))
             ttm, components = _align_ttm_components(fy_i, fq_i, eps_lookup)
             if ttm is not None and ttm > 0:
-                status = "normal"
+                pe_status = "normal"
             elif ttm is not None and ttm <= 0:
-                status = "not_applicable"
+                pe_status = "not_applicable"
             else:
-                status = "insufficient_data"
+                pe_status = "insufficient_data"
             pe_quarters.append(QuarterDataPoint(
-                fiscal_year=fy_i,
-                fiscal_quarter=fq_i,
+                fiscal_year=fy_i, fiscal_quarter=fq_i,
                 label=_quarter_label(fy_i, fq_i),
-                value=val,
-                status=status,
-                ttm_eps=ttm,
-                components=components or None,
+                value=pe_val, status=pe_status,
+                ttm_eps=ttm, components=components or None,
                 quarter_end_price=price,
             ))
-            if val is not None:
-                latest_pe = val
+            if pe_val is not None:
+                latest_pe = pe_val
 
+            # EV/EBITDA
+            ev_val = _f(r.get("ev_ebitda"))
+            ev_status: str = "normal" if ev_val is not None else (
+                "not_applicable" if _f(r.get("ebitda")) is not None and _f(r.get("ebitda")) <= 0
+                else "insufficient_data"
+            )
+            ev_quarters.append(QuarterDataPoint(
+                fiscal_year=fy_i, fiscal_quarter=fq_i,
+                label=_quarter_label(fy_i, fq_i),
+                value=ev_val, status=ev_status,
+            ))
+            if ev_val is not None:
+                latest_ev_ebitda = ev_val
+
+            # P/FCF
+            pfcf_val = _f(r.get("price_to_fcf"))
+            pfcf_status: str = "normal" if pfcf_val is not None else (
+                "not_applicable" if _f(r.get("free_cash_flow")) is not None and _f(r.get("free_cash_flow")) <= 0
+                else "insufficient_data"
+            )
+            pfcf_quarters.append(QuarterDataPoint(
+                fiscal_year=fy_i, fiscal_quarter=fq_i,
+                label=_quarter_label(fy_i, fq_i),
+                value=pfcf_val, status=pfcf_status,
+            ))
+            if pfcf_val is not None:
+                latest_pfcf = pfcf_val
+
+    pe_values = [q.value for q in pe_quarters]
+    pe_dir, pe_pct, pe_label = _determine_trend(pe_values, False)
     pe_series = MetricQuarterSeries(
         metric_id="pe_ratio", label="P/E", unit="x",
-        quarters=pe_quarters, buy_quarter_index=buy_idx or 0,
-        trend_direction="stable", change_pct=None,
-        change_label="per quarter" if pe_quarters else "current snapshot",
+        quarters=pe_quarters, buy_quarter_index=buy_idx,
+        trend_direction=pe_dir, change_pct=pe_pct,
+        change_label=pe_label if pe_quarters else "current snapshot",
+    )
+    ev_values = [q.value for q in ev_quarters]
+    ev_dir, ev_pct, ev_label = _determine_trend(ev_values, False)
+    ev_series = MetricQuarterSeries(
+        metric_id="ev_ebitda", label="EV/EBITDA", unit="x",
+        quarters=ev_quarters, buy_quarter_index=buy_idx,
+        trend_direction=ev_dir, change_pct=ev_pct,
+        change_label=ev_label if ev_quarters else "current snapshot",
+    )
+    pfcf_values = [q.value for q in pfcf_quarters]
+    pfcf_dir, pfcf_pct, pfcf_label = _determine_trend(pfcf_values, False)
+    pfcf_series = MetricQuarterSeries(
+        metric_id="price_to_fcf", label="P/FCF", unit="x",
+        quarters=pfcf_quarters, buy_quarter_index=buy_idx,
+        trend_direction=pfcf_dir, change_pct=pfcf_pct,
+        change_label=pfcf_label if pfcf_quarters else "current snapshot",
     )
 
-    # ── EV/EBITDA, P/FCF — single snapshot from company_summary ──
-    latest_fcf = None
-    for r in reversed(fcf_data):
-        cfo = _f(r.get("cash_from_operating_activities"))
-        capex = _f(r.get("capital_expenditures"))
-        if cfo is not None and capex is not None:
-            latest_fcf = cfo + capex if capex < 0 else cfo - capex
-            break
-
-    pfcf = _safe_div(ev, latest_fcf) if ev is not None and latest_fcf is not None else None
-
+    # ── price_vs_intrinsic — single snapshot from latest DCF valuation ──
     price_vs_intrinsic = None
     if latest_valuation:
         snap = latest_valuation.get("output_snapshot") or {}
@@ -471,14 +510,37 @@ def _compute_valuation_metrics(
 
     metrics = [
         pe_series,
-        _flat_series("ev_ebitda", "EV/EBITDA", "x", ev_ebitda, False),
-        _flat_series("price_to_fcf", "P/FCF", "x", pfcf, False),
+        ev_series,
+        pfcf_series,
         _flat_series("price_vs_intrinsic", "Price vs intrinsic", "%", price_vs_intrinsic, False),
     ]
 
+    # Fallback: if job hasn't populated qratios yet, use company_summary snapshot
+    if not qratios and company_summary:
+        ev_ebitda_current = _f(company_summary.get("enterprise_to_ebitda"))
+        ev_current = _f(company_summary.get("enterprise_value"))
+        latest_fcf = None
+        for r in reversed(fcf_data):
+            cfo = _f(r.get("cash_from_operating_activities"))
+            capex = _f(r.get("capital_expenditures"))
+            if cfo is not None and capex is not None:
+                latest_fcf = cfo + capex if capex < 0 else cfo - capex
+                break
+        pfcf_current = _safe_div(ev_current, latest_fcf) if latest_fcf is not None else None
+        metrics = [
+            pe_series if pe_quarters else _flat_series("pe_ratio", "P/E", "x", None, False),
+            _flat_series("ev_ebitda", "EV/EBITDA", "x", ev_ebitda_current, False),
+            _flat_series("price_to_fcf", "P/FCF", "x", pfcf_current, False),
+            _flat_series("price_vs_intrinsic", "Price vs intrinsic", "%", price_vs_intrinsic, False),
+        ]
+        if latest_pe is None:
+            latest_pe = _f(company_summary.get("trailing_pe"))
+        latest_ev_ebitda = ev_ebitda_current
+        latest_pfcf = pfcf_current
+
     score_parts = 0
     score_total = 0
-    for metric_val, threshold in [(latest_pe, 15), (ev_ebitda, 10), (pfcf, 15)]:
+    for metric_val, threshold in [(latest_pe, 15), (latest_ev_ebitda, 10), (latest_pfcf, 15)]:
         if metric_val is not None and metric_val > 0:
             score_total += 25
             if metric_val <= threshold:

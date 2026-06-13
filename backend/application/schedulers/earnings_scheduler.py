@@ -332,14 +332,14 @@ class EarningsRefreshScheduler:
                         exc_info=True,
                     )
 
-                # Quarterly valuation metrics — trailing P/E
+                # Quarterly valuation metrics — trailing P/E, EV/EBITDA, P/FCF
                 try:
                     vpe_result = await compute_and_upsert_quarterly_valuation_metrics(
                         company_id=company_id
                     )
                     if vpe_result.get("upserted"):
                         logger.info(
-                            "[VPE] %s: %d/%d quarterly trailing-PE rows written",
+                            "[VPE] %s: %d/%d quarterly valuation-ratio rows written",
                             symbol,
                             vpe_result.get("rows_changed", 0),
                             vpe_result.get("count", 0),

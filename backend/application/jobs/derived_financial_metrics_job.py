@@ -940,23 +940,26 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
 
 async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dict[str, Any]:
     """
-    Computes quarterly trailing P/E from income_statements + price_history and
-    writes to financial_ratios (on_conflict: company_id, fiscal_year, fiscal_quarter).
+    Computes quarterly valuation metrics from income_statements + balance_sheets +
+    cash_flow_statements + price_history and writes to financial_ratios.
 
-    Formula per quarter:
-      1. EPS_q = net_income_to_common / shares_outstanding_diluted
-      2. TTM_EPS = EPS_q + EPS(q-1) + EPS(q-2) + EPS(q-3)
-      3. quarter_end_price = close_price from price_history nearest to period_end_date
-      4. trailing_pe = quarter_end_price / TTM_EPS   (NULL if TTM_EPS ≤ 0)
+    Metrics per quarter:
+      1. trailing_pe     = quarter_end_price / TTM_EPS   (NULL if TTM_EPS ≤ 0)
+      2. market_cap      = shares_outstanding_diluted × quarter_end_price
+      3. enterprise_value = market_cap + total_debt - cash_and_cash_equivalents
+      4. ev_ebitda        = enterprise_value / ebitda     (NULL if ebitda ≤ 0)
+      5. price_to_fcf     = enterprise_value / FCF        (NULL if FCF ≤ 0)
+         where FCF = cash_from_operating_activities + capital_expenditures
 
     Version-gated: only upserts when source data changed.
+    On-conflict key: (company_id, fiscal_year, fiscal_quarter).
 
     Returns: {"count": int, "rows_changed": int, "upserted": bool}
     """
-    # ── 1. Fetch quarterly income statements ──────────────────────────────
+    # ── 1. Fetch quarterly income statements (now includes ebitda) ────────
     is_resp = (
         supabase.table("income_statements")
-        .select("fiscal_year, fiscal_quarter, period_end_date, net_income_to_common, shares_outstanding_diluted")
+        .select("fiscal_year, fiscal_quarter, period_end_date, net_income_to_common, shares_outstanding_diluted, ebitda")
         .eq("company_id", company_id)
         .not_.is_("fiscal_quarter", "null")
         .order("fiscal_year", desc=False)
@@ -968,13 +971,14 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
         logger.info("[VPE] No quarterly income data for company_id=%s", company_id)
         return {"count": 0, "rows_changed": 0, "upserted": False}
 
-    # Build a chronologically ordered list of (fy, fq, eps, period_end)
+    # Build a chronologically ordered list of (fy, fq, eps, ebitda, period_end)
     quarters: List[Dict] = []
     for r in is_rows:
         fy = r.get("fiscal_year")
         fq = r.get("fiscal_quarter")
         net_inc = _f(r.get("net_income_to_common"))
         shares = _f(r.get("shares_outstanding_diluted"))
+        ebitda = _f(r.get("ebitda"))
         end_date = r.get("period_end_date")
         if fy is None or fq is None or end_date is None:
             continue
@@ -983,6 +987,8 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
             "fiscal_year": int(fy),
             "fiscal_quarter": int(fq),
             "eps": eps,
+            "ebitda": ebitda,
+            "shares": shares,
             "period_end_date": str(end_date)[:10],
         })
     quarters.sort(key=lambda x: (x["fiscal_year"], x["fiscal_quarter"]))
@@ -999,12 +1005,47 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
                 if quarters[j]["eps"] is not None
             )
             q["ttm_eps"] = ttm
-            # trailing_pe is computed after we match price below
         else:
-            q["ttm_eps"] = None  # not enough history for first 3 quarters
+            q["ttm_eps"] = None
         q["trailing_pe"] = None
+        q["quarter_end_price"] = None
+        q["market_cap"] = None
+        q["enterprise_value"] = None
+        q["ev_ebitda"] = None
+        q["free_cash_flow"] = None
+        q["price_to_fcf"] = None
 
-    # ── 3. Fetch price_history for quarter-end close prices ──────────────
+    # ── 3. Fetch balance_sheets → lookup by (fy, fq) ──────────────────────
+    bs_resp = (
+        supabase.table("balance_sheets")
+        .select("fiscal_year, fiscal_quarter, total_debt, cash_and_cash_equivalents")
+        .eq("company_id", company_id)
+        .not_.is_("fiscal_quarter", "null")
+        .execute()
+    )
+    bs_by_key: Dict[tuple, Dict] = {}
+    for r in bs_resp.data or []:
+        fy = r.get("fiscal_year")
+        fq = r.get("fiscal_quarter")
+        if fy is not None and fq is not None:
+            bs_by_key[(int(fy), int(fq))] = r
+
+    # ── 4. Fetch cash_flow_statements → lookup by (fy, fq) ────────────────
+    cf_resp = (
+        supabase.table("cash_flow_statements")
+        .select("fiscal_year, fiscal_quarter, cash_from_operating_activities, capital_expenditures")
+        .eq("company_id", company_id)
+        .not_.is_("fiscal_quarter", "null")
+        .execute()
+    )
+    cf_by_key: Dict[tuple, Dict] = {}
+    for r in cf_resp.data or []:
+        fy = r.get("fiscal_year")
+        fq = r.get("fiscal_quarter")
+        if fy is not None and fq is not None:
+            cf_by_key[(int(fy), int(fq))] = r
+
+    # ── 5. Fetch price_history for quarter-end close prices ───────────────
     ph_resp = (
         supabase.table("price_history")
         .select("price_date, close_price")
@@ -1014,7 +1055,6 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
     )
     ph_rows = ph_resp.data or []
 
-    # Build a date → close_price lookup for the ±45 day window
     price_by_date: Dict[str, float] = {}
     for r in ph_rows:
         d = r.get("price_date")
@@ -1033,7 +1073,6 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
                 end_dt = datetime.strptime(end, "%Y-%m-%d").date()
             except (ValueError, TypeError):
                 continue
-            # Find the closest price_date within ±45 days
             best_price = None
             best_diff = timedelta(days=46)
             for pd in price_dates_sorted:
@@ -1047,35 +1086,90 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
                     best_price = price_by_date[pd]
             if best_price is not None and best_diff.days <= 45:
                 q["quarter_end_price"] = best_price
-                q["trailing_pe"] = round(best_price / q["ttm_eps"], 2)
+                pe = _safe_div(best_price, q["ttm_eps"])
+                q["trailing_pe"] = round(pe, 2) if pe is not None else None
 
-    # ── 4. Assemble rows for upsert ───────────────────────────────────────
+                # ── Compute valuation multiples ──────────────────────────
+                key = (q["fiscal_year"], q["fiscal_quarter"])
+                shares = q.get("shares")
+                ebitda = q.get("ebitda")
+
+                # market_cap
+                if shares is not None:
+                    q["market_cap"] = round(shares * best_price, 2)
+
+                # enterprise_value = market_cap + total_debt - cash
+                bs_row = bs_by_key.get(key)
+                if bs_row is not None:
+                    total_debt = _f(bs_row.get("total_debt"))
+                    cash = _f(bs_row.get("cash_and_cash_equivalents"))
+                    mcap = q["market_cap"]
+                    if mcap is not None and total_debt is not None and cash is not None:
+                        q["enterprise_value"] = round(mcap + total_debt - cash, 2)
+
+                # ev_ebitda
+                ev = q["enterprise_value"]
+                if ev is not None and ebitda is not None and ebitda > 0:
+                    q["ev_ebitda"] = round(ev / ebitda, 4)
+
+                # free_cash_flow and price_to_fcf
+                cf_row = cf_by_key.get(key)
+                if cf_row is not None:
+                    cfo = _f(cf_row.get("cash_from_operating_activities"))
+                    capex = _f(cf_row.get("capital_expenditures"))
+                    if cfo is not None and capex is not None:
+                        fcf = cfo + capex  # capex is negative
+                        q["free_cash_flow"] = fcf
+                        if ev is not None and fcf > 0:
+                            q["price_to_fcf"] = round(ev / fcf, 4)
+
+    # ── 6. Assemble rows for upsert ───────────────────────────────────────
     out: List[Dict[str, Any]] = []
     for q in quarters:
+        key = (q["fiscal_year"], q["fiscal_quarter"])
+        bs_row = bs_by_key.get(key)
+        cf_row = cf_by_key.get(key)
+
         source_payload = {
-            "is": {"net_income_to_common": None, "shares_outstanding_diluted": None},
+            "is": {"net_income_to_common": None, "shares_outstanding_diluted": None, "ebitda": None},
+            "bs": {"total_debt": None, "cash_and_cash_equivalents": None},
+            "cf": {"cash_from_operating_activities": None, "capital_expenditures": None},
             "price": {"close_price": q.get("quarter_end_price")},
         }
-        # Find the original income row for version tag
         for r in is_rows:
             if r.get("fiscal_year") == q["fiscal_year"] and r.get("fiscal_quarter") == q["fiscal_quarter"]:
                 source_payload["is"] = {
                     "net_income_to_common": r.get("net_income_to_common"),
                     "shares_outstanding_diluted": r.get("shares_outstanding_diluted"),
+                    "ebitda": r.get("ebitda"),
                 }
                 break
+        if bs_row:
+            source_payload["bs"] = {
+                "total_debt": bs_row.get("total_debt"),
+                "cash_and_cash_equivalents": bs_row.get("cash_and_cash_equivalents"),
+            }
+        if cf_row:
+            source_payload["cf"] = {
+                "cash_from_operating_activities": cf_row.get("cash_from_operating_activities"),
+                "capital_expenditures": cf_row.get("capital_expenditures"),
+            }
 
         out.append({
-            "company_id":      company_id,
-            "fiscal_year":     q["fiscal_year"],
-            "fiscal_quarter":  q["fiscal_quarter"],
-            "period_end_date": q["period_end_date"],
-            "trailing_pe":     q["trailing_pe"],
-            "quarter_end_price": q.get("quarter_end_price"),
-            "computed_at":     datetime.utcnow().isoformat(),
-            "source_version_tag": _version_tag(source_payload),
-            "data_source":     "derived",
-            "confidence_score": float(
+            "company_id":          company_id,
+            "fiscal_year":         q["fiscal_year"],
+            "fiscal_quarter":      q["fiscal_quarter"],
+            "period_end_date":     q["period_end_date"],
+            "trailing_pe":         q["trailing_pe"],
+            "quarter_end_price":   q.get("quarter_end_price"),
+            "market_cap":          q.get("market_cap"),
+            "enterprise_value":    q.get("enterprise_value"),
+            "ev_ebitda":           q.get("ev_ebitda"),
+            "price_to_fcf":        q.get("price_to_fcf"),
+            "computed_at":         datetime.utcnow().isoformat(),
+            "source_version_tag":  _version_tag(source_payload),
+            "data_source":         "derived",
+            "confidence_score":    float(
                 getattr(settings, "DERIVED_METRICS_CONFIDENCE_SCORE", 1.0)
             ),
         })
@@ -1083,7 +1177,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
     if not out:
         return {"count": 0, "rows_changed": 0, "upserted": False}
 
-    # ── 5. Version-gated upsert ───────────────────────────────────────────
+    # ── 7. Version-gated upsert ───────────────────────────────────────────
     existing_tags: Dict[tuple, str] = {}
     try:
         tags_resp = (
@@ -1124,7 +1218,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
     ).execute()
 
     logger.info(
-        "[VPE] Upserted %d/%d trailing-PE rows for company_id=%s",
+        "[VPE] Upserted %d/%d valuation-ratio rows for company_id=%s",
         len(changed_rows), len(out), company_id,
     )
     return {"count": len(out), "rows_changed": len(changed_rows), "upserted": True}

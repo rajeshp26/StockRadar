@@ -90,7 +90,7 @@ class FundamentalsRepository:
     ) -> List[Dict[str, Any]]:
         resp = (
             supabase.table("income_statements")
-            .select("fiscal_year, fiscal_quarter, revenue, net_income, net_income_to_common, shares_outstanding_diluted, period_end_date")
+            .select("fiscal_year, fiscal_quarter, revenue, net_income, net_income_to_common, ebitda, shares_outstanding_diluted, period_end_date")
             .eq("company_id", company_id)
             .not_.is_("fiscal_quarter", "null")
             .order("fiscal_year", desc=True)
@@ -131,7 +131,7 @@ class FundamentalsRepository:
     ) -> List[Dict[str, Any]]:
         resp = (
             supabase.table("balance_sheets")
-            .select("fiscal_year, fiscal_quarter, total_equity, total_debt, total_assets, retained_earnings, current_assets, current_liabilities")
+            .select("fiscal_year, fiscal_quarter, total_equity, total_debt, total_assets, retained_earnings, current_assets, current_liabilities, cash_and_cash_equivalents")
             .eq("company_id", company_id)
             .not_.is_("fiscal_quarter", "null")
             .order("fiscal_year", desc=True)

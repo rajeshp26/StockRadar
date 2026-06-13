@@ -249,7 +249,7 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data: makeData(), loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")!;
+    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")! as HTMLElement;
 
     // Default "All" mode — x-axis labels only (floating tooltip only on hover)
     expect(within(qualitySection).getAllByText("Q1'23").length).toBe(2);  // ROIC + ROE
@@ -267,7 +267,7 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data: makeData(), loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")!;
+    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")! as HTMLElement;
 
     fireEvent.click(within(qualitySection).getByText("From purchase"));
     expect(within(qualitySection).queryAllByText("Q1'23").length).toBe(0);
@@ -285,7 +285,7 @@ describe("FundamentalsPanel", () => {
     });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")!;
+    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")! as HTMLElement;
 
     // "From purchase" button appears because has_portfolio_position is true
     fireEvent.click(within(qualitySection).getByText("From purchase"));
@@ -319,8 +319,8 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data: makeData(), loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")!;
-    const growthSection = screen.getByText("Growth metrics").closest(".glass-panel")!;
+    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")! as HTMLElement;
+    const growthSection = screen.getByText("Growth metrics").closest(".glass-panel")! as HTMLElement;
 
     // Click "From purchase" only in quality section
     fireEvent.click(within(qualitySection).getByText("From purchase"));
@@ -336,7 +336,7 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data: makeData(), loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")!;
+    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")! as HTMLElement;
 
     // ROE has only Q1 2023, filtered out when panel-level buy_quarter_index=1 slices
     fireEvent.click(within(qualitySection).getByText("From purchase"));
@@ -356,7 +356,7 @@ describe("FundamentalsPanel", () => {
         { label: "Q1 2025", value: 0.12 },
         { label: "Q4 2024", value: 0.45 },
       ]},
-    ];
+    ] as any;
     mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
@@ -375,7 +375,7 @@ describe("FundamentalsPanel", () => {
         { label: "Q2 2025", value: -0.01 },
         { label: "Q1 2025", value: 0.12 },
       ]},
-    ];
+    ] as any;
     mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
@@ -383,7 +383,7 @@ describe("FundamentalsPanel", () => {
     expect(screen.getByText(/not meaningful/)).toBeTruthy();
 
     // Hover over the bar to show tooltip with PE, EPS breakdown, and driver flag
-    const peMetric = screen.getByText("P/E").closest(".flex-1")!;
+    const peMetric = screen.getByText("P/E").closest(".flex-1")! as HTMLElement;
     const bar = within(peMetric).getByTestId("bar-0");
     fireEvent.mouseEnter(bar);
     expect(screen.getByText("-6.3×")).toBeTruthy();
@@ -395,14 +395,79 @@ describe("FundamentalsPanel", () => {
     const data = makeData();
     data.sections[3].metrics[0].quarters = [
       { fiscal_year: 2022, fiscal_quarter: 2, label: "Q2 2022", value: null, status: "insufficient_data", ttm_eps: null, components: [] },
-    ];
+    ] as any;
     mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    const peMetric = screen.getByText("P/E").closest(".flex-1")!;
+    const peMetric = screen.getByText("P/E").closest(".flex-1")! as HTMLElement;
     const bar = within(peMetric).getByTestId("bar-0");
     fireEvent.mouseEnter(bar);
     expect(screen.getByText("insufficient data")).toBeTruthy();
+  });
+
+  it("normal bar tooltip shows quarter-end price", () => {
+    const data = makeData();
+    data.sections[3].metrics[0].quarters = [
+      { fiscal_year: 2025, fiscal_quarter: 3, label: "Q3 2025", value: 10.25, status: "normal", ttm_eps: 1.16, quarter_end_price: 150.50, components: [
+        { label: "Q3 2025", value: 0.60 },
+        { label: "Q2 2025", value: -0.01 },
+        { label: "Q1 2025", value: 0.12 },
+        { label: "Q4 2024", value: 0.45 },
+      ]},
+    ] as any;
+    mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
+    render(<FundamentalsPanel symbol="AAPL" />);
+
+    const peMetric = screen.getByText("P/E").closest(".flex-1")! as HTMLElement;
+    const bar = within(peMetric).getByTestId("bar-0");
+    fireEvent.mouseEnter(bar);
+
+    expect(screen.getByText(/Quarter-end price: \$150\.50/)).toBeTruthy();
+  });
+
+  it("insufficient_data tooltip shows quarter count and missing list", () => {
+    const data = makeData();
+    data.sections[3].metrics[0].quarters = [
+      { fiscal_year: 2022, fiscal_quarter: 2, label: "Q2 2022", value: null, status: "insufficient_data", ttm_eps: null, quarter_end_price: null, components: [
+        { label: "Q2 2022", value: 0.16 },
+        { label: "Q1 2022", value: null },
+        { label: "Q4 2021", value: null },
+        { label: "Q3 2021", value: null },
+      ]},
+    ] as any;
+    mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
+    render(<FundamentalsPanel symbol="AAPL" />);
+
+    const peMetric = screen.getByText("P/E").closest(".flex-1")! as HTMLElement;
+    const bar = within(peMetric).getByTestId("bar-0");
+    fireEvent.mouseEnter(bar);
+
+    expect(screen.getByText(/Only 1 of 4 quarters on record/)).toBeTruthy();
+    expect(screen.getByText(/Missing:/)).toBeTruthy();
+    expect(screen.getByText(/Q1 2022, Q4 2021, Q3 2021/)).toBeTruthy();
+  });
+
+  it("buy marker renders below bar when quarter matches buyQuarterIndex", () => {
+    const data = makeData(); // buy_quarter_index=1, Q2 2023 is purchase quarter
+    mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
+    render(<FundamentalsPanel symbol="AAPL" />);
+
+    // The purchase quarter bar should have a blue ring + arrow
+    const qualitySection = screen.getByText("Quality metrics").closest(".glass-panel")! as HTMLElement;
+    const bars = qualitySection.querySelectorAll('[data-testid^="bar-"]');
+    expect(bars.length).toBeGreaterThanOrEqual(2);
+
+    // buyQuarterIndex=1 → second bar container (index 1) should contain a bar div with ring
+    const buyBar = bars[1];
+    const barDivs = buyBar.querySelectorAll("div");
+    const ringBar = Array.from(barDivs).find((d) => d.className.includes("ring-blue-400"));
+    expect(ringBar).toBeTruthy();
+
+    // Arrow indicator should be present below the bar
+    const spans = buyBar.querySelectorAll("span");
+    const arrow = Array.from(spans).find((s) => s.textContent === "▲");
+    expect(arrow).toBeTruthy();
+    expect(arrow?.className).toContain("-bottom-3");
   });
 
   it("EPS breakdown appears in tooltip on hover for normal status", () => {
@@ -414,12 +479,12 @@ describe("FundamentalsPanel", () => {
         { label: "Q1 2025", value: 0.12 },
         { label: "Q4 2024", value: 0.45 },
       ]},
-    ];
+    ] as any;
     mockUseFundamentals.mockReturnValue({ data, loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
     // Hover over the bar to show tooltip with EPS breakdown
-    const peMetric = screen.getByText("P/E").closest(".flex-1")!;
+    const peMetric = screen.getByText("P/E").closest(".flex-1")! as HTMLElement;
     const bar = within(peMetric).getByTestId("bar-0");
     fireEvent.mouseEnter(bar);
 

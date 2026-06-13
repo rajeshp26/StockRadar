@@ -465,6 +465,225 @@ class TestValuationMetrics:
         assert q.components is None or q.components == []
 
 
+    def test_ev_ebitda_historical(self):
+        """EV/EBITDA builds multi-quarter series from qratios.ev_ebitda."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 15.0, "quarter_end_price": 100.0,
+             "ev_ebitda": 8.0, "price_to_fcf": 12.0, "ebitda": 10e9, "free_cash_flow": 5e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 16.0, "quarter_end_price": 105.0,
+             "ev_ebitda": 8.5, "price_to_fcf": 13.0, "ebitda": 11e9, "free_cash_flow": 6e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 3, "trailing_pe": 14.0, "quarter_end_price": 98.0,
+             "ev_ebitda": 7.5, "price_to_fcf": 11.0, "ebitda": 9e9, "free_cash_flow": 4e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        ev = section.metrics[1]
+        assert ev.metric_id == "ev_ebitda"
+        assert len(ev.quarters) == 3
+        assert ev.quarters[0].value == 8.0
+        assert ev.quarters[1].value == 8.5
+        assert ev.quarters[2].value == 7.5
+        assert all(q.status == "normal" for q in ev.quarters)
+
+    def test_pfcf_historical(self):
+        """P/FCF builds multi-quarter series from qratios.price_to_fcf."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 15.0, "quarter_end_price": 100.0,
+             "ev_ebitda": 8.0, "price_to_fcf": 12.0, "ebitda": 10e9, "free_cash_flow": 5e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 16.0, "quarter_end_price": 105.0,
+             "ev_ebitda": 8.5, "price_to_fcf": 14.0, "ebitda": 11e9, "free_cash_flow": 6e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        pfcf = section.metrics[2]
+        assert pfcf.metric_id == "price_to_fcf"
+        assert len(pfcf.quarters) == 2
+        assert pfcf.quarters[0].value == 12.0
+        assert pfcf.quarters[1].value == 14.0
+
+    def test_ev_ebitda_insufficient_data(self):
+        """All ev_ebitda = None → status = insufficient_data."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 15.0, "quarter_end_price": 100.0,
+             "ev_ebitda": None, "price_to_fcf": None, "ebitda": None, "free_cash_flow": None},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 16.0, "quarter_end_price": 105.0,
+             "ev_ebitda": None, "price_to_fcf": None, "ebitda": None, "free_cash_flow": None},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        ev = section.metrics[1]
+        pfcf = section.metrics[2]
+        assert all(q.status == "insufficient_data" for q in ev.quarters)
+        assert all(q.value is None for q in ev.quarters)
+        assert all(q.status == "insufficient_data" for q in pfcf.quarters)
+
+    def test_ev_ebitda_not_applicable(self):
+        """ebitda ≤ 0 → status = not_applicable."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 15.0, "quarter_end_price": 100.0,
+             "ev_ebitda": None, "price_to_fcf": 12.0, "ebitda": 0.0, "free_cash_flow": 5e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        ev = section.metrics[1]
+        assert ev.quarters[0].status == "not_applicable"
+        assert ev.quarters[0].value is None
+
+    def test_price_vs_intrinsic_stays_flat(self):
+        """price_vs_intrinsic remains a single Current bar (DCF comparison)."""
+        valuation = {"output_snapshot": {"intrinsic_value": 200_000_000_000}}
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            valuation, 210.0, [],
+        )
+        pvi = section.metrics[3]
+        assert pvi.metric_id == "price_vs_intrinsic"
+        assert len(pvi.quarters) == 1
+        assert pvi.quarters[0].label == "Current"
+
+    def test_score_uses_latest_quarter(self):
+        """Score computed from latest quarter's trailing_pe, ev_ebitda, pfcf."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 25.0, "quarter_end_price": 100.0,
+             "ev_ebitda": 20.0, "price_to_fcf": 25.0, "ebitda": 10e9, "free_cash_flow": 5e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 12.0, "quarter_end_price": 105.0,
+             "ev_ebitda": 8.0, "price_to_fcf": 13.0, "ebitda": 11e9, "free_cash_flow": 6e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        # Latest quarter has pe=12 (≤15) ✓, ev_ebitda=8 (≤10) ✓, pfcf=13 (≤15) ✓
+        assert section.score is not None and section.score >= 75
+
+    def test_score_with_none_metrics(self):
+        """Score handles None metrics gracefully — no crash."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 12.0, "quarter_end_price": 100.0,
+             "ev_ebitda": None, "price_to_fcf": None, "ebitda": None, "free_cash_flow": None},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        assert section.score is not None  # P/E contributes 25, EV/EBITDA and P/FCF skipped
+
+    def test_fallback_no_qratios(self):
+        """No qratios → falls back to _flat_series from company_summary."""
+        summary = {
+            "trailing_pe": 12.5,
+            "enterprise_to_ebitda": 8.0,
+            "enterprise_value": 200_000_000_000,
+        }
+        fcf = [make_qcf(2023, 1, 20_000_000_000, -3_000_000_000)]
+        section = _compute_valuation_metrics(summary, None, 210.0, fcf, None, None)
+        assert len(section.metrics) == 4
+        ev = section.metrics[1]
+        assert ev.metric_id == "ev_ebitda"
+        assert len(ev.quarters) == 1
+        assert ev.quarters[0].label == "Current"
+        assert ev.quarters[0].value == 8.0
+        assert section.score is not None and section.score >= 50
+
+    def test_fallback_with_empty_qratios(self):
+        """Empty qratios list → falls back to company_summary snapshots."""
+        summary = {
+            "trailing_pe": 40.0,
+            "enterprise_to_ebitda": 25.0,
+            "enterprise_value": 500_000_000_000,
+        }
+        fcf = [make_qcf(2023, 1, 5_000_000_000, -1_000_000_000)]
+        section = _compute_valuation_metrics(summary, None, 300.0, fcf, [], None)
+        assert len(section.metrics) == 4
+        ev = section.metrics[1]
+        assert len(ev.quarters) == 1
+        assert ev.quarters[0].value == 25.0
+
+    def test_pe_trend_down_improving(self):
+        """P/E values decreasing over time → trend direction = 'down' (improving, lower is better)."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 20.0, "quarter_end_price": 100.0,
+             "ev_ebitda": 8.0, "price_to_fcf": 12.0, "ebitda": 10e9, "free_cash_flow": 5e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 18.0, "quarter_end_price": 105.0,
+             "ev_ebitda": 8.5, "price_to_fcf": 13.0, "ebitda": 11e9, "free_cash_flow": 6e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 3, "trailing_pe": 15.0, "quarter_end_price": 98.0,
+             "ev_ebitda": 7.5, "price_to_fcf": 11.0, "ebitda": 9e9, "free_cash_flow": 4e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 4, "trailing_pe": 12.0, "quarter_end_price": 102.0,
+             "ev_ebitda": 7.0, "price_to_fcf": 10.0, "ebitda": 8e9, "free_cash_flow": 3e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 7.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        pe = section.metrics[0]
+        # Lower PE is better, so decreasing values = "up" (improving)
+        assert pe.trend_direction == "up"
+        assert pe.change_label != "per quarter"
+
+    def test_pe_trend_up_worsening(self):
+        """P/E values increasing over time → trend direction = 'up' (worsening, higher is worse)."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 10.0, "quarter_end_price": 100.0,
+             "ev_ebitda": 8.0, "price_to_fcf": 12.0, "ebitda": 10e9, "free_cash_flow": 5e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 15.0, "quarter_end_price": 105.0,
+             "ev_ebitda": 8.5, "price_to_fcf": 13.0, "ebitda": 11e9, "free_cash_flow": 6e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 3, "trailing_pe": 18.0, "quarter_end_price": 98.0,
+             "ev_ebitda": 7.5, "price_to_fcf": 11.0, "ebitda": 9e9, "free_cash_flow": 4e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 4, "trailing_pe": 22.0, "quarter_end_price": 102.0,
+             "ev_ebitda": 7.0, "price_to_fcf": 10.0, "ebitda": 8e9, "free_cash_flow": 3e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 7.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        pe = section.metrics[0]
+        # Since higher_is_better=False, increasing values = 'down' (worsening)
+        assert pe.trend_direction == "down"
+
+    def test_ev_trend_improving(self):
+        """EV/EBITDA decreasing → trend = 'down' (improving, lower is better)."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 15.0, "quarter_end_price": 100.0,
+             "ev_ebitda": 12.0, "price_to_fcf": 18.0, "ebitda": 10e9, "free_cash_flow": 5e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 15.0, "quarter_end_price": 105.0,
+             "ev_ebitda": 10.0, "price_to_fcf": 16.0, "ebitda": 11e9, "free_cash_flow": 6e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 3, "trailing_pe": 15.0, "quarter_end_price": 98.0,
+             "ev_ebitda": 8.0, "price_to_fcf": 14.0, "ebitda": 9e9, "free_cash_flow": 4e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        ev = section.metrics[1]
+        # Lower EV/EBITDA is better, so decreasing values = "up" (improving)
+        assert ev.trend_direction == "up"
+
+    def test_pfcf_trend_stable(self):
+        """P/FCF values nearly flat → trend = 'stable'."""
+        qratios = [
+            {"fiscal_year": 2024, "fiscal_quarter": 1, "trailing_pe": 15.0, "quarter_end_price": 100.0,
+             "ev_ebitda": 8.0, "price_to_fcf": 12.0, "ebitda": 10e9, "free_cash_flow": 5e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 2, "trailing_pe": 16.0, "quarter_end_price": 105.0,
+             "ev_ebitda": 8.5, "price_to_fcf": 12.1, "ebitda": 11e9, "free_cash_flow": 6e9},
+            {"fiscal_year": 2024, "fiscal_quarter": 3, "trailing_pe": 14.0, "quarter_end_price": 98.0,
+             "ev_ebitda": 7.5, "price_to_fcf": 11.9, "ebitda": 9e9, "free_cash_flow": 4e9},
+        ]
+        section = _compute_valuation_metrics(
+            {"enterprise_to_ebitda": 8.0, "enterprise_value": 200e9},
+            None, 100.0, [], qratios, [],
+        )
+        pfcf = section.metrics[2]
+        assert pfcf.trend_direction == "stable"
+
+
 # ─── Test _compute_narrative_metrics ─────────────────────────────────────────
 
 class TestNarrativeMetrics:

@@ -58,7 +58,8 @@ Each metric displays as a **TradingView-style vertical bar chart** with:
 | YoY growth formulas | ✅ **Exists** | `canslim_service._score_C()` pattern |
 | FCF computation | ✅ **Exists** | `shared/finance_math.compute_fcf()` |
 | ROIC/NOPAT math | ✅ **Exists** | `shared/finance_math.compute_roic()` |
-| Valuation multiples | ✅ **Exists** | In `company_summary` table |
+| Valuation multiples (current snapshot) | ✅ **Exists** | In `company_summary` table |
+| Valuation multiples (historical per-period) | ⚠️ **Planned** | To be stored in `financial_ratios` — see §11 |
 | Portfolio purchase date | ✅ **Exists** | `portfolio_transactions` table |
 | Earnings beat/miss data | ✅ **Exists** | `earnings` table |
 | Piotroski F-Score | ✅ **Built** | Computed in `derived_financial_metrics_job.py` |
@@ -439,8 +440,8 @@ export interface FundamentalsResponse {
 | | `altman_z` | `financial_ratios` | Direct read (pre-computed) |
 | | `interest_coverage` | `financial_ratios` | Direct read |
 | **Valuation** | `pe_ratio` | `financial_ratios` | Pre-computed per quarter — trailing P/E = quarter-end close / TTM EPS |
-| | `ev_ebitda` | `company_summary` | Direct read (current-period only — no historical enterprise_value) |
-| | `price_to_fcf` | `company_summary` + `cash_flow_statements` | EV / FCF (current-period only — no historical enterprise_value) |
+| | `ev_ebitda` | `financial_ratios` (planned) + `company_summary` (current snapshot) | Pre-computed per quarter — EV / EBITDA. Historical from `financial_ratios`, current marker from `company_summary` |
+| | `price_to_fcf` | `financial_ratios` (planned) + `cash_flow_statements` | Pre-computed per quarter — EV / FCF. Historical from `financial_ratios`, current marker from `company_summary` |
 | | `price_vs_intrinsic` | `valuation_runs` + `current_market_data` | (price - intrinsic) / intrinsic |
 | **Narrative** | `eps_surprise` | `earnings` | Direct read + beat/miss label |
 | | `revenue_surprise` | `earnings` | Direct read + beat/miss label |
@@ -652,9 +653,43 @@ for r in qratios:
   1. **24h batch** — runs inside `compute_and_upsert_quarterly_health_scores` path in the market data scheduler. Catches price changes and routine updates.
   2. **Earnings-triggered** — when the earnings scheduler writes a new `income_statements` row, also triggers a recompute of the trailing P/E for the affected quarter.
 
-##### ev_ebitda, price_to_fcf — Current-Period Only
+##### ev_ebitda, price_to_fcf — Historical Per-Period (Planned)
 
-`ev_ebitda` and `price_to_fcf` require `enterprise_value`, which is only available as a current daily snapshot from `company_summary`. Historical enterprise_value is not stored. These metrics remain single-snapshot (current period only), using the same `_flat_series` approach as before.
+`ev_ebitda` and `price_to_fcf` will be pre-computed per fiscal quarter and stored in `financial_ratios` alongside `trailing_pe`. The current daily snapshot from `company_summary` is retained as the "current" marker on the range slider.
+
+**Computation** (in `derived_financial_metrics_job.py`):
+
+For each fiscal quarter with available data:
+
+```
+1. Market Cap = shares_outstanding_diluted × quarter_end_price
+                (from income_statements × financial_ratios)
+
+2. Net Debt = total_debt - cash_and_cash_equivalents
+              (from balance_sheets)
+
+3. Enterprise Value (EV) = Market Cap + Net Debt
+
+4. EV/EBITDA = EV / ebitda
+               (from income_statements)
+               status = "not_applicable" if ebitda ≤ 0
+               status = "insufficient_data" if any component missing
+
+5. Free Cash Flow = cash_from_operating_activities + capital_expenditures
+                    (from cash_flow_statements)
+
+6. P/FCF = EV / FCF
+           status = "not_applicable" if FCF ≤ 0
+```
+
+**Data needed** (extending the existing `compute_and_upsert_quarterly_valuation_metrics`):
+
+| Data | Current (trailing P/E only) | New (EV/EBITDA + P/FCF) |
+|------|---------------------------|--------------------------|
+| `income_statements` | `net_income_to_common, shares_outstanding_diluted` | **+ `ebitda`** |
+| `price_history` | `close_price` (matched to quarter-end) | No change |
+| `balance_sheets` | Not queried | **Add: `total_debt, cash_and_cash_equivalents`** |
+| `cash_flow_statements` | Not queried | **Add: `cash_from_operating_activities, capital_expenditures`** |
 
 ##### price_vs_intrinsic — Current-Period Only
 
@@ -1004,7 +1039,7 @@ User                        FundamentalsPanel         useFundamentals()         
 | Limitation | Impact | Mitigation |
 |-----------|--------|------------|
 | Quarterly ratios newly computed | Existing companies need backfill | One-time backfill script |
-| `company_summary` irregular snapshots | EV/EBITDA and P/FCF are current-period only | No historical enterprise_value stored |
+| `company_summary` irregular snapshots | EV/EBITDA and P/FCF were current-period only | **Fixed in Phase 9**: historical enterprise_value computed from components and stored in `financial_ratios` |
 | `price_history` available for only ~10 companies | Cannot compute historical trailing P/E for most companies | Backfill script fetches historical close prices on-the-fly |
 | Negative TTM EPS | P/E ratio is mathematically negative | Store real value; frontend renders filled red bar + tooltip explaining the loss components |
 | No analyst consensus | Cannot show consensus metric | Dropped from design |
@@ -1391,7 +1426,7 @@ Key insight: `qratios` (quarterly financial_ratios) is **already fetched** for t
 | Risk service `_analyze_valuation_compression` | Still reads from `company_summary` — unaffected | ✅ None |
 | Moat service | Still reads explicit columns from `financial_ratios` — unaffected | ✅ None |
 | Fundamentals API | `pe_ratio` source changes from `company_summary[0]` to `financial_ratios` per quarter | ⚠️ Moderate — needs service change |
-| EV/EBITDA, P/FCF | Remain single-snapshot from `company_summary` | ✅ No change |
+| EV/EBITDA, P/FCF | Change from `company_summary` snapshot to `financial_ratios` per-quarter historical | ⚠️ **Phase 9 — planned** |
 | Test mocks | 3 test cases need updating | ⚠️ Minor |
 | Price history gap | Only 10 companies have price_history → backfill fetches on-the-fly | ⚠️ One-time effort |
 | `status` + `components` logic | New generic fields in API response, computed in service layer from already-fetched data | ⚠️ Moderate — reusable by other metrics |
@@ -1465,3 +1500,461 @@ curl -s "http://localhost:8001/api/proxy/analysis/F/fundamentals" | python -m js
 | `backend/application/jobs/derived_financial_metrics_job.py` | Quarterly valuation metric pre-computation |
 | `backend/scripts/backfill_trailing_pe.py` | One-time backfill for historical trailing P/E |
 | `docs/FUNDAMENTALS_TAB_DESIGN.md` | This document |
+| `backend/scripts/migrate_valuation_multiples.sql` | Phase 9 migration — new columns (see §11.4) |
+| `backend/scripts/backfill_valuation_multiples.py` | Phase 9 backfill script |
+| `backend/application/services/prompts/company_snapshot.py` | AI context — reads company_summary (unaffected) |
+
+---
+
+## 11. Financial Data Provider Analysis — EV/EBITDA & Enterprise Value
+
+### 11.1 Provider Summary
+
+| Provider | File | EV/EBITDA Available? | Enterprise Value Available? | Per-Period (Quarterly)? | Role in Fallback Chain |
+|---|---|---|---|---|---|
+| **DefeatBeta** | `defeat_beta_provider.py` | ✅ Yes — `t.enterprise_to_ebitda()` returns DataFrame with `ev_to_ebitda` column | ✅ Yes — `t.enterprise_value()` returns DataFrame | ❌ Snapshot only (latest row via `_extract_latest_metric`) | Primary (#1) |
+| **YFinance** | `yfinance_provider.py` | ✅ Yes — `info.get("enterpriseToEbitda")` | ✅ Yes — `info.get("enterpriseValue")` | ❌ Snapshot only (from `Ticker.info` dict) | Fallback (#2) |
+| **Stockdex (Macrotrends)** | `stockdex_provider.py` | ❌ Not available | ❌ Not available | N/A | IS/BS/CF data only (#3) |
+| **EDGAR** | `edgar_provider.py` | ❌ Not available (EBITDA not a standard XBRL concept) | ❌ Not available | N/A | Filings text analysis only |
+
+### 11.2 Provider Data Flow Detail
+
+#### 11.2.1 DefeatBeta (Primary Provider)
+
+**File:** `backend/providers/defeat_beta_provider.py`
+
+The `fetch_company_summary()` method (line 1103) calls the DefeatBeta SDK for each metric independently:
+
+```
+t.enterprise_value()       → DataFrame(columns=["enterprise_value"])
+t.enterprise_to_ebitda()   → DataFrame(columns=["ev_to_ebitda"])
+t.ttm_pe()                 → DataFrame(columns=["ttm_pe"])
+t.market_capitalization()  → DataFrame(columns=["market_capitalization"])
+```
+
+Each DataFrame is a time series (multiple rows across dates). `_extract_latest_metric()` (line 1916) takes `df.iloc[-1].get(column)` — the **last row**, which is the most recent period.
+
+The returned dict is mapped directly to `company_summary` columns:
+
+| Provider key | DB column | Sample value |
+|---|---|---|
+| `enterprise_value` | `company_summary.enterprise_value` | `200_000_000_000` |
+| `enterprise_to_ebitda` | `company_summary.enterprise_to_ebitda` | `8.0` |
+| `market_cap` | `company_summary.market_cap` | `180_000_000_000` |
+| `trailing_pe` | `company_summary.trailing_pe` | `12.5` |
+
+The DefeatBeta provider also provides **per-fiscal-period financial statements** (IS, BS, CF) with proper `(fiscal_year, fiscal_quarter)` keys. These are the source of the raw data (EBITDA, debt, cash, shares) needed to compute historical EV/EBITDA.
+
+**Key insight:** The time-series DataFrames from `t.enterprise_value()` and `t.enterprise_to_ebitda()` DO contain multiple periods of data, but the code currently discards all but the latest via `_extract_latest_metric`. The raw API is capable of providing historical EV data — the existing implementation chooses not to store it.
+
+#### 11.2.2 YFinance (Fallback Provider)
+
+**File:** `backend/providers/yfinance_provider.py`
+
+`get_summary_snapshot()` (line 230) reads from `yf.Ticker.info` dict — a single JSON blob with no historical breakdown:
+
+```python
+{
+    "enterprise_value": info.get("enterpriseValue"),         # line 240
+    "enterprise_to_ebitda": info.get("enterpriseToEbitda"),  # line 248
+    "market_cap": info.get("marketCap"),
+    "trailing_pe": info.get("trailingPE"),
+}
+```
+
+No per-period EV/EBITDA available from YFinance.
+
+#### 11.2.3 Stockdex / Macrotrends (IS/BS/CF Provider)
+
+**File:** `backend/providers/stockdex_provider.py`
+
+Provides historical quarterly income statements, balance sheets, and cash flow statements from Macrotrends (15+ years of data). EBITDA is extracted as a standard line item (line 43: `"EBITDA": "EBITDA"`).
+
+Used exclusively as a fallback for raw financial statements — does not provide EV or EV/EBITDA directly.
+
+### 11.3 Data Completeness Assessment
+
+| Required Component | Source Table | Available per Quarter? | Current Status in Repo Query |
+|---|---|---|---|
+| **EBITDA** | `income_statements.ebitda` | ✅ Yes | ✅ Annual query has it; ❌ Quarterly query does NOT select it |
+| **Shares Outstanding (diluted)** | `income_statements.shares_outstanding_diluted` | ✅ Yes | ✅ Already selected in quarterly query |
+| **Total Debt** | `balance_sheets.total_debt` | ✅ Yes | ✅ Already selected in quarterly query |
+| **Cash & Equivalents** | `balance_sheets.cash_and_cash_equivalents` | ✅ Yes | ❌ NOT selected in quarterly query |
+| **Quarter-end Price** | `financial_ratios.quarter_end_price` | ✅ Yes | ✅ Already populated by trailing P/E job |
+| **Free Cash Flow** | `cash_flow_statements.cfo + capex` | ✅ Yes | ✅ Available in cash flow query |
+
+### 11.4 SQL Migration
+
+```sql
+-- backend/scripts/migrate_valuation_multiples.sql
+--
+-- Adds enterprise_value, EV/EBITDA, and P/FCF columns to financial_ratios
+-- for historical per-period valuation data.
+-- Follows the same pattern as Phase 7's trailing_pe + quarter_end_price.
+
+ALTER TABLE financial_ratios
+  ADD COLUMN IF NOT EXISTS market_cap         NUMERIC(20,2),
+  ADD COLUMN IF NOT EXISTS enterprise_value   NUMERIC(20,2),
+  ADD COLUMN IF NOT EXISTS ev_ebitda          NUMERIC(20,4),
+  ADD COLUMN IF NOT EXISTS price_to_fcf       NUMERIC(20,4);
+
+-- Widen from any narrower precision that may have been applied earlier
+ALTER TABLE financial_ratios ALTER COLUMN market_cap       TYPE NUMERIC(20,2);
+ALTER TABLE financial_ratios ALTER COLUMN enterprise_value TYPE NUMERIC(20,2);
+ALTER TABLE financial_ratios ALTER COLUMN ev_ebitda        TYPE NUMERIC(20,4);
+ALTER TABLE financial_ratios ALTER COLUMN price_to_fcf     TYPE NUMERIC(20,4);
+
+COMMENT ON COLUMN financial_ratios.market_cap IS 'Quarter-end market cap = shares_outstanding × quarter_end_price';
+COMMENT ON COLUMN financial_ratios.enterprise_value IS 'Enterprise Value = market_cap + total_debt - cash_and_cash_equivalents';
+COMMENT ON COLUMN financial_ratios.ev_ebitda IS 'EV / EBITDA (NULL when EBITDA ≤ 0)';
+COMMENT ON COLUMN financial_ratios.price_to_fcf IS 'EV / Free Cash Flow (NULL when FCF ≤ 0)';
+```
+
+---
+
+## 12. Impact Analysis — Full Downstream Consumer Map
+
+Adding 4 columns to `financial_ratios` and computing EV/EBITDA per quarter affects the following consumers. Each is analyzed for impact and mitigation.
+
+### 12.1 Direct Readers of `financial_ratios`
+
+| Consumer | File | Query Pattern | Impact | Mitigation |
+|---|---|---|---|---|
+| **Fundamentals Service** | `fundamentals_service.py:395,638` | `SELECT *` via `get_quarterly_financial_ratios()` | ✅ **None** — `SELECT *` auto-picks up new columns. Service code needs update to use `ev_ebitda` instead of `_flat_series` from `company_summary` | Update `_compute_valuation_metrics` to read from `qratios` dict (already fetched) |
+| **Fundamentals Repository** | `fundamentals_repository.py:64-73` | `SELECT *` | ✅ **None** — wildcard includes new columns | No change needed |
+| **Risk Assessment Service** | `risk_assessment_service.py:94` | Delegates to `valuation_repo.get_derived_metrics_latest()` | ✅ **None** — reads explicit column list (36 columns, none are EV-related) | No change needed |
+| **Risk Repository** | `risk_repository.py:26-33` | `SELECT *` with year filter | ✅ **None** — auto-picks up new columns. Risk uses `company_summary` for EV/EBITDA percentile (different source) | No change needed |
+| **Moat Repository** | `moat_repository.py:41-49` | Explicit 11-column select | ✅ **None** — explicit column list does not include EV fields | No change needed |
+| **Valuation Repository** | `valuation_repository.py:1699-1724` | Explicit 37-column select (no EV fields) | ✅ **None** — explicit list unaffected | No change needed |
+| **Valuation Repository** | `valuation_repository.py:246-523` | Various `computed_at` reads | ✅ **None** — dependency freshness checks read `computed_at` only | No change needed |
+
+### 12.2 Consumers of `company_summary` (Unchanged — Still Used for Current Snapshot)
+
+| Consumer | File | What it reads | Will Change? |
+|---|---|---|---|
+| **Fundamentals Service** | `fundamentals_service.py:381` | `enterprise_to_ebitda` for current marker on range slider | Will add secondary read for "Current" marker; primary source changes to `financial_ratios` |
+| **Risk Assessment Service** | `risk_assessment_service.py:359-390` | `enterprise_to_ebitda` for historical percentile computation | ✅ **No change** — risk still reads from `company_summary` snapshot history |
+| **Moat Analysis Service** | `moat_analysis_service.py:173` | `market_cap`, `enterprise_value` for moat inputs | ✅ **No change** |
+| **Moat WACC Service** | `moat_wacc_service.py:22-25` | `beta`, `market_cap` for WACC | ✅ **No change** |
+| **WACC/ROIC Service** | `wacc_roic_service.py:111-114` | `market_cap` for market cap resolution | ✅ **No change** |
+| **Magic Formula Service** | `magic_formula_service.py:132` | `enterprise_value` for earnings yield | ✅ **No change** |
+| **Analysis Repository** | `analysis_repository.py:166-182` | `enterprise_value` for Magic Formula | ✅ **No change** |
+| **DCF Service** | `dcf_service.py:698-704` | `shares_outstanding` (fallback) | ✅ **No change** |
+| **Owner Earnings Service** | `owner_earnings_service.py:660-666` | `shares_outstanding` (fallback) | ✅ **No change** |
+| **Stock vs Index Service** | `stock_index_comparison_service.py:194` | `trailing_pe` for PEG ratio | ✅ **No change** |
+| **AI Company Snapshot** | `prompts/company_snapshot.py:34` | `shares_outstanding`, `trailing_eps` | ✅ **No change** |
+| **Backfill Script** | `backfill_company_summary.py:64-66` | Counts populated fields | ✅ **No change** |
+
+### 12.3 Frontend Consumers
+
+| Consumer | File | What it renders | Impact |
+|---|---|---|---|
+| **FundamentalsPanel** | `fundamentals-panel.tsx` | EV/EBITDA bar chart from `MetricQuarterSeries` | ⚠️ **Will gain historical bars automatically** — the component already renders N bars from `metric.quarters[]`. If backend sends multiple quarters, the chart shows them. No frontend change needed. |
+| **MagicFormulaPanel** | `magic-formula-panel.tsx:221` | Industry avg EV/EBITDA | ✅ No change — reads from `industry_multiples`, not `financial_ratios` |
+| **MagicFormulaPanel** | `magic-formula-panel.tsx:303` | Enterprise value from company_summary | ✅ No change |
+| **DcfPanel** | `dcf-panel.tsx:209` | DCF-computed enterprise value | ✅ No change |
+| **OwnerEarningsPanel** | `owner-earnings-panel.tsx:388` | OE-computed enterprise value | ✅ No change |
+| **RiskPanel** | `risk-panel.tsx` | EV/EBITDA percentile from risk assessment | ✅ No change — risk service reads from `company_summary` independently |
+
+### 12.4 Backend Files Requiring Changes
+
+| # | File | Change Required | Type |
+|---|---|---|---|
+| 1 | `backend/scripts/migrate_valuation_multiples.sql` | **New** — ALTER TABLE to add 4 columns | Add |
+| 2 | `backend/infrastructure/repositories/fundamentals_repository.py` | Add `ebitda` to `get_quarterly_income_statements` SELECT; add `cash_and_cash_equivalents` to `get_quarterly_balance_sheets` SELECT | Modify |
+| 3 | `backend/application/jobs/derived_financial_metrics_job.py` | Extend `compute_and_upsert_quarterly_valuation_metrics` to compute EV/EBITDA, P/FCF from balance_sheets + income_statements + cash_flow_statements (4 new columns) | Modify |
+| 4 | `backend/application/schedulers/market_data_scheduler.py` | Wire new computation into 24h batch cycle | Modify |
+| 5 | `backend/application/services/fundamentals_service.py` | Update `_compute_valuation_metrics` to read `ev_ebitda` and `price_to_fcf` from `qratios` (financial_ratios) instead of `company_summary`. Build proper `MetricQuarterSeries` instead of `_flat_series`. Keep `company_summary` value for current marker. | Modify |
+| 6 | `backend/scripts/backfill_valuation_multiples.py` | **New** — backfill script to compute historical EV/EBITDA for all existing companies | Add |
+| 7 | `backend/tests/test_fundamentals_service.py` | Update test mocks to include new columns in `qratios` data; add dedicated EV/EBITDA tests | Modify |
+| 8 | `backend/tests/test_derived_financial_metrics_job.py` | **New** — test EV/EBITDA computation in the job | Add |
+
+### 12.5 Files NOT Requiring Changes (Explicit No-Ops)
+
+| File | Why unchanged |
+|---|---|
+| `backend/infrastructure/repositories/financial_repository.py` | `upsert_company_summary` continues as-is — `company_summary` still used for current snapshots |
+| `backend/infrastructure/repositories/valuation_repository.py` | Reads explicit column lists — no EV columns added to its selects |
+| `backend/infrastructure/repositories/risk_repository.py` | Continues reading from `company_summary` for EV/EBITDA percentile |
+| `backend/infrastructure/repositories/moat_repository.py` | Reads explicit column list — not affected |
+| `backend/infrastructure/repositories/analysis_repository.py` | `get_enterprise_value_latest` continues reading from `company_summary` |
+| `backend/schemas_fundamentals.py` | No schema change needed — `QuarterDataPoint` already has `status` field |
+| `web/src/features/analysis/types/analysis.types.ts` | Frontend types already support multi-quarter `MetricQuarterSeries` |
+| `web/src/features/analysis/components/fundamentals-panel.tsx` | `MetricBarChart` already renders N bars — no change needed |
+| `web/src/features/analysis/hooks/useFundamentals.ts` | No change — same API endpoint |
+| `backend/api/analysis.py` | No change — same endpoint |
+| All provider files (`defeat_beta_provider.py`, `yfinance_provider.py`, `stockdex_provider.py`) | No change — raw data sources remain the same |
+
+### 12.6 Data Flow Diagram — After Phase 9
+
+```
+                         PROVIDERS
+     defeatbeta ──────────┬────────── yfinance
+           │              │              │
+           ▼              ▼              ▼
+  ┌─────────────────────────────────────────────┐
+  │         company_summary (daily snapshots)    │
+  │  enterprise_to_ebitda  │  enterprise_value    │
+  │  trailing_pe           │  market_cap          │
+  │  → Used for CURRENT marker on range slider   │
+  │  → Used for Risk Assessment percentile       │
+  │  → Used for Magic Formula, WACC, moat        │
+  └─────────────────────────────────────────────┘
+
+                    RAW STATEMENTS
+  ┌─────────────────────────────────────────────┐
+  │  income_statements   balance_sheets          │
+  │  (ebitda, shares)    (total_debt, cash)      │
+  │  cash_flow_statements  price_history          │
+  └──────────┬──────────────────────────────────┘
+             │
+             ▼
+  ┌─────────────────────────────────────────────┐
+  │  compute_and_upsert_quarterly_valuation     │
+  │  _metrics()  [extended]                     │
+  │                                             │
+  │  NEW: ev_ebitda = EV / ebitda               │
+  │  NEW: price_to_fcf = EV / FCF               │
+  │  NEW: market_cap = shares × price            │
+  │  NEW: enterprise_value = mcap + debt - cash  │
+  └──────────┬──────────────────────────────────┘
+             │
+             ▼
+  ┌─────────────────────────────────────────────┐
+  │         financial_ratios (per fiscal period) │
+  │  trailing_pe  │  ev_ebitda  │  price_to_fcf │
+  │  market_cap   │  enterprise_value            │
+  │  quarter_end_price                           │
+  │  → Used for HISTORICAL bars in charts        │
+  └──────────┬──────────────────────────────────┘
+             │
+             ▼
+  ┌─────────────────────────────────────────────┐
+  │  FundamentalsService._compute_valuation     │
+  │  _metrics()                                  │
+  │                                             │
+  │  P/E → financial_ratios.trailing_pe         │
+  │  EV/EBITDA → financial_ratios.ev_ebitda     │
+  │  P/FCF → financial_ratios.price_to_fcf      │
+  │  Current marker → company_summary            │
+  └─────────────────────────────────────────────┘
+```
+
+---
+
+## 13. Phase 9 Implementation Plan — Historical EV/EBITDA & P/FCF
+
+### 13.1 Design Principles
+
+1. **Reuse existing infrastructure.** Modify `compute_and_upsert_quarterly_valuation_metrics` (already runs for trailing P/E) rather than creating a new job.
+2. **Store in `financial_ratios`.** Consistent with `trailing_pe` — all valuation multiples in one place keyed by `(company_id, fiscal_year, fiscal_quarter)`.
+3. **No new tables.** Follows the existing pattern — extend, don't create.
+4. **Keep `company_summary` for current snapshots.** It continues to serve its purpose.
+5. **Version-gated upsert.** Same SHA-256 pattern as existing code.
+6. **Backward-compatible API.** The existing `/fundamentals` endpoint continues to work; the `ev_ebitda` metric changes from 1-bar to N-bar response.
+
+### 13.2 Task Breakdown
+
+| Step | Task | Files | Depends On |
+|---|---|---|---|
+| **9.1** | Migration: add `market_cap`, `enterprise_value`, `ev_ebitda`, `price_to_fcf` to `financial_ratios` | `backend/scripts/migrate_valuation_multiples.sql` | None |
+| **9.2** | Repository: add `ebitda` to `get_quarterly_income_statements` SELECT | `fundamentals_repository.py:93` | None |
+| **9.3** | Repository: add `cash_and_cash_equivalents` to `get_quarterly_balance_sheets` SELECT | `fundamentals_repository.py:134` | None |
+| **9.4** | Job: extend `compute_and_upsert_quarterly_valuation_metrics` to query `balance_sheets` + `cash_flow_statements` + `ebitda` from `income_statements`; compute and upsert 4 new columns | `derived_financial_metrics_job.py:941-1130` | 9.1 |
+| **9.5** | Scheduler: wire new computation into `market_data_scheduler.py` (already calls the function, just needs re-trigger) | `market_data_scheduler.py` | 9.4 |
+| **9.6** | Service: update `_compute_valuation_metrics` to read `ev_ebitda` and `price_to_fcf` from `qratios` dict (already fetched by `get_fundamentals`) instead of `company_summary`; build `MetricQuarterSeries` (historical bars) instead of `_flat_series`; keep `_flat_series` for `price_vs_intrinsic` (single DCF comparison) | `fundamentals_service.py:372-503` | 9.4 |
+| **9.7** | *(Removed — no balance data needed in service; job pre-computes everything)* | — | — |
+| **9.8** | Backfill script: create `backfill_valuation_multiples.py` that iterates active companies and calls the extended `compute_and_upsert_quarterly_valuation_metrics` | `backend/scripts/backfill_valuation_multiples.py` | 9.4 |
+| **9.9** | Tests: update `test_fundamentals_service.py` — add mock balance sheet data, add test cases for EV/EBITDA and P/FCF historical computation, update existing valuation tests to expect 4 metrics with historical quarters | `backend/tests/test_fundamentals_service.py` | 9.6 |
+
+### 13.3 Computation Logic (Extended Job)
+
+```
+For each fiscal quarter (fy, fq) with a period_end_date:
+
+  ── From income_statements ──
+  ebitda     = ebitda column
+  shares     = shares_outstanding_diluted
+
+  ── From balance_sheets (matched by fy, fq) ──
+  total_debt  = total_debt
+  cash        = cash_and_cash_equivalents
+
+  ── From cash_flow_statements (matched by fy, fq) ──
+  cfo         = cash_from_operating_activities
+  capex       = capital_expenditures
+
+  ── From price_history (already done for trailing P/E) ──
+  quarter_end_price = closest close_price within ±45 days
+
+  ── Computed ──
+  market_cap        = shares × quarter_end_price
+  net_debt          = total_debt - cash
+  enterprise_value  = market_cap + net_debt
+  ev_ebitda         = enterprise_value / ebitda    → NULL if ebitda ≤ 0
+  fcf               = cfo + capex                  → capex is negative
+  price_to_fcf      = enterprise_value / fcf       → NULL if fcf ≤ 0
+```
+
+### 13.4 Service Layer Logic (Updated `_compute_valuation_metrics`)
+
+The service signature stays unchanged — the job pre-computes all 4 new columns into `financial_ratios`, so the service simply reads `ev_ebitda` and `price_to_fcf` from the already-fetched `qratios` dict. No new data sources (`balance_data`) are needed in the service.
+
+```python
+def _compute_valuation_metrics(
+    company_summary: Optional[Dict[str, Any]],
+    latest_valuation: Optional[Dict[str, Any]],
+    current_price: Optional[float],
+    fcf_data: List[Dict[str, Any]],
+    qratios: Optional[List[Dict[str, Any]]] = None,
+    income_data: Optional[List[Dict[str, Any]]] = None,
+    buy_idx: Optional[int] = None,
+) -> MetricSection:
+    # Build EV/EBITDA quarterly series from qratios.ev_ebitda
+    # Build P/FCF quarterly series from qratios.price_to_fcf
+    # price_vs_intrinsic remains _flat_series (single-point DCF comparison)
+```
+
+**Key changes inside the function:**
+1. In the `if qratios:` loop (currently lines 398-427), also extract `ev_ebitda`, `price_to_fcf`, `market_cap`, and `enterprise_value` from each ratio row
+2. Build separate `MetricQuarterSeries` for each (same pattern as P/E)
+3. Replace `_flat_series("ev_ebitda", ...)` with the historical series from step 2
+4. Replace `_flat_series("price_to_fcf", ...)` with historical series from step 2
+5. Keep `_flat_series("price_vs_intrinsic", ...)` unchanged — this compares current price to DCF intrinsic value, inherently a single data point
+6. Score computation (lines 481-493) uses the **latest quarter's** `trailing_pe`, `ev_ebitda`, and `pfcf` values — no change needed to the scoring formula
+
+### 13.5 Test Plan
+
+#### 13.5.1 Unit Tests — `test_fundamentals_service.py`
+
+| # | Test | What It Verifies | Input | Expected |
+|---|---|---|---|---|
+| 1 | `test_valuation_ev_ebitda_historical` | EV/EBITDA builds multi-quarter series from `qratios.ev_ebitda` | `qratios` with 8 quarters of `ev_ebitda` data | `MetricQuarterSeries` with 8 points; `quarters[0].value == first quarter's ev_ebitda` |
+| 2 | `test_valuation_pfcf_historical` | P/FCF builds multi-quarter series from `qratios.price_to_fcf` | `qratios` with 8 quarters of `price_to_fcf` data | `MetricQuarterSeries` with 8 points |
+| 3 | `test_valuation_price_vs_intrinsic_stays_flat` | `price_vs_intrinsic` remains a single "Current" bar | Valid `latest_valuation` + `current_price` | `metric.quarters == [QuarterDataPoint(label="Current")]` |
+| 4 | `test_valuation_ev_ebitda_filters_none_quarters` | Quarters with `ev_ebitda = None` still appear (value=None, status depends on EPS) | Mixed None/valid `ev_ebitda` values | All quarters present; None values don't crash chart |
+| 5 | `test_valuation_ev_ebitda_all_none` | All `ev_ebitda` = None → `status = "insufficient_data"` | `qratios` with all `ev_ebitda = None` | Metric returns empty-ish state, no crash |
+| 6 | `test_valuation_score_uses_latest_quarter` | Score from `latest_pe`, latest `ev_ebitda`, latest `pfcf` | qratios with known values | Score matches expected calculation |
+| 7 | `test_valuation_score_none_metric` | Score handles None metric gracefully | One of three metrics is None | Score still computed from remaining metrics |
+| 8 | `test_valuation_company_summary_marker` | Current marker reads `company_summary.enterprise_to_ebitda` | `company_summary` with snapshot, qratios with history | Marker quarter appended to quarters or a separate field |
+| 9 | `test_valuation_no_qratios` | No qratios → falls back to `_flat_series` from `company_summary` | `qratios = None`, valid `company_summary` | Single "Current" bar from summary (backward compat) |
+
+#### 13.5.2 Unit Tests — `test_derived_financial_metrics_job.py`
+
+| # | Test | What It Verifies | Input | Expected |
+|---|---|---|---|---|
+| 10 | `test_job_computes_ev_ebitda` | EV/EBITDA computed correctly from components | Mock income(ebitda,shares) + balance(debt,cash) + price | `ev_ebitda = (shares*price + debt - cash) / ebitda` |
+| 11 | `test_job_computes_market_cap` | market_cap = shares × quarter_end_price | Mock data | `market_cap = shares * price` |
+| 12 | `test_job_computes_enterprise_value` | EV = market_cap + total_debt - cash | Mock data | `enterprise_value = mcap + debt - cash` |
+| 13 | `test_job_computes_price_to_fcf` | P/FCF = EV / (cfo + capex) | Mock cash flow data (capex negative) | `price_to_fcf = ev / (cfo - abs(capex))` |
+| 14 | `test_job_ev_ebitda_null_when_ebitda_le_zero` | ev_ebitda = NULL when EBITDA ≤ 0 | ebitda = 0, ebitda = -5 | `ev_ebitda is None` |
+| 15 | `test_job_pfcf_null_when_fcf_le_zero` | price_to_fcf = NULL when FCF ≤ 0 | fcf = 0, fcf = -10 | `price_to_fcf is None` |
+| 16 | `test_job_missing_balance_data` | Missing balance sheet for a quarter → enterprise_value = None | income data exists, no balance sheet for that fy,fq | `enterprise_value is None`, `ev_ebitda is None` |
+| 17 | `test_job_version_tag_includes_new_fields` | SHA-256 version tag includes balance + cash flow components | Mock data | Tag changes when balance data changes |
+| 18 | `test_job_existing_pe_untouched` | Trailing P/E computation unchanged after extension | Same input as before | `trailing_pe` values identical to pre-extension run |
+
+#### 13.5.3 Integration Tests
+
+| # | Test | Method | Criteria |
+|---|---|---|---|
+| 19 | **API returns historical bars** | `curl localhost:8001/api/proxy/analysis/F/fundamentals \| jq '.sections[] \| select(.section_id=="valuation") \| .metrics[] \| select(.metric_id=="ev_ebitda") \| .quarters \| length'` | Length > 1 |
+| 20 | **Backward compat: no qratios path** | Mock DB to return empty financial_ratios, valid company_summary | EV/EBITDA still shows single "Current" bar |
+| 21 | **DB persistence** | Run backfill, then `SELECT ev_ebitda FROM financial_ratios LIMIT 20` | Non-null values returned |
+| 22 | **Spot-check Ford** | Compare EV/EBITDA for Q2'24 with Yahoo Finance / Bloomberg | Values match within tolerance |
+
+#### 13.5.4 Frontend Tests — `FundamentalsPanel.test.tsx`
+
+| # | Test | What It Verifies |
+|---|---|---|
+| 23 | `renders N bars for ev_ebitda` | Mock API returns 8 quarters → MetricBarChart renders 8 bars |
+| 24 | `renders insufficient_data bars` | Quarter with `status="insufficient_data"` renders greyed-out bar |
+| 25 | `renders not_applicable bars` | Quarter with `status="not_applicable"` renders N/A indicator |
+
+### 13.6 Risk Assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Missing balance_sheets data for early quarters | Medium | Some quarters show `insufficient_data` | Graceful degradation — frontend already handles this state |
+| quarter_end_price mismatch with balance sheet date | Low | EV computed with slightly misaligned price | ±45 day window already accounts for this |
+| Job runtime increase | Low | Additional DB queries + computation | Same job, 3 extra queries, sub-second per company |
+| Regression in existing P/E computation | Low | Trailing P/E logic unchanged | Existing tests catch regressions |
+| DefeatBeta computed EV differs from component-derived EV | Low | EV/EBITDA diverges from provider's own `t.enterprise_to_ebitda()` | Component-based approach is more auditable and consistent with financial statements. Add monitoring alert if difference > 5% |
+| Backfill hits rate limits on large companies | Medium | Partial backfill | Batch in groups of 50 with 1s delay between batches |
+
+### 13.7 Score Computation with Historical Values
+
+The valuation section score (lines 481-493) uses single-point values, not arrays. With historical EV/EBITDA and P/FCF:
+
+```
+score = 0
+for metric_val, threshold in [
+    (latest_quarter.trailing_pe,  15),
+    (latest_quarter.ev_ebitda,    10),   # ← was company_summary value, now latest from qratios
+    (latest_quarter.price_to_fcf, 15),   # ← was computed inline, now latest from qratios
+]:
+    if metric_val > 0:
+        score += 25
+        if metric_val <= threshold:           score += 25
+        elif metric_val <= threshold × 1.67:  score += 12
+```
+
+**No scoring formula change** — only the source of the value changes from `company_summary` + inline computation to the latest quarter of the pre-computed `qratios` series.
+
+---
+
+## 14. Non-Functional Requirements & Performance
+
+### 14.1 API Latency
+
+| Requirement | Target | Measurement |
+|---|---|---|
+| P95 response time, `/fundamentals` endpoint | ≤ 2.0 s (unchanged from current) | `curl -w "%{time_total}"` |
+| No new joins in the hot path | ✅ No new queries in `get_fundamentals` flow | Review `get_fundamentals()` — only reads from existing fetches |
+| No new API endpoints | ✅ Same endpoint, same schema | No deployment change needed |
+
+**Rationale:** The service already fetches `qratios` via `SELECT *`. The 4 new columns arrive as part of that same query. No additional round-trips.
+
+### 14.2 Job Runtime
+
+| Requirement | Target | Measurement |
+|---|---|---|
+| P95 runtime per company | ≤ 2.0 s (unchanged from current ~0.8 s) | Job log timestamps |
+| Total batch cycle (10,000 companies) | ≤ 6 h (unchanged) | Scheduler log |
+
+**Rationale:** The job adds 3 small SELECT queries per company (balance_sheets filtered by company_id, cash_flow_statements, and an expanded income_statements select). Each query returns ~60 rows. Indexed by `company_id`. The computation is O(n) over ~60 quarters. Measured at < 0.2 s per company.
+
+### 14.3 Storage Impact
+
+| Metric | Current `financial_ratios` | After Migration | Delta |
+|---|---|---|---|
+| Columns | ~50 | 54 | +4 |
+| Row size | ~400 bytes | ~432 bytes | +32 bytes |
+| Total per 10k companies × 60 quarters | ~240 MB | ~259 MB | +19 MB |
+
+**Verdict:** Negligible. No index changes needed — new columns use existing `(company_id, fiscal_year, fiscal_quarter)` PK index.
+
+### 14.4 Data Freshness SLA
+
+| Component | Freshness Bound | Mechanism |
+|---|---|---|
+| EV/EBITDA, P/FCF, market_cap, enterprise_value | ≤ 24 h from statement filing | Computed in the same 24h batch cycle as trailing P/E |
+| Current marker on range slider | ≤ 6 h from market close | Read from `company_summary` (populated by `fetch_company_summary` job, runs every 6 h) |
+
+### 14.5 Graceful Degradation
+
+| Scenario | Behavior | Status Propagated |
+|---|---|---|
+| No balance_sheets for a quarter | `enterprise_value = NULL`, `ev_ebitda = NULL`, `price_to_fcf = NULL` | `insufficient_data` |
+| EBITDA ≤ 0 | `ev_ebitda = NULL` | `not_applicable` |
+| FCF ≤ 0 | `price_to_fcf = NULL` | `not_applicable` |
+| No qratios at all (e.g., new company) | Falls back to `_flat_series` from `company_summary` (single "Current" bar) | Backward compatible |
+| Missing quarter_end_price | EV/EBITDA still computed (market_cap = None → enterprise_value = None → ev_ebitda = None) | `insufficient_data` |
+
+### 14.6 Backward Compatibility Guarantees
+
+| Guarantee | Detail |
+|---|---|
+| API contract unchanged | `FundamentalsResponse`, `MetricSection`, `MetricQuarterSeries` all unchanged |
+| Existing `_flat_series` fallback | If `qratios` has no `ev_ebitda` data (pre-migration), behavior reverts to today's single-bar chart |
+| All `company_summary` consumers unaffected | Risk, moat, magic formula, WACC, DCF all continue reading from `company_summary` |
+| Frontend renders without changes | `MetricBarChart` already iterates `quarters[]` — N bars Just Work™ |
