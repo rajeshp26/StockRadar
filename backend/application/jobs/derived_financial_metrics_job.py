@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # Bump this when ANY computation logic in this file changes.
 # It gets hashed into _version_tag() so every row gets re-computed on the
 # next scheduler or backfill run — no silent staleness from version-gating.
-COMPUTATION_VERSION = 2
+COMPUTATION_VERSION = 3
 
 
 def _f(x: Any) -> Optional[float]:
@@ -819,6 +819,10 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
 
             working_capital = (current_assets - current_liab) if current_assets is not None and current_liab is not None else None
 
+            interest_coverage = None
+            if ebit is not None and interest_exp is not None and interest_exp != 0:
+                interest_coverage = ebit / abs(interest_exp)
+
             # ── Health scores ──────────────────────────────────────────
             # Build a flat dict for the _compute helpers to consume.
             period_dict: Dict[str, Any] = {
@@ -887,8 +891,9 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
                 "long_term_debt_to_assets": _clamp_ratio(lt_debt_assets),
                 "current_ratio":    _clamp_ratio(current_ratio),
                 "asset_turnover":   _clamp_ratio(asset_turnover),
-                "piotroski_score":  piotroski,
-                "altman_z_score":   _clamp_ratio(altman_z),
+                "piotroski_score":    piotroski,
+                "altman_z_score":     _clamp_ratio(altman_z),
+                "interest_coverage":  _clamp_ratio(interest_coverage),
                 "computed_at":      datetime.utcnow().isoformat(),
                 "source_version_tag": _version_tag(source_payload),
                 "data_source":      "derived",
