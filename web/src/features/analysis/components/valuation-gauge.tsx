@@ -534,8 +534,8 @@ function MiniGauge({ current, min, max, bandLow, bandHigh, percentile, mode }: {
 
 // ── MiniSparkline: centered full-width sparkline matching Design 4 reference ─
 
-function MiniSparkline({ values, firstYear, delta, unit }: {
-  values?: number[]; firstYear?: string; delta?: number | null; unit: string;
+function MiniSparkline({ values, firstYear, delta, unit, invertDeltaColor }: {
+  values?: number[]; firstYear?: string; delta?: number | null; unit: string; invertDeltaColor?: boolean;
 }) {
   if (!values || values.length < 2) return null;
   const min = Math.min(...values);
@@ -545,35 +545,41 @@ function MiniSparkline({ values, firstYear, delta, unit }: {
   const first = values[0];
   const color = last >= first ? "#00c875" : "#ff6565";
 
-  const pts = values.map((v, i) => {
+  const points = values.map((v, i) => {
     const x = (i / (values.length - 1)) * 100;
-    const y = 100 - ((v - min) / range) * 80 - 10;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-
-  const areaPts = `0,100 ${pts} 100,100`;
+    const y = 100 - ((v - min) / range) * 76 - 12;
+    return { x: x.toFixed(1), y: y.toFixed(1) };
+  });
+  const ptsStr = points.map((p) => `${p.x},${p.y}`).join(" ");
+  const areaPts = `0,100 ${ptsStr} 100,100`;
+  const gradId = `sg_${Math.random().toString(36).slice(2, 8)}`;
 
   return (
     <div className="mt-4 pt-4 border-t border-[#2f3336]">
-      <svg className="w-full h-[40px]" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <svg className="w-full h-[52px]" viewBox="0 0 100 100" preserveAspectRatio="none">
         <defs>
-          <linearGradient id="sparkFill" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+          <linearGradient id={gradId} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+            <stop offset="60%" stopColor={color} stopOpacity="0.08" />
             <stop offset="100%" stopColor={color} stopOpacity="0" />
           </linearGradient>
         </defs>
-        <polygon points={areaPts} fill="url(#sparkFill)" />
-        <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx="100" cy={parseFloat(pts.split(" ").pop()!.split(",")[1])} r="3" fill={color} stroke="#1c2023" strokeWidth="1.5" />
+        <polygon points={areaPts} fill={`url(#${gradId})`} />
+        <polyline points={ptsStr} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="1.5" fill={color} opacity={i === points.length - 1 ? 1 : 0.35} />
+        ))}
+        <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="4" fill={color} stroke="#1c2023" strokeWidth="2" />
       </svg>
-      <div className="flex justify-between mt-1 text-[10px] text-[#71767b]">
-        <span>{firstYear ?? ""}</span>
+      <div className="flex justify-between mt-1.5 text-[10px] text-[#71767b]">
+        <span className="font-medium">{firstYear ?? ""}</span>
         {delta != null && (
-          <span className={cn("font-semibold", delta >= 0 ? "text-[#ff6565]" : "text-[#00c875]")}>
-            {delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toFixed(0)}% vs avg
+          <span className={cn("font-semibold flex items-center gap-0.5", (invertDeltaColor ? delta < 0 : delta >= 0) ? "text-[#ff6565]" : "text-[#00c875]")}>
+            <span className="text-[11px] leading-none">{delta >= 0 ? "▲" : "▼"}</span>
+            <span>{Math.abs(delta).toFixed(0)}% vs avg</span>
           </span>
         )}
-        <span className="font-semibold text-white/60">Now</span>
+        <span className="font-semibold text-white/70">Now</span>
       </div>
     </div>
   );
@@ -822,6 +828,298 @@ export function MetricCard({
         avgValue={config.historical_avg ?? config.avg_value}
         vsAvgDelta={config.vs_avg_delta}
       />
+    </div>
+  );
+}
+
+
+// ── Health-score gauge helpers ──────────────────────────────────────────────
+
+export function getHealthLevel(value: number, metricId: string): {
+  label: string; color: string; className: string;
+} {
+  if (metricId === "piotroski_f") {
+    if (value >= 8) return { label: "Strong", color: "#00c875", className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25" };
+    if (value >= 4) return { label: "Fair", color: "#ffc700", className: "bg-amber-500/15 text-amber-400 border-amber-500/25" };
+    return { label: "Weak", color: "#ff6565", className: "bg-rose-500/15 text-rose-400 border-rose-500/25" };
+  }
+  if (metricId === "altman_z") {
+    if (value >= 2.99) return { label: "Safe", color: "#00c875", className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25" };
+    if (value >= 1.81) return { label: "Grey", color: "#ffc700", className: "bg-amber-500/15 text-amber-400 border-amber-500/25" };
+    return { label: "Distress", color: "#ff6565", className: "bg-rose-500/15 text-rose-400 border-rose-500/25" };
+  }
+  if (metricId === "interest_coverage") {
+    if (value >= 5) return { label: "Strong", color: "#00c875", className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25" };
+    if (value >= 1.5) return { label: "Adequate", color: "#ffc700", className: "bg-amber-500/15 text-amber-400 border-amber-500/25" };
+    return { label: "Weak", color: "#ff6565", className: "bg-rose-500/15 text-rose-400 border-rose-500/25" };
+  }
+  return { label: "Unknown", color: "#71767b", className: "bg-white/5 text-white/30" };
+}
+
+export function getHealthDescription(metricId: string): string {
+  if (metricId === "piotroski_f") return "Score range: 0 (weak) → 9 (strong). ≥8 strong, ≤3 erosion.";
+  if (metricId === "altman_z") return "Safe ≥ 2.99 · Grey 1.81–2.99 · Distress < 1.81";
+  if (metricId === "interest_coverage") return "Strong ≥ 5.0 · Adequate 1.5–5.0 · Weak < 1.5";
+  return "";
+}
+
+// ── HealthArc: a 180-degree semicircle with green/amber/red zones ──────────
+// High values = green (strong), low values = red (weak) — opposite of MiniGauge.
+// Shows tick marks and value labels at min, bandLow, bandHigh, and max.
+
+function HealthArc({ current, min, max, bandLow, bandHigh, metricId }: {
+  current: number; min: number; max: number; bandLow: number; bandHigh: number; metricId: string;
+}) {
+  const cx = 110, cy = 115, r = 75;
+  const viewW = 220, viewH = 170;
+  const range = Math.max(max - min, 1);
+  const startAngle = 180;
+
+  function valToAngle(v: number): number {
+    return startAngle + ((v - min) / range) * 180;
+  }
+
+  const rawMaxAngle = Math.max(startAngle, valToAngle(max));
+  const maxAngle = Math.min(rawMaxAngle, 360);
+  const redEndAngle = Math.min(maxAngle, Math.max(startAngle, valToAngle(bandLow)));
+  const amberEndAngle = Math.min(maxAngle, Math.max(startAngle, valToAngle(bandHigh)));
+  const currentAngle = Math.min(maxAngle, Math.max(startAngle, valToAngle(current)));
+
+  const needleEnd = polarToCartesian(cx, cy, r, currentAngle);
+
+  function labelPos(v: number, off = 20) {
+    const a = Math.min(maxAngle, Math.max(startAngle, valToAngle(v)));
+    return polarToCartesian(cx, cy, r + off, a);
+  }
+  function tickEnds(v: number, inner = 10, outer = 3) {
+    const a = Math.min(maxAngle, Math.max(startAngle, valToAngle(v)));
+    const pi = polarToCartesian(cx, cy, r - inner, a);
+    const po = polarToCartesian(cx, cy, r - outer, a);
+    return { x1: pi.x, y1: pi.y, x2: po.x, y2: po.y };
+  }
+  function zoneLabelPos(a: number) {
+    return polarToCartesian(cx, cy, r - 28, a);
+  }
+
+  const midRed = (startAngle + redEndAngle) / 2;
+  const midAmber = (redEndAngle + amberEndAngle) / 2;
+  const midGreen = (amberEndAngle + maxAngle) / 2;
+  const redZonePos = zoneLabelPos(midRed);
+  const amberZonePos = zoneLabelPos(midAmber);
+  const greenZonePos = zoneLabelPos(midGreen);
+
+  const minP = labelPos(min), maxP = labelPos(max);
+  const lowP = labelPos(bandLow), highP = labelPos(bandHigh);
+  const minT = tickEnds(min), maxT = tickEnds(max);
+  const lowT = tickEnds(bandLow), highT = tickEnds(bandHigh);
+
+  const zoneLabel = (z: "red" | "amber" | "green"): string => {
+    if (metricId === "altman_z") {
+      if (z === "red") return "Distress";
+      if (z === "amber") return "Grey";
+      return "Safe";
+    }
+    if (metricId === "piotroski_f") {
+      if (z === "red") return "Weak";
+      if (z === "amber") return "Fair";
+      return "Strong";
+    }
+    if (z === "red") return "Weak";
+    if (z === "amber") return "Adequate";
+    return "Strong";
+  };
+
+  return (
+    <svg className="w-[220px] h-[170px] mx-auto" viewBox={`0 0 ${viewW} ${viewH}`}>
+      <path d={describeArc(cx, cy, r, startAngle, maxAngle)} fill="none" stroke="#2f3336" strokeWidth="14" strokeLinecap="round" />
+      {bandLow > min && (
+        <path d={describeArc(cx, cy, r, startAngle, redEndAngle)} fill="none" stroke="#ff6565" strokeWidth="14" strokeLinecap="round" />
+      )}
+      {bandHigh > bandLow && (
+        <path d={describeArc(cx, cy, r, redEndAngle, amberEndAngle)} fill="none" stroke="#ffc700" strokeWidth="14" strokeLinecap="round" />
+      )}
+      {max > bandHigh && (
+        <path d={describeArc(cx, cy, r, amberEndAngle, maxAngle)} fill="none" stroke="#00c875" strokeWidth="14" strokeLinecap="round" />
+      )}
+      {/* Zone labels */}
+      {bandLow > min && (
+        <text x={redZonePos.x} y={redZonePos.y} fill="#ff6565" fontSize="11" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">{zoneLabel("red")}</text>
+      )}
+      {bandHigh > bandLow && (
+        <text x={amberZonePos.x} y={amberZonePos.y} fill="#ffc700" fontSize="11" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">{zoneLabel("amber")}</text>
+      )}
+      {max > bandHigh && (
+        <text x={greenZonePos.x} y={greenZonePos.y} fill="#00c875" fontSize="11" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">{zoneLabel("green")}</text>
+      )}
+      <line {...minT} stroke="rgba(255,255,255,0.5)" strokeWidth="2" />
+      <line {...lowT} stroke="rgba(255,255,255,0.5)" strokeWidth="2" />
+      <line {...highT} stroke="rgba(255,255,255,0.5)" strokeWidth="2" />
+      <line {...maxT} stroke="rgba(255,255,255,0.5)" strokeWidth="2" />
+      <text x={minP.x} y={minP.y} fill="rgba(255,255,255,0.7)" fontSize="12" textAnchor="middle" dominantBaseline="middle">{min.toFixed(1)}</text>
+      <text x={lowP.x} y={lowP.y} fill="rgba(255,255,255,0.7)" fontSize="12" textAnchor="middle" dominantBaseline="middle">{bandLow.toFixed(1)}</text>
+      <text x={highP.x} y={highP.y} fill="rgba(255,255,255,0.7)" fontSize="12" textAnchor="middle" dominantBaseline="middle">{bandHigh.toFixed(1)}</text>
+      <text x={maxP.x} y={maxP.y} fill="rgba(255,255,255,0.7)" fontSize="12" textAnchor="middle" dominantBaseline="middle">{max.toFixed(1)}</text>
+      <circle cx={needleEnd.x} cy={needleEnd.y} r="7" fill="white" />
+      <line x1={needleEnd.x} y1={needleEnd.y} x2={cx} y2={cy + 5} stroke="white" strokeWidth="2.5" />
+    </svg>
+  );
+}
+
+
+// ── MoatGaugeCard: gauge + current value + explanation + sparkline ──────────
+
+export function MoatGaugeCard({
+  config, unit, label, metricId, quarters,
+}: {
+  config: GaugeConfig;
+  unit: string;
+  label: string;
+  metricId: string;
+  quarters: { label: string; value: number | null; status?: string }[];
+}) {
+  const health = config.current_value != null
+    ? getHealthLevel(config.current_value, metricId)
+    : null;
+  const description = getHealthDescription(metricId);
+  const hasData = config.current_value != null && config.min_value != null;
+
+  return (
+    <div className="flex-1 min-w-[280px] bg-[#1c2023] border border-[#2f3336] rounded-xl p-5 text-center">
+      <div className="flex items-center justify-center gap-2 mb-3">
+        <span className="text-[13px] text-white/80 font-bold uppercase tracking-wider">{label}</span>
+        {health && (
+          <span className={cn("text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded", health.className)}>
+            {health.label}
+          </span>
+        )}
+      </div>
+
+      {hasData ? (
+        <>
+          <HealthArc
+            current={config.current_value!}
+            min={config.min_value!}
+            max={config.max_value!}
+            bandLow={config.band_low ?? 0}
+            bandHigh={config.band_high ?? 0}
+            metricId={metricId}
+          />
+
+          <div className="text-[36px] font-bold text-white/90 mt-2 tracking-tight">
+            {metricId === "altman_z" && config.current_value != null
+              ? config.current_value.toFixed(2)
+              : fmtValue(config.current_value, unit)}
+          </div>
+
+          {description && (
+            <div className="mt-2 text-[10px] text-white/40 leading-relaxed max-w-[220px] mx-auto">
+              {description}
+            </div>
+          )}
+
+          <MiniSparkline
+            values={config.sparkline_values}
+            firstYear={quarters.length > 0 ? quarters[0].label.split(" ")[0] : undefined}
+            delta={config.vs_avg_delta}
+            unit={unit}
+            invertDeltaColor
+          />
+        </>
+      ) : (
+        <div className="text-[11px] text-white/50 italic py-8">No data available</div>
+      )}
+    </div>
+  );
+}
+
+
+// ── MoatHistoryTable: yearly or quarterly comparison across all health metrics ─
+
+export function MoatHistoryTable({
+  metrics,
+  frequency,
+}: {
+  metrics: { metricId: string; label: string; unit: string; quarters: { label: string; value: number | null }[] }[];
+  frequency: "quarterly" | "annual";
+}) {
+  const [open, setOpen] = useState(false);
+
+  // Collect unique columns across all metrics
+  const allColumns = new Set<string>();
+  const colValues: Record<string, Record<string, number | null>> = {};
+  for (const m of metrics) {
+    colValues[m.metricId] = {};
+    for (const q of m.quarters) {
+      const colKey = frequency === "annual"
+        ? (q.label.split(" ").length >= 2 ? q.label.split(" ")[1] : q.label)
+        : q.label;
+      allColumns.add(colKey);
+      // Keep the latest value for each column key (last quarter wins for annual)
+      colValues[m.metricId][colKey] = q.value;
+    }
+  }
+  const sortedCols = [...allColumns].sort();
+  if (sortedCols.length === 0) return null;
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/70 transition-colors"
+      >
+        <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
+        History ({sortedCols.length} {frequency === "annual" ? "years" : "quarters"})
+      </button>
+      {open && (
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="text-[#71767b] border-b border-[#2f3336]">
+                <th className="text-left py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">Metric</th>
+                {sortedCols.map((c) => (
+                  <th key={c} className="text-right py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">{c}</th>
+                ))}
+                <th className="text-right py-1.5 px-2 font-semibold text-[10px] uppercase tracking-wider">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.map((m) => {
+                const lastVal = sortedCols
+                  .map((c) => colValues[m.metricId]?.[c])
+                  .filter((v): v is number => v != null)
+                  .pop();
+                return (
+                  <tr key={m.metricId} className="border-b border-[rgba(47,51,54,0.4)]">
+                    <td className="py-1.5 px-2 text-white/60 font-semibold">{m.label}</td>
+                    {sortedCols.map((c) => {
+                      const v = colValues[m.metricId]?.[c];
+                      const hl = v != null ? getHealthLevel(v, m.metricId) : null;
+                      return (
+                        <td
+                          key={c}
+                          className="py-1.5 px-2 text-right tabular-nums font-semibold"
+                          style={hl ? { color: hl.color } : undefined}
+                        >
+                          {v != null ? (m.metricId === "altman_z" ? v.toFixed(2) : m.metricId === "interest_coverage" ? v.toFixed(1) : v.toFixed(0)) : "\u2014"}
+                        </td>
+                      );
+                    })}
+                    <td className="py-1.5 px-2 text-right">
+                      {lastVal != null ? (
+                        <span className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded", getHealthLevel(lastVal, m.metricId).className)}>
+                          {getHealthLevel(lastVal, m.metricId).label}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-white/30 italic">No data</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

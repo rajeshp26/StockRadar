@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Info, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { useFundamentals } from "../hooks/useFundamentals";
 import { SectionHeader } from "./shared-ui";
-import { MetricCard, ValuationGauge } from "./valuation-gauge";
+import { MetricCard, ValuationGauge, MoatGaugeCard, MoatHistoryTable } from "./valuation-gauge";
 import { IntrinsicValueCard, IntrinsicValueEmptyState } from "./intrinsic-value-card";
 import type {
   FundamentalsResponse,
@@ -1005,6 +1005,7 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
   const [valViewMode, setValViewMode] = useState<"all" | "from_purchase">("all");
   const [valFrequency, setValFrequency] = useState<"quarterly" | "annual">("quarterly");
   const [valBenchmark, setValBenchmark] = useState<"history" | "sector">("history");
+  const [moatFrequency, setMoatFrequency] = useState<"quarterly" | "annual">("quarterly");
 
   if (loading) {
     return (
@@ -1107,6 +1108,69 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
                   })}
                 </div>
               )}
+            </div>
+          );
+        }
+        if (section.section_id === "moat") {
+          const moatMetrics = section.metrics.filter(
+            (m) => m.metric_id === "piotroski_f" || m.metric_id === "altman_z" || m.metric_id === "interest_coverage",
+          );
+          const moatAllIndices = data.quarters.map((_, i) => i);
+          const moatActiveIndices = valViewMode === "from_purchase" && data.buy_quarter_index != null
+            ? moatAllIndices.slice(data.buy_quarter_index)
+            : moatAllIndices;
+          const moatFiltered = moatMetrics.map((m) => {
+            const rawQ = moatActiveIndices.map((i) => m.quarters[i]).filter(Boolean);
+            return {
+              metricId: m.metric_id,
+              label: m.label,
+              unit: m.unit,
+              gauge_config: m.gauge_config,
+              quarters: rawQ,
+            };
+          });
+          return (
+            <div key={section.section_id} className="glass-panel rounded-2xl p-5 space-y-4">
+              <div className="flex items-center gap-3 flex-wrap">
+                <h3 className="text-[16px] font-semibold text-white/90">{section.title}</h3>
+                <span className={cn(
+                  "text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border",
+                  section.status.label === "Intact"
+                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
+                    : section.status.label === "Watch"
+                      ? "bg-amber-500/15 text-amber-400 border-amber-500/25"
+                      : "bg-rose-500/15 text-rose-400 border-rose-500/25",
+                )}>
+                  {section.status.label}
+                </span>
+                <div className="flex items-center gap-2 ml-auto">
+                  <FrequencyToggle value={moatFrequency} onChange={setMoatFrequency} />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-4">
+                {moatFiltered.map((m) => {
+                  if (!m.gauge_config) return null;
+                  return (
+                    <MoatGaugeCard
+                      key={m.metricId}
+                      config={m.gauge_config}
+                      unit={m.unit}
+                      label={m.label}
+                      metricId={m.metricId}
+                      quarters={m.quarters}
+                    />
+                  );
+                })}
+              </div>
+              <MoatHistoryTable
+                metrics={moatFiltered.map((m) => ({
+                  metricId: m.metricId,
+                  label: m.label,
+                  unit: m.unit,
+                  quarters: m.quarters,
+                }))}
+                frequency={moatFrequency}
+              />
             </div>
           );
         }

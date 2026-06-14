@@ -329,6 +329,58 @@ def _compute_growth_metrics(
 
 # ── Moat Signals Section ─────────────────────────────────────────────────
 
+def _compute_sparkline(quarters: List[QuarterDataPoint], max_points: int = 8) -> Optional[List[Optional[float]]]:
+    if not quarters:
+        return None
+    return [q.value for q in quarters[-max_points:]]
+
+
+def _compute_moat_gauge(
+    metric_id: str, quarters: List[QuarterDataPoint],
+) -> Optional[GaugeConfig]:
+    vals = [q.value for q in quarters if q.value is not None]
+    if not vals:
+        return None
+    current = vals[-1]
+    min_v = min(vals)
+    max_v = max(vals)
+    avg_v = sum(vals) / len(vals)
+    sparkline = _compute_sparkline(quarters)
+
+    if metric_id == "piotroski_f":
+        return GaugeConfig(
+            display_mode="gauge", benchmark="historical",
+            band_low=3.0, band_high=8.0,
+            current_value=current, min_value=0.0, max_value=9.0,
+            avg_value=avg_v,
+            positive_count=len(vals), total_quarters=len(quarters),
+            sparkline_values=sparkline,
+        )
+    if metric_id == "altman_z":
+        min_val = min(min_v, 0.0)
+        max_val = max(max_v, 4.0)  # ensure bands (1.81, 2.99) fit
+        return GaugeConfig(
+            display_mode="gauge", benchmark="historical",
+            band_low=1.81, band_high=2.99,
+            current_value=current, min_value=min_val, max_value=max_val,
+            avg_value=avg_v,
+            positive_count=len(vals), total_quarters=len(quarters),
+            sparkline_values=sparkline,
+        )
+    if metric_id == "interest_coverage":
+        min_val = min(min_v, 0.0)
+        max_val = max(max_v, 6.0)  # ensure bands (1.5, 5.0) fit
+        return GaugeConfig(
+            display_mode="gauge", benchmark="historical",
+            band_low=1.5, band_high=5.0,
+            current_value=current, min_value=min_val, max_value=max_val,
+            avg_value=avg_v,
+            positive_count=len(vals), total_quarters=len(quarters),
+            sparkline_values=sparkline,
+        )
+    return None
+
+
 def _compute_moat_metrics(
     ratios: List[Dict[str, Any]], buy_idx: Optional[int] = None,
     is_annual: bool = False,
@@ -347,6 +399,9 @@ def _compute_moat_metrics(
         _build_quarter_series("altman_z", "Altman Z", "score", ratios, "altman_z_score", True, buy_idx, is_annual=is_annual),
         _build_quarter_series("interest_coverage", "Int. coverage", "x", ratios, "interest_coverage", True, buy_idx, is_annual=is_annual),
     ]
+
+    for m in metrics:
+        m.gauge_config = _compute_moat_gauge(m.metric_id, m.quarters)
 
     piotroski_vals = [_f(r.get("piotroski_score")) for r in ratios]
     altman_vals = [_f(r.get("altman_z_score")) for r in ratios]
