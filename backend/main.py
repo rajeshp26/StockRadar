@@ -103,6 +103,12 @@ async def lifespan(app: FastAPI):
     price_task = asyncio.create_task(background_price_monitor(), name="price_monitor")
     app.state.tasks["price_monitor"] = price_task
     logger.info("✅ Price monitor started")
+
+    # DuckDB cache pre-warm (non-blocking)
+    from dependencies import get_defeat_beta_provider
+    provider = get_defeat_beta_provider()
+    warm_task = asyncio.create_task(provider.warm_cache(), name="duckdb_warm")
+    app.state.tasks["duckdb_warm"] = warm_task
     
     # ──────────────────────────────────────────────────────────────────────
     # SCHEDULERS MOVED TO SEPARATE WORKER PROCESS

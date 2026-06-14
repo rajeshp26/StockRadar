@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -81,7 +82,11 @@ class StockdexMacrotrendsProvider:
 
     def __init__(self) -> None:
         self._ticker_cache: Dict[str, Any] = {}
+        self._cooldown_until: float = 0.0
         logger.info("StockdexMacrotrendsProvider initialized")
+
+    def is_rate_limited(self) -> bool:
+        return time.monotonic() < self._cooldown_until
 
     # ------------------------------------------------------------------
     # Public statement accessors
@@ -135,6 +140,13 @@ class StockdexMacrotrendsProvider:
             )
             return pd.DataFrame()
         except Exception as e:
+            estr = str(e)
+            if "429" in estr or "Too Many Requests" in estr:
+                cool_secs = 300
+                self._cooldown_until = time.monotonic() + cool_secs
+                logger.warning(
+                    "[STOCKDEX][%s] 429 rate-limited – cooling off %ds", symbol, cool_secs
+                )
             logger.warning(
                 "[STOCKDEX][%s] %s %s failed: %s", symbol, period, statement, e
             )

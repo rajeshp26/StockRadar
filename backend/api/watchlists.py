@@ -13,10 +13,9 @@ from pydantic import BaseModel, Field, field_validator
 from dependencies import get_current_user_dep, get_watchlist_service, get_watchlist_repository, limiter
 from application.services.watchlist_service import WatchlistService
 from infrastructure.repositories.supabase_repository import (
-    SupabaseUserRepository,
     SupabaseWatchlistRepository,
 )
-from providers.yfinance_provider import YFinanceProvider
+
 from shared.exceptions.base import AppException
 from database import supabase
 
@@ -35,16 +34,7 @@ user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
 symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
 
 
-def get_watchlist_service_local() -> WatchlistService:
-    """Local factory — mirrors the original get_watchlist_service in this file."""
-    user_repo     = SupabaseUserRepository(client=supabase)
-    watchlist_repo = SupabaseWatchlistRepository(client=supabase)
-    stock_provider = YFinanceProvider()
-    return WatchlistService(
-        user_repo=user_repo,
-        watchlist_repo=watchlist_repo,
-        stock_provider=stock_provider,
-    )
+
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────
@@ -111,7 +101,7 @@ class RenameWatchlistRequest(BaseModel):
 @router.post("/watchlists/default-with-items", tags=["Watchlists"], status_code=200)
 def get_default_watchlist_with_items(
     request: Request,
-    service: WatchlistService = Depends(get_watchlist_service_local),
+    service: WatchlistService = Depends(get_watchlist_service),
     user: dict = Depends(get_current_user_dep),
 ):
     try:
@@ -127,7 +117,7 @@ def get_default_watchlist_with_items(
 @router.post("/watchlists/default-structure", tags=["Watchlists"], status_code=200)
 def get_default_watchlist_structure(
     request: Request,
-    service: WatchlistService = Depends(get_watchlist_service_local),
+    service: WatchlistService = Depends(get_watchlist_service),
     user: dict = Depends(get_current_user_dep),
 ):
     try:
@@ -571,7 +561,7 @@ def get_watchlist_structure_by_id(
     request: Request,
     watchlist_id: int,
     user: dict = Depends(get_current_user_dep),
-    service: WatchlistService = Depends(get_watchlist_service_local),
+    service: WatchlistService = Depends(get_watchlist_service),
 ):
     """
     Get structure (symbols + targets, no live prices) for a specific watchlist.

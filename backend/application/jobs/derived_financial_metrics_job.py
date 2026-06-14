@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+# Bump this when ANY computation logic in this file changes.
+# It gets hashed into _version_tag() so every row gets re-computed on the
+# next scheduler or backfill run — no silent staleness from version-gating.
+COMPUTATION_VERSION = 2
+
+
 def _f(x: Any) -> Optional[float]:
     try:
         if x is None:
@@ -60,8 +66,20 @@ def _fcf(cfo: Optional[float], capex: Optional[float]) -> Optional[float]:
 
 
 def _version_tag(payload: Dict[str, Any]) -> str:
-    raw = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    enriched = {"payload": payload, "v": COMPUTATION_VERSION}
+    raw = json.dumps(enriched, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _clamp_ratio(v: Optional[float]) -> Optional[float]:
+    """Clamp a ratio value to fit numeric(10,6): [-9999.999999, 9999.999999].
+    Returns None when v is None; rounds to 6 decimal places to avoid
+    PostgreSQL numeric field overflow errors from extreme denominator values."""
+    if v is None:
+        return None
+    if abs(v) >= 10000:
+        return round(9999.999999 if v > 0 else -9999.999999, 6)
+    return round(v, 6)
 
 
 # ─── Job ──────────────────────────────────────────────────────────────────────
@@ -625,7 +643,7 @@ def _fetch_quarterly_statements(
             .select("*")
             .eq("company_id", company_id)
             .eq("fiscal_year", fiscal_year)
-            .neq("fiscal_quarter", None)
+            .not_.is_("fiscal_quarter", "null")
             .order("fiscal_quarter", desc=False)
             .execute()
         )
@@ -665,7 +683,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
         supabase.table("income_statements")
         .select("fiscal_year")
         .eq("company_id", company_id)
-        .neq("fiscal_quarter", None)
+        .not_.is_("fiscal_quarter", "null")
         .execute()
     )
     quarters = qis_resp.data or []
@@ -722,7 +740,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
                     .select("*")
                     .eq("company_id", company_id)
                     .eq("fiscal_year", fy - 1)
-                    .neq("fiscal_quarter", None)
+                    .not_.is_("fiscal_quarter", "null")
                     .execute()
                 )
                 prior_ratios = prior_resp.data or []
@@ -857,21 +875,20 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
                 "fiscal_year":      fy,
                 "fiscal_quarter":   q,
                 "period_end_date":  period_end,
-                "roic": roic,
-                "roe":  roe,
-                "roa":  roa,
-                "gross_margin":     gross_margin,
-                "operating_margin": operating_margin,
-                "net_margin":       net_margin,
-                "fcf_margin":       fcf_margin,
+                "roic": _clamp_ratio(roic),
+                "roe":  _clamp_ratio(roe),
+                "roa":  _clamp_ratio(roa),
+                "gross_margin":     _clamp_ratio(gross_margin),
+                "operating_margin": _clamp_ratio(operating_margin),
+                "net_margin":       _clamp_ratio(net_margin),
+                "fcf_margin":       _clamp_ratio(fcf_margin),
                 "free_cash_flow":   fcf,
-                "debt_to_equity":           debt_to_equity,
-                "long_term_debt_to_assets": lt_debt_assets,
-                "current_ratio":    current_ratio,
-                "asset_turnover":   asset_turnover,
-                "working_capital":  working_capital,
+                "debt_to_equity":           _clamp_ratio(debt_to_equity),
+                "long_term_debt_to_assets": _clamp_ratio(lt_debt_assets),
+                "current_ratio":    _clamp_ratio(current_ratio),
+                "asset_turnover":   _clamp_ratio(asset_turnover),
                 "piotroski_score":  piotroski,
-                "altman_z_score":   altman_z,
+                "altman_z_score":   _clamp_ratio(altman_z),
                 "computed_at":      datetime.utcnow().isoformat(),
                 "source_version_tag": _version_tag(source_payload),
                 "data_source":      "derived",
@@ -895,7 +912,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
             supabase.table("financial_ratios")
             .select("fiscal_year, fiscal_quarter, source_version_tag")
             .eq("company_id", company_id)
-            .neq("fiscal_quarter", None)
+            .not_.is_("fiscal_quarter", "null")
             .execute()
         )
         for r in tags_resp.data or []:

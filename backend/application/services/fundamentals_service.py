@@ -166,11 +166,19 @@ def _compute_quality_metrics(
             score=None,
         )
 
+    # Build display ratios with percentage metrics multiplied by 100
+    # (consistency with growth metrics which already send values as percentages)
+    pct_keys = {"roic", "roe", "gross_margin", "operating_margin"}
+    display_ratios = [
+        {**r, **{k: round(r[k] * 100, 2) for k in pct_keys if r.get(k) is not None}}
+        for r in ratios
+    ]
+
     metrics = [
-        _build_quarter_series("roic", "ROIC", "%", ratios, "roic", True, buy_idx, is_annual=is_annual),
-        _build_quarter_series("roe", "ROE", "%", ratios, "roe", True, buy_idx, is_annual=is_annual),
-        _build_quarter_series("gross_margin", "Gross margin", "%", ratios, "gross_margin", True, buy_idx, is_annual=is_annual),
-        _build_quarter_series("operating_margin", "Op. margin", "%", ratios, "operating_margin", True, buy_idx, is_annual=is_annual),
+        _build_quarter_series("roic", "ROIC", "%", display_ratios, "roic", True, buy_idx, is_annual=is_annual),
+        _build_quarter_series("roe", "ROE", "%", display_ratios, "roe", True, buy_idx, is_annual=is_annual),
+        _build_quarter_series("gross_margin", "Gross margin", "%", display_ratios, "gross_margin", True, buy_idx, is_annual=is_annual),
+        _build_quarter_series("operating_margin", "Op. margin", "%", display_ratios, "operating_margin", True, buy_idx, is_annual=is_annual),
         _build_quarter_series("debt_to_equity", "D/E", "x", ratios, "debt_to_equity", False, buy_idx, is_annual=is_annual),
     ]
 

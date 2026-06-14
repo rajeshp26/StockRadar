@@ -66,31 +66,14 @@ class WatchlistService:
         stock_provider: StockProvider,
         watchlist_repo: WatchlistRepository,
         user_repo: UserRepository,
+        defeat_beta_provider: DefeatBetaProvider,
         financial_repo: Optional[SupabaseFinancialRepository] = None,
-        defeat_beta_provider: Optional[DefeatBetaProvider] = None,
     ):
-        """
-        Initialize watchlist service.
-
-        ARGS:
-            stock_provider: Provider for real-time stock prices (YFinance wrapper)
-            watchlist_repo: Repository for watchlist operations
-            user_repo: Repository for user operations
-            financial_repo: Repository for financial data (Supabase)
-            defeat_beta_provider: Unified fundamentals provider (DefeatBeta->YF fallback)
-        """
         self.stock_provider = stock_provider
         self.watchlist_repo = watchlist_repo
         self.user_repo = user_repo
+        self.defeat_beta_provider = defeat_beta_provider
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
-        # Allow injecting a DBeta provider that internally knows how to fallback to YF
-        if defeat_beta_provider is not None:
-            self.defeat_beta_provider = defeat_beta_provider
-        else:
-            from providers.defeat_beta_provider import DefeatBetaProvider
-            self.defeat_beta_provider = DefeatBetaProvider(
-                yfinance_provider=stock_provider
-            )
 
     # ========================================================================
     # EXISTING METHODS (unchanged)

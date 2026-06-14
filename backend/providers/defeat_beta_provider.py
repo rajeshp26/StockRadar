@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Optional, Tuple, List, Dict, Any, Set
+from typing import NamedTuple, Optional, Tuple, List, Dict, Any, Set
 
 import pandas as pd
 import html
@@ -52,6 +52,21 @@ GapKey = Tuple[int, Optional[int], date]  # (fiscal_year, fiscal_quarter, period
 GapDict = Dict[str, Set[GapKey]]          # {"is": ..., "bs": ..., "cf": ...}
 # -------------------------------------------------------------------------------
 
+# --- Provider capability rules ------------------------------------------------
+# Controls which providers are tried for a given exchange + security_type.
+# Security types: "stock", "etf", "fund", etc.
+PROVIDER_EXCHANGE_RULES: Dict[str, Dict[str, Any]] = {
+    "stockdex": {
+        "exchanges": {"NYSE", "NYQ", "NMS", "NGM", "NCM", "NASDAQ",
+                       "TOR", "TSX", "VAN", "TSXV", "V", "CNQ", "NEO"},
+    },
+    "edgar": {
+        "exchanges": {"NYSE", "NYQ", "NMS", "NGM", "NCM", "NASDAQ"},
+        "security_types": {"stock"},
+    },
+}
+# -------------------------------------------------------------------------------
+
 # --- RAW DEFEATBETA DUMPER (file-based) ---------------------------------------
 def _logs_dir_for_provider() -> Path:
     """
@@ -97,6 +112,15 @@ def dump_defeatbeta_raw(symbol: str, statement: str, obj: Any) -> None:
         # Never let diagnostics break the fetch
         logger.warning("dump_defeatbeta_raw failure for %s/%s: %s", symbol, statement, e)
 # -------------------------------------------------------------------------------
+
+
+class _FallbackStatements(NamedTuple):
+    is_rows: list
+    bs_rows: list
+    cf_rows: list
+    earn_rows: list
+    div_rows: list
+    next_earnings_date: Optional[datetime]
 
 
 class DefeatBetaProvider(StockDataProvider):
@@ -268,6 +292,49 @@ class DefeatBetaProvider(StockDataProvider):
         'share_issuance': ['Issuance of Capital Stock', 'Common Stock Issuance'],
     }
 
+    # ---------------------------------------------------------------------
+    # Provider applicability (exchange + security_type aware routing)
+    # ---------------------------------------------------------------------
+    @staticmethod
+    def _provider_applicable(
+        provider_name: str,
+        exchange: Optional[str] = None,
+        security_type: Optional[str] = None,
+    ) -> bool:
+        rules = PROVIDER_EXCHANGE_RULES.get(provider_name)
+        if rules is None:
+            return True
+        if exchange and "exchanges" in rules:
+            if exchange.upper() not in rules["exchanges"]:
+                return False
+        if security_type and "security_types" in rules:
+            if security_type.lower() not in rules["security_types"]:
+                return False
+        return True
+
+    @staticmethod
+    async def warm_cache() -> None:
+        """Pre-warm DuckDB httpfs cache by querying a known stock."""
+        try:
+            from defeatbeta_api.client.duckdb_client import get_duckdb_client
+            client = get_duckdb_client()
+            spec_url = "https://huggingface.co/datasets/defeatbeta/yahoo-finance-data/resolve/main/spec.json"
+            client.query(f"SELECT * FROM '{spec_url}'")
+            logger.info("✅ DuckDB cache pre-warmed")
+        except Exception as e:
+            logger.warning(f"DuckDB cache pre-warm failed: {e}")
+
+    @staticmethod
+    def _clear_duckdb_cache() -> None:
+        """Clear DuckDB httpfs on-disk cache."""
+        try:
+            from defeatbeta_api.client.duckdb_client import get_duckdb_client
+            client = get_duckdb_client()
+            client._clear_cache()
+            logger.info("✅ DuckDB httpfs cache cleared")
+        except Exception as e:
+            logger.warning(f"Failed to clear DuckDB cache: {e}")
+
     def __init__(
         self,
         yfinance_provider: Optional["YFinanceProvider"] = None,
@@ -313,6 +380,8 @@ class DefeatBetaProvider(StockDataProvider):
         last_refreshed_fiscal_quarter: Optional[int] = None,
         force_full_history: bool = False,
         min_fiscal_year: Optional[int] = None,
+        exchange: Optional[str] = None,
+        security_type: Optional[str] = None,
     ) -> CompleteFundamentals:
         logger.info(f"Starting financials fetch for {symbol} (company_id={company_id})")
         last_error: Optional[Exception] = None
@@ -328,7 +397,7 @@ class DefeatBetaProvider(StockDataProvider):
                 # gap-fill missing statements from yfinance (if enabled)
                 if self.settings.ENABLE_YFINANCE_FALLBACK and self.yfinance_provider:
                     only_after = None if force_full_history else (last_refreshed_fiscal_year, last_refreshed_fiscal_quarter)
-                    fin = await self._fill_gaps_with_yfinance(fin, gaps, only_after=only_after)
+                    fin = await self._fill_gaps_with_yfinance(fin, gaps, only_after=only_after, exchange=exchange, security_type=security_type)
 
                 # strip rows older than min_fiscal_year
                 if min_fiscal_year is not None:
@@ -345,13 +414,17 @@ class DefeatBetaProvider(StockDataProvider):
                         f"Attempt {attempt + 1}/{self.settings.RETRY_MAX_ATTEMPTS} failed for {symbol}: "
                         f"retrying in {backoff}s. Error: {str(e)}"
                     )
+                    # Clear DuckDB cache on penultimate retry (transient corruption recovery)
+                    if attempt == self.settings.RETRY_MAX_ATTEMPTS - 2:
+                        logger.info(f"Clearing DuckDB cache before final retry for {symbol}")
+                        self._clear_duckdb_cache()
                     await asyncio.sleep(backoff)
 
         # total failure → fallback to yfinance
         if self.settings.ENABLE_YFINANCE_FALLBACK and self.yfinance_provider:
             logger.warning(f"Defeat-beta failed for {symbol}, attempting yfinance fallback")
             only_after = None if force_full_history else (last_refreshed_fiscal_year, last_refreshed_fiscal_quarter)
-            fin = await self._fallback_to_yfinance(symbol, company_id, only_after=only_after)
+            fin = await self._fallback_to_yfinance(symbol, company_id, only_after=only_after, exchange=exchange, security_type=security_type)
             if min_fiscal_year is not None:
                 fin = self._filter_by_min_year(fin, min_fiscal_year)
             return fin
@@ -642,11 +715,55 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
     # Fallbacks (YFinance): full fallback and gap-fill
     # ---------------------------------------------------------------------
+
+    async def _fetch_all_fallback_statements(
+        self,
+        symbol: str,
+        company_id: int,
+        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None,
+        exchange: Optional[str] = None,
+        security_type: Optional[str] = None,
+    ) -> _FallbackStatements:
+        fyq_filter = only_after
+
+        yf_q_is, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_income_statement_df", exchange, security_type)
+        yf_a_is, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_income_statement_df", exchange, security_type)
+        is_rows = self._parse_yf_income_statement(yf_q_is, company_id, True, symbol, fyq_filter, q_src) + \
+                  self._parse_yf_income_statement(yf_a_is, company_id, False, symbol, fyq_filter, a_src)
+
+        yf_q_bs, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_balance_sheet_df", exchange, security_type)
+        yf_a_bs, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_balance_sheet_df", exchange, security_type)
+        bs_rows = self._parse_yf_balance_sheet(yf_q_bs, company_id, True, symbol, fyq_filter, q_src) + \
+                  self._parse_yf_balance_sheet(yf_a_bs, company_id, False, symbol, fyq_filter, a_src)
+
+        yf_q_cf, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_cash_flow_df", exchange, security_type)
+        yf_a_cf, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_cash_flow_df", exchange, security_type)
+        cf_rows = self._parse_yf_cash_flow(yf_q_cf, company_id, True, symbol, fyq_filter, q_src) + \
+                  self._parse_yf_cash_flow(yf_a_cf, company_id, False, symbol, fyq_filter, a_src)
+
+        yf_earn = await asyncio.to_thread(self.yfinance_provider.get_earnings_data, symbol)
+        earn_rows = self._build_earnings_rows_from_yf(company_id, yf_earn)
+
+        yf_div = await asyncio.to_thread(self.yfinance_provider.get_dividends_df, symbol)
+        div_rows = self._parse_dividends(yf_div, company_id, symbol, provider='yfinance') if (yf_div is not None and not yf_div.empty) else []
+
+        next_earnings_date = None
+        try:
+            details = await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
+            if details and details.next_earnings_date:
+                next_earnings_date = details.next_earnings_date
+        except Exception:
+            pass
+
+        return _FallbackStatements(is_rows, bs_rows, cf_rows, earn_rows, div_rows, next_earnings_date)
+
     async def _fallback_to_yfinance(
         self,
         symbol: str,
         company_id: int,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None
+        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None,
+        exchange: Optional[str] = None,
+        security_type: Optional[str] = None,
     ) -> CompleteFundamentals:
         if not self.edgar_provider and not self.yfinance_provider:
             logger.warning(
@@ -663,52 +780,17 @@ class DefeatBetaProvider(StockDataProvider):
                 fetched_at=datetime.utcnow(),
             )
 
-        fyq_filter = only_after
-
-        # Income — Edgar first (SEC filing), then YFinance
-        yf_q_is, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_income_statement_df")
-        yf_a_is, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_income_statement_df")
-        is_rows = self._parse_yf_income_statement(yf_q_is, company_id, True, symbol, fyq_filter, q_src) + \
-                  self._parse_yf_income_statement(yf_a_is, company_id, False, symbol, fyq_filter, a_src)
-        
-        # Balance — Edgar first, then YFinance
-        yf_q_bs, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_balance_sheet_df")
-        yf_a_bs, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_balance_sheet_df")
-        bs_rows = self._parse_yf_balance_sheet(yf_q_bs, company_id, True, symbol, fyq_filter, q_src) + \
-                  self._parse_yf_balance_sheet(yf_a_bs, company_id, False, symbol, fyq_filter, a_src)
-        
-        # Cash Flow — Edgar first, then YFinance
-        yf_q_cf, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_cash_flow_df")
-        yf_a_cf, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_cash_flow_df")
-        cf_rows = self._parse_yf_cash_flow(yf_q_cf, company_id, True, symbol, fyq_filter, q_src) + \
-                  self._parse_yf_cash_flow(yf_a_cf, company_id, False, symbol, fyq_filter, a_src)
-
-        # Earnings (best-effort)
-        yf_earn = await asyncio.to_thread(self.yfinance_provider.get_earnings_data, symbol)
-        earn_rows = self._build_earnings_rows_from_yf(company_id, yf_earn)
-
-        # Dividends (best-effort)
-        yf_div = await asyncio.to_thread(self.yfinance_provider.get_dividends_df, symbol)
-        div_rows = self._parse_dividends(yf_div, company_id, symbol, provider='yfinance') if (yf_div is not None and not yf_div.empty) else []
-
-        # Next earnings date via YF details
-        next_earnings_date = None
-        try:
-            details = await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
-            if details and details.next_earnings_date:
-                next_earnings_date = details.next_earnings_date
-        except Exception:
-            pass
+        fb = await self._fetch_all_fallback_statements(symbol, company_id, only_after, exchange, security_type)
 
         return CompleteFundamentals(
             company_id=company_id,
             symbol=symbol,
-            income_statements=IncomeStatementRows(rows=is_rows),
-            balance_sheets=BalanceSheetRows(rows=bs_rows),
-            cash_flows=CashFlowRows(rows=cf_rows),
-            earnings=EarningsRows(rows=earn_rows),
-            dividends=DividendRows(rows=div_rows),
-            next_earnings_date=next_earnings_date,
+            income_statements=IncomeStatementRows(rows=fb.is_rows),
+            balance_sheets=BalanceSheetRows(rows=fb.bs_rows),
+            cash_flows=CashFlowRows(rows=fb.cf_rows),
+            earnings=EarningsRows(rows=fb.earn_rows),
+            dividends=DividendRows(rows=fb.div_rows),
+            next_earnings_date=fb.next_earnings_date,
             fetched_at=datetime.utcnow(),
         )
 
@@ -716,7 +798,9 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         fin: CompleteFundamentals,
         gaps: GapDict,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None
+        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None,
+        exchange: Optional[str] = None,
+        security_type: Optional[str] = None,
     ) -> CompleteFundamentals:
         if not self.yfinance_provider:
             return fin
@@ -746,7 +830,7 @@ class DefeatBetaProvider(StockDataProvider):
             if not missing:
                 continue
 
-            df, source = await self._fetch_statement_df_with_fallback(symbol, quarter_method)
+            df, source = await self._fetch_statement_df_with_fallback(symbol, quarter_method, exchange, security_type)
             # Parse all periods — no only_after filter here, we filter by missing set below
             fallback_rows = parser(df, company_id, True, symbol, None, source)
             existing = {(r.fiscal_year, r.fiscal_quarter) for r in rows_list}
@@ -770,55 +854,30 @@ class DefeatBetaProvider(StockDataProvider):
         #   have added rows above.
         # ═══════════════════════════════════════════════════════════════════
 
-        fyq_filter = only_after
         need_is = not fin.income_statements.rows
         need_bs = not fin.balance_sheets.rows
         need_cf = not fin.cash_flows.rows
         need_earn = not fin.earnings.rows
         need_div = not fin.dividends.rows
+        need_next_earn = fin.next_earnings_date is None
         logger.debug("[DBETA][%s] need_bs=%s (rows=%d)", symbol, need_bs, len(fin.balance_sheets.rows))
 
+        if need_is or need_bs or need_cf or need_earn or need_div or need_next_earn:
+            fb = await self._fetch_all_fallback_statements(symbol, company_id, only_after, exchange, security_type)
+
         if need_is:
-            # Edgar → YFinance chain for income statements
-            yf_q_is, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_income_statement_df")
-            yf_a_is, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_income_statement_df")
-            fin.income_statements = IncomeStatementRows(
-                rows=self._parse_yf_income_statement(yf_q_is, company_id, True, symbol, fyq_filter, q_src) +
-                     self._parse_yf_income_statement(yf_a_is, company_id, False, symbol, fyq_filter, a_src)
-            )
+            fin.income_statements = IncomeStatementRows(rows=fb.is_rows)
         if need_bs:
-            # Edgar → YFinance chain for balance sheets
-            yf_q_bs, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_balance_sheet_df")
-            yf_a_bs, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_balance_sheet_df")
-            fin.balance_sheets = BalanceSheetRows(
-                rows=self._parse_yf_balance_sheet(yf_q_bs, company_id, True, symbol, fyq_filter, q_src) +
-                     self._parse_yf_balance_sheet(yf_a_bs, company_id, False, symbol, fyq_filter, a_src)
-            )
+            fin.balance_sheets = BalanceSheetRows(rows=fb.bs_rows)
         if need_cf:
-            # Edgar → YFinance chain for cash flows
-            yf_q_cf, q_src = await self._fetch_statement_df_with_fallback(symbol, "get_quarterly_cash_flow_df")
-            yf_a_cf, a_src = await self._fetch_statement_df_with_fallback(symbol, "get_annual_cash_flow_df")
-            fin.cash_flows = CashFlowRows(
-                rows=self._parse_yf_cash_flow(yf_q_cf, company_id, True, symbol, fyq_filter, q_src) +
-                     self._parse_yf_cash_flow(yf_a_cf, company_id, False, symbol, fyq_filter, a_src)
-            )
-
+            fin.cash_flows = CashFlowRows(rows=fb.cf_rows)
         if need_earn:
-            yf_earn = await asyncio.to_thread(self.yfinance_provider.get_earnings_data, symbol)
-            fin.earnings = EarningsRows(rows=self._build_earnings_rows_from_yf(company_id, yf_earn))
-
+            fin.earnings = EarningsRows(rows=fb.earn_rows)
         if need_div:
-            yf_div = await asyncio.to_thread(self.yfinance_provider.get_dividends_df, symbol)
-            if yf_div is not None and not yf_div.empty:
-                fin.dividends = DividendRows(rows=self._parse_dividends(yf_div, company_id, symbol, provider='yfinance'))
-
-        if fin.next_earnings_date is None:
-            try:
-                details = await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
-                if details and details.next_earnings_date:
-                    fin.next_earnings_date = details.next_earnings_date
-            except Exception:
-                pass
+            if fb.div_rows:
+                fin.dividends = DividendRows(rows=fb.div_rows)
+        if need_next_earn:
+            fin.next_earnings_date = fb.next_earnings_date
 
         if fin.income_statements.rows and any(
            r.shares_outstanding_diluted is None for r in fin.income_statements.rows
@@ -1949,51 +2008,49 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         method_name: str,
+        exchange: Optional[str] = None,
+        security_type: Optional[str] = None,
     ) -> tuple[pd.DataFrame, str]:
-        """
-        Fetch a financial statement DataFrame using the Stockdex → Edgar → YFinance chain.
-        Returns: (dataframe, source) where source is "stockdex", "edgar", or "yfinance"
-
-        All providers expose the same method names:
-          get_quarterly_income_statement_df / get_annual_income_statement_df
-          get_quarterly_balance_sheet_df    / get_annual_balance_sheet_df
-          get_quarterly_cash_flow_df        / get_annual_cash_flow_df
-
-        StockdexMacrotrends (Macrotrends scraper, 15+ years) is tried first.
-        EdgarTools (SEC XBRL filings) is tried second.
-        YFinance is the final fallback.
-        """
         # 1. Try Stockdex/Macrotrends
         if self.stockdex_provider:
-            try:
-                df = await asyncio.to_thread(
-                    getattr(self.stockdex_provider, method_name), symbol
-                )
-                if df is not None and not df.empty:
-                    logger.debug(
-                        "[STOCKDEX][%s] %s succeeded (%d cols)",
-                        symbol, method_name, len(df.columns),
-                    )
-                    return (df, "stockdex")
-                logger.debug("[STOCKDEX][%s] %s returned empty", symbol, method_name)
-            except Exception as e:
-                logger.debug("[STOCKDEX][%s] %s failed: %s", symbol, method_name, e)
+            if self._provider_applicable("stockdex", exchange, security_type):
+                if not self.stockdex_provider.is_rate_limited():
+                    try:
+                        df = await asyncio.to_thread(
+                            getattr(self.stockdex_provider, method_name), symbol
+                        )
+                        if df is not None and not df.empty:
+                            logger.debug(
+                                "[STOCKDEX][%s] %s succeeded (%d cols)",
+                                symbol, method_name, len(df.columns),
+                            )
+                            return (df, "stockdex")
+                        logger.debug("[STOCKDEX][%s] %s returned empty", symbol, method_name)
+                    except Exception as e:
+                        logger.debug("[STOCKDEX][%s] %s failed: %s", symbol, method_name, e)
+                else:
+                    logger.debug("[SKIP] stockdex rate-limited for %s, skipping", symbol)
+            else:
+                logger.debug("[SKIP] stockdex not applicable for %s (exchange=%s, type=%s)", symbol, exchange, security_type)
 
         # 2. Try Edgar
         if self.edgar_provider:
-            try:
-                df = await asyncio.to_thread(
-                    getattr(self.edgar_provider, method_name), symbol
-                )
-                if df is not None and not df.empty:
-                    logger.debug(
-                        "[EDGAR][%s] %s succeeded (%d cols)",
-                        symbol, method_name, len(df.columns),
+            if self._provider_applicable("edgar", exchange, security_type):
+                try:
+                    df = await asyncio.to_thread(
+                        getattr(self.edgar_provider, method_name), symbol
                     )
-                    return (df, "edgar")
-                logger.debug("[EDGAR][%s] %s returned empty", symbol, method_name)
-            except Exception as e:
-                logger.debug("[EDGAR][%s] %s failed: %s", symbol, method_name, e)
+                    if df is not None and not df.empty:
+                        logger.debug(
+                            "[EDGAR][%s] %s succeeded (%d cols)",
+                            symbol, method_name, len(df.columns),
+                        )
+                        return (df, "edgar")
+                    logger.debug("[EDGAR][%s] %s returned empty", symbol, method_name)
+                except Exception as e:
+                    logger.debug("[EDGAR][%s] %s failed: %s", symbol, method_name, e)
+            else:
+                logger.debug("[SKIP] edgar not applicable for %s (exchange=%s, type=%s)", symbol, exchange, security_type)
 
         # 3. Fall through to YFinance
         if self.yfinance_provider:
@@ -2005,4 +2062,4 @@ class DefeatBetaProvider(StockDataProvider):
             except Exception as e:
                 logger.debug("[YF][%s] %s failed: %s", symbol, method_name, e)
 
-        return (pd.DataFrame(), "yfinance")  # empty with default source
+        return (pd.DataFrame(), "yfinance")

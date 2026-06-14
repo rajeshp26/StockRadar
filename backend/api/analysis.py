@@ -67,21 +67,33 @@ def _get_canslim_service():
     from application.services.canslim_service import CANSlimService
     from providers.defeat_beta_provider import DefeatBetaProvider
     from providers.yfinance_provider import YFinanceProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    from providers.edgar_provider import EdgarToolsProvider
     repo = ValuationRepository()
     arepo = AnalysisRepository(repo)
     yf = YFinanceProvider()
-    dbeta = DefeatBetaProvider(yfinance_provider=yf)
+    dbeta = DefeatBetaProvider(
+        yfinance_provider=yf,
+        stockdex_provider=StockdexMacrotrendsProvider(),
+        edgar_provider=EdgarToolsProvider(),
+    )
     return CANSlimService(repo, arepo, dbeta, yf)
- 
- 
+
+
 def _get_technical_service():
     from infrastructure.repositories.valuation_repository import ValuationRepository
     from application.services.technical_analysis_service import TechnicalAnalysisService
     from providers.defeat_beta_provider import DefeatBetaProvider
     from providers.yfinance_provider import YFinanceProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    from providers.edgar_provider import EdgarToolsProvider
     repo = ValuationRepository()
     yf = YFinanceProvider()
-    dbeta = DefeatBetaProvider(yfinance_provider=yf)
+    dbeta = DefeatBetaProvider(
+        yfinance_provider=yf,
+        stockdex_provider=StockdexMacrotrendsProvider(),
+        edgar_provider=EdgarToolsProvider(),
+    )
     return TechnicalAnalysisService(repo, dbeta, yf)
 
 

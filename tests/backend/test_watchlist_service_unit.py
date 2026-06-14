@@ -18,8 +18,12 @@ class TestWatchlistService:
         return MagicMock()
 
     @pytest.fixture
-    def service(self, mock_stock_provider, mock_watchlist_repo, mock_user_repo):
-        return WatchlistService(mock_stock_provider, mock_watchlist_repo, mock_user_repo)
+    def mock_defeat_beta_provider(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def service(self, mock_stock_provider, mock_watchlist_repo, mock_user_repo, mock_defeat_beta_provider):
+        return WatchlistService(mock_stock_provider, mock_watchlist_repo, mock_user_repo, defeat_beta_provider=mock_defeat_beta_provider)
 
     def test_get_db_user_id_success(self, service, mock_user_repo):
         # Arrange
