@@ -530,6 +530,7 @@ def _compute_metric_gauge_config(
     quarters: List[QuarterDataPoint],
     sector: Optional[str] = None,
     security_type: str = "stock",
+    sector_stats: Optional[Dict[str, Any]] = None,
 ) -> GaugeConfig:
     positive = _positive_values(quarters)
     pos_count = len(positive)
@@ -550,6 +551,18 @@ def _compute_metric_gauge_config(
     vs_avg_delta = (current - avg_v) if current is not None and avg_v is not None else None
     recent_quarter_label = _find_recent_positive_label(quarters, raw_current)
 
+    # ── Sector benchmark stats ─────────────────────────────────────────
+    sector_p05: Optional[float] = None
+    sector_p50: Optional[float] = None
+    sector_p95: Optional[float] = None
+    sector_sample_size: int = 0
+    if sector_stats and metric_id in sector_stats:
+        row = sector_stats[metric_id]
+        sector_p05 = row.get("p05")
+        sector_p50 = row.get("p50")
+        sector_p95 = row.get("p95")
+        sector_sample_size = row.get("sample_size", 0)
+
     def _cfg(**extra: Any) -> GaugeConfig:
         """Build GaugeConfig with Design 4 fields automatically attached."""
         return GaugeConfig(
@@ -558,6 +571,10 @@ def _compute_metric_gauge_config(
             historical_avg=historical_avg,
             vs_avg_delta=vs_avg_delta,
             recent_quarter_label=recent_quarter_label,
+            sector_p05=sector_p05,
+            sector_p50=sector_p50,
+            sector_p95=sector_p95,
+            sector_sample_size=sector_sample_size,
             **extra,
         )
 
@@ -772,6 +789,7 @@ def _compute_valuation_metrics(
     buy_idx: Optional[int] = None,
     security_type: str = "stock",
     sector: Optional[str] = None,
+    sector_stats: Optional[Dict[str, Any]] = None,
 ) -> MetricSection:
     if security_type != "stock":
         return MetricSection(
@@ -875,7 +893,7 @@ def _compute_valuation_metrics(
         quarters=pe_quarters, buy_quarter_index=buy_idx,
         trend_direction=pe_dir, change_pct=pe_pct,
         change_label=pe_label if pe_quarters else "current snapshot",
-        gauge_config=_compute_metric_gauge_config("pe", pe_quarters, sector, security_type),
+        gauge_config=_compute_metric_gauge_config("pe", pe_quarters, sector, security_type, sector_stats),
     )
     ev_values = [q.value for q in ev_quarters]
     ev_dir, ev_pct, ev_label = _determine_trend(ev_values, False)
@@ -884,7 +902,7 @@ def _compute_valuation_metrics(
         quarters=ev_quarters, buy_quarter_index=buy_idx,
         trend_direction=ev_dir, change_pct=ev_pct,
         change_label=ev_label if ev_quarters else "current snapshot",
-        gauge_config=_compute_metric_gauge_config("ev_ebitda", ev_quarters, sector, security_type),
+        gauge_config=_compute_metric_gauge_config("ev_ebitda", ev_quarters, sector, security_type, sector_stats),
     )
     pfcf_values = [q.value for q in pfcf_quarters]
     pfcf_dir, pfcf_pct, pfcf_label = _determine_trend(pfcf_values, False)
@@ -893,7 +911,7 @@ def _compute_valuation_metrics(
         quarters=pfcf_quarters, buy_quarter_index=buy_idx,
         trend_direction=pfcf_dir, change_pct=pfcf_pct,
         change_label=pfcf_label if pfcf_quarters else "current snapshot",
-        gauge_config=_compute_metric_gauge_config("pfcf", pfcf_quarters, sector, security_type),
+        gauge_config=_compute_metric_gauge_config("pfcf", pfcf_quarters, sector, security_type, sector_stats),
     )
 
     intrinsic_valuations: List[Dict[str, Any]] = []
@@ -1146,6 +1164,25 @@ class FundamentalsService:
         security_type = company.get("security_type", "stock")
         sector = company.get("sector")
 
+        # ── Sector benchmark stats ─────────────────────────────────────
+        sector_stats: Dict[str, Any] = {}
+        if sector:
+            try:
+                from database import supabase
+                resp = (
+                    supabase.table("group_metric_stats")
+                    .select("*")
+                    .eq("group_type", "sector")
+                    .eq("group_key", sector)
+                    .execute()
+                )
+                for row in resp.data or []:
+                    mid = row.get("metric_id")
+                    if mid:
+                        sector_stats[mid] = row
+            except Exception:
+                logger.warning("Failed to fetch sector stats for %s", sector, exc_info=True)
+
         is_annual = frequency == "annual"
         if is_annual:
             qratios = await self.repo.get_annual_financial_ratios(company_id)
@@ -1227,7 +1264,7 @@ class FundamentalsService:
         quality = _compute_quality_metrics(qratios, buy_quarter_index, is_annual=is_annual)
         growth = _compute_growth_metrics(income_q, cash_q, buy_quarter_index, is_annual=is_annual)
         moat = _compute_moat_metrics(qratios, buy_quarter_index, is_annual=is_annual)
-        valuation = _compute_valuation_metrics(summary_row, valuation_snapshots, current_price, cash_q, qratios, income_q, buy_quarter_index, security_type=security_type, sector=sector)
+        valuation = _compute_valuation_metrics(summary_row, valuation_snapshots, current_price, cash_q, qratios, income_q, buy_quarter_index, security_type=security_type, sector=sector, sector_stats=sector_stats)
         narrative = _compute_narrative_metrics(earnings, buy_quarter_index)
 
         sections = [quality, growth, moat, valuation, narrative]

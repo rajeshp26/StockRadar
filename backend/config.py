@@ -215,6 +215,14 @@ class Settings(BaseSettings):
         default=24,
         description="Hours between super investors scheduler runs"
     )
+    AGGREGATION_REFRESH_INTERVAL_HOURS: int = Field(
+        default=24,
+        description="Hours between sector metric aggregation runs"
+    )
+    ENABLE_AGGREGATION_SCHEDULER: bool = Field(
+        default=True,
+        description="Enable the sector metric aggregation scheduler"
+    )
     ENABLE_SUPER_INVESTORS_SCHEDULER: bool = Field(
         default=True,
         description="Enable the super investors refresh scheduler"

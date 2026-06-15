@@ -86,47 +86,89 @@ function StatPill({ label, value, highlighted }: { label: string; value: string;
 }
 
 function GaugeSvg({
-  current, min, max, avg, label, bandLow, bandHigh, compact,
+  current, min, max, avg, label, bandLow, bandHigh, compact, benchmark = "history",
+  sectorP05, sectorP50, sectorP95,
 }: {
   current: number; min: number; max: number; avg: number; label: string;
-  bandLow: number; bandHigh: number; compact?: boolean;
+  bandLow: number; bandHigh: number; compact?: boolean; benchmark?: "history" | "sector";
+  sectorP05?: number | null; sectorP50?: number | null; sectorP95?: number | null;
 }) {
-  const cx = 120;
-  const cy = compact ? 90 : 112;
-  const r = compact ? 68 : 86;
-  const range = Math.max(max - min, 1);
+  // When benchmark=sector and sector stats are available, override gauge range
+  const useSector = benchmark === "sector" && sectorP05 != null && sectorP50 != null && sectorP95 != null;
+  const effMin = useSector ? Math.min(min, sectorP05!) : min;
+  const effMax = useSector ? Math.max(max, sectorP95!) : max;
+  const effAvg = useSector ? sectorP50! : avg;
+  const effBandLow = useSector ? sectorP50! : bandLow;
+  const effBandHigh = useSector ? Math.max(sectorP50! * 1.5, sectorP95!) : bandHigh;
 
-  const threshold = avg * 1.5;
-  const greenEndVal = Math.min(avg, max);
-  const amberEndVal = Math.min(threshold, max);
-  const redStartVal = Math.max(threshold, min);
+  const r = compact ? 68 : 82;
+  const cx = compact ? 125 : 130;
+  const cy = compact ? 95 : 115;
+  const viewW = compact ? 250 : 270;
+  const viewH = compact ? 170 : 180;
+  const range = Math.max(effMax - effMin, 1);
 
-  const minAngle = valueToAngle(min, min, max);
-  const maxAngle = valueToAngle(max, min, max);
-  const greenEndAngle = valueToAngle(greenEndVal, min, max);
-  const amberEndAngle = valueToAngle(amberEndVal, min, max);
-  const redStartAngle = valueToAngle(redStartVal, min, max);
-  const currentAngle = valueToAngle(current, min, max);
+  const greenEndVal = Math.min(effAvg, effMax);
+  const threshold = effAvg * 1.5;
+  const amberEndVal = Math.min(threshold, effMax);
+  const redStartVal = Math.max(threshold, effMin);
 
-  const hasGreen = greenEndVal > min && range > 0;
+  const minAngle = valueToAngle(effMin, effMin, effMax);
+  const maxAngle = valueToAngle(effMax, effMin, effMax);
+  const greenEndAngle = valueToAngle(greenEndVal, effMin, effMax);
+  const amberEndAngle = valueToAngle(amberEndVal, effMin, effMax);
+  const redStartAngle = valueToAngle(redStartVal, effMin, effMax);
+  const currentAngle = valueToAngle(current, effMin, effMax);
+
+  const hasGreen = greenEndVal > effMin && range > 0;
   const hasAmber = amberEndVal > greenEndVal && range > 0;
-  const hasRed = max > redStartVal && range > 0;
+  const hasRed = effMax > redStartVal && range > 0;
 
   const needleEnd = polarToCartesian(cx, cy, r, currentAngle);
-  const height = compact ? 120 : 150;
-  const centerTextY = compact ? cy + 8 : cy + 12;
-  const labelTextY = compact ? cy + 26 : cy + 34;
-  const fontSize = compact ? 22 : 28;
+  const heightVal = compact ? 170 : 180;
+  const centerTextY = compact ? cy + 6 : cy + 10;
+  const labelTextY = compact ? cy + 22 : cy + 28;
+  const fontSize = compact ? 20 : 26;
 
-  const valuation = getValuation(current, bandLow, bandHigh);
+  const valuation = getValuation(current, effBandLow, effBandHigh);
+
+  // ── Scale labels ──────────────────────────────────────────────────
+  function tickEnds(v: number, inner = 10, outer = 3) {
+    const a = Math.min(maxAngle, Math.max(minAngle, valueToAngle(v, effMin, effMax)));
+    const pi = polarToCartesian(cx, cy, r - inner, a);
+    const po = polarToCartesian(cx, cy, r - outer, a);
+    return { x1: pi.x, y1: pi.y, x2: po.x, y2: po.y };
+  }
+  function valLabelPos(v: number, off = 18) {
+    const a = Math.min(maxAngle, Math.max(minAngle, valueToAngle(v, effMin, effMax)));
+    return polarToCartesian(cx, cy, r + off, a);
+  }
+  function zoneMid(a1: number, a2: number) {
+    return (a1 + a2) / 2;
+  }
+  function zonePos(a: number) {
+    return polarToCartesian(cx, cy, r - 28, a);
+  }
+
+  const minT = tickEnds(effMin);
+  const avgT = tickEnds(greenEndVal);
+  const thrT = tickEnds(amberEndVal);
+  const maxT = tickEnds(effMax);
+  const minLP = valLabelPos(effMin);
+  const avgLP = valLabelPos(greenEndVal);
+  const thrLP = valLabelPos(amberEndVal);
+  const maxLP = valLabelPos(effMax);
+  const greenZoneP = zonePos(zoneMid(minAngle, greenEndAngle));
+  const amberZoneP = zonePos(zoneMid(greenEndAngle, amberEndAngle));
+  const redZoneP = zonePos(zoneMid(amberEndAngle, maxAngle));
 
   return (
     <div className={compact ? "" : "mb-3"}>
-      <div className="relative mx-auto" style={{ width: 240, height }}>
+      <div className="relative mx-auto" style={{ width: compact ? 250 : 270, height: heightVal }}>
         <svg
           width="100%"
           height="100%"
-          viewBox={`0 0 240 ${height}`}
+          viewBox={`0 0 ${viewW} ${viewH}`}
           aria-label={`${label} Gauge: ${fmt(current)}`}
         >
           <path
@@ -166,6 +208,29 @@ function GaugeSvg({
               strokeLinecap="butt"
             />
           )}
+
+          {/* Zone labels */}
+          {hasGreen && (
+            <text x={greenZoneP.x} y={greenZoneP.y} fill={G} fontSize="10" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">Undervalued</text>
+          )}
+          {hasAmber && (
+            <text x={amberZoneP.x} y={amberZoneP.y} fill={A} fontSize="10" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">Fair</text>
+          )}
+          {hasRed && (
+            <text x={redZoneP.x} y={redZoneP.y} fill={R} fontSize="10" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">Overvalued</text>
+          )}
+
+          {/* Tick marks */}
+          <line {...minT} stroke="rgba(255,255,255,0.4)" strokeWidth="2" />
+          <line {...avgT} stroke="rgba(255,255,255,0.4)" strokeWidth="2" />
+          <line {...thrT} stroke="rgba(255,255,255,0.4)" strokeWidth="2" />
+          <line {...maxT} stroke="rgba(255,255,255,0.4)" strokeWidth="2" />
+
+          {/* Value labels on scale */}
+          <text x={minLP.x} y={minLP.y} fill="rgba(255,255,255,0.6)" fontSize="10" textAnchor="middle" dominantBaseline="middle">{fmt(min)}</text>
+          <text x={avgLP.x} y={avgLP.y} fill="rgba(255,255,255,0.6)" fontSize="10" textAnchor="middle" dominantBaseline="middle">{fmt(greenEndVal)}</text>
+          <text x={thrLP.x} y={thrLP.y} fill="rgba(255,255,255,0.6)" fontSize="10" textAnchor="middle" dominantBaseline="middle">{fmt(amberEndVal)}</text>
+          <text x={maxLP.x} y={maxLP.y} fill="rgba(255,255,255,0.6)" fontSize="10" textAnchor="middle" dominantBaseline="middle">{fmt(max)}</text>
 
           <line
             x1={cx}
@@ -207,40 +272,23 @@ function GaugeSvg({
         </svg>
       </div>
 
-      {!compact && (
-        <>
-          <div className="flex items-center justify-center gap-2 mt-1">
-            <StatPill label="Min" value={fmt(min)} highlighted={false} />
-            <StatPill label="Avg" value={fmt(avg)} highlighted={false} />
-            <StatPill label="Max" value={fmt(max)} highlighted={false} />
-            <StatPill label="Current" value={fmt(current)} highlighted={true} />
-          </div>
+      <div className="flex items-center justify-center gap-2 mt-1">
+        <StatPill label="Min" value={fmt(min)} highlighted={false} />
+        <StatPill label="Avg" value={fmt(avg)} highlighted={false} />
+        <StatPill label="Max" value={fmt(max)} highlighted={false} />
+        <StatPill label="Current" value={fmt(current)} highlighted={true} />
+      </div>
 
-          <div className="flex justify-center mt-2.5">
-            <span
-              className={cn(
-                "text-[11px] font-semibold uppercase tracking-wide px-3 py-0.5 rounded-full border",
-                valuation.className,
-              )}
-            >
-              {valuation.label}
-            </span>
-          </div>
-        </>
-      )}
-
-      {compact && (
-        <div className="flex justify-center mt-1">
-          <span
-            className={cn(
-              "text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border",
-              valuation.className,
+      <div className="flex justify-center mt-2">
+        <span
+          className={cn(
+            "text-[11px] font-semibold uppercase tracking-wide px-3 py-0.5 rounded-full border",
+            valuation.className,
             )}
           >
             {valuation.label}
-          </span>
-        </div>
-      )}
+        </span>
+      </div>
     </div>
   );
 }
@@ -397,9 +445,10 @@ export interface ValuationGaugeProps {
   unit: string;
   label: string;
   metricId: string;
+  benchmark?: "history" | "sector";
 }
 
-export function ValuationGauge({ config, unit, label }: ValuationGaugeProps) {
+export function ValuationGauge({ config, unit, label, benchmark = "history" }: ValuationGaugeProps) {
   if (config.display_mode === "disabled") {
     return (
       <div className="text-[11px] text-white/50 italic">
@@ -432,6 +481,10 @@ export function ValuationGauge({ config, unit, label }: ValuationGaugeProps) {
         bandLow={config.band_low}
         bandHigh={config.band_high}
         compact={config.display_mode === "compact_gauge"}
+        benchmark={benchmark}
+        sectorP05={config.sector_p05}
+        sectorP50={config.sector_p50}
+        sectorP95={config.sector_p95}
       />
     );
   }
@@ -724,24 +777,6 @@ export function MetricCard({
 }) {
   const firstYear = quarters.length > 0 ? quarters[0].label.split(" ")[0] : undefined;
 
-  const valLabel = benchmark === "sector"
-    ? (config.current_value != null && config.band_low != null && config.band_high != null
-        ? getValuation(config.current_value, config.band_low, config.band_high).label : null)
-    : config.percentile != null
-      ? config.percentile >= 66 ? "Overvalued" : config.percentile >= 33 ? "Fairly valued" : "Undervalued"
-      : null;
-
-  const valClass = benchmark === "sector"
-    ? (config.current_value != null && config.band_low != null && config.band_high != null
-        ? getValuation(config.current_value, config.band_low, config.band_high).className : "")
-    : config.percentile != null
-      ? config.percentile >= 66
-        ? "bg-rose-500/15 text-rose-400 border-rose-500/25"
-        : config.percentile >= 33
-          ? "bg-amber-500/15 text-amber-400 border-amber-500/25"
-          : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
-      : "";
-
   if (config.display_mode === "disabled") {
     return (
       <div className="flex-1 min-w-[280px] bg-[#1c2023] border border-[#2f3336] rounded-xl p-5 text-center">
@@ -749,9 +784,6 @@ export function MetricCard({
       </div>
     );
   }
-
-  const showGauge = benchmark === "sector" || config.percentile != null ||
-    config.display_mode === "gauge" || config.display_mode === "compact_gauge";
 
   return (
     <div className="flex-1 min-w-[280px] bg-[#1c2023] border border-[#2f3336] rounded-xl p-5 text-center">
@@ -765,62 +797,28 @@ export function MetricCard({
         </span>
       </div>
 
-      {showGauge ? (
-        <>
-          {config.current_value != null && config.min_value != null && config.max_value != null ? (
-            benchmark === "sector" && (config.band_low == null || config.band_high == null) ? (
-              <div className="text-[11px] text-white/40 italic py-4">No sector benchmark</div>
-            ) : (
-              <MiniGauge
-                current={config.current_value}
-                min={config.min_value}
-                max={config.max_value}
-                bandLow={config.band_low ?? 0}
-                bandHigh={config.band_high ?? 0}
-                percentile={config.percentile}
-                mode={benchmark}
-              />
-            )
-          ) : (
-            <div className="text-[11px] text-white/50 italic py-4">Insufficient data</div>
-          )}
+      <ValuationGauge config={config} unit={unit} label={label} metricId={metricId} benchmark={benchmark} />
 
-          <div className="text-[24px] font-bold text-white mt-2">
-            {config.current_value != null ? fmtValue(config.current_value, unit) : "—"}
-          </div>
-
-          {valLabel && (
-            <div className="mt-1">
-              <span className={cn("inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold", valClass)}>
-                {valLabel}
-              </span>
-            </div>
-          )}
-
-          {benchmark === "history" && config.percentile != null && (
-            <div className="mt-3 flex items-center justify-center gap-2">
-              <span className={cn(
-                "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold",
-                config.percentile >= 66 ? "bg-[rgba(255,101,101,0.15)] text-[#ff6565]" :
-                config.percentile >= 33 ? "bg-[rgba(255,199,0,0.15)] text-[#ffc700]" :
-                                          "bg-[rgba(0,200,117,0.15)] text-[#00c875]",
-              )}>
-                <span className="w-2 h-2 rounded-full" style={{ background: "currentColor" }} />
-                {Math.round(config.percentile)}th percentile
-              </span>
-            </div>
-          )}
-
-          <MiniSparkline
-            values={config.sparkline_values}
-            firstYear={firstYear}
-            delta={config.vs_avg_delta}
-            unit={unit}
-          />
-        </>
-      ) : (
-        <ValuationGauge config={config} unit={unit} label={label} metricId={metricId} />
+      {benchmark === "history" && config.percentile != null && (
+        <div className="mt-3 flex items-center justify-center gap-2">
+          <span className={cn(
+            "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold",
+            config.percentile >= 66 ? "bg-[rgba(255,101,101,0.15)] text-[#ff6565]" :
+            config.percentile >= 33 ? "bg-[rgba(255,199,0,0.15)] text-[#ffc700]" :
+                                      "bg-[rgba(0,200,117,0.15)] text-[#00c875]",
+          )}>
+            <span className="w-2 h-2 rounded-full" style={{ background: "currentColor" }} />
+            {Math.round(config.percentile)}th percentile
+          </span>
+        </div>
       )}
+
+      <MiniSparkline
+        values={config.sparkline_values}
+        firstYear={firstYear}
+        delta={config.vs_avg_delta}
+        unit={unit}
+      />
 
       <HistoryTable
         quarters={quarters}

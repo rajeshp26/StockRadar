@@ -55,6 +55,15 @@ class GaugeConfig(BaseModel):
     recent_quarter_label: Optional[str] = None
     """Label of the quarter used for 'current' value.
        e.g. 'Q3 2025' when the most recent quarter had negative earnings."""
+    # ── Sector benchmark fields (populated when sector stats available) ──
+    sector_p05: Optional[float] = None
+    """5th percentile of this metric within the company's sector."""
+    sector_p50: Optional[float] = None
+    """50th percentile (median) of this metric within the company's sector."""
+    sector_p95: Optional[float] = None
+    """95th percentile of this metric within the company's sector."""
+    sector_sample_size: int = 0
+    """Number of companies in the sector used to compute the percentiles."""
 
 
 class MetricQuarterSeries(BaseModel):

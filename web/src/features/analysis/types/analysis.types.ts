@@ -1138,6 +1138,10 @@ export interface GaugeConfig {
   historical_avg?: number;
   vs_avg_delta?: number;
   recent_quarter_label?: string;
+  sector_p05?: number | null;
+  sector_p50?: number | null;
+  sector_p95?: number | null;
+  sector_sample_size?: number;
 }
 
 export interface MetricQuarterSeries {

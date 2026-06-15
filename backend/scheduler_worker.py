@@ -27,6 +27,7 @@ from typing import Dict, Any, Optional
 from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
 from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
 from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
+from application.schedulers.aggregation_scheduler import AggregationScheduler
 
 # Import config
 from config import settings
@@ -142,6 +143,22 @@ async def main():
     else:
         logger.info("⏭️  Earnings scheduler disabled (ENABLE_EARNINGS_SCHEDULER=false)")
     
+    # ── Aggregation Scheduler ─────────────────────────────────────────────
+    if getattr(settings, "ENABLE_AGGREGATION_SCHEDULER", True):
+        try:
+            logger.info("Initializing Aggregation scheduler...")
+            schedulers["aggregation"] = AggregationScheduler()
+            await schedulers["aggregation"].start()
+            logger.info(
+                f"✅ Aggregation scheduler started "
+                f"(interval: {schedulers['aggregation'].interval_hours}h)"
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to start Aggregation scheduler: {e}", exc_info=True)
+            sys.exit(1)
+    else:
+        logger.info("⏭️  Aggregation scheduler disabled (ENABLE_AGGREGATION_SCHEDULER=false)")
+
     # ── Validation ─────────────────────────────────────────────────────────
     if not schedulers:
         logger.error("❌ No schedulers enabled. Check config settings.")
