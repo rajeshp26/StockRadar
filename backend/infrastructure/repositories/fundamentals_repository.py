@@ -248,12 +248,12 @@ class FundamentalsRepository:
     ) -> List[Dict[str, Any]]:
         """Get all quarterly earnings data for surprise and beat-rate computation.
 
-        Uses earnings table with eps_surprise_percent and revenue_surprise_percent columns.
+        Returns actual vs estimate fields for the Narrative snapshot header.
         Ordered chronologically ascending for direct use by the service layer.
         """
         resp = (
             supabase.table("earnings")
-            .select("fiscal_year, fiscal_quarter, eps_surprise_percent, revenue_surprise_percent, period_end_date")
+            .select("fiscal_year, fiscal_quarter, eps_surprise_percent, revenue_surprise_percent, period_end_date, eps_reported_diluted, eps_estimate, eps_surprise_amount, revenue_reported, revenue_estimate, revenue_surprise_amount")
             .eq("company_id", company_id)
             .order("fiscal_year", desc=False)
             .order("fiscal_quarter", desc=False)

@@ -1055,6 +1055,23 @@ def _compute_narrative_metrics(
             return "miss"
         return "inline"
 
+    def _build_components(r: Dict[str, Any]) -> List[MetricComponent]:
+        """Build actual-vs-estimate component pairs for a quarter."""
+        comps: List[MetricComponent] = []
+        eps_actual = _f(r.get("eps_reported_diluted"))
+        eps_est = _f(r.get("eps_estimate"))
+        rev_actual = _f(r.get("revenue_reported"))
+        rev_est = _f(r.get("revenue_estimate"))
+        if eps_actual is not None:
+            comps.append(MetricComponent(label="EPS Actual", value=eps_actual))
+        if eps_est is not None:
+            comps.append(MetricComponent(label="EPS Estimate", value=eps_est))
+        if rev_actual is not None:
+            comps.append(MetricComponent(label="Revenue Actual", value=rev_actual))
+        if rev_est is not None:
+            comps.append(MetricComponent(label="Revenue Estimate", value=rev_est))
+        return comps
+
     sorted_earnings = _quarters_chronological(earnings)
 
     eps_quarters: List[QuarterDataPoint] = []
@@ -1070,12 +1087,14 @@ def _compute_narrative_metrics(
             label=_quarter_label(int(fy), int(fq)),
             value=eps_v,
             narrative_label=_surprise_label(eps_v),
+            components=_build_components(r),
         ))
         rev_quarters.append(QuarterDataPoint(
             fiscal_year=int(fy), fiscal_quarter=int(fq),
             label=_quarter_label(int(fy), int(fq)),
             value=rev_v,
             narrative_label=_surprise_label(rev_v),
+            components=_build_components(r),
         ))
 
     eps_vals = [q.value for q in eps_quarters if q.value is not None]
@@ -1093,20 +1112,28 @@ def _compute_narrative_metrics(
             value=beat_rate,
         ))
 
+    # Gauge configs for slider display of each surprise metric
+    eps_gc = _simple_slider_config("eps_surprise", eps_quarters, "%")
+    rev_gc = _simple_slider_config("revenue_surprise", rev_quarters, "%")
+    br_gc = _simple_slider_config("beat_rate", beat_quarters, "%")
+
     eps_series = MetricQuarterSeries(
-        metric_id="eps_surprise", label="EPS surprise", unit="%",
+        metric_id="eps_surprise", label="EPS Surprise", unit="%",
         quarters=eps_quarters, buy_quarter_index=buy_idx,
         trend_direction="stable", change_pct=None, change_label="beat/miss",
+        gauge_config=eps_gc,
     )
     rev_series = MetricQuarterSeries(
-        metric_id="revenue_surprise", label="Rev. surprise", unit="%",
+        metric_id="revenue_surprise", label="Revenue Surprise", unit="%",
         quarters=rev_quarters, buy_quarter_index=buy_idx,
         trend_direction="stable", change_pct=None, change_label="beat/miss",
+        gauge_config=rev_gc,
     )
     br_series = MetricQuarterSeries(
-        metric_id="beat_rate", label="Beat rate", unit="%",
+        metric_id="beat_rate", label="Beat Rate", unit="%",
         quarters=beat_quarters, buy_quarter_index=buy_idx,
         trend_direction="stable", change_pct=None, change_label="rolling",
+        gauge_config=br_gc,
     )
 
     score = 0
@@ -1124,6 +1151,36 @@ def _compute_narrative_metrics(
         metrics=[eps_series, rev_series, br_series],
         status=_compute_section_status(float(score)),
         score=float(score),
+    )
+
+
+def _simple_slider_config(
+    metric_id: str,
+    quarters: List[QuarterDataPoint],
+    unit: str,
+) -> GaugeConfig:
+    """Build a minimal slider GaugeConfig for a narrative metric."""
+    positive = _positive_values(quarters)
+    pos_count = len(positive)
+    current = _most_recent_positive(quarters)
+    raw_current = quarters[-1].value if quarters else None
+    min_v = min(positive) if positive else None
+    max_v = max(positive) if positive else None
+    avg_v = sum(positive) / pos_count if pos_count > 0 else None
+    na = _na_count(quarters)
+    return GaugeConfig(
+        display_mode="slider",
+        benchmark="none",
+        current_value=current,
+        current_quarter_raw=raw_current,
+        min_value=min_v,
+        max_value=max_v,
+        avg_value=avg_v,
+        positive_count=pos_count,
+        total_quarters=len(quarters),
+        na_count=na,
+        sparkline_values=_compute_sparkline_values(quarters),
+        historical_avg=avg_v,
     )
 
 

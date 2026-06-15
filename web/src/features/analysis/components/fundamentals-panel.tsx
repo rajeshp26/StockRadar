@@ -6,6 +6,7 @@ import { useFundamentals } from "../hooks/useFundamentals";
 import { SectionHeader } from "./shared-ui";
 import { MetricCard, ValuationGauge, MoatGaugeCard, MoatHistoryTable } from "./valuation-gauge";
 import { IntrinsicValueCard, IntrinsicValueEmptyState } from "./intrinsic-value-card";
+import { NarrativeSection } from "./narrative-section";
 import type {
   FundamentalsResponse,
   MetricQuarterSeries,
@@ -1109,6 +1110,15 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
                 </div>
               )}
             </div>
+          );
+        }
+        if (section.section_id === "narrative") {
+          return (
+            <NarrativeSection
+              key={section.section_id}
+              metrics={section.metrics}
+              status={section.status.label}
+            />
           );
         }
         if (section.section_id === "moat") {
