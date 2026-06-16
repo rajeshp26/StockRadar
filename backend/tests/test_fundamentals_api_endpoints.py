@@ -261,7 +261,7 @@ class TestFundamentalsAPIContract:
                  "status": {"label": "Intact"}, "score": 80.0, "metrics": []},
                 {"section_id": "growth", "title": "Growth metrics",
                  "status": {"label": "Watch"}, "score": 55.0, "metrics": []},
-                {"section_id": "moat", "title": "Moat signals",
+                {"section_id": "financial_health", "title": "Financial Health",
                  "status": {"label": "Intact"}, "score": 75.0, "metrics": []},
                 self._mock_valuation_section(),
                 {"section_id": "narrative", "title": "Narrative",
@@ -289,7 +289,7 @@ class TestFundamentalsAPIContract:
 
         data = resp.json()
         section_ids = {s["section_id"] for s in data["sections"]}
-        assert section_ids == {"quality", "growth", "moat", "valuation", "narrative"}
+        assert section_ids == {"quality", "growth", "financial_health", "valuation", "narrative"}
 
     def test_pe_metric_has_trend_direction(self, client):
         mock_svc = MagicMock()

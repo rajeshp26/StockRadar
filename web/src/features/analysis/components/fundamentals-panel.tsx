@@ -1121,7 +1121,7 @@ export function FundamentalsPanel({ symbol }: { symbol: string }) {
             />
           );
         }
-        if (section.section_id === "moat") {
+        if (section.section_id === "financial_health") {
           const moatMetrics = section.metrics.filter(
             (m) => m.metric_id === "piotroski_f" || m.metric_id === "altman_z" || m.metric_id === "interest_coverage",
           );

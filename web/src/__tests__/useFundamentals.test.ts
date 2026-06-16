@@ -48,8 +48,8 @@ function makeResponse(overrides = {}) {
         score: 65,
       },
       {
-        section_id: "moat",
-        title: "Moat signals",
+        section_id: "financial_health",
+        title: "Financial Health",
         metrics: [
           { metric_id: "piotroski_f", label: "Piotroski F", unit: "score", quarters: [{ fiscal_year: 2023, fiscal_quarter: 1, label: "Q1 2023", value: 7 }], buy_quarter_index: null, trend_direction: "stable", change_pct: null, change_label: "stable" },
         ],

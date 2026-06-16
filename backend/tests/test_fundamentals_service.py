@@ -281,7 +281,7 @@ class TestMoatMetrics:
             make_qratio(2023, 2, piotroski_score=9, altman_z_score=4.0, interest_coverage=10.0),
         ]
         section = _compute_moat_metrics(ratios)
-        assert section.section_id == "moat"
+        assert section.section_id == "financial_health"
         assert len(section.metrics) == 3
         assert section.score is not None and section.score >= 70
         assert section.status.label == "Intact"

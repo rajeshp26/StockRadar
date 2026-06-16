@@ -67,8 +67,8 @@ function makeData(overrides = {}) {
         score: 65,
       },
       {
-        section_id: "moat",
-        title: "Moat signals",
+        section_id: "financial_health",
+        title: "Financial Health",
         metrics: [
           { metric_id: "piotroski_f", label: "Piotroski F", unit: "score", quarters: [
             { fiscal_year: 2023, fiscal_quarter: 1, label: "Q1 2023", value: 7 },

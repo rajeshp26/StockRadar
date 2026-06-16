@@ -387,8 +387,8 @@ def _compute_moat_metrics(
 ) -> MetricSection:
     if not ratios:
         return MetricSection(
-            section_id="moat",
-            title="Moat signals",
+            section_id="financial_health",
+            title="Financial Health",
             metrics=[],
             status=_compute_section_status(None),
             score=None,
@@ -425,8 +425,8 @@ def _compute_moat_metrics(
         elif latest_ic >= 1: pts += 5
 
     return MetricSection(
-        section_id="moat",
-        title="Moat signals",
+        section_id="financial_health",
+        title="Financial Health",
         metrics=metrics,
         status=_compute_section_status(float(pts)),
         score=float(pts),

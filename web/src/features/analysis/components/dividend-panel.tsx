@@ -1,34 +1,21 @@
-// web/src/features/analysis/components/dividend-panel.tsx
 "use client";
-import { useState, useMemo } from "react";
+import React, { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import {
-    TrendingDown, AlertTriangle, CheckCircle2,
-    TrendingUp, Sparkles, Calendar, Percent,
-    BarChart2, ArrowUpRight, ArrowDownRight, Minus,
+    TrendingDown, AlertTriangle, TrendingUp, CheckCircle2,
 } from "lucide-react";
+import {
+    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+    LineChart, Line,
+} from "recharts";
 import { useDividendAnalysis } from "../hooks/useDividendAnalysis";
 import {
     ScoreRing, SectionHeader, Metric,
     fmtCurrency, fmtPct,
 } from "./shared-ui";
 import type {
-    DividendOverviewData, DividendSafetyData,
-    DividendGrowthData, DividendYieldData,
-    DividendRating, SuitabilityCategory,
+    DividendAnalysis, DividendRating,
 } from "../types/analysis.types";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Sub-tab type & config
-// ─────────────────────────────────────────────────────────────────────────────
-type DivTab = "overview" | "safety" | "growth" | "yield";
-
-const DIV_TABS: { id: DivTab; label: string }[] = [
-    { id: "overview", label: "Overview" },
-    { id: "safety", label: "Safety" },
-    { id: "growth", label: "Growth" },
-    { id: "yield", label: "Yield" },
-];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Formatters
@@ -41,11 +28,6 @@ function fmtYield(v: number | null | undefined): string {
 function fmtPctRaw(v: number | null | undefined, digits = 1): string {
     if (v == null) return "—";
     return `${(v * 100).toFixed(digits)}%`;
-}
-
-function fmtMultiple(v: number | null | undefined, digits = 1): string {
-    if (v == null) return "—";
-    return `${v.toFixed(digits)}×`;
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -76,15 +58,6 @@ function fmtCagr(v: number | null | undefined): string {
 // Shared sub-components
 // ─────────────────────────────────────────────────────────────────────────────
 
-function MetricSkeleton() {
-    return (
-        <div className="glass-stat space-y-3">
-            <div className="h-2 w-16 rounded-full bg-white/10 glass-shimmer" />
-            <div className="h-8 w-24 rounded-lg bg-white/10 glass-shimmer" />
-        </div>
-    );
-}
-
 function AccentLine() {
     return (
         <div
@@ -98,182 +71,35 @@ function AccentLine() {
     );
 }
 
-function AiNote({ text, loading }: { text?: string | null; loading?: boolean }) {
-    if (loading) {
-        return (
-            <div className="rounded-2xl border border-white/6 bg-white/3 px-5 py-4 space-y-2">
-                {[20, 36, 28].map((w, i) => (
-                    <div key={i} className={`h-2 w-${w} rounded-full bg-white/8 glass-shimmer`} />
-                ))}
-            </div>
-        );
-    }
-    if (!text) return null;
-    return (
-        <div className="rounded-2xl border border-indigo-500/15 bg-indigo-500/5 px-5 py-4">
-            <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="h-3 w-3 text-indigo-400/70" />
-                <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400/70">
-                    AI Dividend Insight
-                </span>
-            </div>
-            <p className="text-[12px] leading-relaxed text-white/60">{text}</p>
-        </div>
-    );
-}
-
-/** Rating pill — maps backend rating to exact glass-badge CSS classes */
-function RatingBadge({ rating, text }: { rating: DividendRating; text?: string }) {
+function RatingTag({ rating, text }: { rating: DividendRating; text?: string }) {
     const styles: Record<DividendRating, string> = {
-        safe: "glass-badge-buy",
-        moderate: "glass-badge-hold",
+        safe: "bg-emerald-500/12 border-emerald-500/25 text-emerald-400",
+        moderate: "bg-amber-500/12 border-amber-500/25 text-amber-400",
         borderline: "bg-orange-500/10 border-orange-500/25 text-orange-400",
-        risk: "glass-badge-sell",
-        info: "bg-indigo-500/10 border-indigo-500/25 text-indigo-400",
+        risk: "bg-rose-500/12 border-rose-500/25 text-rose-400",
+        info: "bg-indigo-500/12 border-indigo-500/25 text-indigo-400",
     };
     const labels: Record<DividendRating, string> = {
         safe: "Safe", moderate: "Moderate", borderline: "Borderline",
         risk: "Risk", info: "Info",
     };
     return (
-        <span className={cn("glass-badge", styles[rating])}>
+        <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-widest border", styles[rating])}>
             {text ?? labels[rating]}
         </span>
     );
 }
 
-/** Status chip shown in overview */
-function StatusBadge({ status }: { status: string }) {
-    if (status === "stable") return (
-        <span className="glass-badge glass-badge-buy flex items-center gap-1">
-            <CheckCircle2 className="h-2.5 w-2.5" /> Stable
-        </span>
-    );
-    if (status === "growing") return (
-        <span className="glass-badge glass-badge-buy flex items-center gap-1">
-            <TrendingUp className="h-2.5 w-2.5" /> Growing
-        </span>
-    );
-    if (status === "declining") return (
-        <span className="glass-badge glass-badge-sell flex items-center gap-1">
-            <TrendingDown className="h-2.5 w-2.5" /> Declining
-        </span>
-    );
-    return <span className="glass-badge bg-white/5 border-white/10 text-white/30">—</span>;
-}
-
-/** Category label coloring */
-function categoryColor(cat?: SuitabilityCategory | string): string {
-    if (cat === "Good") return "text-emerald-400";
-    if (cat === "Caution") return "text-amber-400";
-    if (cat === "Poor") return "text-rose-400";
-    return "text-white/40";
-}
-
-/** Metric row used in the safety table */
-function SafetyRow({ m }: { m: { name: string; formatted: string; benchmark: string; rating: DividendRating; info_note?: string | null } }) {
+function MetricSkeleton() {
     return (
-        <div className="flex items-center justify-between py-2.5 border-b border-white/5 last:border-0">
-            <div>
-                <p className="text-[11px] font-semibold text-white/75">{m.name}</p>
-                <p className="text-[9px] text-white/25 mt-0.5">Benchmark: {m.benchmark}</p>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-                <span className="text-sm font-black text-white tabular-nums">
-                    {m.info_note ? (
-                        <span className="text-[10px] text-white/40 font-medium">{m.formatted}</span>
-                    ) : m.formatted}
-                </span>
-                <RatingBadge rating={m.rating} text={m.info_note ?? undefined} />
-            </div>
+        <div className="glass-stat space-y-3">
+            <div className="h-2 w-16 rounded-full bg-white/10 glass-shimmer" />
+            <div className="h-8 w-24 rounded-lg bg-white/10 glass-shimmer" />
         </div>
     );
 }
 
-/** Dividend sparkline SVG — polyline with y-axis labels and multi-year x-axis */
-function DividendSparkline({ data }: { data: { date: string; amount: number }[] }) {
-    if (!data.length) return null;
-
-    // Layout constants
-    const LW = 42;            // left margin reserved for y-axis labels
-    const TW = 256;           // total SVG width
-    const CW = TW - LW;      // chart area width
-    const CH = 52;            // chart area height
-    const XH = 14;            // x-axis label row height below chart
-    const TH = CH + XH;      // total SVG height
-    const PAD = 6;             // inner padding within chart area
-
-    const amounts = data.map((d) => d.amount);
-    const minA = Math.min(...amounts);
-    const maxA = Math.max(...amounts);
-    const range = maxA - minA || 1;
-
-    const toX = (i: number) =>
-        LW + PAD + (i / Math.max(data.length - 1, 1)) * (CW - PAD * 2);
-    const toY = (amt: number) =>
-        PAD + ((maxA - amt) / range) * (CH - PAD * 2);
-
-    const points = data.map((_, i) => `${toX(i).toFixed(1)},${toY(data[i].amount).toFixed(1)}`);
-    const firstX = parseFloat(points[0].split(",")[0]);
-    const lastPt = points[points.length - 1];
-    const lastX = parseFloat(lastPt.split(",")[0]);
-    const fillPath = `M ${firstX},${CH - PAD} L ${points.join(" L ")} L ${lastX},${CH - PAD} Z`;
-
-    const hasCut = data.some((d, i) => i > 0 && d.amount < data[i - 1].amount * 0.9);
-    const stroke = hasCut ? "rgba(248,113,113,0.75)" : "rgba(99,102,241,0.75)";
-    const fillCol = hasCut ? "rgba(248,113,113,0.08)" : "rgba(99,102,241,0.08)";
-
-    // Y-axis label formatter — adapts decimal places to magnitude
-    const fmtAmt = (v: number) =>
-        v < 0.1 ? `$${v.toFixed(4)}` : v < 1 ? `$${v.toFixed(3)}` : `$${v.toFixed(2)}`;
-
-    // X-axis: unique years sampled to ≤5 labels so they don't collide
-    const uniqueYears = [...new Set(data.map((d) => d.date?.slice(0, 4) ?? ""))].sort();
-    const step = Math.max(1, Math.ceil(uniqueYears.length / 5));
-    const xLabels = uniqueYears
-        .filter((_, i) => i % step === 0 || i === uniqueYears.length - 1)
-        .map((yr) => {
-            const idx = data.findIndex((d) => d.date?.startsWith(yr));
-            return idx >= 0 ? { yr, x: toX(idx) } : null;
-        })
-        .filter((v): v is { yr: string; x: number } => v !== null);
-
-    const [lx, ly] = lastPt.split(",").map(Number);
-
-    return (
-        <svg viewBox={`0 0 ${TW} ${TH}`} className="w-full" aria-hidden="true">
-            {/* Y-axis: max and min labels */}
-            <text x={LW - 4} y={toY(maxA) + 4} textAnchor="end" fontSize="7.5"
-                fill="rgba(255,255,255,0.28)">{fmtAmt(maxA)}</text>
-            <text x={LW - 4} y={toY(minA) + 4} textAnchor="end" fontSize="7.5"
-                fill="rgba(255,255,255,0.28)">{fmtAmt(minA)}</text>
-
-            {/* Horizontal guide lines */}
-            <line x1={LW} y1={toY(maxA)} x2={TW - PAD} y2={toY(maxA)}
-                stroke="rgba(255,255,255,0.05)" strokeWidth="0.5" strokeDasharray="3 3" />
-            <line x1={LW} y1={toY(minA)} x2={TW - PAD} y2={toY(minA)}
-                stroke="rgba(255,255,255,0.05)" strokeWidth="0.5" strokeDasharray="3 3" />
-
-            {/* Area fill */}
-            <path d={fillPath} fill={fillCol} />
-
-            {/* Sparkline */}
-            <polyline points={points.join(" ")} fill="none" stroke={stroke}
-                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-
-            {/* Terminal dot */}
-            <circle cx={lx} cy={ly} r="3" fill={stroke} />
-
-            {/* X-axis year labels */}
-            {xLabels.map(({ yr, x }) => (
-                <text key={yr} x={x} y={TH - 2} textAnchor="middle" fontSize="7.5"
-                    fill="rgba(255,255,255,0.25)">{yr}</text>
-            ))}
-        </svg>
-    );
-}
-
-/** Yield range bar */
+/** Yield range bar — adapted from the existing component */
 function YieldRangeBar({
     current, min, max, percentile,
 }: {
@@ -287,7 +113,6 @@ function YieldRangeBar({
 
     return (
         <div className="space-y-3">
-            {/* Range track */}
             <div className="relative h-2 rounded-full bg-white/8">
                 <div
                     className="absolute left-0 top-0 h-2 rounded-full"
@@ -301,16 +126,18 @@ function YieldRangeBar({
                     style={{ left: `${fillPct}%` }}
                 />
             </div>
-            {/* Labels */}
             <div className="flex justify-between text-[10px]">
                 <span className="text-white/30">Low: {fmtYield(min)}</span>
                 <span className="font-black text-indigo-300">Now: {fmtYield(current)}</span>
                 <span className="text-white/30">High: {fmtYield(max)}</span>
             </div>
-            {/* Percentile bar */}
             {percentile != null && (
-                <div className="rounded-xl bg-white/4 border border-white/7 p-3 space-y-2">
+                <div className="space-y-2">
                     <p className="glass-overline text-[9px]">5-Year yield percentile</p>
+                    <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-black text-white">{percentile}th</span>
+                        <span className="text-xs text-white/40">percentile</span>
+                    </div>
                     <div className="h-1.5 rounded-full bg-white/8 overflow-hidden">
                         <div
                             className="h-full rounded-full"
@@ -322,7 +149,6 @@ function YieldRangeBar({
                     </div>
                     <div className="flex justify-between text-[9px] text-white/25">
                         <span>0th</span>
-                        <span className="text-indigo-300 font-black">{percentile}th percentile</span>
                         <span>100th</span>
                     </div>
                 </div>
@@ -331,549 +157,62 @@ function YieldRangeBar({
     );
 }
 
-/** History row for recent dividend changes */
-function ChangeRow({ c }: {
-    c: { date: string; amount: number; change_pct: number; label: string; direction: string };
-}) {
-    const Icon = c.direction === "increase" ? ArrowUpRight
-        : c.direction === "decrease" ? ArrowDownRight
-            : Minus;
-    const color = c.direction === "increase" ? "text-emerald-400"
-        : c.direction === "decrease" ? "text-rose-400"
-            : "text-white/30";
+/** Arrow indicator for change direction */
+function ChangeDirection({ change_pct, direction }: { change_pct: number; direction: string }) {
+    if (direction === "flat") return <span className="text-white/40 font-bold">Flat</span>;
+    const isUp = direction === "increase";
+    const label = `${isUp ? "+" : ""}${(change_pct * 100).toFixed(1)}%`;
     return (
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 last:border-0 hover:bg-white/3 transition-colors">
-            <div>
-                <p className="text-sm font-bold text-white/80">{fmtDate(c.date)}</p>
-                <p className="text-[9px] text-white/25 uppercase tracking-wider mt-0.5">Dividend payment</p>
-            </div>
-            <div className="text-right">
-                <p className="text-sm font-black text-white">${c.amount.toFixed(4)}</p>
-                <p className={cn("text-[10px] font-bold flex items-center justify-end gap-0.5 mt-0.5", color)}>
-                    <Icon className="h-2.5 w-2.5" />{c.label}
-                </p>
-            </div>
-        </div>
+        <span className={cn("font-bold flex items-center gap-0.5", isUp ? "text-emerald-400" : "text-rose-400")}>
+            {isUp ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+            {label}
+        </span>
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-tab panels
+// Chart components (memoized)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function OverviewPanel({ data, loading }: { data: DividendOverviewData | null; loading: boolean }) {
+const DividendBarChart = React.memo(function DividendBarChart({ data }: { data: { year: string; amount: number }[] }) {
+    if (!data.length) {
+        return <p className="text-sm text-white/30 italic pt-8 text-center">No dividend history data</p>;
+    }
     return (
-        <div className="space-y-6 animate-fade-up">
-            {/* KPI cards */}
-            <div className="glass-panel p-8 relative overflow-hidden">
-                <AccentLine />
-                <SectionHeader
-                    title="Dividend Overview"
-                    subtitle="Current distribution metrics and schedule"
-                    action={data ? <StatusBadge status={data.status} /> : undefined}
+        <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis dataKey="year" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
+                <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
+                <Tooltip
+                    contentStyle={{ backgroundColor: "#111827", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }}
+                    formatter={(value: number) => [`$${value.toFixed(2)}`, "Annual Dividend"]}
                 />
-
-                {loading ? (
-                    <div className="grid md:grid-cols-4 gap-4">
-                        {Array.from({ length: 4 }).map((_, i) => <MetricSkeleton key={i} />)}
-                    </div>
-                ) : data ? (
-                    <div className="grid md:grid-cols-4 gap-4">
-                        <Metric
-                            label="Annual Dividend"
-                            value={data.annual_dividend != null ? `$${data.annual_dividend.toFixed(2)}` : "—"}
-                            hint={`$${(data.per_period_amount ?? 0).toFixed(4)} / ${fmtFrequency(data.frequency).toLowerCase()} payment`}
-                            accent="indigo"
-                        />
-                        <Metric
-                            label="Dividend Yield"
-                            value={fmtYield(data.dividend_yield)}
-                            hint="At current market price"
-                            accent="emerald"
-                        />
-                        <Metric
-                            label="Payout Ratio"
-                            value={data.payout_ratio_adj_eps != null
-                                ? fmtPctRaw(data.payout_ratio_adj_eps, 0)
-                                : "—"}
-                            hint="Adjusted EPS basis"
-                            accent={
-                                (data.payout_ratio_adj_eps ?? 0) < 0.60 ? "emerald" :
-                                    (data.payout_ratio_adj_eps ?? 0) < 0.80 ? "amber" : "rose"
-                            }
-                        />
-                        <Metric
-                            label="Frequency"
-                            value={fmtFrequency(data.frequency)}
-                            hint={`${data.frequency_multiplier}× per year`}
-                        />
-                    </div>
-                ) : null}
-
-                <div className="glass-divider my-6" />
-
-                {/* Schedule + Sparkline */}
-                <div className="grid md:grid-cols-[1.6fr_1fr] gap-6">
-                    <div>
-                        <p className="glass-overline mb-4">Dividend Schedule</p>
-                        <div className="grid grid-cols-2 gap-3">
-                            {[
-                                { label: "Last Increase", value: fmtDate(data?.last_increase_date) },
-                                { label: "Ex-Dividend Date", value: fmtDate(data?.ex_dividend_date) },
-                            ].map(({ label, value }) => (
-                                <div
-                                    key={label}
-                                    className="bg-white/4 border border-white/7 rounded-xl p-3"
-                                >
-                                    <p className="glass-overline text-[9px]">{label}</p>
-                                    <p className="text-sm font-black text-white mt-1.5">{value}</p>
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* Secondary payout metrics */}
-                        {data && (
-                            <div className="grid grid-cols-2 gap-3 mt-3">
-                                <div className="bg-white/4 border border-white/7 rounded-xl p-3">
-                                    <p className="glass-overline text-[9px]">FCF Payout</p>
-                                    <p className="text-sm font-black text-white mt-1.5">
-                                        {data.payout_ratio_fcf != null
-                                            ? fmtPctRaw(data.payout_ratio_fcf, 0)
-                                            : "—"}
-                                    </p>
-                                </div>
-                                <div className="bg-white/4 border border-white/7 rounded-xl p-3">
-                                    <p className="glass-overline text-[9px]">GAAP Payout</p>
-                                    <p className="text-sm font-black text-white mt-1.5">
-                                        {data.gaap_negative_eps
-                                            ? <span className="text-[10px] text-white/40 font-medium">Neg EPS</span>
-                                            : data.payout_ratio_gaap != null
-                                                ? fmtPctRaw(data.payout_ratio_gaap, 0)
-                                                : "—"}
-                                    </p>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Sparkline */}
-                    <div className="bg-white/4 border border-white/7 rounded-xl p-4">
-                        <p className="glass-overline text-[9px] mb-3">Dividend History</p>
-                        {data?.sparkline?.length ? (
-                            <DividendSparkline data={data.sparkline} />
-                        ) : (
-                            <p className="text-xs text-white/20 italic">No history data</p>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </div>
+                <Bar dataKey="amount" radius={[8, 8, 0, 0]} fill="#818cf8" />
+            </BarChart>
+        </ResponsiveContainer>
     );
-}
+});
 
-function SafetyPanel({ data, loading }: { data: DividendSafetyData | null; loading: boolean }) {
+const GrowthLineChart = React.memo(function GrowthLineChart({ data }: { data: { year: string; amount: number }[] }) {
+    if (!data.length) {
+        return <p className="text-sm text-white/30 italic pt-8 text-center">No dividend history data</p>;
+    }
     return (
-        <div className="space-y-6 animate-fade-up">
-            {/* Score + Metrics */}
-            <div className="glass-panel p-8 relative overflow-hidden">
-                <AccentLine />
-                <SectionHeader
-                    title="Dividend Safety"
-                    subtitle="Coverage ratios, leverage, and sustainability scorecard"
+        <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis dataKey="year" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
+                <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
+                <Tooltip
+                    contentStyle={{ backgroundColor: "#111827", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }}
+                    formatter={(value: number) => [`$${value.toFixed(2)}`, "Annual Dividend"]}
                 />
-
-                <div className="flex flex-col lg:flex-row gap-8">
-                    {/* Score ring */}
-                    <div className="flex-shrink-0 flex justify-center lg:justify-start">
-                        {loading ? (
-                            <div className="flex flex-col items-center gap-3">
-                                <div className="h-[120px] w-[120px] rounded-full bg-white/5 glass-shimmer" />
-                                <div className="h-3 w-24 rounded-full bg-white/8 glass-shimmer" />
-                            </div>
-                        ) : data ? (
-                            <div className="flex flex-col items-center gap-3">
-                                <ScoreRing
-                                    score={data.composite_score}
-                                    category={data.composite_category}
-                                    size={120}
-                                />
-                                <p className={cn(
-                                    "text-[10px] font-black uppercase tracking-widest text-center max-w-[140px] leading-relaxed",
-                                    categoryColor(data.composite_category),
-                                )}>
-                                    {data.composite_category === "Good" ? "Dividend Well-Covered"
-                                        : data.composite_category === "Caution" ? "Monitor Key Ratios"
-                                            : "High Sustainability Risk"}
-                                </p>
-                            </div>
-                        ) : null}
-                    </div>
-
-                    <div className="hidden lg:block w-px bg-white/8 self-stretch" />
-                    <div className="block lg:hidden h-px bg-white/8" />
-
-                    {/* Metrics table — 2-col grid */}
-                    <div className="flex-1 min-w-0">
-                        {loading ? (
-                            <div className="space-y-3">
-                                {Array.from({ length: 6 }).map((_, i) => (
-                                    <div key={i} className="h-10 rounded-xl bg-white/5 glass-shimmer" />
-                                ))}
-                            </div>
-                        ) : data ? (
-                            <div className="grid md:grid-cols-2 gap-x-8">
-                                {/* Left column: first 4 metrics */}
-                                <div>
-                                    {data.metrics.slice(0, 4).map((m) => (
-                                        <SafetyRow key={m.name} m={m} />
-                                    ))}
-                                </div>
-                                {/* Right column: remaining metrics */}
-                                <div>
-                                    {data.metrics.slice(4).map((m) => (
-                                        <SafetyRow key={m.name} m={m} />
-                                    ))}
-                                </div>
-                            </div>
-                        ) : null}
-                    </div>
-                </div>
-            </div>
-
-            {/* Policy + Strengths + Risks */}
-            {(loading || data) && (
-                <div className="grid md:grid-cols-2 gap-6">
-                    {/* Policy + Earnings Stability */}
-                    <div className="space-y-4">
-                        <div className="glass-panel p-6">
-                            <SectionHeader title="Earnings Stability" />
-                            <div className="bg-white/4 border border-white/7 rounded-xl p-3">
-                                {loading ? (
-                                    <div className="h-3 w-40 rounded-full bg-white/8 glass-shimmer" />
-                                ) : (
-                                    <>
-                                        <p className="text-sm font-bold text-white/75 capitalize">
-                                            {data?.earnings_stability === "high" ? "High — consistent earnings base"
-                                                : data?.earnings_stability === "moderate" ? "Moderate — some variability"
-                                                    : data?.earnings_stability === "volatile" ? "Volatile — earnings fluctuate"
-                                                        : "Insufficient data"}
-                                        </p>
-                                        <p className="glass-overline text-[8px] mt-1">5-year trend analysis</p>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="glass-panel p-6">
-                            <SectionHeader title="Dividend Policy" />
-                            {loading ? (
-                                <div className="grid grid-cols-2 gap-2">
-                                    {Array.from({ length: 4 }).map((_, i) => (
-                                        <div key={i} className="h-14 rounded-xl bg-white/5 glass-shimmer" />
-                                    ))}
-                                </div>
-                            ) : data ? (
-                                <div className="grid grid-cols-2 gap-2">
-                                    {[
-                                        { label: "Growth Trend", value: data.dividend_policy.growth_trend === "growing" ? "Growing" : data.dividend_policy.growth_trend === "flat" ? "Flat" : data.dividend_policy.growth_trend === "declining" ? "Declining" : "—", color: data.dividend_policy.growth_trend === "growing" ? "text-emerald-400" : data.dividend_policy.growth_trend === "declining" ? "text-rose-400" : "" },
-                                        { label: "Cut History", value: data.dividend_policy.cut_history, color: data.dividend_policy.has_cut ? "text-rose-400" : "text-emerald-400" },
-                                        { label: "Retention Rate", value: data.dividend_policy.retention_rate != null ? fmtPctRaw(data.dividend_policy.retention_rate, 0) : "—", color: "" },
-                                    ].map(({ label, value, color }) => (
-                                        <div key={label} className="bg-white/4 border border-white/7 rounded-xl p-3">
-                                            <p className="glass-overline text-[8px]">{label}</p>
-                                            <p className={cn("text-[11px] font-bold text-white mt-1 leading-tight", color)}>
-                                                {value}
-                                            </p>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : null}
-                        </div>
-                    </div>
-
-                    {/* Strengths + Risks */}
-                    <div className="space-y-4">
-                        <div className="glass-panel p-6">
-                            <div className="flex items-center gap-2 mb-4">
-                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400">
-                                    Strengths
-                                </span>
-                            </div>
-                            {loading ? (
-                                <div className="space-y-2">
-                                    {Array.from({ length: 3 }).map((_, i) => (
-                                        <div key={i} className="h-3 rounded-full bg-white/5 glass-shimmer" />
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    {(data?.strengths ?? []).map((s, i) => (
-                                        <div key={i} className="flex items-start gap-2.5 text-[11px] text-white/65 leading-relaxed">
-                                            <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0 mt-1.5" />
-                                            {s}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="glass-panel p-6">
-                            <div className="flex items-center gap-2 mb-4">
-                                <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
-                                <span className="text-[10px] font-black uppercase tracking-widest text-rose-400">
-                                    Key Risks
-                                </span>
-                            </div>
-                            {loading ? (
-                                <div className="space-y-2">
-                                    {Array.from({ length: 3 }).map((_, i) => (
-                                        <div key={i} className="h-3 rounded-full bg-white/5 glass-shimmer" />
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    {(data?.key_risks ?? []).map((r, i) => (
-                                        <div key={i} className="flex items-start gap-2.5 text-[11px] text-white/65 leading-relaxed">
-                                            <div className="h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0 mt-1.5" />
-                                            {r}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
+                <Line type="monotone" dataKey="amount" stroke="#22c55e" strokeWidth={3} dot={{ r: 4, fill: "#22c55e" }} />
+            </LineChart>
+        </ResponsiveContainer>
     );
-}
-
-function GrowthPanel({ data, loading }: { data: DividendGrowthData | null; loading: boolean }) {
-    return (
-        <div className="space-y-6 animate-fade-up">
-            {/* Score + CAGR table */}
-            <div className="glass-panel p-8 relative overflow-hidden">
-                <AccentLine />
-                <SectionHeader
-                    title="Dividend Growth"
-                    subtitle="Historical momentum and consistency of dividend increases"
-                />
-
-                <div className="flex flex-col lg:flex-row gap-8">
-                    {/* Score ring */}
-                    <div className="flex-shrink-0 flex justify-center lg:justify-start">
-                        {loading ? (
-                            <div className="flex flex-col items-center gap-3">
-                                <div className="h-[120px] w-[120px] rounded-full bg-white/5 glass-shimmer" />
-                                <div className="h-3 w-24 rounded-full bg-white/8 glass-shimmer" />
-                            </div>
-                        ) : data ? (
-                            <div className="flex flex-col items-center gap-3">
-                                <ScoreRing
-                                    score={data.growth_score}
-                                    category={data.growth_category}
-                                    size={120}
-                                />
-                                <p className={cn(
-                                    "text-[10px] font-black uppercase tracking-widest text-center max-w-[140px] leading-relaxed",
-                                    categoryColor(data.growth_category),
-                                )}>
-                                    {data.growth_category === "Good" ? "Strong Growth Track"
-                                        : data.growth_category === "Caution" ? "Inconsistent Growth"
-                                            : "Weak Growth Profile"}
-                                </p>
-                            </div>
-                        ) : null}
-                    </div>
-
-                    <div className="hidden lg:block w-px bg-white/8 self-stretch" />
-                    <div className="block lg:hidden h-px bg-white/8" />
-
-                    {/* CAGR grid */}
-                    <div className="flex-1 min-w-0">
-                        <p className="glass-overline mb-4">Growth Momentum</p>
-                        {loading ? (
-                            <div className="grid grid-cols-2 gap-3">
-                                {Array.from({ length: 5 }).map((_, i) => <MetricSkeleton key={i} />)}
-                            </div>
-                        ) : data ? (
-                            <div className="grid grid-cols-2 gap-0 border border-white/8 rounded-2xl overflow-hidden">
-                                {[
-                                    { label: "1-Year Growth", v: data.cagr_1y },
-                                    { label: "3-Year CAGR", v: data.cagr_3y },
-                                    { label: "5-Year CAGR", v: data.cagr_5y },
-                                    { label: "10-Year CAGR", v: data.cagr_10y },
-                                ].map(({ label, v }, i) => {
-                                    const isNeg = v != null && v < 0;
-                                    const border = i % 2 === 1 ? "border-l border-white/5" : "";
-                                    return (
-                                        <div key={label} className={cn("p-4 border-b border-white/5", border)}>
-                                            <p className="glass-overline text-[9px]">{label}</p>
-                                            <p className={cn(
-                                                "text-xl font-black mt-1.5 tracking-tight",
-                                                isNeg ? "text-rose-400" : v === 0 ? "text-white/50" : "text-white",
-                                            )}>
-                                                {fmtCagr(v)}
-                                            </p>
-                                        </div>
-                                    );
-                                })}
-                                <div className="col-span-2 p-4 border-t border-white/5">
-                                    <p className="glass-overline text-[9px]">Consecutive Years of Increases</p>
-                                    <p className={cn(
-                                        "text-xl font-black mt-1.5",
-                                        data.consecutive_increases >= 5 ? "text-emerald-400" :
-                                            data.consecutive_increases >= 1 ? "text-white" : "text-rose-400",
-                                    )}>
-                                        {data.consecutive_increases === 0 ? "None" : `${data.consecutive_increases} Year${data.consecutive_increases !== 1 ? "s" : ""}`}
-                                    </p>
-                                </div>
-                            </div>
-                        ) : null}
-                    </div>
-                </div>
-            </div>
-
-            {/* Recent changes — history table */}
-            <div className="glass-panel p-8">
-                <SectionHeader
-                    title="Recent Dividend Changes"
-                    subtitle="Per-payment movement history"
-                />
-                {loading ? (
-                    <div className="space-y-2">
-                        {Array.from({ length: 4 }).map((_, i) => (
-                            <div key={i} className="h-14 rounded-xl bg-white/5 glass-shimmer" />
-                        ))}
-                    </div>
-                ) : !data?.recent_changes?.length ? (
-                    <p className="text-sm text-white/30 italic">No recent dividend data available.</p>
-                ) : (
-                    <div className="rounded-2xl overflow-hidden border border-white/8">
-                        {/* Header */}
-                        <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/8">
-                            <span className="glass-overline">Date</span>
-                            <span className="glass-overline">Amount / Change</span>
-                        </div>
-                        {data.recent_changes.map((c, i) => (
-                            <ChangeRow key={`${c.date}-${i}`} c={c} />
-                        ))}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-}
-
-function YieldPanel({ data, loading }: { data: DividendYieldData | null; loading: boolean }) {
-    return (
-        <div className="space-y-6 animate-fade-up">
-            {/* Top KPI tiles */}
-            <div className="glass-panel p-8 relative overflow-hidden">
-                <AccentLine />
-                <SectionHeader
-                    title="Yield Analysis"
-                    subtitle="Current, historical, and relative yield positioning"
-                />
-
-                {loading ? (
-                    <div className="grid md:grid-cols-4 gap-4">
-                        {Array.from({ length: 4 }).map((_, i) => <MetricSkeleton key={i} />)}
-                    </div>
-                ) : data ? (
-                    <div className="grid md:grid-cols-4 gap-4">
-                        <Metric
-                            label="Current Yield"
-                            value={fmtYield(data.current_yield)}
-                            hint="At current market price"
-                            accent="emerald"
-                        />
-                        <Metric
-                            label="5-Year Avg Yield"
-                            value={fmtYield(data.avg_yield_5y)}
-                            hint="Historical mean yield"
-                            accent="indigo"
-                        />
-                        <Metric
-                            label="5-Year High"
-                            value={fmtYield(data.yield_max_5y)}
-                            hint="Peak historical yield"
-                            accent="amber"
-                        />
-                        <Metric
-                            label="5-Year Low"
-                            value={fmtYield(data.yield_min_5y)}
-                            hint="Trough historical yield"
-                        />
-                    </div>
-                ) : null}
-
-                <div className="glass-divider my-6" />
-
-                {/* Range + Theory */}
-                <div className="grid md:grid-cols-[1.6fr_1fr] gap-6">
-                    <div>
-                        <p className="glass-overline mb-5">5-Year Historical Yield Range</p>
-                        {loading ? (
-                            <div className="space-y-3">
-                                <div className="h-2 rounded-full bg-white/8 glass-shimmer" />
-                                <div className="h-12 rounded-xl bg-white/5 glass-shimmer" />
-                            </div>
-                        ) : (
-                            <YieldRangeBar
-                                current={data?.current_yield}
-                                min={data?.yield_min_5y}
-                                max={data?.yield_max_5y}
-                                percentile={data?.yield_percentile_5y}
-                            />
-                        )}
-                    </div>
-
-                    <div className="space-y-4">
-                        {/* Yield Theory */}
-                        <div className="rounded-2xl border border-indigo-500/15 bg-indigo-500/5 p-5">
-                            <p className="text-[9px] font-black uppercase tracking-widest text-indigo-400/70 mb-3">
-                                Yield Theory Signal
-                            </p>
-                            {loading ? (
-                                <div className="space-y-2">
-                                    <div className="h-2 w-full rounded-full bg-white/5 glass-shimmer" />
-                                    <div className="h-2 w-4/5 rounded-full bg-white/5 glass-shimmer" />
-                                </div>
-                            ) : (
-                                <p className="text-[12px] leading-relaxed text-white/60 italic border-l-2 border-indigo-500/50 pl-3">
-                                    {data?.theory_signal ?? "Insufficient history to generate a yield signal."}
-                                </p>
-                            )}
-                        </div>
-
-                        {/* Relative vs sector/market — optional */}
-                        <div className="glass-card rounded-xl p-4 space-y-3">
-                            <p className="glass-overline text-[9px]">Relative Positioning</p>
-                            {[
-                                { label: "vs Sector avg", v: data?.yield_vs_sector },
-                                { label: "vs Market avg", v: data?.yield_vs_market },
-                            ].map(({ label, v }) => (
-                                <div key={label} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
-                                    <span className="text-[11px] text-white/60">{label}</span>
-                                    <span className="text-sm font-black text-white/30">
-                                        {v != null ? `${v.toFixed(1)}×` : "—"}
-                                    </span>
-                                </div>
-                            ))}
-                            {(!data?.yield_vs_sector && !data?.yield_vs_market) && (
-                                <p className="text-[10px] text-white/20 italic">
-                                    Sector &amp; market comparison data coming soon
-                                </p>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // No-dividend state
@@ -898,8 +237,56 @@ function NoDividendState() {
 // Main exported component
 // ─────────────────────────────────────────────────────────────────────────────
 export function DividendPanel({ symbol }: { symbol: string }) {
-    const [activeTab, setActiveTab] = useState<DivTab>("overview");
     const { data, loading, error, paysDividend } = useDividendAnalysis(symbol);
+
+    // ── Derived data ──────────────────────────────────────────────────────────
+
+    const chartData = useMemo(() => {
+        const totals = data?.growth?.annual_totals;
+        if (!totals || !Object.keys(totals).length) return [];
+        return Object.entries(totals)
+            .map(([year, amount]) => ({ year, amount }))
+            .sort((a, b) => a.year.localeCompare(b.year));
+    }, [data?.growth?.annual_totals]);
+
+    const annualDividend = data?.overview?.annual_dividend;
+    const perPeriod = data?.overview?.per_period_amount;
+    const dividendYield = data?.overview?.dividend_yield;
+    const payoutRatio = data?.overview?.payout_ratio_adj_eps;
+    const frequency = data?.overview?.frequency;
+    const freqMult = data?.overview?.frequency_multiplier;
+
+    const lastIncrease = data?.overview?.last_increase_date;
+    const exDivDate = data?.overview?.ex_dividend_date;
+    const fcfPayout = data?.overview?.payout_ratio_fcf;
+    const gaapPayout = data?.overview?.payout_ratio_gaap;
+    const status = data?.overview?.status;
+
+    const safetyScore = data?.safety?.composite_score;
+    const safetyCategory = data?.safety?.composite_category;
+    const safetyMetrics = data?.safety?.metrics ?? [];
+
+    const growthScore = data?.growth?.growth_score;
+    const growthCategory = data?.growth?.growth_category;
+    const cagr1y = data?.growth?.cagr_1y;
+    const cagr3y = data?.growth?.cagr_3y;
+    const cagr5y = data?.growth?.cagr_5y;
+    const cagr10y = data?.growth?.cagr_10y;
+    const consecutiveInc = data?.growth?.consecutive_increases;
+
+    const yieldCurr = data?.yield_analysis?.current_yield;
+    const yieldAvg5y = data?.yield_analysis?.avg_yield_5y;
+    const yieldMax5y = data?.yield_analysis?.yield_max_5y;
+    const yieldMin5y = data?.yield_analysis?.yield_min_5y;
+    const yieldPctl = data?.yield_analysis?.yield_percentile_5y;
+    const theorySignal = data?.yield_analysis?.theory_signal;
+
+    const policy = data?.safety?.dividend_policy;
+    const strengths = data?.safety?.strengths ?? [];
+    const keyRisks = data?.safety?.key_risks ?? [];
+    const recentChanges = data?.growth?.recent_changes ?? [];
+
+    // ── Render ────────────────────────────────────────────────────────────────
 
     return (
         <div className="space-y-6 animate-fade-up">
@@ -911,44 +298,493 @@ export function DividendPanel({ symbol }: { symbol: string }) {
                 </div>
             )}
 
-            {/* Sub-tab bar — same CSS pattern as MethodSelector */}
-            <div className="flex items-center gap-2 flex-wrap" role="tablist">
-                {DIV_TABS.map(({ id, label }) => (
-                    <button
-                        key={id}
-                        role="tab"
-                        aria-selected={activeTab === id}
-                        onClick={() => setActiveTab(id)}
-                        className={cn(
-                            "px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-[0.2em]",
-                            "border transition-all duration-200",
-                            activeTab === id
-                                ? "bg-indigo-600 border-indigo-400/50 text-white shadow-[0_4px_16px_rgba(99,102,241,0.3)]"
-                                : "bg-white/5 border-white/8 text-white/30 hover:text-white/60 hover:bg-white/8",
-                        )}
-                    >
-                        {label}
-                    </button>
-                ))}
-            </div>
-
-            {/* Content */}
             {paysDividend === false && !loading ? (
                 <NoDividendState />
             ) : (
                 <>
-                    {activeTab === "overview" && (
-                        <OverviewPanel data={data?.overview ?? null} loading={loading} />
-                    )}
-                    {activeTab === "safety" && (
-                        <SafetyPanel data={data?.safety ?? null} loading={loading} />
-                    )}
-                    {activeTab === "growth" && (
-                        <GrowthPanel data={data?.growth ?? null} loading={loading} />
-                    )}
-                    {activeTab === "yield" && (
-                        <YieldPanel data={data?.yield_analysis ?? null} loading={loading} />
-                    )}
+                    {/* ── Top Bar ─────────────────────────────────────────────── */}
+                    <div className="flex justify-between items-start gap-5 flex-wrap">
+                        <div>
+                            <h1 className="text-2xl font-black text-white tracking-tight">Dividend Dashboard</h1>
+                            <p className="text-sm text-white/35 mt-1">
+                                Current distribution metrics, dividend safety, growth profile, yield analysis, and recent payout activity.
+                            </p>
+                            <div className="flex gap-2 flex-wrap mt-3">
+                                {loading ? (
+                                    <>
+                                        <div className="h-6 w-20 rounded-full bg-white/8 glass-shimmer" />
+                                        <div className="h-6 w-28 rounded-full bg-white/8 glass-shimmer" />
+                                        <div className="h-6 w-32 rounded-full bg-white/8 glass-shimmer" />
+                                        <div className="h-6 w-24 rounded-full bg-white/8 glass-shimmer" />
+                                    </>
+                                ) : data ? (
+                                    <>
+                                        <span className={cn(
+                                            "glass-badge",
+                                            status === "growing" ? "glass-badge-buy" :
+                                            status === "stable" ? "glass-badge-hold" :
+                                            "glass-badge-sell",
+                                        )}>
+                                            {status === "growing" && <TrendingUp className="h-2.5 w-2.5 mr-1" />}
+                                            {status === "declining" && <TrendingDown className="h-2.5 w-2.5 mr-1" />}
+                                            {status === "stable" && <CheckCircle2 className="h-2.5 w-2.5 mr-1" />}
+                                            {status === "growing" ? "Growing" : status === "stable" ? "Stable" : "Declining"}
+                                        </span>
+                                        <span className={cn(
+                                            "glass-badge",
+                                            safetyCategory === "Good" ? "glass-badge-buy" :
+                                            safetyCategory === "Caution" ? "glass-badge-hold" :
+                                            "glass-badge-sell",
+                                        )}>
+                                            Safety: {safetyCategory}
+                                        </span>
+                                        {policy?.has_cut && (
+                                            <span className="glass-badge glass-badge-sell">
+                                                Major Cut {policy.cut_year ? `(${policy.cut_year})` : ""}
+                                            </span>
+                                        )}
+                                        <span className="glass-badge-dark">
+                                            {fmtFrequency(frequency || "quarterly")} Payer
+                                        </span>
+                                    </>
+                                ) : null}
+                            </div>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                            {["Overview", "Safety", "Growth", "Yield", "History"].map((chip) => (
+                                <span key={chip} className="glass-chip">{chip}</span>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* ── 12-Column Grid ─────────────────────────────────────── */}
+                    <div className="grid grid-cols-12 gap-4">
+
+                        {/* ── Hero Section (span-12) ─────────────────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-12">
+                            <AccentLine />
+                            <div className="grid md:grid-cols-[2fr_1fr] gap-6">
+                                {/* Left: Metrics */}
+                                <div>
+                                    <SectionHeader
+                                        title="Dividend Overview"
+                                        subtitle="Current distribution metrics and schedule"
+                                    />
+                                    {loading ? (
+                                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                                            {Array.from({ length: 4 }).map((_, i) => <MetricSkeleton key={i} />)}
+                                        </div>
+                                    ) : data ? (
+                                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                                            <Metric
+                                                label="Annual Dividend"
+                                                value={annualDividend != null ? `$${annualDividend.toFixed(2)}` : "—"}
+                                                hint={`$${(perPeriod ?? 0).toFixed(4)} / ${fmtFrequency(frequency || "").toLowerCase()} payment`}
+                                                accent="indigo"
+                                            />
+                                            <Metric
+                                                label="Dividend Yield"
+                                                value={fmtYield(dividendYield)}
+                                                hint="At current market price"
+                                                accent="emerald"
+                                            />
+                                            <Metric
+                                                label="Payout Ratio"
+                                                value={payoutRatio != null ? fmtPctRaw(payoutRatio, 0) : "—"}
+                                                hint="Adjusted EPS basis"
+                                                accent={
+                                                    (payoutRatio ?? 0) < 0.60 ? "emerald" :
+                                                    (payoutRatio ?? 0) < 0.80 ? "amber" : "rose"
+                                                }
+                                            />
+                                            <Metric
+                                                label="Frequency"
+                                                value={fmtFrequency(frequency || "")}
+                                                hint={`${freqMult ?? "?"}× per year`}
+                                            />
+                                        </div>
+                                    ) : null}
+                                </div>
+
+                                {/* Right: Schedule + Signal */}
+                                <div className="flex flex-col gap-4">
+                                    {/* Schedule */}
+                                    <div className="bg-white/4 border border-white/8 rounded-2xl p-4">
+                                        <p className="glass-overline mb-3">Dividend Schedule</p>
+                                        <div className="space-y-3">
+                                            {[
+                                                { label: "Last Increase", value: fmtDate(lastIncrease) },
+                                                { label: "Ex-Dividend Date", value: fmtDate(exDivDate) },
+                                                { label: "FCF Payout", value: fcfPayout != null ? fmtPctRaw(fcfPayout, 0) : "—" },
+                                                { label: "GAAP Payout", value: gaapPayout != null ? fmtPctRaw(gaapPayout, 0) : "—" },
+                                            ].map(({ label, value }) => (
+                                                <div key={label} className="flex items-center justify-between py-1.5 border-b border-white/6 last:border-0">
+                                                    <span className="text-xs text-white/50">{label}</span>
+                                                    <span className="text-sm font-bold text-white">{value}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Signal box */}
+                                    {!loading && data && (
+                                        <div className="rounded-2xl border border-teal-500/20 bg-teal-500/8 px-4 py-3">
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-teal-400/80 mb-2">
+                                                Investor Signal
+                                            </p>
+                                            <p className="text-xs leading-relaxed text-white/70">
+                                                Yield is elevated at <strong className="text-white">${((dividendYield ?? 0) * 100).toFixed(2)}%</strong>,
+                                                while cash flow coverage remains healthy.
+                                                However, leverage and prior cut history suggest investors should prioritize
+                                                safety monitoring over pure yield.
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* ── Dividend History Chart (span-8) ─────────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-8 lg:col-span-8 max-lg:col-span-12">
+                            <AccentLine />
+                            <SectionHeader
+                                title="Dividend History"
+                                subtitle="Annual dividend trend over time"
+                            />
+                            {loading ? (
+                                <div className="h-[250px] rounded-xl bg-white/5 glass-shimmer" />
+                            ) : (
+                                <DividendBarChart data={chartData} />
+                            )}
+                        </div>
+
+                        {/* ── Growth Score (span-4) ──────────────────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-4 max-lg:col-span-12">
+                            <AccentLine />
+                            <SectionHeader
+                                title="Dividend Growth"
+                                subtitle="Historical momentum and consistency"
+                            />
+                            {loading ? (
+                                <div className="flex flex-col items-center gap-4">
+                                    <div className="h-[110px] w-[110px] rounded-full bg-white/5 glass-shimmer" />
+                                    <div className="h-4 w-32 rounded-full bg-white/8 glass-shimmer" />
+                                    {Array.from({ length: 3 }).map((_, i) => (
+                                        <div key={i} className="h-3 w-full rounded-full bg-white/5 glass-shimmer" />
+                                    ))}
+                                </div>
+                            ) : data ? (
+                                <>
+                                    <div className="flex items-center gap-4 mb-5">
+                                        <ScoreRing
+                                            score={growthScore}
+                                            category={growthCategory}
+                                            size={110}
+                                        />
+                                        <div>
+                                            <h3 className={cn(
+                                                "text-lg font-black",
+                                                growthCategory === "Good" ? "text-emerald-400" :
+                                                growthCategory === "Caution" ? "text-amber-400" :
+                                                "text-rose-400",
+                                            )}>
+                                                {growthCategory === "Good" ? "Strong Growth Track" :
+                                                 growthCategory === "Caution" ? "Inconsistent Growth" :
+                                                 "Poor Suitability"}
+                                            </h3>
+                                            <p className="text-xs text-white/40 mt-0.5">
+                                                {growthCategory === "Good" ? "Consistent growth history" :
+                                                 growthCategory === "Caution" ? "Mixed growth signals" :
+                                                 "Weak growth profile"}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {[
+                                            { label: "Growth Trend", value: policy?.growth_trend === "growing" ? "Growing" : policy?.growth_trend === "flat" ? "Flat" : policy?.growth_trend === "declining" ? "Declining" : "—", color: "text-white" },
+                                            { label: "Cut History", value: policy?.has_cut ? (policy.cut_year ? `Major cut (${policy.cut_year})` : "Major cut") : "No cuts on record", color: policy?.has_cut ? "text-rose-400" : "text-emerald-400" },
+                                            { label: "Consecutive Years of Increases", value: consecutiveInc === 0 ? "None" : `${consecutiveInc} Year${consecutiveInc !== 1 ? "s" : ""}`, color: consecutiveInc && consecutiveInc >= 5 ? "text-emerald-400" : "text-white" },
+                                            { label: "Retention Rate", value: policy?.retention_rate != null ? fmtPctRaw(policy.retention_rate, 0) : "—", color: "text-white/50" },
+                                        ].map(({ label, value, color }) => (
+                                            <div key={label} className="flex items-center justify-between py-1.5 border-b border-white/6 last:border-0">
+                                                <span className="text-xs text-white/50">{label}</span>
+                                                <span className={cn("text-sm font-bold text-right", color)}>{value}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            ) : null}
+                        </div>
+
+                        {/* ── Dividend Safety (span-8) ───────────────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-8 max-lg:col-span-12">
+                            <AccentLine />
+                            <SectionHeader
+                                title="Dividend Safety"
+                                subtitle="Coverage ratios, leverage, and sustainability scorecard"
+                            />
+                            {loading ? (
+                                <div className="flex gap-6">
+                                    <div className="h-[110px] w-[110px] rounded-full bg-white/5 glass-shimmer flex-shrink-0" />
+                                    <div className="flex-1 grid grid-cols-2 gap-3">
+                                        {Array.from({ length: 8 }).map((_, i) => (
+                                            <div key={i} className="h-20 rounded-xl bg-white/5 glass-shimmer" />
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : data ? (
+                                <>
+                                    <div className="flex flex-col lg:flex-row gap-6">
+                                        <div className="flex-shrink-0 flex flex-col items-center gap-2">
+                                            <ScoreRing
+                                                score={safetyScore}
+                                                category={safetyCategory}
+                                                size={110}
+                                            />
+                                            <p className={cn(
+                                                "text-[10px] font-black uppercase tracking-widest text-center max-w-[120px]",
+                                                safetyCategory === "Good" ? "text-emerald-400" :
+                                                safetyCategory === "Caution" ? "text-amber-400" :
+                                                "text-rose-400",
+                                            )}>
+                                                {safetyCategory === "Good" ? "Well-Covered" :
+                                                 safetyCategory === "Caution" ? "Monitor Ratios" :
+                                                 "At Risk"}
+                                            </p>
+                                        </div>
+                                        <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            {safetyMetrics.map((m) => (
+                                                <div key={m.name} className="bg-white/4 border border-white/8 rounded-xl p-3">
+                                                    <div className="flex items-start justify-between gap-2 mb-2">
+                                                        <div>
+                                                            <p className="text-xs font-bold text-white/80">{m.name}</p>
+                                                            <p className="text-[9px] text-white/30 mt-0.5">Benchmark: {m.benchmark}</p>
+                                                        </div>
+                                                        <RatingTag rating={m.rating} text={m.info_note ?? undefined} />
+                                                    </div>
+                                                    <p className="text-xl font-black text-white tabular-nums">{m.formatted}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="mt-4 text-xs text-white/40">
+                                        Dividend policy: <strong className="text-white/80">{policy?.growth_trend === "growing" ? "Growing" : policy?.growth_trend === "flat" ? "Flat" : policy?.growth_trend === "declining" ? "Declining" : "—"}</strong>
+                                        {policy?.has_cut && <> · Cut history: <strong className="text-rose-400">Major cut {policy.cut_year ? `(${policy.cut_year})` : ""}</strong></>}
+                                    </div>
+                                </>
+                            ) : null}
+                        </div>
+
+                        {/* ── Strengths & Risks (span-4) ─────────────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-4 max-lg:col-span-12">
+                            <AccentLine />
+                            <SectionHeader
+                                title="Strengths & Risks"
+                                subtitle="Plain-language scorecard"
+                            />
+                            {loading ? (
+                                <div className="space-y-4">
+                                    {Array.from({ length: 5 }).map((_, i) => (
+                                        <div key={i} className="h-4 rounded-full bg-white/5 glass-shimmer" />
+                                    ))}
+                                </div>
+                            ) : data ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/6 p-4">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400">
+                                                Strengths
+                                            </span>
+                                        </div>
+                                        <ul className="space-y-2">
+                                            {strengths.map((s, i) => (
+                                                <li key={i} className="flex items-start gap-2 text-[11px] text-white/65 leading-relaxed">
+                                                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 flex-shrink-0 mt-1.5" />
+                                                    {s}
+                                                </li>
+                                            ))}
+                                            {strengths.length === 0 && (
+                                                <li className="text-[11px] text-white/30 italic">No notable strengths identified</li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                    <div className="rounded-xl border border-rose-500/20 bg-rose-500/6 p-4">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-rose-400">
+                                                Key Risks
+                                            </span>
+                                        </div>
+                                        <ul className="space-y-2">
+                                            {keyRisks.map((r, i) => (
+                                                <li key={i} className="flex items-start gap-2 text-[11px] text-white/65 leading-relaxed">
+                                                    <div className="h-1.5 w-1.5 rounded-full bg-rose-400 flex-shrink-0 mt-1.5" />
+                                                    {r}
+                                                </li>
+                                            ))}
+                                            {keyRisks.length === 0 && (
+                                                <li className="text-[11px] text-white/30 italic">No significant risks identified</li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+
+                        {/* ── Growth Momentum (span-12) ──────────────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-12">
+                            <AccentLine />
+                            <SectionHeader
+                                title="Growth Momentum"
+                                subtitle="Historical growth rates and consistency"
+                            />
+                            {loading ? (
+                                <div className="space-y-4">
+                                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                                        {Array.from({ length: 5 }).map((_, i) => <MetricSkeleton key={i} />)}
+                                    </div>
+                                    <div className="h-[250px] rounded-xl bg-white/5 glass-shimmer" />
+                                </div>
+                            ) : data ? (
+                                <>
+                                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                                        {[
+                                            { label: "1-Year Growth", v: cagr1y },
+                                            { label: "3-Year CAGR", v: cagr3y },
+                                            { label: "5-Year CAGR", v: cagr5y },
+                                            { label: "10-Year CAGR", v: cagr10y },
+                                            { label: "Consecutive Increases", v: consecutiveInc as number | null, isCount: true },
+                                        ].map(({ label, v, isCount }) => {
+                                            const isNeg = !isCount && v != null && v < 0;
+                                            const isZero = !isCount && v === 0;
+                                            const display = isCount
+                                                ? (v === 0 ? "None" : `${v} Year${v !== 1 ? "s" : ""}`)
+                                                : fmtCagr(v as number | null | undefined);
+                                            return (
+                                                <div key={label} className="bg-white/4 border border-white/8 rounded-xl p-4">
+                                                    <p className="glass-overline text-[9px]">{label}</p>
+                                                    <p className={cn(
+                                                        "text-2xl font-black mt-1.5",
+                                                        isNeg ? "text-rose-400" :
+                                                        isZero ? "text-white/50" :
+                                                        "text-white",
+                                                    )}>
+                                                        {display}
+                                                    </p>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    <GrowthLineChart data={chartData} />
+                                </>
+                            ) : null}
+                        </div>
+
+                        {/* ── Recent Dividend Changes (span-6) ──────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-6 max-lg:col-span-12">
+                            <AccentLine />
+                            <SectionHeader
+                                title="Recent Dividend Changes"
+                                subtitle="Per-payment movement history"
+                            />
+                            {loading ? (
+                                <div className="space-y-3">
+                                    {Array.from({ length: 6 }).map((_, i) => (
+                                        <div key={i} className="h-12 rounded-xl bg-white/5 glass-shimmer" />
+                                    ))}
+                                </div>
+                            ) : !recentChanges.length ? (
+                                <p className="text-sm text-white/30 italic">No recent dividend data available.</p>
+                            ) : (
+                                <div className="space-y-1">
+                                    {recentChanges.map((c, i) => (
+                                        <div key={`${c.date}-${i}`} className="flex items-center justify-between py-3 px-1 border-b border-white/6 last:border-0">
+                                            <div className="flex items-center gap-4">
+                                                <span className="text-xs text-white/50 font-semibold w-[100px]">{fmtDate(c.date)}</span>
+                                                <div>
+                                                    <p className="text-sm font-bold text-white/90">Dividend payment</p>
+                                                    <p className="text-[11px] text-white/30">${c.amount.toFixed(4)}</p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-sm font-black text-white">${c.amount.toFixed(4)}</p>
+                                                <ChangeDirection change_pct={c.change_pct} direction={c.direction} />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* ── Yield Analysis (span-6) ────────────────────────── */}
+                        <div className="glass-panel p-8 relative overflow-hidden col-span-6 max-lg:col-span-12">
+                            <AccentLine />
+                            <SectionHeader
+                                title="Yield Analysis"
+                                subtitle="Current, historical, and relative yield positioning"
+                            />
+                            {loading ? (
+                                <>
+                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                                        {Array.from({ length: 4 }).map((_, i) => <MetricSkeleton key={i} />)}
+                                    </div>
+                                    <div className="h-40 rounded-xl bg-white/5 glass-shimmer" />
+                                </>
+                            ) : data ? (
+                                <>
+                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                                        <Metric label="Current Yield" value={fmtYield(yieldCurr)} hint="At current market price" accent="emerald" />
+                                        <Metric label="5-Year Avg Yield" value={fmtYield(yieldAvg5y)} hint="Historical mean yield" accent="indigo" />
+                                        <Metric label="5-Year High" value={fmtYield(yieldMax5y)} hint="Peak historical yield" accent="amber" />
+                                        <Metric label="5-Year Low" value={fmtYield(yieldMin5y)} hint="Trough historical yield" />
+                                    </div>
+
+                                    {/* Range bar */}
+                                    <div className="bg-white/4 border border-white/8 rounded-xl p-5">
+                                        <p className="glass-overline mb-4">5-Year Historical Yield Range</p>
+                                        <YieldRangeBar
+                                            current={yieldCurr}
+                                            min={yieldMin5y}
+                                            max={yieldMax5y}
+                                            percentile={yieldPctl}
+                                        />
+
+                                        {/* Theory signal */}
+                                        {theorySignal && (
+                                            <div className="mt-4 rounded-xl border border-indigo-500/15 bg-indigo-500/5 p-4">
+                                                <p className="text-[11px] leading-relaxed text-white/60 italic border-l-2 border-indigo-500/50 pl-3">
+                                                    {theorySignal}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {/* Relative positioning */}
+                                        <div className="mt-4 space-y-2">
+                                            <p className="glass-overline text-[9px]">Relative Positioning</p>
+                                            {[
+                                                { label: "vs Sector avg", v: data?.yield_analysis?.yield_vs_sector },
+                                                { label: "vs Market avg", v: data?.yield_analysis?.yield_vs_market },
+                                            ].map(({ label, v }) => (
+                                                <div key={label} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
+                                                    <span className="text-xs text-white/50">{label}</span>
+                                                    <span className="text-sm font-black text-white/30">
+                                                        {v != null ? `${v.toFixed(1)}×` : "—"}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                            {!data?.yield_analysis?.yield_vs_sector && !data?.yield_analysis?.yield_vs_market && (
+                                                <p className="text-[10px] text-white/20 italic">
+                                                    Sector &amp; market comparison data coming soon
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </>
+                            ) : null}
+                        </div>
+
+                    </div>
                 </>
             )}
         </div>

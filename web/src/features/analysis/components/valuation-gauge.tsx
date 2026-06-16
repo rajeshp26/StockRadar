@@ -126,9 +126,6 @@ function GaugeSvg({
 
   const needleEnd = polarToCartesian(cx, cy, r, currentAngle);
   const heightVal = compact ? 170 : 180;
-  const centerTextY = compact ? cy + 6 : cy + 10;
-  const labelTextY = compact ? cy + 22 : cy + 28;
-  const fontSize = compact ? 20 : 26;
 
   const valuation = getValuation(current, effBandLow, effBandHigh);
 
@@ -243,33 +240,11 @@ function GaugeSvg({
           />
           <circle cx={cx} cy={cy} r="3.5" fill="white" />
           <circle cx={needleEnd.x} cy={needleEnd.y} r="3.5" fill="white" />
-
-          <text
-            x={cx}
-            y={centerTextY}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fill="white"
-            fontSize={fontSize}
-            fontWeight="900"
-            fontFamily="inherit"
-          >
-            {fmt(current)}
-          </text>
-          <text
-            x={cx}
-            y={labelTextY}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fill="rgba(255,255,255,0.4)"
-            fontSize="10"
-            fontWeight="700"
-            fontFamily="inherit"
-            letterSpacing="1.5"
-          >
-            {label}
-          </text>
         </svg>
+      </div>
+
+      <div className={cn("font-bold text-white/90 tracking-tight text-center", compact ? "text-2xl" : "text-[32px]")}>
+        {fmt(current)}
       </div>
 
       <div className="flex items-center justify-center gap-2 mt-1">
@@ -788,7 +763,7 @@ export function MetricCard({
   return (
     <div className="flex-1 min-w-[280px] bg-[#1c2023] border border-[#2f3336] rounded-xl p-5 text-center">
       <div className="flex items-center justify-center gap-2 mb-3">
-        <span className="text-[10px] text-[#71767b] font-semibold uppercase tracking-wider">{label}</span>
+        <span className="text-[13px] text-white/80 font-bold uppercase tracking-wider">{label}</span>
         <span className={cn(
           "text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded",
           benchmark === "history" ? "bg-white/5 text-white/30" : "bg-[rgba(29,155,240,0.15)] text-[#1d9bf0]",

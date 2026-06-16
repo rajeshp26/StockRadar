@@ -364,6 +364,24 @@
     color:        rgb(251,191,36);
   }
 
+  /* ── Glass chip (decorative filter pill) ───────────────── */
+  .glass-chip {
+    @apply glass-badge;
+    background:    var(--glass-1);
+    border-color:  var(--glass-border);
+    color:         rgba(255,255,255,0.40);
+    cursor:        default;
+    user-select:   none;
+  }
+
+  /* ── Dark badge variant for non-semantic use ──────────── */
+  .glass-badge-dark {
+    @apply glass-badge;
+    background:   rgba(96,165,250,0.12);
+    border-color: rgba(96,165,250,0.25);
+    color:        rgb(147,197,253);
+  }
+
   /* ── No-scrollbar utility ──────────────────────────────── */
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

@@ -518,6 +518,20 @@ class DividendAnalysisService:
         elif consecutive_increases >= 5:  score += 28
         elif consecutive_increases >= 3:  score += 16
         elif consecutive_increases >= 1:  score += 8
+        # Aggregate annual totals from dividend history
+        annual_totals: Dict[str, float] = {}
+        for d in sorted_desc:
+            raw = d.get("ex_dividend_date", "")
+            try:
+                year = str(raw)[:4]
+            except:
+                continue
+            amt = safe_float(d.get("dividend_amount"))
+            if amt:
+                annual_totals[year] = annual_totals.get(year, 0.0) + amt
+        # Sort by year ascending
+        annual_totals = dict(sorted(annual_totals.items()))
+
         score = min(100, score)
 
         growth_category = "Good" if score >= 65 else "Caution" if score >= 35 else "Poor"
@@ -545,6 +559,7 @@ class DividendAnalysisService:
             "cagr_5y":               round(cagr_5y, 4)  if cagr_5y  is not None else None,
             "cagr_10y":              round(cagr_10y, 4) if cagr_10y is not None else None,
             "consecutive_increases": consecutive_increases,
+            "annual_totals":         annual_totals,
             "recent_changes":        recent_changes[:6],
         }
 
