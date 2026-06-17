@@ -1,13 +1,11 @@
 "use client";
 
-import { useMemo, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useMemo } from "react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ArrowRight, Edit2, Trash2 } from "lucide-react";
 import type { StockPriceInfo } from "@/features/watchlists/types/watchlist.types";
-import { useQueryClient } from '@tanstack/react-query';
 import { usePriceData } from "@/hooks/usePriceData";
-import { prefetchAllValuations } from '@/features/analysis/utils/prefetch-valuations';
 
 interface StockListRowProps {
   stock:        StockPriceInfo;
@@ -25,29 +23,12 @@ const AVATAR_COLORS = [
 ] as const;
 
 export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-
   const avatarColor = AVATAR_COLORS[stock.symbol.charCodeAt(0) % AVATAR_COLORS.length];
 
   /* ── Live price from shared cache (written by GlobalSSEProvider) ────────── */
   const priceData  = usePriceData(stock.symbol);
   const isPositive = (priceData?.change ?? 0) >= 0;
   const changeColor = isPositive ? "text-emerald-400" : "text-rose-400";
-
-  /* ── Hover prefetch ────────────────────────────────────────────────────── */
-  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handlePointerEnter = useCallback(() => {
-    prefetchTimer.current = setTimeout(() => {
-      prefetchAllValuations(stock.symbol, queryClient);
-    }, 150);
-  }, [stock.symbol, queryClient]);
-  const handlePointerLeave = useCallback(() => {
-    if (prefetchTimer.current) {
-      clearTimeout(prefetchTimer.current);
-      prefetchTimer.current = null;
-    }
-  }, []);
 
   const buyVariance = useMemo(() => {
     if (stock.targetBuy == null || priceData?.price == null) return null;
@@ -72,8 +53,6 @@ export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
         hasBuyAlert  && "border-emerald-500/30 shadow-[0_0_12px_rgba(52,211,153,0.12)]",
         hasSellAlert && "border-rose-500/30    shadow-[0_0_12px_rgba(251,113,133,0.12)]",
       )}
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
     >
       {/* Avatar */}
       <div className={cn(
@@ -177,14 +156,15 @@ export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
         >
           <Trash2 className="h-3 w-3" />
         </button>
-        <button
-          onClick={() => router.push(`/analysis/${stock.symbol}`)}
+        <Link
+          href={`/analysis/${stock.symbol}`}
+          prefetch={true}
           className="h-7 px-2 flex items-center gap-1 rounded-lg glass-card text-white/30 hover:text-indigo-400 transition-colors"
           aria-label={`Analyse ${stock.symbol}`}
         >
           <span className="text-[10px] font-black uppercase tracking-widest">Analyse</span>
           <ArrowRight className="h-3 w-3" />
-        </button>
+        </Link>
       </div>
     </div>
   );

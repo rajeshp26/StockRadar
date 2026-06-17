@@ -1,336 +1,120 @@
-// web/src/app/(authenticated)/analysis/[symbol]/page.tsx
-// CHANGES vs previous version:
-//   1. Imports OwnerEarningsPanel and ResidualIncomePanel
-//   2. Adds {method === "ownerEarnings"} and {method === "residualIncome"} renders
-//   3. "Others" coming-soon panel no longer lists "Residual Income" (it ships now)
-// Everything else is IDENTICAL to the existing file.
-"use client";
-import { useState, useEffect, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
-import { cn } from "@/lib/utils";
-import { useLivePrice } from "@/features/analysis/hooks/useLivePrice";
-import { formatTimestamp } from "@/lib/time";
-import { prefetchAllValuations } from "@/features/analysis/utils/prefetch-valuations";
+import { Suspense } from "react";
+import { ErrorBoundary } from "react-error-boundary";
+import { PriceHeaderRSC } from "@/components/analysis/price-header-rsc";
+import { ValuationOverviewRSC } from "@/components/analysis/valuation-overview-rsc";
+import { ClientTabs } from "@/components/analysis/client-tabs";
 import { AIChatBot } from "@/components/chat/ai-chat-bot";
-import { useHoldingExists } from "@/features/portfolio/hooks/usePortfolio";
-import { StockPerformancePanel } from "@/features/analysis/components/stock-performance-panel";
-import {
-  MethodSelector,
-  type IntrinsicMethod,
-} from "@/features/analysis/components/method-selector";
-import { ValuationOverview } from "@/features/analysis/components/valuation-overview";
-import { IntrinsicPanel } from "@/features/analysis/components/intrinsic-panel";
-import { DcfPanel } from "@/features/analysis/components/dcf-panel";
-import { DdmPanel } from "@/features/analysis/components/ddm-panel";
-import { OwnerEarningsPanel } from "@/features/analysis/components/owner-earnings-panel";   // ← NEW
-import { ResidualIncomePanel } from "@/features/analysis/components/residual-income-panel"; // ← NEW
-import { DividendPanel } from "@/features/analysis/components/dividend-panel";
-import { MurphyPanel } from "@/features/analysis/components/murphy-panel";
-import { MagicFormulaPanel } from "@/features/analysis/components/magic-formula-panel";
-import { CANSlimPanel } from "@/features/analysis/components/canslim-panel";
-import { MoatPanel } from "@/features/analysis/components/moat-panel";
-import { RiskPanel } from "@/features/analysis/components/risk-panel";
-import { SuperInvestorsTab } from "@/features/analysis/components/SuperInvestorsTab";
-import { StockVsIndexPanel } from "@/features/analysis/components/stock-vs-index-panel";
-import { FundamentalsPanel } from "@/features/analysis/components/fundamentals-panel";
+import { Loader2, ArrowLeft } from "lucide-react";
 
-import {
-  TrendingUp,
-  Heart,
-  Shield,
-  TrendingDown,
-  BarChart2,
-  Users,
-  MoreHorizontal,
-  ArrowLeft,
-  AlertTriangle,
-} from "lucide-react";
-
-
-
-type OthersMethod = "magic_formula" | "canslim";
-
-const BASE_TABS = [
-  { id: "intrinsic", label: "Intrinsic Value", icon: TrendingUp },
-  { id: "health", label: "Fundamentals", icon: Heart },
-  { id: "moat", label: "Moat", icon: Shield },
-  { id: "dividend", label: "Dividend", icon: TrendingDown },
-  { id: "comparison", label: "Market Comparison", icon: BarChart2 },
-  { id: "technical", label: "Technical", icon: BarChart2 },
-  { id: "risk", label: "Risk Assessment", icon: AlertTriangle },
-  { id: "investors", label: "Super Investors", icon: Users },
-  { id: "others", label: "Others", icon: MoreHorizontal },
-] as const;
-
-type TopTab = (typeof BASE_TABS)[number]["id"] | "performance";
-
-/* ── Coming-soon placeholder panel ───────────────────────────── */
-function ComingSoonPanel({
-  title,
-  description,
-  items,
-  icon: Icon,
-}: {
-  title: string;
-  description: string;
-  items: string[];
-  icon: React.ElementType;
-}) {
+function PriceSkeleton() {
   return (
-    <div className="glass-panel p-12 flex flex-col items-center text-center space-y-6 animate-fade-up">
-      <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-white/5 border border-white/10">
-        <Icon className="h-9 w-9 text-white/25" />
-      </div>
-      <div>
-        <h3 className="text-xl font-black text-white tracking-tight">{title}</h3>
-        <p className="mt-2 text-sm text-white/40 leading-relaxed max-w-sm">
-          {description}
-        </p>
-      </div>
-      <div className="flex flex-wrap justify-center gap-2">
-        {items.map((item) => (
-          <span
-            key={item}
-            className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/8 text-[10px] font-bold uppercase tracking-widest text-white/30"
-          >
-            {item}
-          </span>
-        ))}
-      </div>
-      <div className="px-4 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-black uppercase tracking-widest text-indigo-400">
-        Coming Soon
+    <div className="sticky top-14 z-20">
+      <div className="glass-panel rounded-[1.75rem] p-6 relative overflow-hidden">
+        <div className="relative flex flex-col gap-4 md:flex-row md:items-center">
+          <div className="flex items-center gap-4">
+            <div className="glass-btn flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0">
+              <ArrowLeft className="h-4 w-4 text-white/60" />
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-indigo-500/20 border border-indigo-500/30 text-sm font-black text-indigo-300 animate-pulse" />
+              <div className="h-7 w-28 rounded-lg bg-white/5 animate-pulse" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-3 md:ml-auto">
+            <div className="h-7 w-24 rounded-lg bg-white/5 animate-pulse" />
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-/* ── Main Page ────────────────────────────────────────────────── */
-export default function AnalysisPage() {
-  const router = useRouter();
-  const { symbol } = useParams<{ symbol: string }>();
-  const upperSymbol = symbol?.toString().toUpperCase() ?? "";
-  const queryClient = useQueryClient();
-
-  const [method, setMethod] = useState<IntrinsicMethod>("overview");
-  const [tab, setTab] = useState<TopTab>("intrinsic");
-  const [othersMethod, setOthersMethod] = useState<OthersMethod>("magic_formula");
-
-  const { data: holdingExists } = useHoldingExists(upperSymbol);
-  const isHeld = holdingExists?.held ?? false;
-
-  const TOP_TABS = useMemo(() => {
-    const tabs = [...BASE_TABS];
-    if (isHeld) {
-      tabs.splice(5, 0, { id: "performance", label: "Performance", icon: TrendingUp });
-    }
-    return tabs;
-  }, [isHeld]);
-
-  const { price, change, changePercent, lastUpdated } = useLivePrice(upperSymbol);
-
-  // ── Prefetch all valuation methods on page load ──────────────────────────
-  // Fires 5 parallel GET requests the moment this page mounts.
-  // By the time the user clicks any method tab, data is already in cache.
-  // prefetchAllValuations is a no-op for methods already cached within staleTime.
-  useEffect(() => {
-    prefetchAllValuations(upperSymbol, queryClient);
-  }, [upperSymbol, queryClient]);
-
-  const priceDisplay = price != null ? `$${price.toFixed(2)}` : "—";
-  const changeDisplay =
-    change != null
-      ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
-      : null;
-  const pctDisplay =
-    changePercent != null
-      ? `${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%`
-      : null;
-  const updatedDisplay = formatTimestamp(lastUpdated, "relative");
-  const isPositiveChange = (change ?? 0) >= 0;
-
+function OverviewSkeleton() {
   return (
-    <div className="space-y-6 animate-fade-up">
-      {/* ── Sticky hero header ──────────────────────────────── */}
-      <div className="sticky top-14 z-20">
-        <div className="glass-panel rounded-[1.75rem] p-6 relative overflow-hidden">
-          <div
-            className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-indigo-600/10 blur-[80px]"
-            aria-hidden="true"
-          />
-          <div className="relative flex flex-col gap-4 md:flex-row md:items-center">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => router.back()}
-                className="glass-btn flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0"
-                aria-label="Go back"
-              >
-                <ArrowLeft className="h-4 w-4 text-white/60" />
-              </button>
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-indigo-500/20 border border-indigo-500/30 text-sm font-black text-indigo-300">
-                  {upperSymbol[0]}
-                </div>
-                <h1 className="text-2xl font-black tracking-tighter text-white uppercase">
-                  {upperSymbol}
-                </h1>
-              </div>
+    <div className="glass-panel p-8 space-y-6 animate-fade-up">
+      <div className="flex items-center gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/15 border border-indigo-500/25">
+          <Loader2 className="h-4 w-4 text-indigo-400 animate-spin" />
+        </div>
+        <div>
+          <div className="h-5 w-40 rounded-lg bg-white/5 animate-pulse" />
+          <div className="h-3 w-64 rounded-lg bg-white/5 animate-pulse mt-1" />
+        </div>
+      </div>
+      <div className="glass-divider" />
+      <div className="space-y-2">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="glass-card rounded-xl px-5 py-4 flex items-center gap-4">
+            <div className="flex-1">
+              <div className="h-4 w-24 rounded bg-white/5 animate-pulse" />
+              <div className="h-3 w-32 rounded bg-white/5 animate-pulse mt-1" />
             </div>
-            <div className="flex items-baseline gap-3 md:ml-auto">
-              <span className="text-2xl font-black text-white tracking-tight">
-                {priceDisplay}
-              </span>
-              {changeDisplay && pctDisplay && (
-                <span
-                  className={cn(
-                    "text-sm font-bold",
-                    isPositiveChange ? "text-emerald-400" : "text-rose-400"
-                  )}
-                >
-                  {changeDisplay} ({pctDisplay})
-                </span>
-              )}
-              {updatedDisplay && (
-                <span className="text-[10px] font-medium text-white/25 hidden md:inline">
-                  · {updatedDisplay}
-                </span>
-              )}
+            <div className="w-24">
+              <div className="h-4 w-16 rounded bg-white/5 animate-pulse ml-auto" />
             </div>
+            <div className="w-20">
+              <div className="h-4 w-12 rounded bg-white/5 animate-pulse ml-auto" />
+            </div>
+            <div className="w-28">
+              <div className="h-4 w-16 rounded bg-white/5 animate-pulse ml-auto" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PriceErrorFallback() {
+  return (
+    <div className="sticky top-14 z-20">
+      <div className="glass-panel rounded-[1.75rem] p-6 relative overflow-hidden">
+        <div className="relative flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/5 border border-white/10 text-sm font-black text-white/30 uppercase">
+              ?
+            </div>
+            <p className="text-sm text-white/40">Price data temporarily unavailable.</p>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* ── Top-level tab bar ───────────────────────────────── */}
-      <div className="glass-segmented overflow-x-auto w-full styled-scrollbar">
-        {TOP_TABS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={cn(
-              "glass-segmented-item flex items-center gap-1.5",
-              tab === id && "active"
-            )}
-          >
-            <Icon className="h-3 w-3 flex-shrink-0" />
-            <span className="hidden sm:inline">{label}</span>
-            <span className="sm:hidden">{label.split(" ")[0]}</span>
-          </button>
-        ))}
-      </div>
+function OverviewErrorFallback() {
+  return (
+    <div className="glass-panel p-8 text-center space-y-3">
+      <p className="text-sm text-rose-400/80 font-bold">Failed to load valuation overview.</p>
+      <p className="text-xs text-white/35">Please try refreshing the page.</p>
+    </div>
+  );
+}
 
-      {/* ── Tab content ─────────────────────────────────────── */}
-      <div className="min-h-[40vh]">
-        {/* Intrinsic Value */}
-        {tab === "intrinsic" && (
-          <div className="space-y-6 animate-fade-up">
-            <MethodSelector method={method} onChange={setMethod} />
-            {method === "overview" && (
-              <ValuationOverview
-                symbol={upperSymbol}
-                onSelectMethod={setMethod}
-              />
-            )}
-            {method === "rule1" && <IntrinsicPanel symbol={upperSymbol} />}
-            {method === "dcf" && <DcfPanel symbol={upperSymbol} />}
-            {method === "ddm" && <DdmPanel symbol={upperSymbol} />}
-            {method === "ownerEarnings" && <OwnerEarningsPanel symbol={upperSymbol} />} {/* ← NEW */}
-            {method === "residualIncome" && <ResidualIncomePanel symbol={upperSymbol} />} {/* ← NEW */}
-          </div>
-        )}
+export default async function AnalysisPage({ params }: { params: Promise<{ symbol: string }> }) {
+  const { symbol: rawSymbol } = await params;
+  const symbol = rawSymbol.toUpperCase();
 
-        {tab === "health" && (
-          <div className="animate-fade-up">
-            <FundamentalsPanel symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "moat" && (
-          <div className="animate-fade-up">
-            <MoatPanel symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "risk" && (
-          <div className="space-y-6 animate-fade-up">
-            <RiskPanel symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "dividend" && (
-          <div className="animate-fade-up">
-            <DividendPanel symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "comparison" && (
-          <div className="animate-fade-up">
-            <StockVsIndexPanel symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "performance" && (
-          <div className="animate-fade-up">
-            <StockPerformancePanel symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "technical" && (
-          <div className="animate-fade-up">
-            <MurphyPanel symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "investors" && (
-          <div className="animate-fade-up">
-            <SuperInvestorsTab symbol={upperSymbol} />
-          </div>
-        )}
-        {tab === "others" && (
-          <div className="space-y-6 animate-fade-up">
-            {/* Sub-tab selector — matches MethodSelector pattern */}
-            <div className="glass-segmented overflow-x-auto no-scrollbar w-full">
-              <button
-                onClick={() => setOthersMethod("magic_formula")}
-                className={cn(
-                  "glass-segmented-item flex items-center gap-1.5",
-                  othersMethod === "magic_formula" && "active",
-                )}
-              >
-                <span className="hidden sm:inline">Magic Formula</span>
-                <span className="sm:hidden">Magic</span>
-              </button>
-              <button
-                onClick={() => setOthersMethod("canslim")}
-                className={cn(
-                  "glass-segmented-item flex items-center gap-1.5",
-                  othersMethod === "canslim" && "active",
-                )}
-              >
-                <span className="hidden sm:inline">CANSlim</span>
-                <span className="sm:hidden">CANS</span>
-              </button>
-              {/* Relative Valuation — coming soon */}
-              <button
-                disabled
-                className="glass-segmented-item flex items-center gap-1.5 opacity-35 cursor-not-allowed"
-              >
-                <span className="hidden sm:inline">Relative Valuation</span>
-                <span className="sm:hidden">Relative</span>
-              </button>
-              {/* Graham Number — coming soon */}
-              <button
-                disabled
-                className="glass-segmented-item flex items-center gap-1.5 opacity-35 cursor-not-allowed"
-              >
-                <span className="hidden sm:inline">Graham Number</span>
-                <span className="sm:hidden">Graham</span>
-              </button>
-            </div>
+  return (
+    <div className="space-y-6 animate-fade-up">
+      <ErrorBoundary fallback={<PriceErrorFallback />}>
+        <Suspense fallback={<PriceSkeleton />}>
+          <PriceHeaderRSC symbol={symbol} />
+        </Suspense>
+      </ErrorBoundary>
 
-            {othersMethod === "magic_formula" && (
-              <MagicFormulaPanel symbol={upperSymbol} />
-            )}
-            {othersMethod === "canslim" && (
-              <CANSlimPanel symbol={upperSymbol} />
-            )}
-          </div>
-        )}
-      </div>
+      <ClientTabs
+        symbol={symbol}
+        overviewChildren={
+          <ErrorBoundary fallback={<OverviewErrorFallback />}>
+            <Suspense fallback={<OverviewSkeleton />}>
+              <ValuationOverviewRSC symbol={symbol} />
+            </Suspense>
+          </ErrorBoundary>
+        }
+      />
 
-      <AIChatBot symbol={upperSymbol} />
+      <AIChatBot symbol={symbol} />
     </div>
   );
 }

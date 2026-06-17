@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { QK } from "@/lib/query-keys";
 import { STALE, GC } from "@/lib/query-client";
+import { useSSEStatus } from "@/providers/GlobalSSEProvider";
 
 type Quote = {
   symbol:        string;
@@ -34,7 +35,13 @@ type Quote = {
 //      When the user returns to the tab after more than 30s, they instantly
 //      see the last known price while a fresh fetch runs in the background.
 //
-//   4. No manual cancelled flag or clearInterval bookkeeping needed.
+//   4. Adaptive SSE polling (NEW)
+//      When the GlobalSSEProvider connection is healthy, the 30s HTTP poll
+//      is disabled entirely — price data arrives via SSE push. If SSE
+//      disconnects, the HTTP poll activates automatically as a fallback.
+//      This eliminates redundant network traffic while maintaining resilience.
+//
+//   5. No manual cancelled flag or clearInterval bookkeeping needed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useLivePrice(symbol: string): {
@@ -47,6 +54,7 @@ export function useLivePrice(symbol: string): {
   error:         string | null;
 } {
   const upper = (symbol ?? "").toUpperCase().trim();
+  const { isConnected: sseConnected } = useSSEStatus();
 
   const { data, isPending, error } = useQuery<Quote, Error>({
     queryKey: QK.price(upper),
@@ -64,7 +72,7 @@ export function useLivePrice(symbol: string): {
     enabled:                     !!upper,
     staleTime:                   STALE.PRICE,          // 30s
     gcTime:                      GC.PRICE,             // 5 min
-    refetchInterval:             STALE.PRICE,          // poll every 30s
+    refetchInterval:             sseConnected ? false : STALE.PRICE,  // disable poll when SSE is connected
     refetchIntervalInBackground: false,                // pause when tab is hidden
     retry:                       1,
   });

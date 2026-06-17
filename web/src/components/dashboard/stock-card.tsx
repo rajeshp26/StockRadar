@@ -3,11 +3,8 @@
 import type { Stock } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown, X, Pencil, Target as TargetIcon, Clock, ArrowRight } from 'lucide-react';
-import { useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { usePriceData } from '@/hooks/usePriceData';
-import { prefetchAllValuations } from '@/features/analysis/utils/prefetch-valuations';
 import { formatTimestamp } from '@/lib/time';
 
 interface StockCardProps {
@@ -17,9 +14,6 @@ interface StockCardProps {
 }
 
 export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-
   /* ── Live price from shared cache (written by GlobalSSEProvider) ────────── */
   const priceData        = usePriceData(stock.symbol);
   const price            = priceData?.price         ?? null;
@@ -27,22 +21,9 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
   const changePercent    = priceData?.changePercent ?? null;
   const isPositiveChange = (change ?? 0) >= 0;
 
-  /* ── DIAG: log price data state ────────────────────────────────────────── */
-  console.log(`[PRICE-DIAG] ${stock.symbol}: priceData=`, priceData, `price=${price}`);
-
-  /* ── Hover prefetch — warms analysis cache 150 ms before click ─────────── */
-  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handlePointerEnter = useCallback(() => {
-    prefetchTimer.current = setTimeout(() => {
-      prefetchAllValuations(stock.symbol, queryClient);
-    }, 150);
-  }, [stock.symbol, queryClient]);
-  const handlePointerLeave = useCallback(() => {
-    if (prefetchTimer.current) {
-      clearTimeout(prefetchTimer.current);
-      prefetchTimer.current = null;
-    }
-  }, []);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[PRICE-DIAG] ${stock.symbol}: priceData=`, priceData, `price=${price}`);
+  }
 
   
 
@@ -70,7 +51,9 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
   const avatarClass = avatarColors[stock.symbol.charCodeAt(0) % avatarColors.length];
 
   return (
-    <div
+    <Link
+      href={`/analysis/${stock.symbol}`}
+      prefetch={true}
       className={cn(
         'glass-panel group relative cursor-pointer',
         'p-6 flex flex-col gap-4',
@@ -80,12 +63,6 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
         buyVariance?.isTargetHit && 'glow-emerald border-emerald-500/25',
         sellHit                   && 'glow-rose    border-rose-500/25',
       )}
-      onClick={() => router.push(`/analysis/${stock.symbol}`)}
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && router.push(`/analysis/${stock.symbol}`)}
       aria-label={`Analyze ${stock.symbol}`}
     >
 
@@ -239,6 +216,6 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </div>
 
-    </div>
+    </Link>
   );
 }

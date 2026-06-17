@@ -119,25 +119,33 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
         if (!connectedRef.current) {
           connectedRef.current = true;
           setIsConnected(true);
-          console.log("[SSE-DIAG] First SSE message received — connection is live");
+          if (process.env.NODE_ENV !== 'production') {
+            console.log("[SSE-DIAG] First SSE message received — connection is live");
+          }
         }
 
         let data: Record<string, unknown>;
         try {
           data = JSON.parse(event.data as string);
         } catch {
-          console.warn("[SSE-DIAG] Malformed SSE frame (non-JSON):", event.data);
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn("[SSE-DIAG] Malformed SSE frame (non-JSON):", event.data);
+          }
           return; // keep-alive ping or malformed frame — ignore
         }
 
         const type = data.type as string | undefined;
-        console.log("[SSE-DIAG] Received event:", type, "symbol:", data.symbol, "price:", data.price);
+        if (process.env.NODE_ENV !== 'production') {
+          console.log("[SSE-DIAG] Received event:", type, "symbol:", data.symbol, "price:", data.price);
+        }
 
         // ── Route: price_update (typed) OR legacy (no type field) ──────────
         if (type === "price_update" || (!type && typeof data.price === "number")) {
           const symbol = (data.symbol as string | undefined)?.toUpperCase();
           if (!symbol) {
-            console.warn("[SSE-DIAG] price_update with no symbol — skipping");
+            if (process.env.NODE_ENV !== 'production') {
+              console.warn("[SSE-DIAG] price_update with no symbol — skipping");
+            }
             return;
           }
 
