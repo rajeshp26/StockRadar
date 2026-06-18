@@ -15,49 +15,7 @@ import {
 import { LogOut, Settings, User } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/providers/auth-provider";
-
-/**
- * Generates user initials from displayName or email.
- * Returns 1-2 uppercase characters for avatar fallback.
- *
- * @example
- * getInitials("Rajesh P", "rajesh@example.com") // "RP"
- * getInitials("Rajesh", "rajesh@example.com") // "RA"
- * getInitials(null, "rajesh@example.com") // "R"
- * getInitials(null, null) // "U"
- */
-const getInitials = (
-  name: string | null | undefined,
-  email: string | null | undefined
-): string => {
-  // Try displayName first
-  if (name && name.trim()) {
-    const parts = name.trim().split(/\s+/).filter(Boolean);
-
-    // Two or more words: use first letter of first two words
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-
-    // Single word: use first two letters
-    if (parts[0].length >= 2) {
-      return parts[0].substring(0, 2).toUpperCase();
-    }
-
-    // Single character: return it
-    if (parts[0].length === 1) {
-      return parts[0].toUpperCase();
-    }
-  }
-
-  // Fallback to email
-  if (email && email.trim()) {
-    return email.trim()[0].toUpperCase();
-  }
-
-  // Final fallback
-  return 'U';
-};
+import { getUserDisplayName, getUserInitials } from "@/features/auth/types/auth.types";
 
 /**
  * UserNav Component
@@ -68,12 +26,12 @@ const getInitials = (
 export function UserNav() {
   const { user, signOut } = useAuth();
 
-  // Don't render if user is not authenticated
   if (!user) {
     return null;
   }
 
-  const initials = getInitials(user.displayName, user.email);
+  const displayName = getUserDisplayName(user);
+  const initials = getUserInitials(user);
 
   return (
     <DropdownMenu>
@@ -81,12 +39,12 @@ export function UserNav() {
         <Button
           variant="ghost"
           className="relative h-8 w-8 rounded-full p-0"
-          aria-label={`Open user menu for ${user.displayName ?? 'User'}`}
+          aria-label={`Open user menu for ${displayName}`}
         >
           <Avatar className="h-8 w-8">
             <AvatarImage
-              src={user.photoURL ?? ""}
-              alt={`${user.displayName ?? 'User'} profile picture`}
+              src={user.avatar_url ?? ""}
+              alt={`${displayName} profile picture`}
             />
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
@@ -97,7 +55,7 @@ export function UserNav() {
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
             <p className="text-sm font-medium leading-none">
-              {user.displayName ?? 'User'}
+              {displayName}
             </p>
             <p className="text-xs leading-none text-muted-foreground">
               {user.email}

@@ -1,6 +1,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 from database import supabase
 from dependencies import get_current_user_dep
 from datetime import datetime
@@ -12,6 +13,18 @@ logger = logging.getLogger(__name__)
 class UserSync(BaseModel):
     email: str
     username: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    preferred_currency: Optional[str] = None
+
+
+class UserProfileUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    username: Optional[str] = None
+    preferred_currency: Optional[str] = None
 
 @router.post("/users/sync", tags=["Users"])
 def sync_user(
@@ -20,51 +33,106 @@ def sync_user(
 ):
     """
     Synchronizes the authenticated user with the Supabase database.
-    This is a robust "upsert" operation.
-    - If auth_id exists, UPDATE.
-    - If email exists, UPDATE (to link accounts).
-    - Otherwise, INSERT.
-    IDENTITY: The 'auth_id' (Supabase user UUID) is from the JWT 'sub' claim.
+    Uses DB-level UNIQUE constraints on auth_id and email for race-condition-safe upsert.
     """
     auth_id = user["sub"]
     email = body.email
-    
+
     try:
-        # Prepare the data payload for the upsert operation.
         user_data = {
             'email': email,
             'username': body.username,
             'last_signed_in': datetime.now().isoformat(),
             'auth_id': auth_id,
-            'preferred_currency': 'USD'
+            'preferred_currency': 'USD',
+            'first_name': body.first_name,
+            'last_name': body.last_name,
+            'avatar_url': body.avatar_url,
         }
 
-        # 1. Check if a user exists with this auth_id.
-        res_auth = supabase.table('users').select('user_id').eq('auth_id', auth_id).execute()
+        result = supabase.table('users').upsert(
+            user_data,
+            on_conflict='auth_id'
+        ).execute()
 
-        if res_auth.data:
-            # Case 1: User with this auth_id exists. Update their profile.
-            logger.info(f"Sync: Updating existing profile for auth_id: {auth_id}")
-            update_res = supabase.table('users').update(user_data).eq('auth_id', auth_id).execute()
-            return update_res.data[0]
-        else:
-            # Case 2: No user with this auth_id. Check if the email is already in use.
-            res_email = supabase.table('users').select('user_id').eq('email', email).execute()
-            if res_email.data:
-                # An account with this email exists. Link it to the new auth_id.
-                logger.info(f"Sync: Email {email} exists. Linking new auth_id: {auth_id}")
-                update_res = supabase.table('users').update(user_data).eq('email', email).execute()
-                return update_res.data[0]
-            else:
-                # Case 3: No user with this auth_id or email. Create a new record.
-                logger.info(f"Sync: Creating new user profile for auth_id: {auth_id}")
-                insert_res = supabase.table('users').insert(user_data).execute()
-                return insert_res.data[0]
+        if result.data:
+            return result.data[0]
+
+        raise HTTPException(status_code=500, detail="Upsert returned no data")
 
     except Exception as e:
         db_error_details = str(getattr(e, 'message', str(e)))
-        logger.error(f"Database sync operation failed for auth_id: {auth_id}. DB Error: {db_error_details}")
+        logger.error(f"Database sync failed for auth_id {auth_id}: {db_error_details}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail=f"Failed to sync user profile: {db_error_details}"
+        )
+
+
+@router.get("/users/me", tags=["Users"])
+def get_current_user_profile(
+    user: dict = Depends(get_current_user_dep)
+):
+    """
+    Returns the authenticated user's profile from the `users` table.
+    Read-only — does not update last_signed_in.
+    """
+    auth_id = user["sub"]
+
+    try:
+        result = supabase.table('users').select(
+            'user_id', 'auth_id', 'email', 'username',
+            'first_name', 'last_name', 'avatar_url',
+            'preferred_currency', 'last_signed_in'
+        ).eq('auth_id', auth_id).maybe_single().execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        return result.data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db_error_details = str(getattr(e, 'message', str(e)))
+        logger.error(f"Failed to fetch profile for auth_id {auth_id}: {db_error_details}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch user profile: {db_error_details}"
+        )
+
+
+@router.patch("/users/me", tags=["Users"])
+def update_current_user_profile(
+    body: UserProfileUpdate,
+    user: dict = Depends(get_current_user_dep)
+):
+    """
+    Updates the authenticated user's profile fields.
+    Only includes fields that are explicitly provided (not None).
+    Never changes auth_id or last_signed_in via this endpoint.
+    """
+    auth_id = user["sub"]
+
+    try:
+        patch_data = {k: v for k, v in body.model_dump().items() if v is not None}
+
+        if not patch_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        result = supabase.table('users').update(patch_data).eq('auth_id', auth_id).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        return result.data[0]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db_error_details = str(getattr(e, 'message', str(e)))
+        logger.error(f"Failed to update profile for auth_id {auth_id}: {db_error_details}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update user profile: {db_error_details}"
         )

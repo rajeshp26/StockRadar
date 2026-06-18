@@ -19,14 +19,16 @@ import { perf } from '@/lib/performance';
 
 const supabase = createClient();
 
-type AuthStatus = 'initializing' | 'authenticated' | 'unauthenticated' | 'error';
+type AuthStatus = 'initializing' | 'authenticated' | 'unauthenticated' | 'pending_verification' | 'error';
 
 interface AuthStateShape {
   status: AuthStatus;
   user: User | null;
   session: Session | null;
   error: string | null;
-  signUpWithEmail: (email: string, password: string, fullName: string) => Promise<void>;
+  pendingEmail: string | null;
+  signUpWithEmail: (email: string, password: string, firstName: string, lastName: string) => Promise<void>;
+  signInWithOAuth: (provider: 'google' | 'apple') => Promise<void>;
   syncWithBackend: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -69,31 +71,45 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     user: User | null;
     session: Session | null;
     error: string | null;
+    pendingEmail: string | null;
   }>({
     status: 'initializing',
     user: null,
     session: null,
     error: null,
+    pendingEmail: null,
   });
 
   // --- Actions ---
 
-  const signUpWithEmail = async (email: string, password: string, fullName: string) => {
+  const signUpWithEmail = async (email: string, password: string, firstName: string, lastName: string) => {
     try {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { display_name: fullName || email } },
+        options: {
+          data: { first_name: firstName, last_name: lastName },
+        },
       });
 
       if (error) throw error;
+
       if (!data.session) {
-        throw new Error('Sign-up succeeded but no session returned (email confirmation may be required)');
+        setAuthState((prev) => ({
+          ...prev,
+          status: 'pending_verification',
+          session: null,
+          user: null,
+          pendingEmail: email,
+          error: null,
+        }));
+        return;
       }
 
       const appUser = await exchangeTokenForUser({
         email: data.user?.email ?? email,
-        displayName: fullName || email,
+        firstName,
+        lastName,
       });
 
       setAuthState((prev) => ({
@@ -101,6 +117,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         status: 'authenticated',
         user: appUser,
         session: data.session,
+        pendingEmail: null,
         error: null,
       }));
     } catch (error: any) {
@@ -109,6 +126,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         ...prev,
         status: 'error',
         error: error?.message || 'Failed to sign up',
+      }));
+      throw error;
+    }
+  };
+
+  const signInWithOAuth = async (provider: 'google' | 'apple') => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      console.error('[AuthProvider] OAuth sign-in error:', error);
+      setAuthState((prev) => ({
+        ...prev,
+        status: 'error',
+        error: error?.message || `Failed to sign in with ${provider}`,
       }));
       throw error;
     }
@@ -140,9 +176,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const syncWithBackend = async () => {
     try {
       if (authState.session) {
+        const meta = authState.session.user.user_metadata;
         const appUser = await exchangeTokenForUser({
           email: authState.session.user.email ?? '',
-          displayName: authState.session.user.user_metadata?.display_name ?? null,
+          firstName: meta?.first_name ?? meta?.full_name ?? null,
+          lastName: meta?.last_name ?? null,
+          avatarUrl: meta?.avatar_url ?? meta?.picture ?? null,
         });
         setAuthState((prev) => ({ ...prev, user: appUser }));
       }
@@ -178,9 +217,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             // Background-sync user profile — failure must NOT revert login.
             // The session cookie is already set; the user is authenticated.
             // If the backend is down or returns an error, log and continue.
+            const meta = session.user.user_metadata;
             exchangeTokenForUser({
               email: session.user.email ?? '',
-              displayName: session.user.user_metadata?.display_name ?? null,
+              firstName: meta?.first_name ?? meta?.full_name ?? null,
+              lastName: meta?.last_name ?? null,
+              avatarUrl: meta?.avatar_url ?? meta?.picture ?? null,
             }).then((appUser) => {
               try {
                 perf.mark?.('auth-end');
@@ -263,6 +305,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       value={{
         ...authState,
         signUpWithEmail,
+        signInWithOAuth,
         syncWithBackend,
         signOut,
       }}
