@@ -122,6 +122,15 @@ export const QK = {
       : ["portfolio", "allocation", groupBy] as const,
   portfolioDividendHistory: (accountId: number) =>
     ["portfolio", "account", accountId, "dividend-history"] as const,
+  // Dividend Dashboard
+  dividendDashboardSummary: (ids: string) =>
+    ["portfolio", "dividends", "dashboard", "summary", ids] as const,
+  dividendDashboardUpcoming: (ids: string) =>
+    ["portfolio", "dividends", "dashboard", "upcoming", ids] as const,
+  dividendDashboardHoldings: (ids: string) =>
+    ["portfolio", "dividends", "dashboard", "holdings", ids] as const,
+  dividendDashboardHoldingDetail: (symbol: string, ids: string) =>
+    ["portfolio", "dividends", "dashboard", "detail", symbol, ids] as const,
   portfolioAccountTransactionsFiltered: (accountId: number, filter: string) =>
     ["portfolio", "account", accountId, "transactions", filter] as const,
   portfolioAllTransactions: (accountIds?: string, filter?: string) =>

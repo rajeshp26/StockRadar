@@ -966,6 +966,159 @@ async def check_company_exists(
 
 
 # ============================================================================
+# DIVIDEND DASHBOARD ENDPOINTS
+# ============================================================================
+
+from application.services.dividend_dashboard_service import DividendDashboardService
+from schemas_portfolio import (
+    PortfolioDividendSummary,
+    PortfolioDividendHolding,
+    PortfolioDividendHoldingDetail,
+    UpcomingExDate,
+)
+
+
+def _get_dividend_dashboard_service() -> DividendDashboardService:
+    """Factory for DividendDashboardService."""
+    return DividendDashboardService()
+
+
+@router.get("/portfolio/dividends/summary", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_dividend_dashboard_summary(
+    request: Request,
+    account_ids: str = Query(..., description="Comma-separated account IDs"),
+    user: dict = Depends(get_current_user_dep),
+) -> PortfolioDividendSummary:
+    """
+    Portfolio dividend summary.
+
+    Returns high-level metrics:
+    - Trailing 12M income (actual)
+    - Forward annual estimate
+    - YTD dividends
+    - Forward yield on cost
+    - Average monthly (trailing and forward)
+    - Portfolio growth 5Y (with coverage_pct)
+    - Portfolio safety score (with coverage_pct)
+    """
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        parsed_ids = _parse_account_ids(account_ids)
+        service = _get_dividend_dashboard_service()
+        result = service.get_summary(parsed_ids)
+
+        return PortfolioDividendSummary(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dividend dashboard summary failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dividend summary")
+
+
+@router.get("/portfolio/dividends/upcoming", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_dividend_dashboard_upcoming(
+    request: Request,
+    account_ids: str = Query(..., description="Comma-separated account IDs"),
+    user: dict = Depends(get_current_user_dep),
+) -> List[UpcomingExDate]:
+    """
+    Upcoming ex-dividend dates for held positions.
+
+    Returns:
+    - Symbol, company name
+    - Ex-dividend date
+    - Amount per share
+    - Estimated income (shares × DPS)
+    - Confidence: high (announced) or low (inferred from pattern)
+    """
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        parsed_ids = _parse_account_ids(account_ids)
+        service = _get_dividend_dashboard_service()
+        result = service.get_upcoming(parsed_ids)
+
+        return [UpcomingExDate(**r) for r in result]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dividend dashboard upcoming failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get upcoming ex-dates")
+
+
+@router.get("/portfolio/dividends/holdings", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_dividend_dashboard_holdings(
+    request: Request,
+    account_ids: str = Query(..., description="Comma-separated account IDs"),
+    user: dict = Depends(get_current_user_dep),
+) -> List[PortfolioDividendHolding]:
+    """
+    Per-holding dividend data for the holdings table.
+
+    Each row contains:
+    - Symbol, company name, sector
+    - Quantity, market value, total cost
+    - Forward income and trailing 12M income
+    - Current yield, yield on cost
+    - Payout ratio, increase streak, safety score
+    - Next event (upcoming ex-date, nullable)
+    """
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        parsed_ids = _parse_account_ids(account_ids)
+        service = _get_dividend_dashboard_service()
+        result = service.get_holdings(parsed_ids)
+
+        return [PortfolioDividendHolding(**r) for r in result]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dividend dashboard holdings failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get dividend holdings")
+
+
+@router.get("/portfolio/dividends/holdings/{symbol}", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_dividend_dashboard_holding_detail(
+    request: Request,
+    symbol: str,
+    account_ids: str = Query(..., description="Comma-separated account IDs"),
+    user: dict = Depends(get_current_user_dep),
+) -> PortfolioDividendHoldingDetail:
+    """
+    Detailed dividend data for a single holding (lazy-loaded on drawer open).
+
+    Returns:
+    - Income summary (trailing 12M, forward, YTD, YoC)
+    - Quality metrics (safety, payout ratio, growth 5Y, streak)
+    - Dividend history (from company dividend_history)
+    - Recent payments (from user's portfolio_dividends)
+    """
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        parsed_ids = _parse_account_ids(account_ids)
+        service = _get_dividend_dashboard_service()
+        result = service.get_holding_detail(parsed_ids, symbol)
+
+        return PortfolioDividendHoldingDetail(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dividend dashboard detail failed for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get holding dividend detail")
+
+
+# ============================================================================
 # HOLDING-LEVEL ENDPOINTS (single-stock performance)
 # ============================================================================
 

@@ -447,6 +447,110 @@ class DividendHistoryResponse(BaseModel):
 
 
 # ============================================================================
+# DIVIDEND DASHBOARD SCHEMAS
+# ============================================================================
+
+class UpcomingExDate(BaseModel):
+    """Upcoming ex-dividend date for a held position."""
+
+    symbol: str
+    company_name: str
+    ex_dividend_date: str
+    amount_per_share: float = 0.0
+    estimated_income: float = 0.0
+    dividend_type: str = "regular"
+    confidence: str = "low"
+
+
+class MetricWithCoverage(BaseModel):
+    """Metric value with coverage percentage."""
+
+    value: Optional[float] = None
+    coverage_pct: float = 0.0
+
+
+class PortfolioDividendSummary(BaseModel):
+    """Portfolio-level dividend summary response."""
+
+    trailing_12m_income: float = 0.0
+    forward_annual_estimate: float = 0.0
+    ytd_dividends: float = 0.0
+    forward_yield_on_cost: Optional[float] = None
+    avg_monthly_trailing: float = 0.0
+    avg_monthly_forward: float = 0.0
+    portfolio_growth_5yr: MetricWithCoverage = MetricWithCoverage()
+    portfolio_safety: MetricWithCoverage = MetricWithCoverage()
+    goal_progress: Optional[Dict[str, Any]] = None
+    currency: Optional[str] = None
+    currencies_mixed: bool = False
+    last_updated: Optional[datetime] = None
+
+
+class PortfolioDividendHolding(BaseModel):
+    """Per-holding dividend data."""
+
+    symbol: str
+    company_name: str
+    sector: Optional[str] = None
+    quantity: float = 0.0
+    market_value: float = 0.0
+    total_cost: float = 0.0
+    forward_income: float = 0.0
+    trailing_12m_income: float = 0.0
+    current_yield: Optional[float] = None
+    forward_yield_on_cost: Optional[float] = None
+    payout_ratio: Optional[float] = None
+    increase_streak: Optional[int] = None
+    safety_score: Optional[float] = None
+    next_event: Optional[UpcomingExDate] = None
+
+
+class DividendHistoryPoint(BaseModel):
+    """Single dividend history entry."""
+
+    date: str
+    amount: float
+
+
+class RecentPayment(BaseModel):
+    """Recent dividend payment entry."""
+
+    payment_date: str
+    amount: float
+    shares_held: Optional[float] = None
+
+
+class IncomeSummary(BaseModel):
+    """Income summary for a single holding."""
+
+    trailing_12m: float = 0.0
+    forward: float = 0.0
+    ytd: float = 0.0
+    yield_on_cost: Optional[float] = None
+
+
+class QualityMetrics(BaseModel):
+    """Quality metrics for a single holding."""
+
+    safety_score: Optional[float] = None
+    payout_ratio: Optional[float] = None
+    growth_5yr: Optional[float] = None
+    increase_streak: Optional[int] = None
+
+
+class PortfolioDividendHoldingDetail(BaseModel):
+    """Detailed dividend data for a single holding."""
+
+    symbol: str
+    company_name: str
+    sector: Optional[str] = None
+    income: IncomeSummary = IncomeSummary()
+    quality_metrics: Optional[QualityMetrics] = None
+    dividend_history: List[DividendHistoryPoint] = []
+    recent_payments: List[RecentPayment] = []
+
+
+# ============================================================================
 # RISK METRICS SCHEMAS
 # ============================================================================
 

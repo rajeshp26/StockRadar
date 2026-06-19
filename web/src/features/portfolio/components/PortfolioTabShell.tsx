@@ -33,7 +33,8 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
 
     const resolvedTab = initialTab ?? activeTab;
 
-    const accountIds = selectedAccountId ? [selectedAccountId] : undefined;
+    const allAccountIds = accounts?.map(a => a.account_id);
+    const accountIds = selectedAccountId ? [selectedAccountId] : allAccountIds;
 
     if (accountsLoading) {
         return (

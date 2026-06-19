@@ -36,6 +36,7 @@ def _exchange_to_market_group(exchange: Optional[str]) -> str:
 from decimal import Decimal
 import logging
 import uuid
+from datetime import timedelta
 
 from database import supabase
 from supabase import Client
@@ -539,6 +540,122 @@ class PortfolioRepository:
             logger.error(f"Failed to get monthly dividends for account {account_id}: {e}")
             return []
     
+    # ========================================================================
+    # DIVIDEND DASHBOARD OPERATIONS
+    # ========================================================================
+
+    def get_holdings_with_companies(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+        """Get holdings enriched with company name/sector for the given accounts."""
+        return self._get_holdings(account_ids=account_ids)
+
+    def get_trailing_twelve_month_dividends(
+        self, account_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Get dividend payments within the last 365 days."""
+        if not account_ids:
+            return []
+        cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        try:
+            res = (
+                self.client.table("portfolio_dividends")
+                .select("symbol, amount, currency, payment_date")
+                .in_("account_id", account_ids)
+                .gte("payment_date", cutoff)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get trailing 12M dividends: {e}")
+            return []
+
+    def get_latest_regular_dps(
+        self, company_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Get the latest regular dividend per share per company."""
+        if not company_ids:
+            return []
+        try:
+            res = (
+                self.client.table("dividend_history")
+                .select("company_id, dividend_amount, ex_dividend_date, currency")
+                .in_("company_id", company_ids)
+                .eq("dividend_type", "regular")
+                .order("ex_dividend_date", desc=True)
+                .execute()
+            )
+            rows = res.data or []
+            seen = set()
+            latest = []
+            for r in rows:
+                cid = r["company_id"]
+                if cid not in seen:
+                    seen.add(cid)
+                    latest.append(r)
+            return latest
+        except Exception as e:
+            logger.error(f"Failed to get latest regular dps: {e}")
+            return []
+
+    def get_dividend_metrics_for_companies(
+        self, company_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Get dividend metrics rows for the given companies."""
+        if not company_ids:
+            return []
+        try:
+            res = (
+                self.client.table("dividend_metrics")
+                .select("company_id, dividend_growth_rate_5yr, cash_dividend_payout_ratio, consecutive_years_paid, annual_dps")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get dividend metrics: {e}")
+            return []
+
+    def get_upcoming_ex_dates(
+        self, company_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Get upcoming ex-dividend dates for the given companies."""
+        if not company_ids:
+            return []
+        today = datetime.now().strftime("%Y-%m-%d")
+        try:
+            res = (
+                self.client.table("dividend_history")
+                .select("*")
+                .in_("company_id", company_ids)
+                .eq("dividend_type", "regular")
+                .gte("ex_dividend_date", today)
+                .order("ex_dividend_date", desc=False)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get upcoming ex-dates: {e}")
+            return []
+
+    def get_portfolio_dividends_for_symbol(
+        self, account_ids: List[int], symbol: str
+    ) -> List[Dict[str, Any]]:
+        """Get dividend payments for a symbol across the given accounts."""
+        if not account_ids:
+            return []
+        try:
+            res = (
+                self.client.table("portfolio_dividends")
+                .select("*")
+                .in_("account_id", account_ids)
+                .eq("symbol", symbol.upper())
+                .order("payment_date", desc=False)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get dividends for {symbol}: {e}")
+            return []
+
     # ========================================================================
     # HOLDING-LEVEL OPERATIONS (for single-stock performance)
     # ========================================================================

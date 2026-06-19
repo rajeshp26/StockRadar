@@ -221,6 +221,96 @@ export const ACCOUNT_TYPE_COLORS: Record<string, string> = {
 };
 
 // ============================================================================
+// DIVIDEND DASHBOARD TYPES
+// ============================================================================
+
+export interface MetricWithCoverage {
+    value: number | null;
+    coverage_pct: number;
+}
+
+export interface UpcomingExDate {
+    symbol: string;
+    company_name: string;
+    ex_dividend_date: string;
+    amount_per_share: number;
+    estimated_income: number;
+    dividend_type: string;
+    confidence: 'high' | 'medium' | 'low';
+    event_type?: string;
+}
+
+export interface PortfolioDividendSummary {
+    trailing_12m_income: number;
+    forward_annual_estimate: number;
+    ytd_dividends: number;
+    forward_yield_on_cost: number | null;
+    avg_monthly_trailing: number;
+    avg_monthly_forward: number;
+    portfolio_growth_5yr: MetricWithCoverage;
+    portfolio_safety: MetricWithCoverage;
+    goal_progress: { monthly_income: number; monthly_goal: number | null; pct: number } | null;
+    currency: string | null;
+    currencies_mixed: boolean;
+    last_updated: string;
+}
+
+export interface PortfolioDividendHolding {
+    symbol: string;
+    company_name: string;
+    sector: string | null;
+    quantity: number;
+    market_value: number;
+    total_cost: number;
+    forward_income: number;
+    trailing_12m_income: number;
+    current_yield: number | null;
+    forward_yield_on_cost: number | null;
+    payout_ratio: number | null;
+    increase_streak: number | null;
+    safety_score: number | null;
+    next_event: UpcomingExDate | null;
+}
+
+export interface PortfolioDividendHoldingDetail {
+    symbol: string;
+    company_name: string;
+    sector: string | null;
+    income: {
+        trailing_12m: number;
+        forward: number;
+        ytd: number;
+        yield_on_cost: number | null;
+        market_value: number;
+        cost_basis: number;
+    };
+    quality_metrics: {
+        safety_score: number | null;
+        payout_ratio: number | null;
+        growth_5yr: number | null;
+        increase_streak: number | null;
+        current_yield: number | null;
+    } | null;
+    dividend_history: Array<{
+        date: string;
+        amount: number;
+    }>;
+    annual_dividends_per_share: Array<{
+        year: number;
+        amount: number;
+    }>;
+    cash_received_by_year: Array<{
+        year: number;
+        amount: number;
+    }>;
+    recent_payments: Array<{
+        payment_date: string;
+        amount: number;
+        shares_held: number | null;
+    }>;
+}
+
+// ============================================================================
 // AGGREGATED HOLDING TYPES
 // ============================================================================
 

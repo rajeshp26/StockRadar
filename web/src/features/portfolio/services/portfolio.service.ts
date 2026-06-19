@@ -34,6 +34,11 @@ import type {
     HoldingDividendSummary,
     HoldingTransaction,
     HoldingAccountBreakdown,
+    TimePeriod,
+    PortfolioDividendSummary,
+    PortfolioDividendHolding,
+    PortfolioDividendHoldingDetail,
+    UpcomingExDate,
 } from "../types/portfolio.types";
 
 /**
@@ -207,6 +212,53 @@ export class PortfolioService {
         const params: Record<string, string> = {};
         if (accountIds) params.account_ids = accountIds;
         const res = await this.api.get("/portfolio/dividends", { params });
+        return res.data;
+    }
+
+    // ========================================================================
+    // DIVIDEND DASHBOARD
+    // ========================================================================
+
+    async getDividendDashboardSummary(accountIds?: string): Promise<PortfolioDividendSummary> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<PortfolioDividendSummary>(
+            "/portfolio/dividends/summary",
+            { params }
+        );
+        return res.data;
+    }
+
+    async getDividendDashboardUpcoming(accountIds?: string): Promise<UpcomingExDate[]> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<UpcomingExDate[]>(
+            "/portfolio/dividends/upcoming",
+            { params }
+        );
+        return res.data;
+    }
+
+    async getDividendDashboardHoldings(accountIds?: string): Promise<PortfolioDividendHolding[]> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<PortfolioDividendHolding[]>(
+            "/portfolio/dividends/holdings",
+            { params }
+        );
+        return res.data;
+    }
+
+    async getDividendDashboardHoldingDetail(
+        symbol: string,
+        accountIds?: string
+    ): Promise<PortfolioDividendHoldingDetail> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<PortfolioDividendHoldingDetail>(
+            `/portfolio/dividends/holdings/${symbol}`,
+            { params }
+        );
         return res.data;
     }
 

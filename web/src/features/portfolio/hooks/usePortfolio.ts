@@ -22,6 +22,10 @@ import type {
     DividendDetail,
     DividendHistoryResponse,
     MonthlyDividendSummary,
+    PortfolioDividendSummary,
+    PortfolioDividendHolding,
+    PortfolioDividendHoldingDetail,
+    UpcomingExDate,
     RiskMetricsResponse,
     DrawdownResponse,
     CovarianceResponse,
@@ -386,6 +390,66 @@ export function useAllDividends(accountIds?: number[]) {
         queryKey: QK.portfolioAllDividends(idsParam),
         queryFn: () => portfolioService.getAllDividends(idsParam),
         staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+// ========================================================================
+// DIVIDEND DASHBOARD HOOKS
+// ========================================================================
+
+const DASHBOARD_STALE = 5 * 60 * 1000;
+const UPCOMING_STALE = 60 * 60 * 1000;
+
+export function useDividendSummary(accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<PortfolioDividendSummary, Error>({
+        queryKey: QK.dividendDashboardSummary(ids ?? ""),
+        queryFn: () => portfolioService.getDividendDashboardSummary(ids),
+        staleTime: DASHBOARD_STALE,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useDividendUpcoming(accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<UpcomingExDate[], Error>({
+        queryKey: QK.dividendDashboardUpcoming(ids ?? ""),
+        queryFn: () => portfolioService.getDividendDashboardUpcoming(ids),
+        staleTime: UPCOMING_STALE,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useDividendHoldings(accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<PortfolioDividendHolding[], Error>({
+        queryKey: QK.dividendDashboardHoldings(ids ?? ""),
+        queryFn: () => portfolioService.getDividendDashboardHoldings(ids),
+        staleTime: DASHBOARD_STALE,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
+export function useDividendHoldingDetail(symbol: string | null, accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const ids = idsParam(accountIds);
+
+    return useQuery<PortfolioDividendHoldingDetail, Error>({
+        queryKey: QK.dividendDashboardHoldingDetail(symbol ?? "", ids ?? ""),
+        queryFn: () => portfolioService.getDividendDashboardHoldingDetail(symbol!, ids),
+        enabled: !!symbol,
+        staleTime: DASHBOARD_STALE,
         gcTime: GC.PORTFOLIO,
         retry: 1,
     });
