@@ -1,7 +1,7 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import { Skeleton } from '@/components/ui/skeleton';
+import { AccentLine, SectionHeader } from './DividendsSharedUI';
 import type { UpcomingExDate } from '../types/portfolio.types';
 
 interface DividendsUpcomingCardProps {
@@ -13,28 +13,34 @@ interface DividendsUpcomingCardProps {
 export function DividendsUpcomingCard({ data, isLoading, error }: DividendsUpcomingCardProps) {
     if (error) {
         return (
-            <div className="glass-panel rounded-lg p-4">
-                <p className="text-xs text-red-400">Failed to load upcoming ex-dates</p>
+            <div className="glass-panel p-8 relative overflow-hidden">
+                <AccentLine />
+                <SectionHeader title="Upcoming Ex-Dates" subtitle="Expected dividend payments" />
+                <p className="text-xs text-rose-400">Failed to load upcoming ex-dates</p>
             </div>
         );
     }
 
     if (isLoading) {
         return (
-            <div className="glass-panel rounded-lg p-4 space-y-2">
-                <p className="text-xs text-white/40 font-medium uppercase tracking-wider mb-2">Upcoming Ex-Dates</p>
-                {Array.from({ length: 3 }).map((_, i) => (
-                    <Skeleton key={i} className="h-10 w-full" />
-                ))}
+            <div className="glass-panel p-8 relative overflow-hidden">
+                <AccentLine />
+                <SectionHeader title="Upcoming Ex-Dates" subtitle="Expected dividend payments" />
+                <div className="space-y-3">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                        <div key={i} className="h-12 rounded-xl bg-white/5 glass-shimmer" />
+                    ))}
+                </div>
             </div>
         );
     }
 
     if (!data || data.length === 0) {
         return (
-            <div className="glass-panel rounded-lg p-4">
-                <p className="text-xs text-white/40 font-medium uppercase tracking-wider mb-1">Upcoming Ex-Dates</p>
-                <p className="text-xs text-white/20">No upcoming ex-dates found</p>
+            <div className="glass-panel p-8 relative overflow-hidden">
+                <AccentLine />
+                <SectionHeader title="Upcoming Ex-Dates" subtitle="Expected dividend payments" />
+                <p className="text-sm text-white/30 italic">No upcoming ex-dates found</p>
             </div>
         );
     }
@@ -43,22 +49,23 @@ export function DividendsUpcomingCard({ data, isLoading, error }: DividendsUpcom
         v.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 
     return (
-        <div className="glass-panel rounded-lg p-4">
-            <p className="text-xs text-white/40 font-medium uppercase tracking-wider mb-2">Upcoming Ex-Dates</p>
+        <div className="glass-panel p-8 relative overflow-hidden">
+            <AccentLine />
+            <SectionHeader title="Upcoming Ex-Dates" subtitle="Expected dividend payments" />
             <div className="space-y-1.5">
                 {data.map((item, i) => (
-                    <div key={`${item.symbol}-${i}`} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
+                    <div key={`${item.symbol}-${i}`} className="flex items-center justify-between py-2 border-b border-white/6 last:border-0">
                         <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-white">{item.symbol}</span>
+                            <span className="text-sm font-black text-white">{item.symbol}</span>
                             <span className={cn(
-                                'text-[10px] px-1.5 py-0.5 rounded-full font-medium',
-                                item.confidence === 'high' ? 'bg-green-900/40 text-green-400' : item.confidence === 'medium' ? 'bg-yellow-900/40 text-yellow-400' : 'bg-red-900/40 text-red-400'
+                                'text-[10px] px-1.5 py-0.5 rounded-full font-black uppercase tracking-widest',
+                                item.confidence === 'high' ? 'bg-emerald-500/12 border border-emerald-500/25 text-emerald-400' : item.confidence === 'medium' ? 'bg-amber-500/12 border border-amber-500/25 text-amber-400' : 'bg-rose-500/12 border border-rose-500/25 text-rose-400'
                             )}>
                                 {item.confidence}
                             </span>
                         </div>
                         <div className="text-right">
-                            <p className="text-sm text-green-400 font-bold">{formatCurrency(item.estimated_income)}</p>
+                            <p className="text-sm text-emerald-400 font-black">{formatCurrency(item.estimated_income)}</p>
                             <p className="text-[10px] text-white/30">{item.ex_dividend_date} · {formatCurrency(item.amount_per_share)}/sh</p>
                         </div>
                     </div>

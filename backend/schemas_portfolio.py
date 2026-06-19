@@ -489,6 +489,7 @@ class PortfolioDividendSummary(BaseModel):
 class PortfolioDividendHolding(BaseModel):
     """Per-holding dividend data."""
 
+    account_id: int
     symbol: str
     company_name: str
     sector: Optional[str] = None

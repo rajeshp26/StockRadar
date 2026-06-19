@@ -256,6 +256,7 @@ export interface PortfolioDividendSummary {
 }
 
 export interface PortfolioDividendHolding {
+    account_id: number;
     symbol: string;
     company_name: string;
     sector: string | null;

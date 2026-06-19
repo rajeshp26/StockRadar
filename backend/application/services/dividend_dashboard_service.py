@@ -263,6 +263,7 @@ class DividendDashboardService:
                 }
 
             result.append({
+                "account_id": h.get("account_id"),
                 "symbol": symbol,
                 "company_name": h["company_name"],
                 "sector": h.get("sector"),
@@ -284,11 +285,11 @@ class DividendDashboardService:
     def get_holding_detail(
         self, account_ids: List[int], symbol: str
     ) -> Dict[str, Any]:
-        """Get detailed dividend data for a single holding."""
+        """Get detailed dividend data for a holding, merging across accounts."""
         holdings = self.repo.get_holdings_with_companies(account_ids)
-        holding = next((h for h in holdings if h["symbol"].upper() == symbol.upper()), None)
+        matching = [h for h in holdings if h["symbol"].upper() == symbol.upper()]
 
-        if not holding:
+        if not matching:
             return {
                 "symbol": symbol.upper(),
                 "company_name": symbol.upper(),
@@ -298,9 +299,14 @@ class DividendDashboardService:
                 "dividend_history": [],
                 "annual_dividends_per_share": [],
                 "cash_received_by_year": [],
-                "cash_received_by_year": [],
                 "recent_payments": [],
             }
+
+        # Merge multi-account holdings for the same symbol
+        total_shares = sum(float(h.get("quantity") or 0) for h in matching)
+        total_cost = sum(float(h.get("total_cost") or 0) for h in matching)
+        total_market_value = sum(float(h.get("current_value") or h.get("market_value") or 0) for h in matching)
+        holding = matching[0]  # company info is the same
 
         company_ids = [holding["company_id"]] if holding.get("company_id") else []
 
@@ -310,10 +316,7 @@ class DividendDashboardService:
         payments = self.repo.get_portfolio_dividends_for_symbol(account_ids, symbol)
 
         dps = dps_rows[0]["dividend_amount"] if dps_rows else 0.0
-        shares = float(holding.get("quantity") or 0)
-        fwd_income = shares * float(dps) * 4
-        cost = float(holding.get("total_cost") or 0)
-        market_value = float(holding.get("current_value") or holding.get("market_value") or 0)
+        fwd_income = total_shares * float(dps) * 4
 
         trailing = sum(
             float(r["amount"]) for r in trailing_rows if r["symbol"] == symbol.upper()
@@ -325,7 +328,7 @@ class DividendDashboardService:
             and str(r.get("payment_date", "")).startswith(str(current_year))
         )
 
-        yoc = round(fwd_income / cost * 100, 2) if dps > 0 and cost > 0 else None
+        yoc = round(fwd_income / total_cost * 100, 2) if dps > 0 and total_cost > 0 else None
 
         quality_metrics = None
         if metrics_rows and company_ids:
@@ -333,13 +336,13 @@ class DividendDashboardService:
             payout = m.get("cash_dividend_payout_ratio")
             growth = m.get("dividend_growth_rate_5yr")
             streak = m.get("consecutive_years_paid")
-            current_yield = round(float(dps) * 4 / market_value * 100, 2) if dps > 0 and market_value > 0 else None
+            current_yield_val = round(float(dps) * 4 / total_market_value * 100, 2) if dps > 0 and total_market_value > 0 else None
             quality_metrics = {
                 "safety_score": round(max(0, 100 - float(payout)), 1) if payout is not None else None,
                 "payout_ratio": round(float(payout), 2) if payout is not None else None,
                 "growth_5yr": round(float(growth), 2) if growth is not None else None,
                 "increase_streak": int(streak) if streak is not None else None,
-                "current_yield": current_yield,
+                "current_yield": current_yield_val,
             }
 
         dividend_history = []
@@ -384,8 +387,8 @@ class DividendDashboardService:
                 "forward": round(fwd_income, 2),
                 "ytd": round(ytd, 2),
                 "yield_on_cost": yoc,
-                "market_value": round(market_value, 2),
-                "cost_basis": round(cost, 2),
+                "market_value": round(total_market_value, 2),
+                "cost_basis": round(total_cost, 2),
             },
             "quality_metrics": quality_metrics,
             "dividend_history": dividend_history[:12],

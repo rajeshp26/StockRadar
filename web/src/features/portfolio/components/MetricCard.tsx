@@ -14,19 +14,19 @@ interface MetricCardProps {
 
 export function MetricCard({ label, value, subtitle, coveragePct, trend, trendLabel, className }: MetricCardProps) {
     return (
-        <div className={cn('glass-panel rounded-lg p-4 flex flex-col', className)}>
-            <p className="text-xs text-white/40 font-medium uppercase tracking-wider">{label}</p>
-            <p className="text-xl font-bold mt-1 text-white">{value}</p>
+        <div className={cn('glass-stat', className)}>
+            <p className="glass-overline">{label}</p>
+            <p className="text-2xl font-black tracking-tighter text-white leading-tight break-words">{value}</p>
             {subtitle && (
-                <p className="text-xs text-white/30 mt-0.5">{subtitle}</p>
+                <p className="text-[10px] text-white/30 leading-relaxed mt-1">{subtitle}</p>
             )}
-            <div className="flex items-center gap-2 mt-1.5">
+            <div className="flex items-center gap-2 mt-2">
                 {trend && (
                     <span className={cn(
-                        'text-xs font-medium',
-                        trend === 'up' && 'text-green-400',
-                        trend === 'down' && 'text-red-400',
-                        trend === 'neutral' && 'text-yellow-400',
+                        'text-xs font-black',
+                        trend === 'up' && 'text-emerald-400',
+                        trend === 'down' && 'text-rose-400',
+                        trend === 'neutral' && 'text-amber-400',
                     )}>
                         {trend === 'up' && '↑ '}{trend === 'down' && '↓ '}{trendLabel || trend}
                     </span>

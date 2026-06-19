@@ -41,7 +41,22 @@ export function DividendsTab({ accountIds }: DividendsTabProps) {
     }, [allDivs]);
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-6 animate-fade-up">
+            {/* Page Header */}
+            <div className="flex justify-between items-start gap-5 flex-wrap">
+                <div>
+                    <h1 className="text-2xl font-black text-white tracking-tight">Dividend Dashboard</h1>
+                    <p className="text-sm text-white/35 mt-1">
+                        Portfolio-level dividend income, upcoming payments, and holdings analysis.
+                    </p>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                    {["Summary", "Trend", "Upcoming", "Holdings"].map((chip) => (
+                        <span key={chip} className="glass-chip">{chip}</span>
+                    ))}
+                </div>
+            </div>
+
             <DividendsSummarySection data={summary} isLoading={summaryLoading} error={summaryError} />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

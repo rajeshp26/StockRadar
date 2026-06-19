@@ -1,6 +1,7 @@
 'use client';
 
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { AccentLine, SectionHeader } from './DividendsSharedUI';
 import type { MonthlyDividendSummary } from '../types/portfolio.types';
 
 interface DividendTrendChartProps {
@@ -12,13 +13,23 @@ const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 
 export function DividendTrendChart({ data, isLoading }: DividendTrendChartProps) {
     if (isLoading) {
-        return <div className="glass-panel rounded-lg p-4 h-48 flex items-center justify-center"><p className="text-white/20 text-sm">Loading trend...</p></div>;
+        return (
+            <div className="glass-panel p-8 relative overflow-hidden">
+                <AccentLine />
+                <SectionHeader title="Monthly Dividend Income" subtitle="Portfolio income trend" />
+                <div className="h-[250px] rounded-xl bg-white/5 glass-shimmer" />
+            </div>
+        );
     }
 
     if (!data || data.length === 0) {
         return (
-            <div className="glass-panel rounded-lg p-4 h-48 flex items-center justify-center">
-                <p className="text-white/20 text-sm">No dividend data yet</p>
+            <div className="glass-panel p-8 relative overflow-hidden">
+                <AccentLine />
+                <SectionHeader title="Monthly Dividend Income" subtitle="Portfolio income trend" />
+                <div className="h-[250px] flex items-center justify-center">
+                    <p className="text-sm text-white/30 italic">No dividend data yet</p>
+                </div>
             </div>
         );
     }
@@ -31,18 +42,20 @@ export function DividendTrendChart({ data, isLoading }: DividendTrendChartProps)
         }));
 
     return (
-        <div className="glass-panel rounded-lg p-4">
-            <p className="text-xs text-white/40 font-medium uppercase tracking-wider mb-3">Monthly Dividend Income</p>
-            <div className="h-48">
+        <div className="glass-panel p-8 relative overflow-hidden">
+            <AccentLine />
+            <SectionHeader title="Monthly Dividend Income" subtitle="Portfolio income trend" />
+            <div className="h-[250px]">
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
-                        <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                        <XAxis dataKey="name" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
+                        <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
                         <Tooltip
-                            contentStyle={{ background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
-                            labelStyle={{ color: 'rgba(255,255,255,0.7)' }}
+                            contentStyle={{ backgroundColor: '#111827', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
+                            formatter={(value: number) => [`$${value.toFixed(2)}`, "Income"]}
                         />
-                        <Line type="monotone" dataKey="income" stroke="#22c55e" strokeWidth={2} dot={{ fill: '#22c55e', r: 3 }} />
+                        <Line type="monotone" dataKey="income" stroke="#6366f1" strokeWidth={3} dot={{ r: 4, fill: "#6366f1" }} />
                     </LineChart>
                 </ResponsiveContainer>
             </div>

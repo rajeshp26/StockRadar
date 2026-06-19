@@ -1,110 +1,115 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
-const mockUseAccountDividends = vi.fn();
-const mockUseDividendHistory = vi.fn();
+const mockUseDividendSummary = vi.fn();
+const mockUseDividendUpcoming = vi.fn();
+const mockUseDividendHoldings = vi.fn();
 const mockUseAllDividends = vi.fn();
+const mockUseDividendHoldingDetail = vi.fn();
 
 vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
-    useAccountDividends: (...args: any[]) => mockUseAccountDividends(...args),
-    useDividendHistory: (...args: any[]) => mockUseDividendHistory(...args),
+    useDividendSummary: (...args: any[]) => mockUseDividendSummary(...args),
+    useDividendUpcoming: (...args: any[]) => mockUseDividendUpcoming(...args),
+    useDividendHoldings: (...args: any[]) => mockUseDividendHoldings(...args),
     useAllDividends: (...args: any[]) => mockUseAllDividends(...args),
-}));
-
-vi.mock("@/components/ui/skeleton", () => ({
-    Skeleton: ({ className }: any) => {
-        const React = require("react");
-        return React.createElement("div", { "data-testid": "skeleton", className });
-    },
+    useDividendHoldingDetail: (...args: any[]) => mockUseDividendHoldingDetail(...args),
 }));
 
 import { DividendsTab } from "@/features/portfolio/components/DividendsTab";
 
-function makeMonthlySummaries() {
-    return {
-        account_id: 1,
-        current_year_total: 1874.35,
-        monthly_summaries: [
-            { fiscal_year: 2026, fiscal_month: 1, payment_count: 3, total_amount: 450.0, paying_companies: 2 },
-            { fiscal_year: 2026, fiscal_month: 2, payment_count: 2, total_amount: 320.5, paying_companies: 2 },
-        ],
-    };
-}
+const mockSummary = {
+    trailing_12m_income: 5000,
+    forward_annual_estimate: 5200,
+    ytd_dividends: 1874.35,
+    forward_yield_on_cost: 4.52,
+    avg_monthly_trailing: 416.67,
+    avg_monthly_forward: 433.33,
+    portfolio_growth_5yr: { value: 8.5, coverage_pct: 80 },
+    portfolio_safety: { value: 72.3, coverage_pct: 85 },
+    goal_progress: null,
+    currency: 'USD',
+    currencies_mixed: false,
+    last_updated: '2026-06-18T00:00:00Z',
+};
 
-function makeDetailData() {
-    return {
-        success: true,
-        account_id: 1,
-        dividends: [
-            { dividend_id: 101, symbol: "AAPL", company_name: "Apple Inc.", payment_date: "2026-02-15", amount: 95.0, shares_held: 50, amount_per_share: 1.9 },
-            { dividend_id: 102, symbol: "GOOGL", company_name: "Alphabet Inc.", payment_date: "2026-03-10", amount: 45.0, shares_held: 30, amount_per_share: 1.5 },
-        ],
-        total_count: 2,
-        current_year_total: 140.0,
-    };
-}
+const mockMonthlySummaries = {
+    account_id: 1,
+    current_year_total: 1874.35,
+    monthly_summaries: [
+        { fiscal_year: 2026, fiscal_month: 1, payment_count: 3, total_amount: 450, paying_companies: 2 },
+        { fiscal_year: 2026, fiscal_month: 2, payment_count: 2, total_amount: 320.5, paying_companies: 2 },
+    ],
+};
+
+const mockUpcoming = [
+    { symbol: 'AAPL', company_name: 'Apple Inc.', ex_dividend_date: '2026-07-15', amount_per_share: 1.90, estimated_income: 95, dividend_type: 'regular', confidence: 'high' },
+];
+
+const mockHoldings = [
+    { account_id: 1, symbol: 'AAPL', company_name: 'Apple Inc.', sector: 'Technology', quantity: 50, market_value: 9025, total_cost: 7500, forward_income: 380, trailing_12m_income: 360, current_yield: 4.21, forward_yield_on_cost: 5.07, payout_ratio: 45, increase_streak: 10, safety_score: 75, next_event: null },
+];
 
 describe("DividendsTab", () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUseAccountDividends.mockReturnValue({ data: makeMonthlySummaries(), isLoading: false });
-        mockUseDividendHistory.mockReturnValue({ data: makeDetailData(), isLoading: false });
-        mockUseAllDividends.mockReturnValue({ data: makeMonthlySummaries(), isLoading: false });
+        mockUseDividendSummary.mockReturnValue({ data: mockSummary, isLoading: false, error: null });
+        mockUseDividendUpcoming.mockReturnValue({ data: mockUpcoming, isLoading: false, error: null });
+        mockUseDividendHoldings.mockReturnValue({ data: mockHoldings, isLoading: false, error: null });
+        mockUseAllDividends.mockReturnValue({ data: mockMonthlySummaries, isLoading: false });
+        mockUseDividendHoldingDetail.mockReturnValue({ data: undefined, isLoading: false, error: null });
     });
 
-    it("renders monthly summary view by default for a specific account", () => {
+    it("renders page header", () => {
         render(<DividendsTab accountIds={[1]} />);
-        expect(screen.getByText("Jan 2026")).toBeInTheDocument();
-        expect(screen.getByText("Feb 2026")).toBeInTheDocument();
-        expect(screen.getByText("$450.00")).toBeInTheDocument();
-        expect(screen.getByText("$320.50")).toBeInTheDocument();
+        expect(screen.getByText("Dividend Dashboard")).toBeInTheDocument();
     });
 
-    it("renders monthly summary view for all accounts", () => {
-        render(<DividendsTab />);
-        expect(screen.getByText("Jan 2026")).toBeInTheDocument();
-        expect(screen.getByText("Feb 2026")).toBeInTheDocument();
-    });
-
-    it("switches to detailed history view", () => {
+    it("renders summary metrics", () => {
         render(<DividendsTab accountIds={[1]} />);
-        fireEvent.click(screen.getByText("Detailed History"));
-        expect(screen.getByText("AAPL")).toBeInTheDocument();
-        expect(screen.getByText("GOOGL")).toBeInTheDocument();
-        expect(screen.getByText("Apple Inc.")).toBeInTheDocument();
-        expect(screen.getByText("Alphabet Inc.")).toBeInTheDocument();
+        expect(screen.getByText("Dividend Summary")).toBeInTheDocument();
+        expect(screen.getAllByText("Trailing 12M").length).toBeGreaterThanOrEqual(1);
+        expect(screen.getByText("Forward Est. Annual")).toBeInTheDocument();
     });
 
-    it("switches back to monthly summary view", () => {
+    it("renders trend chart section", () => {
         render(<DividendsTab accountIds={[1]} />);
-        fireEvent.click(screen.getByText("Detailed History"));
-        fireEvent.click(screen.getByText("Monthly Summary"));
-        expect(screen.getByText("Jan 2026")).toBeInTheDocument();
+        expect(screen.getByText("Monthly Dividend Income")).toBeInTheDocument();
+    });
+
+    it("renders sector chart section", () => {
+        render(<DividendsTab accountIds={[1]} />);
+        expect(screen.getByText("Income by Sector")).toBeInTheDocument();
+    });
+
+    it("renders upcoming ex-dates section", () => {
+        render(<DividendsTab accountIds={[1]} />);
+        expect(screen.getByText("Upcoming Ex-Dates")).toBeInTheDocument();
+        expect(screen.getAllByText("AAPL").length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("renders holdings section", () => {
+        render(<DividendsTab accountIds={[1]} />);
+        expect(screen.getAllByText("Holdings").length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("renders all filter chips", () => {
+        render(<DividendsTab accountIds={[1]} />);
+        expect(screen.getByText("Summary")).toBeInTheDocument();
+        expect(screen.getByText("Trend")).toBeInTheDocument();
+        expect(screen.getByText("Upcoming")).toBeInTheDocument();
+        expect(screen.getAllByText("Holdings").length).toBeGreaterThanOrEqual(1);
     });
 
     it("shows loading state", () => {
-        mockUseAccountDividends.mockReturnValue({ data: null, isLoading: true });
+        mockUseDividendSummary.mockReturnValue({ data: undefined, isLoading: true, error: null });
         mockUseAllDividends.mockReturnValue({ data: null, isLoading: true });
-        const { container } = render(<DividendsTab accountIds={[1]} />);
-        expect(container.querySelectorAll("[data-testid='skeleton']").length).toBeGreaterThanOrEqual(1);
+        render(<DividendsTab accountIds={[1]} />);
+        expect(screen.getByText("Dividend Summary")).toBeInTheDocument();
     });
 
-    it("shows empty state when no monthly summaries", () => {
-        mockUseAccountDividends.mockReturnValue({ data: { account_id: 1, current_year_total: 0, monthly_summaries: [] }, isLoading: false });
+    it("shows error state in summary", () => {
+        mockUseDividendSummary.mockReturnValue({ data: undefined, isLoading: false, error: new Error('fail') });
         render(<DividendsTab accountIds={[1]} />);
-        expect(screen.getByText("No dividend data available")).toBeInTheDocument();
-    });
-
-    it("shows amount per share in detailed view", () => {
-        render(<DividendsTab accountIds={[1]} />);
-        fireEvent.click(screen.getByText("Detailed History"));
-        expect(screen.getByText("$1.9000/share")).toBeInTheDocument();
-        expect(screen.getByText("$1.5000/share")).toBeInTheDocument();
-    });
-
-    it("has Monthly Summary button active by default", () => {
-        render(<DividendsTab accountIds={[1]} />);
-        const summaryBtn = screen.getByText("Monthly Summary");
-        expect(summaryBtn.className).toContain("bg-blue-600");
+        expect(screen.getByText("Failed to load dividend summary")).toBeInTheDocument();
     });
 });

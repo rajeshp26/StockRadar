@@ -55,18 +55,18 @@ describe('MetricCard', () => {
     it('renders up trend with label', () => {
         render(<MetricCard label="Growth" value="12%" trend="up" trendLabel="+2.1% vs last month" />);
         const el = screen.getByText((content) => content.includes('+2.1% vs last month'));
-        expect(el.className).toContain('text-green-400');
+        expect(el.className).toContain('text-emerald-400');
     });
 
     it('renders down trend', () => {
         render(<MetricCard label="Growth" value="5%" trend="down" trendLabel="-1.2%" />);
         const el = screen.getByText((content) => content.includes('-1.2%'));
-        expect(el.className).toContain('text-red-400');
+        expect(el.className).toContain('text-rose-400');
     });
 
     it('renders neutral trend', () => {
         render(<MetricCard label="Growth" value="0%" trend="neutral" trendLabel="flat" />);
-        expect(screen.getByText('flat').className).toContain('text-yellow-400');
+        expect(screen.getByText('flat').className).toContain('text-amber-400');
     });
 });
 
@@ -118,8 +118,9 @@ describe('DividendTrendChart', () => {
     });
 
     it('shows loading state', () => {
-        render(<DividendTrendChart data={[]} isLoading />);
-        expect(screen.getByText('Loading trend...')).toBeInTheDocument();
+        const { container } = render(<DividendTrendChart data={[]} isLoading />);
+        expect(screen.getByText('Monthly Dividend Income')).toBeInTheDocument();
+        expect(container.querySelector('.glass-shimmer')).toBeInTheDocument();
     });
 });
 
@@ -138,8 +139,9 @@ describe('DividendSectorChart', () => {
     });
 
     it('shows loading state', () => {
-        render(<DividendSectorChart data={[]} isLoading />);
-        expect(screen.getByText('Loading sectors...')).toBeInTheDocument();
+        const { container } = render(<DividendSectorChart data={[]} isLoading />);
+        expect(screen.getByText('Income by Sector')).toBeInTheDocument();
+        expect(container.querySelector('.glass-shimmer')).toBeInTheDocument();
     });
 });
 
@@ -157,21 +159,21 @@ describe('DividendsUpcomingCard', () => {
         expect(screen.getByText('Upcoming Ex-Dates')).toBeInTheDocument();
         expect(screen.getByText('AAPL')).toBeInTheDocument();
         expect(screen.getByText('GOOGL')).toBeInTheDocument();
-        expect(screen.getByText('2026-07-15')).toBeInTheDocument();
+        expect(screen.getByText((c) => c.includes('2026-07-15'))).toBeInTheDocument();
     });
 
     it('renders high and low confidence badges', () => {
         render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
         const high = screen.getByText('high');
         const low = screen.getByText('low');
-        expect(high.className).toContain('text-green-400');
-        expect(low.className).toContain('text-yellow-400');
+        expect(high.className).toContain('text-emerald-400');
+        expect(low.className).toContain('text-rose-400');
     });
 
     it('shows loading state with skeletons', () => {
         const { container } = render(<DividendsUpcomingCard data={undefined} isLoading error={null} />);
         expect(screen.getByText('Upcoming Ex-Dates')).toBeInTheDocument();
-        expect(container.querySelectorAll('[data-testid="skeleton"]').length).toBeGreaterThanOrEqual(1);
+        expect(container.querySelector('.glass-shimmer')).toBeInTheDocument();
     });
 
     it('shows error state', () => {
@@ -190,9 +192,9 @@ describe('DividendsUpcomingCard', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('DividendHoldingsTable', () => {
     const data: PortfolioDividendHolding[] = [
-        { symbol: 'AAPL', company_name: 'Apple Inc.', sector: 'Technology', quantity: 50, market_value: 9025, total_cost: 7500, forward_income: 380, trailing_12m_income: 360, current_yield: 4.21, forward_yield_on_cost: 5.07, payout_ratio: 45, increase_streak: 10, safety_score: 75, next_event: { symbol: 'AAPL', company_name: 'Apple Inc.', ex_dividend_date: '2026-07-15', amount_per_share: 1.90, estimated_income: 95, dividend_type: 'regular', confidence: 'high' } },
-        { symbol: 'GOOGL', company_name: 'Alphabet Inc.', sector: 'Technology', quantity: 30, market_value: 5256, total_cost: 4200, forward_income: 180, trailing_12m_income: 160, current_yield: 3.42, forward_yield_on_cost: 4.29, payout_ratio: 30, increase_streak: 5, safety_score: 85, next_event: null },
-        { symbol: 'XOM', company_name: 'Exxon Mobil', sector: 'Energy', quantity: 20, market_value: 2400, total_cost: 2200, forward_income: 280, trailing_12m_income: 260, current_yield: 11.67, forward_yield_on_cost: 12.73, payout_ratio: 60, increase_streak: null, safety_score: 55, next_event: null },
+        { account_id: 1, symbol: 'AAPL', company_name: 'Apple Inc.', sector: 'Technology', quantity: 50, market_value: 9025, total_cost: 7500, forward_income: 380, trailing_12m_income: 360, current_yield: 4.21, forward_yield_on_cost: 5.07, payout_ratio: 45, increase_streak: 10, safety_score: 75, next_event: { symbol: 'AAPL', company_name: 'Apple Inc.', ex_dividend_date: '2026-07-15', amount_per_share: 1.90, estimated_income: 95, dividend_type: 'regular', confidence: 'high' } },
+        { account_id: 1, symbol: 'GOOGL', company_name: 'Alphabet Inc.', sector: 'Technology', quantity: 30, market_value: 5256, total_cost: 4200, forward_income: 180, trailing_12m_income: 160, current_yield: 3.42, forward_yield_on_cost: 4.29, payout_ratio: 30, increase_streak: 5, safety_score: 85, next_event: null },
+        { account_id: 1, symbol: 'XOM', company_name: 'Exxon Mobil', sector: 'Energy', quantity: 20, market_value: 2400, total_cost: 2200, forward_income: 280, trailing_12m_income: 260, current_yield: 11.67, forward_yield_on_cost: 12.73, payout_ratio: 60, increase_streak: null, safety_score: 55, next_event: null },
     ];
 
     it('renders all 3 rows', () => {
@@ -263,11 +265,11 @@ describe('DividendDetailDrawer', () => {
         expect(container.innerHTML).toBe('');
     });
 
-    it('shows loading skeleton when symbol is set and data loading', () => {
+    it('shows loading shimmer when symbol is set and data loading', () => {
         mockUseDividendHoldingDetail.mockReturnValue({ data: undefined, isLoading: true, error: null });
         const { container } = render(<DividendDetailDrawer symbol="AAPL" onClose={vi.fn()} />);
         expect(screen.getByText('AAPL')).toBeInTheDocument();
-        expect(container.querySelectorAll('[data-testid="skeleton"]').length).toBeGreaterThanOrEqual(1);
+        expect(container.querySelector('.glass-shimmer')).toBeInTheDocument();
     });
 
     it('shows error state', () => {
@@ -282,7 +284,7 @@ describe('DividendDetailDrawer', () => {
                 symbol: 'AAPL',
                 company_name: 'Apple Inc.',
                 sector: 'Technology',
-                income: { trailing_12m: 360, forward: 380, ytd: 180, yield_on_cost: 5.07 },
+                income: { trailing_12m: 360, forward: 380, ytd: 180, yield_on_cost: 5.07, market_value: 9025, cost_basis: 7500 },
                 quality_metrics: { safety_score: 75, payout_ratio: 45, growth_5yr: 8.5, increase_streak: 10 },
                 dividend_history: [{ date: '2026-04-15', amount: 1.90 }],
                 recent_payments: [{ payment_date: '2026-04-15', amount: 95, shares_held: 50 }],
@@ -357,9 +359,9 @@ describe('DividendsSummarySection', () => {
         expect(screen.getByText('Goal Progress')).toBeInTheDocument();
     });
 
-    it('shows 6 skeleton cards when loading', () => {
+    it('shows 6 shimmer cards when loading', () => {
         const { container } = render(<DividendsSummarySection data={undefined} isLoading error={null} />);
-        expect(container.querySelectorAll('[data-testid="skeleton"]').length).toBe(6);
+        expect(container.querySelectorAll('.glass-shimmer').length).toBe(6);
     });
 
     it('shows error message', () => {
@@ -373,7 +375,7 @@ describe('DividendsSummarySection', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('DividendsHoldingsSection', () => {
     const holdingsData: PortfolioDividendHolding[] = [
-        { symbol: 'AAPL', company_name: 'Apple Inc.', sector: 'Technology', quantity: 50, market_value: 9025, total_cost: 7500, forward_income: 380, trailing_12m_income: 360, current_yield: 4.21, forward_yield_on_cost: 5.07, payout_ratio: 45, increase_streak: 10, safety_score: 75, next_event: null },
+        { account_id: 1, symbol: 'AAPL', company_name: 'Apple Inc.', sector: 'Technology', quantity: 50, market_value: 9025, total_cost: 7500, forward_income: 380, trailing_12m_income: 360, current_yield: 4.21, forward_yield_on_cost: 5.07, payout_ratio: 45, increase_streak: 10, safety_score: 75, next_event: null },
     ];
 
     it('renders heading and symbol', () => {
@@ -382,9 +384,9 @@ describe('DividendsHoldingsSection', () => {
         expect(screen.getByText('AAPL')).toBeInTheDocument();
     });
 
-    it('shows 3 skeleton rows when loading', () => {
+    it('shows 3 shimmer rows when loading', () => {
         const { container } = render(<DividendsHoldingsSection data={undefined} isLoading error={null} />);
-        expect(container.querySelectorAll('[data-testid="skeleton"]').length).toBe(3);
+        expect(container.querySelectorAll('.glass-shimmer').length).toBe(3);
     });
 
     it('shows error message', () => {

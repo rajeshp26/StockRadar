@@ -65,7 +65,7 @@ export function DividendHoldingsTable({ data, onSelect }: DividendHoldingsTableP
     const formatPct = (v: number | null) => (v != null ? `${v.toFixed(2)}%` : '—');
 
     return (
-        <div className="space-y-2">
+        <div className="space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
                 <div className="relative flex-1 min-w-[150px] max-w-xs">
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/20" />
@@ -74,13 +74,13 @@ export function DividendHoldingsTable({ data, onSelect }: DividendHoldingsTableP
                         placeholder="Search symbol or name..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-white/20"
+                        className="w-full bg-white/4 border border-white/8 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-white/20"
                     />
                 </div>
                 <select
                     value={sectorFilter}
                     onChange={(e) => setSectorFilter(e.target.value)}
-                    className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/60 focus:outline-none focus:border-white/20"
+                    className="bg-white/4 border border-white/8 rounded-xl px-2 py-1.5 text-xs text-white/60 focus:outline-none focus:border-white/20"
                 >
                     <option value="">All sectors</option>
                     {sectors.map((s) => (
@@ -92,7 +92,7 @@ export function DividendHoldingsTable({ data, onSelect }: DividendHoldingsTableP
             <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                     <thead>
-                        <tr className="border-b border-white/5">
+                        <tr className="border-b border-white/6">
                             <Th onClick={() => toggleSort('symbol')}>Symbol <SortIcon col="symbol" /></Th>
                             <Th>Name</Th>
                             <Th>Sector</Th>
@@ -111,17 +111,17 @@ export function DividendHoldingsTable({ data, onSelect }: DividendHoldingsTableP
                     <tbody>
                         {filtered.map((h) => (
                             <tr
-                                key={h.symbol}
+                                key={`${h.account_id}-${h.symbol}`}
                                 onClick={() => onSelect(h.symbol)}
-                                className="border-b border-white/5 hover:bg-white/5 cursor-pointer transition-colors"
+                                className="border-b border-white/6 hover:bg-white/5 cursor-pointer transition-colors"
                             >
-                                <Td className="font-bold text-white">{h.symbol}</Td>
+                                <Td className="font-black text-white">{h.symbol}</Td>
                                 <Td className="text-white/60 max-w-[120px] truncate">{h.company_name}</Td>
                                 <Td className="text-white/40">{h.sector || '—'}</Td>
                                 <Td numeric>{h.quantity.toLocaleString()}</Td>
                                 <Td numeric className="text-white/60">{formatCurrency(h.market_value)}</Td>
-                                <Td numeric className="text-green-400 font-medium">{formatCurrency(h.forward_income)}</Td>
-                                <Td numeric className="text-green-400/70">{formatCurrency(h.trailing_12m_income)}</Td>
+                                <Td numeric className="text-emerald-400 font-black">{formatCurrency(h.forward_income)}</Td>
+                                <Td numeric className="text-emerald-400/70">{formatCurrency(h.trailing_12m_income)}</Td>
                                 <Td numeric>{formatPct(h.current_yield)}</Td>
                                 <Td numeric>{formatPct(h.forward_yield_on_cost)}</Td>
                                 <Td numeric>{formatPct(h.payout_ratio)}</Td>
@@ -129,8 +129,8 @@ export function DividendHoldingsTable({ data, onSelect }: DividendHoldingsTableP
                                 <Td numeric>
                                     {h.safety_score != null ? (
                                         <span className={cn(
-                                            'font-medium',
-                                            h.safety_score >= 70 ? 'text-green-400' : h.safety_score >= 40 ? 'text-yellow-400' : 'text-red-400'
+                                            'font-black',
+                                            h.safety_score >= 70 ? 'text-emerald-400' : h.safety_score >= 40 ? 'text-amber-400' : 'text-rose-400'
                                         )}>
                                             {h.safety_score.toFixed(0)}
                                         </span>
@@ -158,7 +158,7 @@ function Th({ children, numeric, onClick }: { children: React.ReactNode; numeric
         <th
             onClick={onClick}
             className={cn(
-                'px-3 py-2 text-[10px] font-medium text-white/30 uppercase tracking-wider select-none',
+                'px-3 py-2 text-[10px] font-black text-white/30 uppercase tracking-widest select-none',
                 numeric && 'text-right',
                 onClick && 'cursor-pointer hover:text-white/50'
             )}

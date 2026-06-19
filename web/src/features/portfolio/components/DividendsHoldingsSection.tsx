@@ -1,8 +1,8 @@
 'use client';
 
+import { AccentLine, SectionHeader } from './DividendsSharedUI';
 import { DividendHoldingsTable } from './DividendHoldingsTable';
 import { DividendDetailDrawer } from './DividendDetailDrawer';
-import { Skeleton } from '@/components/ui/skeleton';
 import { useState } from 'react';
 import type { PortfolioDividendHolding } from '../types/portfolio.types';
 
@@ -18,33 +18,41 @@ export function DividendsHoldingsSection({ data, isLoading, error, accountIds }:
 
     if (error) {
         return (
-            <div className="glass-panel rounded-lg p-4 text-center">
-                <p className="text-xs text-red-400">Failed to load dividend holdings</p>
+            <div className="glass-panel p-8 relative overflow-hidden text-center">
+                <AccentLine />
+                <p className="text-xs text-rose-400">Failed to load dividend holdings</p>
             </div>
         );
     }
 
     if (isLoading) {
         return (
-            <div className="space-y-2">
-                {Array.from({ length: 3 }).map((_, i) => (
-                    <Skeleton key={i} className="h-12 w-full rounded-lg" />
-                ))}
+            <div className="glass-panel p-8 relative overflow-hidden">
+                <AccentLine />
+                <SectionHeader title="Holdings" subtitle="Dividend-paying positions" />
+                <div className="space-y-3">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                        <div key={i} className="h-12 rounded-xl bg-white/5 glass-shimmer" />
+                    ))}
+                </div>
             </div>
         );
     }
 
     if (!data || data.length === 0) {
         return (
-            <div className="glass-panel rounded-lg p-4 text-center">
-                <p className="text-xs text-white/20">No dividend holdings</p>
+            <div className="glass-panel p-8 relative overflow-hidden text-center">
+                <AccentLine />
+                <SectionHeader title="Holdings" subtitle="Dividend-paying positions" />
+                <p className="text-sm text-white/30 italic">No dividend holdings</p>
             </div>
         );
     }
 
     return (
-        <div className="glass-panel rounded-lg p-4">
-            <p className="text-xs text-white/40 font-medium uppercase tracking-wider mb-3">Holdings</p>
+        <div className="glass-panel p-8 relative overflow-hidden">
+            <AccentLine />
+            <SectionHeader title="Holdings" subtitle="Dividend-paying positions" />
             <DividendHoldingsTable data={data} onSelect={setSelectedSymbol} />
             <DividendDetailDrawer symbol={selectedSymbol} accountIds={accountIds} onClose={() => setSelectedSymbol(null)} />
         </div>
