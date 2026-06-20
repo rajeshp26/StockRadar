@@ -636,6 +636,50 @@ class PortfolioRepository:
             logger.error(f"Failed to get upcoming ex-dates: {e}")
             return []
 
+    def get_next_upcoming_event(
+        self, company_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Get the best available upcoming event for a single company."""
+        events = self.get_next_upcoming_events([company_id])
+        return events[0] if events else None
+
+    def get_next_upcoming_events(
+        self, company_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Batch-fetch best upcoming event per company.
+
+        Single query using ``company_id=in.(…)``, deduplicated in Python
+        to keep the highest‑trust row per company (ORDER BY trust_score
+        DESC, source_observed_at DESC).
+        """
+        if not company_ids:
+            return []
+        today = date.today().isoformat()
+        try:
+            res = (
+                self.client.table("upcoming_dividend_events")
+                .select("*")
+                .in_("company_id", company_ids)
+                .gte("ex_dividend_date", today)
+                .order("trust_score", desc=True)
+                .order("source_observed_at", desc=True)
+                .execute()
+            )
+            seen: set = set()
+            result: List[Dict[str, Any]] = []
+            for row in (res.data or []):
+                cid = row.get("company_id")
+                if cid is not None and cid not in seen:
+                    seen.add(cid)
+                    result.append(row)
+            return result
+        except Exception as e:
+            logger.error(
+                "Failed to get next upcoming events for %d companies: %s",
+                len(company_ids), e,
+            )
+            return []
+
     def get_portfolio_dividends_for_symbol(
         self, account_ids: List[int], symbol: str
     ) -> List[Dict[str, Any]]:

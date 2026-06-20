@@ -154,37 +154,97 @@ class DividendDashboardService:
             "last_updated": datetime.now().isoformat(),
         }
 
+    def _trust_label(self, trust_score: float, status: str) -> str:
+        """Map trust_score + status to a human-readable label."""
+        if status == "provider_reported":
+            if trust_score >= 0.90:
+                return "Likely"
+            elif trust_score >= 0.70:
+                return "Estimate"
+        return "Predicted"
+
+    def _confidence_from_score(self, score: float) -> str:
+        """Map any score (trust or confidence) to high/medium/low."""
+        return "high" if score >= 0.7 else "medium" if score >= 0.4 else "low"
+
     def get_upcoming(self, account_ids: List[int]) -> List[Dict[str, Any]]:
-        """Get upcoming ex-dividend dates for held positions."""
+        """Get upcoming ex-dividend dates for held positions.
+        
+        Reads from upcoming_dividend_events (new table) — the dedicated
+        forward-looking table.  Falls back to dividend_history for any
+        company not yet populated in the new table (graceful migration).
+        
+        The upcoming_dividend_events table doesn't store dividend_amount
+        (Phase 1 design decision).  DPS is backfilled from the latest
+        regular payment in dividend_history so the card always shows
+        an estimated income.
+        """
         holdings = self.repo.get_holdings_with_companies(account_ids)
         if not holdings:
             return []
 
-        company_ids = [h["company_id"] for h in holdings if h.get("company_id")]
-        upcoming = self.repo.get_upcoming_ex_dates(company_ids) if company_ids else []
-
         cid_to_holding = {h["company_id"]: h for h in holdings if h.get("company_id")}
+        company_ids = list(cid_to_holding.keys())
+
+        # Fetch latest DPS for amount backfill
+        dps_rows = self.repo.get_latest_regular_dps(company_ids) if company_ids else []
+        dps_by_cid = {r["company_id"]: float(r["dividend_amount"]) for r in dps_rows if r.get("dividend_amount")}
 
         result = []
-        for ex in upcoming:
-            cid = ex["company_id"]
+
+        # Primary source: upcoming_dividend_events table (batched)
+        upcoming_events = self.repo.get_next_upcoming_events(company_ids) if company_ids else []
+        seen_cids = {e["company_id"] for e in upcoming_events if e.get("company_id")}
+
+        for event in upcoming_events:
+            cid = event["company_id"]
             holding = cid_to_holding.get(cid)
             if not holding:
                 continue
             shares = float(holding.get("quantity") or 0)
-            dps = float(ex.get("dividend_amount") or 0)
-            cs = ex.get("confidence_score") or 0
-            confidence = "high" if cs >= 70 else "medium" if cs >= 40 else "low"
+            ts = float(event.get("trust_score") or 0.50)
+            ev_status = event.get("status", "predicted")
+            dps = dps_by_cid.get(cid, 0.0)
+
             result.append({
                 "symbol": holding["symbol"],
                 "company_name": holding["company_name"],
-                "ex_dividend_date": ex["ex_dividend_date"],
+                "ex_dividend_date": event["ex_dividend_date"],
                 "amount_per_share": dps,
                 "estimated_income": round(shares * dps, 2),
-                "dividend_type": ex.get("dividend_type", "regular"),
-                "confidence": confidence,
+                "dividend_type": "regular",
+                "confidence": self._confidence_from_score(ts),
+                "trust_score": round(ts, 2),
+                "trust_label": self._trust_label(ts, ev_status),
+                "data_source": event.get("data_source", "predicted"),
                 "event_type": "ex_date",
             })
+
+        # Fallback: dividend_history for companies not yet in new table
+        remaining_cids = [c for c in company_ids if c not in seen_cids]
+        if remaining_cids:
+            legacy = self.repo.get_upcoming_ex_dates(remaining_cids)
+            for ex in legacy:
+                cid = ex["company_id"]
+                holding = cid_to_holding.get(cid)
+                if not holding:
+                    continue
+                shares = float(holding.get("quantity") or 0)
+                dps = float(ex.get("dividend_amount") or 0)
+                cs = ex.get("confidence_score") or 0
+                result.append({
+                    "symbol": holding["symbol"],
+                    "company_name": holding["company_name"],
+                    "ex_dividend_date": ex["ex_dividend_date"],
+                    "amount_per_share": dps,
+                    "estimated_income": round(shares * dps, 2),
+                    "dividend_type": ex.get("dividend_type", "regular"),
+                    "confidence": self._confidence_from_score(cs),
+                    "trust_score": round(float(cs), 2),
+                    "trust_label": self._trust_label(float(cs), "provider_reported") if cs >= 0.7 else "Predicted",
+                    "data_source": ex.get("data_source", "defeat_beta"),
+                    "event_type": "ex_date",
+                })
 
         return result
 
@@ -199,8 +259,6 @@ class DividendDashboardService:
         trailing_rows = self.repo.get_trailing_twelve_month_dividends(account_ids)
         dps_rows = self.repo.get_latest_regular_dps(company_ids) if company_ids else []
         metrics_rows = self.repo.get_dividend_metrics_for_companies(company_ids) if company_ids else []
-        upcoming_rows = self.repo.get_upcoming_ex_dates(company_ids) if company_ids else []
-
         trailing_by_symbol = defaultdict(float)
         for r in trailing_rows:
             trailing_by_symbol[r["symbol"]] += float(r["amount"])
@@ -208,9 +266,18 @@ class DividendDashboardService:
         dps_by_cid = {r["company_id"]: float(r["dividend_amount"]) for r in dps_rows if r.get("dividend_amount")}
         metrics_by_cid = {r["company_id"]: r for r in metrics_rows}
 
-        upcoming_by_cid = defaultdict(list)
-        for ex in upcoming_rows:
-            upcoming_by_cid[ex["company_id"]].append(ex)
+        # Upcoming events — batched single query to upcoming_dividend_events
+        # with dividend_history as fallback for migration period
+        upcoming_by_cid: Dict[int, Dict[str, Any]] = {}
+        upcoming_events = self.repo.get_next_upcoming_events(company_ids) if company_ids else []
+        seen_upcoming = {e["company_id"] for e in upcoming_events if e.get("company_id")}
+        for event in upcoming_events:
+            upcoming_by_cid[event["company_id"]] = event
+        legacy_upcoming = self.repo.get_upcoming_ex_dates(
+            [c for c in (company_ids or []) if c not in seen_upcoming]
+        )
+        for ex in legacy_upcoming:
+            upcoming_by_cid[ex["company_id"]] = ex
 
         result = []
         for h in holdings:
@@ -248,17 +315,21 @@ class DividendDashboardService:
                     safety_score = round(max(0, 100 - float(pr)), 1)
 
             next_event = None
-            upcoming_list = upcoming_by_cid.get(cid) if cid else []
-            if upcoming_list:
-                next_ex = upcoming_list[0]
+            event = upcoming_by_cid.get(cid) if cid else None
+            if event:
+                ts = float(event.get("trust_score") or event.get("confidence_score") or 0)
+                event_dps = float(event.get("dividend_amount") or 0)
+                # New table has no dividend_amount — backfill from dps_by_cid
+                if event_dps == 0:
+                    event_dps = dps_by_cid.get(cid, 0.0)
                 next_event = {
                     "symbol": symbol,
                     "company_name": h["company_name"],
-                    "ex_dividend_date": next_ex["ex_dividend_date"],
-                    "amount_per_share": float(next_ex.get("dividend_amount") or 0),
-                    "estimated_income": round(shares * float(next_ex.get("dividend_amount") or 0), 2),
-                    "dividend_type": next_ex.get("dividend_type", "regular"),
-                    "confidence": "high" if (next_ex.get("confidence_score") or 0) >= 70 else "medium" if (next_ex.get("confidence_score") or 0) >= 40 else "low",
+                    "ex_dividend_date": event["ex_dividend_date"],
+                    "amount_per_share": event_dps,
+                    "estimated_income": round(shares * event_dps, 2),
+                    "dividend_type": event.get("dividend_type", "regular"),
+                    "confidence": self._confidence_from_score(ts),
                     "event_type": "ex_date",
                 }
 
