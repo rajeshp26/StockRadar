@@ -30,6 +30,7 @@ NEW
 import asyncio
 import logging
 import uuid
+from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -50,6 +51,153 @@ from application.jobs.derived_financial_metrics_job import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Global semaphore to rate-limit Stockdex/Finviz across parallel workers ──
+stockdex_semaphore = asyncio.Semaphore(1)
+
+
+def _as_date(value: Any) -> Optional[date]:
+    """Parse a date value from Supabase (ISO string or date object)."""
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except Exception:
+            return None
+    if isinstance(value, datetime):
+        return value.date()
+    return None
+
+
+def estimate_next_ex_date(
+    company_id: int,
+    financial_repo: SupabaseFinancialRepository,
+) -> Optional[date]:
+    """Estimate next ex-dividend date from historical payment pattern.
+
+    Reads actuals only (dividend_amount IS NOT NULL, ex_date <= today)
+    from dividend_history. Never reads upcoming_dividend_events.
+
+    Logic from design doc §7.3 Step 3:
+      1. Fetch up to 8 recent actual payments
+      2. Filter special dividends in Python (graceful degradation)
+      3. Use average gap (not most common) to determine frequency
+      4. Map to frequency bands via relativedelta
+      5. Suppress predictions for deep-past dates (suspended payers)
+    """
+    try:
+        today = date.today()
+        resp = (
+            supabase.table("dividend_history")
+            .select("ex_dividend_date, dividend_amount, dividend_type")
+            .eq("company_id", company_id)
+            .not_.is_("dividend_amount", "null")
+            .lte("ex_dividend_date", today.isoformat())
+            .order("ex_dividend_date", desc=True)
+            .limit(8)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows or len(rows) < 4:
+            logger.debug(
+                "[PREDICT] company_id=%s: %d rows (< 4), cannot predict",
+                company_id, len(rows),
+            )
+            return None
+
+        # Filter out special dividends (not representative of regular cadence)
+        regular = [r for r in rows if r.get("dividend_type", "regular") != "special"]
+        if len(regular) < 4:
+            regular = rows[:4]
+
+        # Parse dates (Supabase returns ISO strings, not date objects)
+        sorted_dates = sorted(_as_date(r["ex_dividend_date"]) for r in regular)
+        sorted_dates = [d for d in sorted_dates if d is not None]
+        if len(sorted_dates) < 4:
+            return None
+
+        gaps = [(b - a).days for a, b in zip(sorted_dates, sorted_dates[1:]) if (b - a).days > 0]
+        if not gaps:
+            return None
+
+        avg_gap = sum(gaps) / len(gaps)
+        last_ex = sorted_dates[-1]
+
+        from dateutil.relativedelta import relativedelta
+
+        # Map avg gap to frequency
+        if avg_gap <= 35:
+            next_date = last_ex + timedelta(days=round(avg_gap))
+        elif avg_gap <= 100:
+            months = round(avg_gap / 30.44)
+            next_date = last_ex + relativedelta(months=months)
+        elif avg_gap <= 200:
+            next_date = last_ex + relativedelta(months=6)
+        else:
+            next_date = last_ex + relativedelta(years=1)
+
+        # Suppress predictions for deep-past dates (suspended payers)
+        if next_date >= today:
+            logger.debug(
+                "[PREDICT] company_id=%s: last=%s avg_gap=%dd predicted=%s",
+                company_id, last_ex, round(avg_gap), next_date,
+            )
+            return next_date
+        return None
+
+    except Exception as e:
+        logger.error("[PREDICT] Failed for company_id=%s: %s", company_id, e)
+        return None
+
+
+async def refresh_upcoming_dividend(
+    company_id: int,
+    symbol: str,
+    financial_repo: SupabaseFinancialRepository,
+) -> None:
+    """Refresh upcoming dividend events for a single company.
+
+    Runs all providers in sequence (with rate limiting), then falls
+    back to prediction if no provider returned data. Each source
+    upserts its own opinion via UNIQUE(company_id, data_source).
+    """
+    yf = YFinanceProvider()
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    sd = StockdexMacrotrendsProvider()
+
+    # 1. YFinance (primary) — no rate limit issue
+    yf_date = yf.get_upcoming_ex_date(symbol)
+
+    # 2. Stockdex/Finviz (secondary) — rate-limited via global semaphore
+    sd_date = None
+    async with stockdex_semaphore:
+        await asyncio.sleep(1)  # max 1 req/sec to Finviz
+        sd_date = sd.get_upcoming_ex_date(symbol)
+
+    # 3. Upsert each source opinion
+    if yf_date:
+        await financial_repo.upsert_upcoming_dividend(
+            company_id, yf_date, data_source="yfinance",
+        )
+    if sd_date:
+        await financial_repo.upsert_upcoming_dividend(
+            company_id, sd_date, data_source="finviz",
+        )
+
+    # 4. Prediction fallback (only if no provider data)
+    if not yf_date and not sd_date:
+        pred_date = estimate_next_ex_date(company_id, financial_repo)
+        if pred_date:
+            await financial_repo.upsert_upcoming_dividend(
+                company_id, pred_date, data_source="predicted",
+            )
+
+    # 5. Cleanup stale events (14-day grace period)
+    await financial_repo.cleanup_stale_events(company_id)
 
 
 class MarketDataRefreshScheduler:
@@ -424,6 +572,23 @@ class MarketDataRefreshScheduler:
                     )
             except Exception as exc:
                 logger.error("[DIV_METRICS] %s failed: %s", symbol, exc)
+
+        # 7b) UPCOMING DIVIDEND EVENTS — stocks only
+        # Fetches forward-looking ex-dates from YFinance + Stockdex,
+        # falls back to prediction.  Runs every cycle; upsert is
+        # idempotent via UNIQUE(company_id, data_source).
+        if is_stock:
+            try:
+                await refresh_upcoming_dividend(
+                    company_id=company_id,
+                    symbol=symbol,
+                    financial_repo=self.financial_repo,
+                )
+            except Exception as exc:
+                logger.error(
+                    "[UPCOMING_DIV] %s (company_id=%s) failed: %s",
+                    symbol, company_id, exc,
+                )
 
         # 8) RI VALUATION — stocks only
         if is_stock:

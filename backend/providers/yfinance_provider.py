@@ -350,6 +350,52 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             logger.warning(f"Failed to get earnings data for {ticker_symbol}: {e}")
             return None
 
+    # ---------------------------
+    # NEW: Upcoming ex-dividend date
+    # ---------------------------
+    def get_upcoming_ex_date(self, symbol: str) -> Optional[date]:
+        """Get the next ex-dividend date from yfinance info.
+        
+        Primary source: info.exDividendDate (Unix timestamp).
+        Secondary source: calendar.Ex-Dividend Date (ISO string).
+        Returns None if the stock doesn't pay dividends or both
+        fields are missing/past.
+        Ex-dates are NYSE calendar — uses America/New_York timezone.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+            tkr = yf.Ticker(symbol.upper())
+            info = tkr.info or {}
+            today = date.today()
+
+            # Primary: info.exDividendDate (Unix timestamp)
+            ts = info.get("exDividendDate")
+            if ts is not None:
+                try:
+                    ex_date = datetime.fromtimestamp(float(ts), tz=ZoneInfo("America/New_York")).date()
+                    if ex_date >= today:
+                        return ex_date
+                except (ValueError, TypeError):
+                    pass
+
+            # Secondary: calendar.Ex-Dividend Date (ISO date string)
+            try:
+                cal = tkr.calendar
+                if cal is not None and not cal.empty:
+                    cal_row = cal.iloc[0] if isinstance(cal, pd.DataFrame) else cal
+                    cal_date_str = cal_row.get("Ex-Dividend Date")
+                    if cal_date_str is not None:
+                        cal_date = pd.Timestamp(cal_date_str).date()
+                        if cal_date >= today:
+                            return cal_date
+            except Exception:
+                pass
+
+            return None
+        except Exception as e:
+            logger.debug("[YF] get_upcoming_ex_date(%s) failed: %s", symbol, e)
+            return None
+
     @staticmethod
     def _safe_float(val) -> Optional[float]:
         if val is None:

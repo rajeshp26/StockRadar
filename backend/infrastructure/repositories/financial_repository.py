@@ -30,6 +30,7 @@ from domain.model_types import (
     CashFlowRow,
     EarningsRow,
     DividendRow,
+    UpcomingDividendEvent,
     CompanyRefreshInfo,
     CompleteFundamentals,
 )
@@ -1308,4 +1309,71 @@ class SupabaseFinancialRepository:
             logger.error(
                 "Failed to get company_summary_latest for company_id=%s: %s", company_id, e
             )
-            return None            
+            return None
+
+    # ========================================================================
+    # UPCOMING DIVIDEND EVENTS (forward-looking predictions)
+    # ========================================================================
+
+    async def upsert_upcoming_dividend(
+        self,
+        company_id: int,
+        ex_dividend_date: date,
+        data_source: str,
+        trust_score: float = 0.50,
+        status: str = "predicted",
+    ) -> None:
+        """Upsert a forward-looking ex-dividend date into upcoming_dividend_events.
+        
+        UNIQUE(company_id, data_source) ensures each source has exactly one
+        opinion per company.  When a provider updates its prediction, the
+        old row is replaced atomically — no delete needed.
+        """
+        try:
+            trust_scores = {"yfinance": 0.95, "finviz": 0.80, "predicted": 0.50}
+            score = trust_scores.get(data_source, trust_score)
+
+            source_status = "provider_reported" if data_source in ("yfinance", "finviz") else status
+
+            payload = DatabaseSerializer.serialize({
+                "company_id": company_id,
+                "data_source": data_source,
+                "ex_dividend_date": ex_dividend_date,
+                "trust_score": score,
+                "status": source_status,
+                "source_observed_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            })
+
+            self.client.table("upcoming_dividend_events").upsert(
+                payload,
+                on_conflict="company_id,data_source",
+            ).execute()
+            logger.debug(
+                "[UPCOMING_DIV] Upserted %s for company_id=%s: %s (trust=%.2f, status=%s)",
+                data_source, company_id, ex_dividend_date, score, source_status,
+            )
+        except Exception as e:
+            logger.error(
+                "[UPCOMING_DIV] Failed to upsert %s for company_id=%s: %s",
+                data_source, company_id, e,
+            )
+
+    async def cleanup_stale_events(self, company_id: int) -> None:
+        """Remove past-due upcoming events with a 14-day grace period.
+        
+        The grace period prevents gaps when a provider hasn't refreshed yet.
+        Only affects upcoming_dividend_events — never touches dividend_history.
+        """
+        try:
+            cutoff = (date.today() - timedelta(days=14)).isoformat()
+            self.client.table("upcoming_dividend_events")\
+                .delete()\
+                .eq("company_id", company_id)\
+                .lt("ex_dividend_date", cutoff)\
+                .execute()
+        except Exception as e:
+            logger.error(
+                "[UPCOMING_DIV] Failed to cleanup stale events for company_id=%s: %s",
+                company_id, e,
+            )

@@ -23,6 +23,9 @@ from application.services.dividend_dashboard_service import DividendDashboardSer
 @pytest.fixture
 def mock_repo():
     repo = MagicMock()
+    # By default, the new upcoming_dividend_events table returns nothing.
+    # Tests that need events from the new table must configure this explicitly.
+    repo.get_next_upcoming_event.return_value = None
     return repo
 
 
@@ -62,8 +65,14 @@ SAMPLE_METRICS = [
 ]
 
 SAMPLE_UPCOMING = [
-    {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 85},
-    {"company_id": 2, "ex_dividend_date": "2026-06-15", "dividend_amount": 0.75, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 90},
+    {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 0.85},
+    {"company_id": 2, "ex_dividend_date": "2026-06-15", "dividend_amount": 0.75, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 0.90},
+]
+
+# Upcoming events with the new table format (trust_score + status)
+SAMPLE_NEW_UPCOMING = [
+    {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "trust_score": 0.95, "data_source": "yfinance", "status": "provider_reported"},
+    {"company_id": 2, "ex_dividend_date": "2026-06-15", "dividend_amount": 0.75, "trust_score": 0.95, "data_source": "yfinance", "status": "provider_reported"},
 ]
 
 
@@ -191,7 +200,7 @@ class TestUpcoming:
     def test_ut9_confidence_high(self, service, mock_repo):
         mock_repo.get_holdings_with_companies.return_value = [SAMPLE_HOLDINGS[0]]
         mock_repo.get_upcoming_ex_dates.return_value = [
-            {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 85}
+            {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 0.85}
         ]
         result = service.get_upcoming([1])
         assert result[0]["confidence"] == "high"
@@ -199,7 +208,7 @@ class TestUpcoming:
     def test_ut10_confidence_low(self, service, mock_repo):
         mock_repo.get_holdings_with_companies.return_value = [SAMPLE_HOLDINGS[0]]
         mock_repo.get_upcoming_ex_dates.return_value = [
-            {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 30}
+            {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 0.30}
         ]
         result = service.get_upcoming([1])
         assert result[0]["confidence"] == "low"
@@ -224,7 +233,7 @@ class TestHoldingsTable:
         mock_repo.get_latest_regular_dps.return_value = [{"company_id": 1, "dividend_amount": 1.25}]
         mock_repo.get_dividend_metrics_for_companies.return_value = [SAMPLE_METRICS[0]]
         mock_repo.get_upcoming_ex_dates.return_value = [
-            {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 85}
+            {"company_id": 1, "ex_dividend_date": "2026-06-01", "dividend_amount": 1.25, "dividend_type": "regular", "frequency": "quarterly", "confidence_score": 0.85}
         ]
         result = service.get_holdings([1])
         assert len(result) == 1

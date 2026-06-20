@@ -258,6 +258,23 @@ class DividendRows(BaseModel):
     def __len__(self): return len(self.rows)
 
 
+class UpcomingDividendEvent(BaseModel):
+    """Forward-looking ex-dividend date from a provider or prediction.
+    
+    Stored in upcoming_dividend_events table — separate from historical
+    dividend_history to prevent metrics pollution.
+    """
+    company_id: int
+    data_source: str
+    ex_dividend_date: date
+    trust_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    status: str = "predicted"  # 'predicted' | 'provider_reported'
+    source_observed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+
 
 # ============================================================================
 # COMPLETE FINANCIALS RESPONSE

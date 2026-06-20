@@ -61,7 +61,7 @@ export function DividendsUpcomingCard({ data, isLoading, error }: DividendsUpcom
                                 'text-[10px] px-1.5 py-0.5 rounded-full font-black uppercase tracking-widest',
                                 item.confidence === 'high' ? 'bg-emerald-500/12 border border-emerald-500/25 text-emerald-400' : item.confidence === 'medium' ? 'bg-amber-500/12 border border-amber-500/25 text-amber-400' : 'bg-rose-500/12 border border-rose-500/25 text-rose-400'
                             )}>
-                                {item.confidence}
+                                {item.trust_label ?? item.confidence}
                             </span>
                         </div>
                         <div className="text-right">

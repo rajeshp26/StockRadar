@@ -460,6 +460,9 @@ class UpcomingExDate(BaseModel):
     estimated_income: float = 0.0
     dividend_type: str = "regular"
     confidence: str = "low"
+    trust_score: Optional[float] = None
+    trust_label: Optional[str] = None
+    data_source: Optional[str] = None
 
 
 class MetricWithCoverage(BaseModel):

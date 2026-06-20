@@ -237,6 +237,9 @@ export interface UpcomingExDate {
     estimated_income: number;
     dividend_type: string;
     confidence: 'high' | 'medium' | 'low';
+    trust_score?: number;
+    trust_label?: 'Likely' | 'Estimate' | 'Predicted';
+    data_source?: string;
     event_type?: string;
 }
 

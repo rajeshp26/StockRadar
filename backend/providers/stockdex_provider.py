@@ -83,6 +83,7 @@ class StockdexMacrotrendsProvider:
     def __init__(self) -> None:
         self._ticker_cache: Dict[str, Any] = {}
         self._cooldown_until: float = 0.0
+        self._finviz_cooldown_until: float = 0.0
         logger.info("StockdexMacrotrendsProvider initialized")
 
     def is_rate_limited(self) -> bool:
@@ -109,6 +110,48 @@ class StockdexMacrotrendsProvider:
 
     def get_quarterly_cash_flow_df(self, symbol: str) -> pd.DataFrame:
         return self._fetch("quarterly", "cashflow", symbol)
+
+    # ------------------------------------------------------------------
+    # Upcoming ex-dividend date (Finviz via stockdex)
+    # ------------------------------------------------------------------
+
+    def get_upcoming_ex_date(self, symbol: str) -> Optional[date]:
+        """Get next ex-dividend date from Finviz via stockdex.
+        
+        Returns the ex-date string parsed to date, or None if the stock
+        doesn't pay dividends or the data is unavailable.
+        Finviz has its own rate limit — tracked separately from Macrotrends.
+        """
+        now = time.monotonic()
+        if now < self._finviz_cooldown_until:
+            logger.debug("[STOCKDEX][%s] Finviz rate-limited, skipping", symbol)
+            return None
+
+        try:
+            from stockdex import Ticker as StockdexTicker
+            ticker = self._get_or_create_ticker(symbol)
+            div = ticker.finviz_overall_dividend()
+            if div is None or not isinstance(div, dict):
+                return None
+
+            ex_str = div.get("dividendExDate")
+            if not ex_str:
+                return None
+
+            from datetime import datetime
+            return datetime.strptime(str(ex_str).strip(), "%Y-%m-%d").date()
+
+        except Exception as e:
+            estr = str(e)
+            if "429" in estr or "Too Many Requests" in estr:
+                cool_secs = 300
+                self._finviz_cooldown_until = time.monotonic() + cool_secs
+                logger.warning(
+                    "[STOCKDEX][%s] Finviz 429 rate-limited – cooling off %ds",
+                    symbol, cool_secs,
+                )
+            logger.debug("[STOCKDEX][%s] get_upcoming_ex_date failed: %s", symbol, e)
+            return None
 
     # ------------------------------------------------------------------
     # Core fetch & normalisation
