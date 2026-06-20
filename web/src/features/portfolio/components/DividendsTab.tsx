@@ -68,19 +68,14 @@ export function DividendsTab({ accountIds }: DividendsTabProps) {
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                <div className="lg:col-span-1">
-                    <DividendsUpcomingCard data={upcoming} isLoading={upcomingLoading} error={upcomingError} />
-                </div>
-                <div className="lg:col-span-2">
-                    <DividendsHoldingsSection
-                        data={holdings}
-                        isLoading={holdingsLoading}
-                        error={holdingsError}
-                        accountIds={accountIds}
-                    />
-                </div>
-            </div>
+            <DividendsUpcomingCard data={upcoming} isLoading={upcomingLoading} error={upcomingError} />
+
+            <DividendsHoldingsSection
+                data={holdings}
+                isLoading={holdingsLoading}
+                error={holdingsError}
+                accountIds={accountIds}
+            />
         </div>
     );
 }

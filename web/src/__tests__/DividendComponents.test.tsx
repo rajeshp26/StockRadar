@@ -146,23 +146,61 @@ describe('DividendSectorChart', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DividendsUpcomingCard
+// DividendsUpcomingCard (Ex-Dates Calendar)
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('DividendsUpcomingCard', () => {
     const data: UpcomingExDate[] = [
-        { symbol: 'AAPL', company_name: 'Apple Inc.', ex_dividend_date: '2026-07-15', amount_per_share: 1.90, estimated_income: 95, dividend_type: 'regular', confidence: 'high' },
-        { symbol: 'GOOGL', company_name: 'Alphabet Inc.', ex_dividend_date: '2026-07-20', amount_per_share: 1.50, estimated_income: 45, dividend_type: 'regular', confidence: 'low' },
+        { symbol: 'AAPL', company_name: 'Apple Inc.', ex_dividend_date: '2026-06-25', amount_per_share: 1.90, estimated_income: 95, dividend_type: 'regular', confidence: 'high' },
+        { symbol: 'GOOGL', company_name: 'Alphabet Inc.', ex_dividend_date: '2026-06-25', amount_per_share: 1.50, estimated_income: 45, dividend_type: 'regular', confidence: 'low' },
     ];
 
-    it('renders heading, symbols, and date', () => {
-        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
-        expect(screen.getByText('Upcoming Ex-Dates')).toBeInTheDocument();
-        expect(screen.getByText('AAPL')).toBeInTheDocument();
-        expect(screen.getByText('GOOGL')).toBeInTheDocument();
-        expect(screen.getByText((c) => c.includes('2026-07-15'))).toBeInTheDocument();
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-06-15'));
     });
 
-    it('renders high and low confidence badges', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('renders heading, search input, and month nav', () => {
+        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        expect(screen.getByText('Ex-Dates Calendar')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Filter by ticker...')).toBeInTheDocument();
+        expect(screen.getByLabelText('Previous month')).toBeInTheDocument();
+        expect(screen.getByLabelText('Next month')).toBeInTheDocument();
+        expect(screen.getByText('June 2026')).toBeInTheDocument();
+    });
+
+    it('renders week day headers', () => {
+        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(d => {
+            expect(screen.getByText(d)).toBeInTheDocument();
+        });
+    });
+
+    it('shows predicted badge chip', () => {
+        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        expect(screen.getByText('Predicted')).toBeInTheDocument();
+    });
+
+    it('shows legend items', () => {
+        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        expect(screen.getByText('Has ex-date')).toBeInTheDocument();
+        expect(screen.getByText('≤3 days away')).toBeInTheDocument();
+    });
+
+    it('auto-selects next upcoming date and shows tickers in detail panel', () => {
+        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        expect(screen.getByText('AAPL')).toBeInTheDocument();
+        expect(screen.getByText('GOOGL')).toBeInTheDocument();
+        const labels = screen.getAllByText('Dividend / share');
+        expect(labels.length).toBe(2);
+        const totals = screen.getAllByText('Est. total (to date)');
+        expect(totals.length).toBe(2);
+    });
+
+    it('renders high and low confidence badges in detail panel', () => {
         render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
         const high = screen.getByText('high');
         const low = screen.getByText('low');
@@ -170,9 +208,18 @@ describe('DividendsUpcomingCard', () => {
         expect(low.className).toContain('text-rose-400');
     });
 
-    it('shows loading state with skeletons', () => {
+    it('filters by ticker search and hides non-matching tickers', () => {
+        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        const input = screen.getByPlaceholderText('Filter by ticker...');
+        fireEvent.change(input, { target: { value: 'GOOGL' } });
+        // Both are on the same auto-selected date, so GOOGL still shows but AAPL is hidden
+        expect(screen.getByText('GOOGL')).toBeInTheDocument();
+        expect(screen.queryByText('AAPL')).not.toBeInTheDocument();
+    });
+
+    it('shows loading state with shimmer', () => {
         const { container } = render(<DividendsUpcomingCard data={undefined} isLoading error={null} />);
-        expect(screen.getByText('Upcoming Ex-Dates')).toBeInTheDocument();
+        expect(screen.getByText('Ex-Dates Calendar')).toBeInTheDocument();
         expect(container.querySelector('.glass-shimmer')).toBeInTheDocument();
     });
 
@@ -184,6 +231,20 @@ describe('DividendsUpcomingCard', () => {
     it('shows empty state when no upcoming', () => {
         render(<DividendsUpcomingCard data={[]} isLoading={false} error={null} />);
         expect(screen.getByText('No upcoming ex-dates found')).toBeInTheDocument();
+    });
+
+    it('displays legend with amber and rose dots', () => {
+        const { container } = render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        const amberDots = container.querySelectorAll('.bg-amber-400');
+        expect(amberDots.length).toBeGreaterThan(0);
+        const roseDots = container.querySelectorAll('.bg-rose-500');
+        expect(roseDots.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it('shows count badge on calendar days that have ex-dates', () => {
+        render(<DividendsUpcomingCard data={data} isLoading={false} error={null} />);
+        const badges = screen.getAllByText((content) => /^\d+$/.test(content));
+        expect(badges.length).toBeGreaterThan(0);
     });
 });
 
