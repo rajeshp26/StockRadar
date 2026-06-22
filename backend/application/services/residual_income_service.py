@@ -22,7 +22,7 @@
 
 from __future__ import annotations
 import logging
-from datetime import date, datetime
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
 
 from shared.finance_math import (
@@ -470,7 +470,7 @@ class ResidualIncomeService:
             except Exception:
                 pass
 
-            now_iso = datetime.utcnow().isoformat() + "Z"
+            _now_iso_ea = now_iso()
 
             # Bug 1 fix: early-abort path also has a fully defined resolved_inputs
             # so insert_valuation_run always receives a complete audit record.
@@ -483,7 +483,7 @@ class ResidualIncomeService:
                 "g_ri_source":      "early_abort",
                 "terminal_g_final": None,
                 "forecast_years":   n_default,
-                "resolved_at":      now_iso,
+                "resolved_at":      _now_iso_ea,
             }
 
             abort_valuation = ResidualIncomeValuation(
@@ -511,11 +511,11 @@ class ResidualIncomeService:
                                 "suitabilitySummary": suitability_summary,
                             },
                             "dataQuality": {
-                                "freshnessDays": {"lastComputedAt": now_iso},
+                                "freshnessDays": {"lastComputedAt": _now_iso_ea},
                                 "fallbacksUsed": True,
                                 "inputDecisions": input_decisions,
                             },
-                            "earlyAbort": True, "lastComputedAt": now_iso,
+                            "earlyAbort": True, "lastComputedAt": _now_iso_ea,
                         },
                         "data_version_tag": None,
                         "notes": "early_abort:shares_not_available",
@@ -531,7 +531,7 @@ class ResidualIncomeService:
                     suitabilitySummary=suitability_summary,
                 ),
                 dataQuality=DataQuality(
-                    freshnessDays={"lastComputedAt": now_iso},
+                    freshnessDays={"lastComputedAt": _now_iso_ea},
                     fallbacksUsed=True, inputDecisions=input_decisions,
                 ),
             )
@@ -697,7 +697,7 @@ class ResidualIncomeService:
             "g_ri_source":      g_evidence.get("source"),
             "terminal_g_final": round(float(tg_used), 4) if tg_used is not None else None,
             "forecast_years":   int(n),
-            "resolved_at":      datetime.utcnow().isoformat() + "Z",
+            "resolved_at":      now_iso(),
         }
 
         # ── Forecast RI per share ──────────────────────────────────────────────
@@ -840,7 +840,7 @@ class ResidualIncomeService:
 
         # ── Audit run ──────────────────────────────────────────────────────────
 
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        _now_iso = now_iso()
         output_snapshot: Dict[str, Any] = {
             "valuation": valuation.dict(),
             "applicability": {
@@ -850,12 +850,12 @@ class ResidualIncomeService:
                 "suitabilitySummary": suitability_summary,
             },
             "dataQuality": {
-                "freshnessDays":  {"lastComputedAt": now_iso},
+                "freshnessDays":  {"lastComputedAt": _now_iso},
                 "fallbacksUsed":  bool(fallbacks_used),
                 "inputDecisions": {"ri": input_decisions},
             },
             "suitabilityEvidence": ri_evidence,
-            "lastComputedAt":      now_iso,
+            "lastComputedAt":      _now_iso,
         }
 
         # resolved_inputs is guaranteed defined above — NameError impossible.
@@ -883,7 +883,7 @@ class ResidualIncomeService:
                 suitabilitySummary=suitability_summary,
             ),
             dataQuality=DataQuality(
-                freshnessDays={"lastComputedAt": now_iso},
+                freshnessDays={"lastComputedAt": _now_iso},
                 fallbacksUsed=bool(fallbacks_used),
                 inputDecisions={"ri": input_decisions},
             ),

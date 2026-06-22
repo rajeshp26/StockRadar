@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, timedelta
+from datetime import timedelta
+from shared.time_utils import now_utc
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -93,7 +94,7 @@ async def get_price_history(
     sym = _normalize(symbol)
 
     try:
-        end = date.today()
+        end = now_utc().date()
         start = end - timedelta(days=days)
 
         # Resolve company_id

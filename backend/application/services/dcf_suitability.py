@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
 
 from domain.models.valuation_rule1 import DiagnosticFlag
@@ -642,7 +642,7 @@ async def evaluate_dcf_suitability(
         "totalPossible": total_possible,
         "score0to100": score_0_100,
         "category": category,
-        "asOf": date.today().isoformat(),
+        "asOf": now_iso(),
         "sector": sector,
     }
 

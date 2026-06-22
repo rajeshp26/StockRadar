@@ -3,9 +3,9 @@ import os, sys, json, math
 from datetime import date, timedelta, datetime
 from random import Random
 
-SUPABASE_URL = "https://viqdqgxcumcdhqxooplw.supabase.co"
-SERVICE_KEY = "sb_secret_NxN3ywf1RrMektnf-rq9hg_FxKFOVoG"
-FIREBASE_UID = "OVUH9KDf7TORSB4KuvrGEIRAvTI2"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+FIREBASE_UID = os.environ.get("SEED_FIREBASE_UID", "")
 
 HEADERS = {
     "apikey": SERVICE_KEY,

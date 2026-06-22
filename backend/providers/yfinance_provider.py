@@ -2,7 +2,8 @@
 from .base import StockDataProvider, TickerInfo, StockDetails
 from domain.interfaces.stock_provider import StockProvider
 from typing import Optional, List, Dict, Any
-from datetime import datetime, date
+from datetime import datetime, date, timezone
+from shared.time_utils import now_utc, parse_db_timestamp
 import logging
 import yfinance as yf
 import pandas as pd
@@ -75,7 +76,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             ts = info.get('earningsTimestamp')
             if ts:
                 try:
-                    earnings_date = datetime.fromtimestamp(ts).date()
+                    earnings_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
                 except (ValueError, TypeError):
                     pass
 
@@ -235,7 +236,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             tkr = yf.Ticker(symbol.upper())
             info = tkr.info or {}
             return {
-                "snapshot_date": date.today(),
+                "snapshot_date": now_utc().date(),
                 "market_cap": info.get("marketCap"),
                 "enterprise_value": info.get("enterpriseValue"),
                 "shares_outstanding": info.get("sharesOutstanding"),
@@ -280,7 +281,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
                             if isinstance(quarter_date, pd.Timestamp):
                                 report_date = quarter_date.date()
                             elif isinstance(quarter_date, str):
-                                report_date = datetime.strptime(quarter_date, "%Y-%m-%d").date()
+                                report_date = parse_db_timestamp(quarter_date).date()
                             else:
                                 report_date = quarter_date
 
@@ -366,7 +367,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             from zoneinfo import ZoneInfo
             tkr = yf.Ticker(symbol.upper())
             info = tkr.info or {}
-            today = date.today()
+            today = now_utc().date()
 
             # Primary: info.exDividendDate (Unix timestamp)
             ts = info.get("exDividendDate")

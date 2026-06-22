@@ -14,7 +14,8 @@ from application.services import owner_earnings_suitability
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from decimal import Decimal
 import hashlib
 from typing import List, Dict, Any, Optional, Tuple
@@ -488,7 +489,7 @@ class PortfolioService:
         # Insert new holdings (price-independent cost-basis fields only)
         for holding in holdings_by_symbol.values():
             holding["account_id"] = account_id
-            holding["computed_at"] = datetime.now().isoformat()
+            holding["computed_at"] = now_iso()
             self.portfolio_repo.upsert_holding(holding)
         
         logger.info(f"Holdings recalculated for account {account_id}: {len(holdings_by_symbol)} positions")
@@ -1051,8 +1052,8 @@ class PortfolioService:
                             "payment_date": payment_date,
                             "amount": float(amount),
                             "currency": tx.get("currency", "CAD"),
-                            "fiscal_year": payment_date.year if isinstance(payment_date, date) else datetime.fromisoformat(payment_date).year,
-                            "fiscal_month": payment_date.month if isinstance(payment_date, date) else datetime.fromisoformat(payment_date).month,
+                            "fiscal_year": payment_date.year if isinstance(payment_date, date) else parse_db_timestamp(payment_date).year,
+                            "fiscal_month": payment_date.month if isinstance(payment_date, date) else parse_db_timestamp(payment_date).month,
                         })
         
         if dividend_records:
@@ -1115,7 +1116,7 @@ class PortfolioService:
         )
         
         # Get dividend summary for current year
-        current_year = datetime.now().year
+        current_year = now_utc().year
         ytd_dividends = Decimal("0")
         
         for account in accounts:
@@ -1194,7 +1195,7 @@ class PortfolioService:
                 "monthly_summaries": [],
             }
 
-        current_year = datetime.now().year
+        current_year = now_utc().year
         current_year_total = Decimal("0")
         all_monthly_summaries = []
 
@@ -1318,7 +1319,7 @@ class PortfolioService:
         dividends = repo.get_account_dividends_by_year(account_id, None)
         dividends.sort(key=lambda d: d.get("payment_date", ""), reverse=True)
 
-        current_year = datetime.now().year
+        current_year = now_utc().year
         current_year_total = sum(
             float(d.get("amount", 0)) for d in dividends
             if d.get("fiscal_year") == current_year
@@ -1546,7 +1547,7 @@ class PortfolioService:
         transaction date across the given accounts, falling back to a safe
         default if no account_ids or transactions exist.
         """
-        end = datetime.now().date()
+        end = now_utc().date()
         p = period.upper()
         if p == "1D":
             start = end
@@ -1945,7 +1946,7 @@ class PortfolioService:
         worst: Optional[Dict[str, Any]] = None
         for month_key, returns in monthly_map.items():
             avg_ret = sum(returns) / len(returns)
-            dt = datetime.strptime(month_key + "-01", "%Y-%m-%d")
+            dt = datetime.strptime(month_key + "-01", "%Y-%m-%d").replace(tzinfo=timezone.utc)
             label = dt.strftime("%b %Y")
             entry = {"month": month_key, "return_pct": round(avg_ret, 2), "label": label}
             if best is None or avg_ret > best["return_pct"]:

@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional
 
 from application.services.ai_service import generate_suitability_summary
@@ -91,8 +92,8 @@ class MagicFormulaService:
         last_computed = snap.get("lastComputedAt")
         if last_computed:
             try:
-                ts = datetime.fromisoformat(last_computed.replace("Z", "+00:00"))
-                age = datetime.utcnow().replace(tzinfo=ts.tzinfo) - ts
+                ts = parse_db_timestamp(last_computed)
+                age = now_utc() - ts
                 if age > timedelta(hours=_CACHE_MAX_AGE_HOURS):
                     return None
             except Exception:
@@ -117,7 +118,7 @@ class MagicFormulaService:
         sector: str,
         industry: str,
     ) -> MagicFormulaResponse:
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        now_str = now_iso()
 
         # ── Parallel data fetch ────────────────────────────────────────────────
         (
@@ -263,7 +264,7 @@ class MagicFormulaService:
             days_since_bs_update=None,   # would require an extra query; omit for now
             days_since_ev_snapshot=None,
             fallbacks_used=(ttm_ebit is None or ev is None),
-            last_computed_at=now_iso,
+            last_computed_at=now_str,
         )
 
         # ── Assemble response ─────────────────────────────────────────────────
@@ -333,7 +334,7 @@ class MagicFormulaService:
                 "assumption_snapshot": {},
                 "output_snapshot": {
                     "response": response.dict(),
-                    "lastComputedAt": now_iso,
+                    "lastComputedAt": now_str,
                 },
                 "data_version_tag": None,
                 "notes": None,

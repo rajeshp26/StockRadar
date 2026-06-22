@@ -51,6 +51,7 @@ from schemas_portfolio import (
     RiskContributionResponse,
     FactorExposureResponse,
 )
+from shared.time_utils import now_utc
 from shared.exceptions.base import AppException
 from database import supabase
 
@@ -695,8 +696,7 @@ async def get_account_dividends(
             )
         
         # Get current year total
-        from datetime import datetime
-        current_year = datetime.now().year
+        current_year = now_utc().year
         yearly_divs = repo.get_account_dividends_by_year(account_id, current_year)
         current_year_total = sum(d.get("amount", 0) for d in yearly_divs)
         

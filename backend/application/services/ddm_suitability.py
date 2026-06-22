@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
 
 from domain.models.valuation_rule1 import DiagnosticFlag
@@ -553,7 +553,7 @@ async def evaluate_ddm_suitability(
         "category": category,
         "recommendedModel": recommended_model,
         "hardFail": hard_fail,
-        "asOf": date.today().isoformat(),
+        "asOf": now_iso(),
     }
 
     flags.insert(0, DiagnosticFlag(

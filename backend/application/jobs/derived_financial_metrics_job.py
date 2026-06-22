@@ -22,7 +22,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
@@ -435,7 +436,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
             "working_capital_per_share":     wc_ps,
             "capex_per_share":               capex_ps,
 
-            "computed_at":        datetime.utcnow().isoformat(),
+            "computed_at":        now_iso(),
             "source_version_tag": _version_tag(source_payload),
             "data_source":        "derived",
             "confidence_score":   float(
@@ -894,7 +895,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
                 "piotroski_score":    piotroski,
                 "altman_z_score":     _clamp_ratio(altman_z),
                 "interest_coverage":  _clamp_ratio(interest_coverage),
-                "computed_at":      datetime.utcnow().isoformat(),
+                "computed_at":      now_iso(),
                 "source_version_tag": _version_tag(source_payload),
                 "data_source":      "derived",
                 "confidence_score": float(
@@ -1092,14 +1093,14 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
             if not end or q["ttm_eps"] is None:
                 continue
             try:
-                end_dt = datetime.strptime(end, "%Y-%m-%d").date()
+                end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
             except (ValueError, TypeError):
                 continue
             best_price = None
             best_diff = timedelta(days=46)
             for pd in price_dates_sorted:
                 try:
-                    pd_dt = datetime.strptime(pd, "%Y-%m-%d").date()
+                    pd_dt = datetime.strptime(pd, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
                 except (ValueError, TypeError):
                     continue
                 diff = abs((pd_dt - end_dt).days)
@@ -1188,7 +1189,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
             "enterprise_value":    q.get("enterprise_value"),
             "ev_ebitda":           q.get("ev_ebitda"),
             "price_to_fcf":        q.get("price_to_fcf"),
-            "computed_at":         datetime.utcnow().isoformat(),
+            "computed_at":         now_iso(),
             "source_version_tag":  _version_tag(source_payload),
             "data_source":         "derived",
             "confidence_score":    float(

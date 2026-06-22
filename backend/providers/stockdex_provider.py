@@ -4,6 +4,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from shared.time_utils import parse_db_timestamp
+
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -128,7 +130,6 @@ class StockdexMacrotrendsProvider:
             return None
 
         try:
-            from stockdex import Ticker as StockdexTicker
             ticker = self._get_or_create_ticker(symbol)
             div = ticker.finviz_overall_dividend()
             if div is None or not isinstance(div, dict):
@@ -138,8 +139,7 @@ class StockdexMacrotrendsProvider:
             if not ex_str:
                 return None
 
-            from datetime import datetime
-            return datetime.strptime(str(ex_str).strip(), "%Y-%m-%d").date()
+            return parse_db_timestamp(str(ex_str).strip()).date()
 
         except Exception as e:
             estr = str(e)
@@ -206,8 +206,6 @@ class StockdexMacrotrendsProvider:
             Index:   named "field_name" with metric labels
             Values:  string-encoded floats
         """
-        from stockdex import Ticker as StockdexTicker
-
         ticker = self._get_or_create_ticker(symbol)
 
         method_map = {

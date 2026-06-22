@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime
+from shared.time_utils import now_iso
 from typing import Dict, Set, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -250,14 +250,13 @@ async def broadcast_stock_update(symbol: str, price: float, change: float, chang
     uids = symbol_subscribers.get(symbol, set())
     if not uids:
         return
-    now_iso = datetime.now().isoformat()
     payload = {
         "type":          "price_update",
         "symbol":        symbol,
         "price":         float(price),
         "change":        float(change),
         "changePercent": float(change_percent),
-        "lastUpdated":   now_iso,
+        "lastUpdated":   now_iso(),
     }
     for uid in uids:
         for queue in user_queues.get(uid, []):

@@ -2,7 +2,8 @@ from __future__ import annotations
 import logging
 import math
 import statistics
-from datetime import date, datetime, timedelta
+from datetime import date
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional
 
 from domain.models.risk_assessment import (
@@ -147,7 +148,7 @@ class RiskAssessmentService:
                 data_sources="financial_ratios + income_statements + company_summary + price_history",
                 fiscal_year_end=None,
                 fallbacks_used=fallbacks,
-                last_computed_at=datetime.utcnow().isoformat() + "Z",
+                last_computed_at=now_iso(),
             ),
         )
 
@@ -200,7 +201,7 @@ class RiskAssessmentService:
             return RiskAiNarrative(
                 narrative=narrative_text,
                 model="openrouter/default",
-                generated_at=datetime.utcnow().isoformat() + "Z",
+                generated_at=now_iso(),
                 generation_time_ms=end_ms - start_ms,
             )
 

@@ -3,3 +3,23 @@ requires-python = ">=3.12,<3.13"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "DTZ001",  # datetime.utcnow()
+    "DTZ002",  # datetime.utcfromtimestamp()
+    "DTZ003",  # datetime.now() without tz
+    "DTZ004",  # datetime.fromtimestamp() without tz
+    "DTZ005",  # datetime.datetime.utcnow()
+    "DTZ006",  # datetime.datetime.utcfromtimestamp()
+    "DTZ007",  # datetime.datetime.now() without tz
+    "DTZ011",  # date.today() — timezone-naive
+    "DTZ012",  # datetime.date() — timezone-naive
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["DTZ"]
+"scripts/**/*.py" = ["DTZ"]

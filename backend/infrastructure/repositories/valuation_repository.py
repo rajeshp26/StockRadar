@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
  
 from database import supabase
 from shared.finance_math import safe_float
+from shared.time_utils import now_utc, parse_db_timestamp
 
 import hashlib
 import json
@@ -60,7 +61,7 @@ def _normalize_datetime(ts: Any) -> Optional[datetime]:
     if isinstance(ts, str):
         try:
             s = ts.replace("Z", "+00:00")
-            return datetime.fromisoformat(s).replace(tzinfo=None)
+            return parse_db_timestamp(s).replace(tzinfo=None)
         except Exception:
             return None
     return None
@@ -945,7 +946,7 @@ class ValuationRepository:
 
     async def get_ddm_dependency_values(self, company_id: int) -> Dict[str, Any]:
         ttm_rows = await self.get_dividend_history(company_id, limit=300)
-        cutoff   = date.today() - timedelta(days=365)
+        cutoff   = now_utc().date() - timedelta(days=365)
         ttm_dividends = sorted(
             [
                 {"date": str(r["ex_dividend_date"]), "amount": round(float(r["dividend_amount"]), 6)}
@@ -1872,7 +1873,7 @@ class ValuationRepository:
         rows = await self.get_dividend_history(company_id, limit=300)
         if not rows:
             return None
-        cutoff = date.today() - timedelta(days=365)
+        cutoff = now_utc().date() - timedelta(days=365)
         total = 0.0
         hit = False
         for r in rows:

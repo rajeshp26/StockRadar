@@ -58,6 +58,7 @@ class TestEarningsSchedulerCheckAndRefresh:
     async def test_refresh_triggers_derived_metrics_when_rows_written(self):
         self.mock_repo.get_company_refresh_info.return_value = SimpleNamespace(
             company_id=1, ticker_symbol="AAPL",
+            exchange=None,
             first_financial_data_loaded_at=datetime(2024, 1, 1),
             last_refreshed_fiscal_year=2024,
             last_refreshed_fiscal_quarter=None,
@@ -89,6 +90,7 @@ class TestEarningsSchedulerCheckAndRefresh:
     async def test_refresh_triggers_ri_valuation(self):
         self.mock_repo.get_company_refresh_info.return_value = SimpleNamespace(
             company_id=1, ticker_symbol="AAPL",
+            exchange=None,
             first_financial_data_loaded_at=datetime(2024, 1, 1),
             last_refreshed_fiscal_year=2024,
             last_refreshed_fiscal_quarter=None,
@@ -123,6 +125,7 @@ class TestEarningsSchedulerCheckAndRefresh:
     async def test_refresh_skips_derived_when_no_rows_written(self):
         self.mock_repo.get_company_refresh_info.return_value = SimpleNamespace(
             company_id=1, ticker_symbol="AAPL",
+            exchange=None,
             first_financial_data_loaded_at=datetime(2024, 1, 1),
             last_refreshed_fiscal_year=2024,
             last_refreshed_fiscal_quarter=None,
@@ -198,6 +201,7 @@ class TestMarketDataProcessCompany:
         with patch.object(self.scheduler, "_has_any_financials", return_value=False):
             self.mock_repo.get_company_refresh_info.return_value = SimpleNamespace(
                 company_id=1, ticker_symbol="AAPL",
+                exchange=None,
                 first_financial_data_loaded_at=None,
                 last_refreshed_fiscal_year=None,
                 last_refreshed_fiscal_quarter=None,

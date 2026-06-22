@@ -6,10 +6,11 @@ MarketDataRefresh cycle to validate coverage, freshness, and integrity.
 """
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from database import supabase
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ async def validate_dividend_pipeline(
             logger.warning("[DIV_MONITOR] Alert would fire: %s", msg)
         alert_slack = _noop_alert
 
-    today = date.today()
+    today = now_utc().date()
 
     # ── 1. Coverage: at least 15% of holdings have upcoming events ─────
     company_ids: List[int] = []
@@ -126,7 +127,7 @@ async def validate_dividend_pipeline(
         stale_sources_resp = (
             supabase.table("upcoming_dividend_events")
             .select("id", count="exact")
-            .lt("source_observed_at", (datetime.utcnow() - timedelta(days=7)).isoformat())
+            .lt("source_observed_at", (now_utc() - timedelta(days=7)).isoformat())
             .execute()
         )
         stale_source_count = len(stale_sources_resp.data) if stale_sources_resp.data else 0

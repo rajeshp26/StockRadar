@@ -8,8 +8,9 @@ Smart fetching: 20 quarters on first run, then only new filings when due.
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timedelta
-from typing import Dict, Any, Optional, List
+from datetime import date, timedelta
+from shared.time_utils import now_utc, parse_db_timestamp
+from typing import Dict, Any, Optional
 
 from config import settings
 from application.services.super_investors_service import SuperInvestorsService, SUPER_INVESTORS
@@ -52,6 +53,48 @@ class SuperInvestorsRefreshScheduler:
     # ========================================================================
     # SCHEDULER CONTROL
     # ========================================================================
+    async def plan(self) -> list:
+        """
+        v3 planner integration — returns job dicts for each investor due.
+        Only enqueues investors whose last filing is past the due date,
+        or who have never been filed (new investors).
+        """
+        jobs = []
+        today = now_utc().date()
+
+        # Fetch all existing investor records
+        try:
+            existing_resp = self.financial_repo.client.table("institutional_investors").select(
+                "cik, last_filed_period"
+            ).eq("is_super_investor", True).execute()
+            existing = {r["cik"]: r for r in (existing_resp.data or [])}
+        except Exception:
+            existing = {}
+
+        for cik, info in SUPER_INVESTORS.items():
+            record = existing.get(cik)
+            if record and record.get("last_filed_period"):
+                try:
+                    lfp = record["last_filed_period"]
+                    if isinstance(lfp, str):
+                        lfp = parse_db_timestamp(lfp).date()
+                    next_due = self._calculate_next_due_date(lfp)
+                    if today < next_due:
+                        continue
+                except Exception:
+                    pass
+
+            jobs.append({
+                "job_type": "investor_refresh",
+                "dedupe_key": f"investor_refresh:{cik}",
+                "resource_type": "investor",
+                "resource_id": cik,
+                "payload": {"cik": cik, "name": info.get("name"), "firm": info.get("firm"), "tag": info.get("tag")},
+                "priority": 50,
+                "max_attempts": 3,
+            })
+        return jobs
+
     async def start(self) -> None:
         if self.is_running:
             logger.warning("SuperInvestorsScheduler already running")
@@ -148,7 +191,7 @@ class SuperInvestorsRefreshScheduler:
         # Check if new filing is due
         if last_period:
             next_due = self._calculate_next_due_date(last_period)
-            if datetime.now().date() < next_due:
+            if now_utc().date() < next_due:
                 logger.debug(
                     f"Skipping {investor_name}: not due until {next_due}"
                 )
@@ -186,7 +229,7 @@ class SuperInvestorsRefreshScheduler:
         try:
             # Fetch filings by year (SEC API requires year filter for historical data)
             all_filings = []
-            current_year = datetime.now().year
+            current_year = now_utc().year
             years_to_fetch = list(range(current_year - 5, current_year + 1))
             
             for year in years_to_fetch:
@@ -437,7 +480,7 @@ class SuperInvestorsRefreshScheduler:
     def _calculate_next_due_date(self, last_period: date) -> date:
         """Calculate next filing due date (quarter end + 49 days grace)."""
         if isinstance(last_period, str):
-            last_period = datetime.strptime(last_period, "%Y-%m-%d").date()
+            last_period = parse_db_timestamp(last_period).date()
 
         # Next quarter is 6 months after last
         month = last_period.month

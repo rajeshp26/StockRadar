@@ -28,6 +28,7 @@ import asyncio
 import logging
 import statistics
 from datetime import date, timedelta
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
 
 from database import supabase
@@ -156,7 +157,7 @@ class DividendAnalysisService:
     async def _fetch_price_history(self, company_id: int) -> List[Dict]:
         """Direct query — price_history has no method in ValuationRepository."""
         try:
-            cutoff = (date.today() - timedelta(days=6 * 365)).isoformat()
+            cutoff = (now_utc().date() - timedelta(days=6 * 365)).isoformat()
             resp = (
                 supabase.table("price_history")
                 .select("price_date, close_price")
@@ -385,7 +386,7 @@ class DividendAnalysisService:
             s += 20 if nd_ebitda < 1.0 else 16 if nd_ebitda < 2.0 else 10 if nd_ebitda < 3.0 else 4 if nd_ebitda < 4.0 else 0
         if int_cov is not None:
             s += 10 if int_cov > 5.0 else 8 if int_cov > 3.0 else 5 if int_cov > 2.0 else 2 if int_cov > 1.0 else 0
-        s += 10 if not has_cut else (4 if cut_year and (date.today().year - cut_year) > 5 else 0)
+        s += 10 if not has_cut else (4 if cut_year and (now_utc().year - cut_year) > 5 else 0)
         return min(100, s)
 
     def _build_safety_metrics(self, payout_adj, payout_gaap, cash_payout, fcf_payout,

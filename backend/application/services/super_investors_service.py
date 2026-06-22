@@ -17,7 +17,7 @@ Key metrics:
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from shared.time_utils import now_utc
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -396,7 +396,7 @@ class SuperInvestorsService:
             # Save to database
             if overlap_count > 0 and holders:
                 quarter_date = holders[0].get("quarter_date", "")
-                filing_date = str(datetime.now().date())
+                filing_date = str(now_utc().date())
                 self._save_holdings_to_db(ticker, holders, quarter_date, filing_date)
 
             return {

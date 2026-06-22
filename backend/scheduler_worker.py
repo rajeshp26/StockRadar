@@ -1,213 +1,349 @@
 #!/usr/bin/env python3
 """
-StockerPro Background Worker Process
-Runs all schedulers independently from FastAPI.
+StockerPro Background Worker Process (v3 — DB-backed Job Queue)
+================================================================
 
-This process handles:
-- Super Investors refresh (every 24 hours)
-- Market Data refresh (every 24 hours)  
-- Earnings refresh (every 2 hours)
+Architecture
+------------
+- SchedulerPlanner:  polls each scheduler's plan() and enqueues jobs
+- JobEngine + WorkerPool: claims and executes jobs concurrently
+- Janitor: reclaims expired leases, prunes old records
 
-Usage:
+Backward Compatibility
+----------------------
+The v2 scheduler objects (SuperInvestorsRefreshScheduler, etc.) still exist
+with their start()/stop() methods.  In v3 mode they are instantiated only for
+their plan() method and data-fetching logic; the planner loop replaces their
+inline sleep loops.
+
+Usage
+-----
     python scheduler_worker.py
 
-Deployment:
+Deployment
+----------
     - systemd: See systemd/stockerpro-worker.service
-    - Docker: See docker-compose.yml worker service
+    - Docker:  See docker-compose.yml worker service
 """
 
 import asyncio
 import logging
+import os
 import signal
 import sys
-from datetime import datetime
-from typing import Dict, Any, Optional
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, Optional
 
-# Import schedulers
+# v3 infrastructure
+from application.jobs.job_engine import JobEngine, classify_failure
+from application.schedulers.planner import SchedulerPlanner
+from infrastructure.repositories.scheduler_repository import SchedulerRepository
+
+# v2 scheduler classes (used for plan() + data logic)
 from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
 from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
 from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
 from application.schedulers.aggregation_scheduler import AggregationScheduler
 
-# Import config
+# Providers & Repos
+from providers.defeat_beta_provider import DefeatBetaProvider
+from providers.yfinance_provider import YFinanceProvider
+from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from infrastructure.repositories.valuation_repository import ValuationRepository
+from application.services.recompute_guard import RecomputeGuard
+from application.services.valuation_service import ValuationService
+
+# Config
 from config import settings
 
-# ============================================================================
-# Logging Setup
-# ============================================================================
-
 logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    level=logging.INFO,
+    format="%(name)s %(message)s",
+    stream=sys.stderr,
 )
-
 logger = logging.getLogger("stockerpro.worker")
 
+
 # ============================================================================
-# Graceful Shutdown Handler
+# Graceful Shutdown
 # ============================================================================
 
 class GracefulShutdown:
-    """
-    Handles SIGTERM/SIGINT for clean scheduler shutdown.
-    Allows in-progress tasks to complete before exit.
-    """
     def __init__(self):
         self.shutdown_requested = False
-        signal.signal(signal.SIGTERM, self.request_shutdown)
-        signal.signal(signal.SIGINT, self.request_shutdown)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self.request_shutdown)
+            except (ValueError, OSError):
+                logger.warning("Cannot register handler for %s on this platform", signal.Signals(sig).name)
         logger.info("Shutdown handlers registered (SIGTERM, SIGINT)")
-    
+
     def request_shutdown(self, signum, frame):
-        """Signal handler - sets flag for graceful shutdown"""
         sig_name = signal.Signals(signum).name
-        logger.info(f"📥 Shutdown signal received: {sig_name}")
+        logger.info("Shutdown signal received: %s", sig_name)
         self.shutdown_requested = True
 
+
 # ============================================================================
-# Main Worker Process
+# Job Handlers (the actual data-fetching work)
+# ============================================================================
+
+async def handle_company_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handler for 'company_refresh' jobs.
+    Runs all scopes in the payload's scopes list.
+    """
+    payload = job.get("payload", {})
+    scopes = payload.get("scopes", ["market_data"])
+    results = {}
+    if "financials" in scopes:
+        results["financials"] = await _handle_company_refresh_financials(job)
+    if "market_data" in scopes:
+        results["market_data"] = await _handle_company_refresh_market_data(job)
+    return results
+
+
+async def _handle_company_refresh_market_data(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Market data refresh for a single company (price, splits, forecasts, ratios)."""
+    payload = job.get("payload", {})
+    company_id = payload.get("company_id")
+    symbol = payload.get("ticker_symbol")
+    security_type = payload.get("security_type", "stock")
+    exchange = payload.get("exchange")
+
+    if not company_id or not symbol:
+        raise ValueError(f"Missing company_id or ticker_symbol in job payload: {payload}")
+
+    scheduler = MarketDataRefreshScheduler()
+    detail = await scheduler._process_company(
+        symbol=symbol,
+        company_id=company_id,
+        security_type=security_type,
+        exchange=exchange,
+    )
+    return detail
+
+
+async def _handle_company_refresh_financials(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Financial data refresh for a single company (IS/BS/CF, derived metrics)."""
+    payload = job.get("payload", {})
+    company_id = payload.get("company_id")
+    symbol = payload.get("ticker_symbol")
+    earnings_date = payload.get("earnings_date")
+
+    if not company_id or not symbol:
+        raise ValueError(f"Missing company_id or ticker_symbol in job payload: {payload}")
+
+    if earnings_date and isinstance(earnings_date, str):
+        try:
+            earnings_date = date.fromisoformat(earnings_date)
+        except ValueError:
+            earnings_date = None
+
+    scheduler = EarningsRefreshScheduler()
+    from domain.exceptions import SchedulerRefreshError
+    try:
+        result = await scheduler._refresh_company_financials_optimized(
+            company_id=company_id,
+            symbol=symbol,
+            earnings_date=earnings_date,
+        )
+        return result
+    except SchedulerRefreshError as e:
+        raise Exception(str(e)) from e
+
+
+async def handle_investor_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for 'investor_refresh' jobs — refresh a single super investor's portfolio."""
+    payload = job.get("payload", {})
+    cik = payload.get("cik")
+    name = payload.get("name")
+
+    if not cik:
+        raise ValueError(f"Missing cik in investor_refresh payload: {payload}")
+
+    scheduler = SuperInvestorsRefreshScheduler()
+    info = {"name": name, "firm": payload.get("firm"), "tag": payload.get("tag")}
+    result = await scheduler._refresh_single_investor(cik, info)
+    return {"cik": cik, "status": "ok" if result else "skipped"}
+
+
+async def handle_aggregation_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for 'aggregation_refresh' jobs — compute sector/industry percentile stats."""
+    payload = job.get("payload", {})
+    group_type = payload.get("group_type", "sector")
+    min_sample_size = payload.get("min_sample_size", 5)
+
+    from application.jobs.aggregation_jobs import compute_and_upsert_group_metric_stats
+    result = await compute_and_upsert_group_metric_stats(
+        group_type=group_type,
+        min_sample_size=min_sample_size,
+    )
+    return result
+
+
+# ============================================================================
+# Main
 # ============================================================================
 
 async def main():
-    """
-    Initialize and run all schedulers.
-    
-    Architecture:
-    - Each scheduler is a separate async task
-    - All run in same event loop (no blocking between them)
-    - Distributed locks prevent conflicts with other workers
-    - Graceful shutdown waits for current cycles to complete
-    """
     shutdown = GracefulShutdown()
-    
-    logger.info("=" * 60)
-    logger.info("🚀 StockerPro Background Worker Starting")
-    logger.info("=" * 60)
-    logger.info(f"Environment: {settings.ENVIRONMENT}")
-    logger.info(f"Log Level: {settings.LOG_LEVEL}")
-    logger.info(f"Supabase URL: {settings.SUPABASE_URL}")
-    logger.info("=" * 60)
-    
-    # Initialize schedulers
-    schedulers: Dict[str, Any] = {}
-    scheduler_tasks: Dict[str, asyncio.Task] = {}
-    
-    # ── Super Investors Scheduler ────────────────────────────────────────
-    if getattr(settings, "ENABLE_SUPER_INVESTORS_SCHEDULER", True):
-        try:
-            logger.info("Initializing Super Investors scheduler...")
-            schedulers["super_investors"] = SuperInvestorsRefreshScheduler()
-            await schedulers["super_investors"].start()
-            logger.info(
-                f"✅ Super Investors scheduler started "
-                f"(interval: {schedulers['super_investors'].interval_hours}h)"
-            )
-        except Exception as e:
-            logger.error(f"❌ Failed to start Super Investors scheduler: {e}", exc_info=True)
-            sys.exit(1)
-    else:
-        logger.info("⏭️  Super Investors scheduler disabled (ENABLE_SUPER_INVESTORS_SCHEDULER=false)")
-    
-    # ── Market Data Scheduler ─────────────────────────────────────────────
-    if getattr(settings, "ENABLE_MARKET_DATA_SCHEDULER", True):
-        try:
-            logger.info("Initializing Market Data scheduler...")
-            schedulers["market_data"] = MarketDataRefreshScheduler()
-            await schedulers["market_data"].start()
-            logger.info(
-                f"✅ Market Data scheduler started "
-                f"(interval: {schedulers['market_data'].interval_hours}h)"
-            )
-        except Exception as e:
-            logger.error(f"❌ Failed to start Market Data scheduler: {e}", exc_info=True)
-            sys.exit(1)
-    else:
-        logger.info("⏭️  Market Data scheduler disabled (ENABLE_MARKET_DATA_SCHEDULER=false)")
-    
-    # ── Earnings Scheduler ────────────────────────────────────────────────
-    if getattr(settings, "ENABLE_EARNINGS_SCHEDULER", False):
-        try:
-            logger.info("Initializing Earnings scheduler...")
-            schedulers["earnings"] = EarningsRefreshScheduler()
-            await schedulers["earnings"].start()
-            logger.info(
-                f"✅ Earnings scheduler started "
-                f"(interval: {settings.EARNINGS_REFRESH_CHECK_INTERVAL_HOURS}h)"
-            )
-        except Exception as e:
-            logger.error(f"❌ Failed to start Earnings scheduler: {e}", exc_info=True)
-            sys.exit(1)
-    else:
-        logger.info("⏭️  Earnings scheduler disabled (ENABLE_EARNINGS_SCHEDULER=false)")
-    
-    # ── Aggregation Scheduler ─────────────────────────────────────────────
-    if getattr(settings, "ENABLE_AGGREGATION_SCHEDULER", True):
-        try:
-            logger.info("Initializing Aggregation scheduler...")
-            schedulers["aggregation"] = AggregationScheduler()
-            await schedulers["aggregation"].start()
-            logger.info(
-                f"✅ Aggregation scheduler started "
-                f"(interval: {schedulers['aggregation'].interval_hours}h)"
-            )
-        except Exception as e:
-            logger.error(f"❌ Failed to start Aggregation scheduler: {e}", exc_info=True)
-            sys.exit(1)
-    else:
-        logger.info("⏭️  Aggregation scheduler disabled (ENABLE_AGGREGATION_SCHEDULER=false)")
 
-    # ── Validation ─────────────────────────────────────────────────────────
-    if not schedulers:
-        logger.error("❌ No schedulers enabled. Check config settings.")
-        sys.exit(1)
-    
     logger.info("=" * 60)
-    logger.info(f"✅ Worker process running with {len(schedulers)} active schedulers")
+    logger.info("StockerPro Background Worker (v3)")
     logger.info("=" * 60)
-    
-    # ── Keep Running Until Shutdown ───────────────────────────────────────
+    logger.info("Environment: %s", settings.ENVIRONMENT)
+    logger.info("=" * 60)
+
+    # ── Initialize components ──────────────────────────────────────────────
+
+    # 1. Job Engine
+    engine = JobEngine()
+    engine.register_handler("company_refresh", handle_company_refresh)
+    engine.register_handler("investor_refresh", handle_investor_refresh)
+    engine.register_handler("aggregation_refresh", handle_aggregation_refresh)
+
+    # 2. Planner
+    planner = SchedulerPlanner()
+
+    # ── Register Schedulers ────────────────────────────────────────────────
+
+    # Super Investors (every 24h)
+    if getattr(settings, "ENABLE_SUPER_INVESTORS_SCHEDULER", True):
+        si_scheduler = SuperInvestorsRefreshScheduler()
+        planner.register(
+            name="super_investors",
+            plan_fn=si_scheduler.plan,
+            interval_hours=si_scheduler.interval_hours,
+            enabled=True,
+        )
+        logger.info("Registered super_investors planner (interval=%dh)", si_scheduler.interval_hours)
+    else:
+        logger.info("Super Investors scheduler disabled")
+
+    # Market Data (every 24h)
+    if getattr(settings, "ENABLE_MARKET_DATA_SCHEDULER", True):
+        md_scheduler = MarketDataRefreshScheduler()
+        planner.register(
+            name="market_data",
+            plan_fn=md_scheduler.plan,
+            interval_hours=md_scheduler.interval_hours,
+            enabled=True,
+        )
+        logger.info("Registered market_data planner (interval=%dh)", md_scheduler.interval_hours)
+    else:
+        logger.info("Market Data scheduler disabled")
+
+    # Earnings (every 2h)
+    if getattr(settings, "ENABLE_EARNINGS_SCHEDULER", False):
+        ea_scheduler = EarningsRefreshScheduler()
+        planner.register(
+            name="earnings",
+            plan_fn=ea_scheduler.plan,
+            interval_hours=int(getattr(settings, "EARNINGS_REFRESH_CHECK_INTERVAL_HOURS", 2)),
+            enabled=True,
+        )
+        logger.info("Registered earnings planner (interval=%dh)", settings.EARNINGS_REFRESH_CHECK_INTERVAL_HOURS)
+    else:
+        logger.info("Earnings scheduler disabled")
+
+    # Aggregation (every 24h)
+    if getattr(settings, "ENABLE_AGGREGATION_SCHEDULER", True):
+        agg_scheduler = AggregationScheduler()
+        planner.register(
+            name="aggregation",
+            plan_fn=agg_scheduler.plan,
+            interval_hours=agg_scheduler.interval_hours,
+            enabled=True,
+        )
+        logger.info("Registered aggregation planner (interval=%dh)", agg_scheduler.interval_hours)
+    else:
+        logger.info("Aggregation scheduler disabled")
+
+    # ── Launch all loops ───────────────────────────────────────────────────
+
+    worker_pool_task = asyncio.create_task(
+        engine.run_worker_pool(concurrency=5),
+        name="worker_pool",
+    )
+    planner_task = asyncio.create_task(
+        planner.run_planner_loop(),
+        name="planner",
+    )
+    janitor_task = asyncio.create_task(
+        planner.run_janitor_loop(),
+        name="janitor",
+    )
+
+    logger.info("=" * 60)
+    logger.info("Worker running — planner + 5 workers + janitor")
+    logger.info("=" * 60)
+
+    # ── Heartbeat loop ─────────────────────────────────────────────────────
+    repo = SchedulerRepository()
+    async def heartbeat_loop():
+        hostname = os.uname().nodename if hasattr(os, 'uname') else 'unknown'
+        pid = os.getpid()
+        while not shutdown.shutdown_requested:
+            repo.record_heartbeat(
+                worker_id=engine.get_worker_id(),
+                hostname=hostname,
+                pid=pid,
+                active_jobs=5,
+            )
+            await asyncio.sleep(60)
+
+    heartbeat_task = asyncio.create_task(heartbeat_loop(), name="heartbeat")
+
+    # ── Wait for shutdown ──────────────────────────────────────────────────
     try:
         while not shutdown.shutdown_requested:
-            # Heartbeat every 60 seconds
-            await asyncio.sleep(60)
-            
-            # Optional: Log scheduler status
-            if logger.isEnabledFor(logging.DEBUG):
-                for name, sched in schedulers.items():
-                    is_running = getattr(sched, "is_running", None) or getattr(sched, "_is_running", None)
-                    next_run = getattr(sched, "next_run_at", None)
-                    logger.debug(
-                        f"[{name}] running={is_running}, next_run={next_run}"
-                    )
-    
-    except KeyboardInterrupt:
-        logger.info("⌨️  Keyboard interrupt received")
-    
+            await asyncio.sleep(1)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+
     # ── Graceful Shutdown ──────────────────────────────────────────────────
-    logger.info("🛑 Initiating graceful shutdown...")
-    
-    for name, scheduler in schedulers.items():
-        try:
-            logger.info(f"Stopping {name} scheduler...")
-            await scheduler.stop()
-            logger.info(f"✅ {name} scheduler stopped")
-        except Exception as e:
-            logger.error(f"⚠️  Error stopping {name} scheduler: {e}", exc_info=True)
-    
+    logger.info("Shutting down...")
+
+    # 1. Stop planner (no more enqueueing)
+    planner_task.cancel()
+    janitor_task.cancel()
+
+    # 2. Stop heartbeat
+    heartbeat_task.cancel()
+
+    # 3. Stop worker pool (no new claims)
+    worker_pool_task.cancel()
+
+    await asyncio.gather(
+        planner_task,
+        janitor_task,
+        heartbeat_task,
+        worker_pool_task,
+        return_exceptions=True,
+    )
+
+    # 4. Release leases on all jobs claimed by this worker
+    released = repo.release_worker_leases(engine.get_worker_id())
+    if released > 0:
+        logger.info("Released %d leases during shutdown", released)
+
+    # 5. Final heartbeat marking stopped
+    repo.record_heartbeat(
+        worker_id=engine.get_worker_id(),
+        hostname="shutdown",
+        pid=0,
+        active_jobs=0,
+    )
+
     logger.info("=" * 60)
-    logger.info("✅ Worker process shutdown complete")
+    logger.info("Worker shutdown complete")
     logger.info("=" * 60)
 
-# ============================================================================
-# Entry Point
-# ============================================================================
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        logger.error(f"💥 Worker process crashed: {e}", exc_info=True)
+        logger.error("Worker process crashed: %s", e, exc_info=True)
         sys.exit(1)

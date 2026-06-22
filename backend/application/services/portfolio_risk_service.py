@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -292,7 +293,7 @@ class PortfolioRiskService:
     async def _fetch_holding_prices(
         self, symbols: List[str], period: str,
     ) -> Tuple[Optional[pd.DataFrame], Optional[str], Optional[str]]:
-        end = date.today()
+        end = now_utc().date()
         n_days = _parse_period(period)
         start = end - timedelta(days=n_days * 2)
         try:
@@ -351,7 +352,7 @@ class PortfolioRiskService:
                 error_code=error_code,
             )
 
-        end = date.today()
+        end = now_utc().date()
         start = _safe_date_add_years(end, -3)
         try:
             prices = self.price_provider.fetch_prices(symbols, start, end)
@@ -511,7 +512,7 @@ class PortfolioRiskService:
 
         from pypfopt import risk_models
 
-        end = date.today()
+        end = now_utc().date()
         start = _safe_date_add_years(end, -1)
         try:
             prices = self.price_provider.fetch_prices(symbols, start, end)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from schemas_fundamentals import (
@@ -1289,7 +1289,7 @@ class FundamentalsService:
         buy_quarter_index = None
         if has_portfolio_position and purchase_date and first_quarter:
             try:
-                pd = datetime.strptime(str(purchase_date)[:10], "%Y-%m-%d").date()
+                pd = date.fromisoformat(str(purchase_date)[:10])
                 pd_year, pd_month = pd.year, pd.month
                 pd_quarter = (pd_month - 1) // 3 + 1
                 for i, (fy, fq) in enumerate(sorted_q):
@@ -1331,7 +1331,7 @@ class FundamentalsService:
         return FundamentalsResponse(
             success=True, symbol=symbol, company_name=company_name,
             has_portfolio_position=has_portfolio_position,
-            purchase_date=datetime.strptime(str(purchase_date)[:10], "%Y-%m-%d").date() if purchase_date else None,
+            purchase_date=date.fromisoformat(str(purchase_date)[:10]) if purchase_date else None,
             purchase_period=purchase_period,
             quarters=quarter_labels,
             buy_quarter_index=buy_quarter_index,

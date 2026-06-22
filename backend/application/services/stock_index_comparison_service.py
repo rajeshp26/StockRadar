@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import date, timedelta
+from shared.time_utils import now_utc
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -88,7 +89,7 @@ class StockIndexComparisonService:
         index_company_id = primary["company_id"]
         primary_index_symbol = primary["symbol"]
 
-        end_date = date.today()
+        end_date = now_utc().date()
         start_date = end_date - timedelta(days=years * 365 + 30)
 
         # Fetch stock price data

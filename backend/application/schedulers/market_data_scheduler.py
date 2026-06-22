@@ -30,16 +30,15 @@ NEW
 import asyncio
 import logging
 import uuid
-from collections import Counter
+
 from datetime import date, datetime, timedelta
+from shared.time_utils import now_utc
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from config import settings
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from providers.defeat_beta_provider import DefeatBetaProvider
-from providers.yfinance_provider import YFinanceProvider
 from database import supabase
 
 # Derived metrics jobs
@@ -90,7 +89,7 @@ def estimate_next_ex_date(
       5. Suppress predictions for deep-past dates (suspended payers)
     """
     try:
-        today = date.today()
+        today = now_utc().date()
         resp = (
             supabase.table("dividend_history")
             .select("ex_dividend_date, dividend_amount, dividend_type")
@@ -165,6 +164,7 @@ async def refresh_upcoming_dividend(
     back to prediction if no provider returned data. Each source
     upserts its own opinion via UNIQUE(company_id, data_source).
     """
+    from providers.yfinance_provider import YFinanceProvider
     yf = YFinanceProvider()
     from providers.stockdex_provider import StockdexMacrotrendsProvider
     sd = StockdexMacrotrendsProvider()
@@ -214,18 +214,25 @@ class MarketDataRefreshScheduler:
     def __init__(
         self,
         financial_repo: Optional[SupabaseFinancialRepository] = None,
-        defeat_beta_provider: Optional[DefeatBetaProvider] = None,
+        defeat_beta_provider: Optional["DefeatBetaProvider"] = None,
     ):
         # Repos & Providers
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
-        yf_provider = YFinanceProvider()
-        from providers.stockdex_provider import StockdexMacrotrendsProvider
-        from providers.edgar_provider import EdgarToolsProvider
-        self.defeat_beta_provider = defeat_beta_provider or DefeatBetaProvider(
-            yfinance_provider=yf_provider,
-            stockdex_provider=StockdexMacrotrendsProvider(),
-            edgar_provider=EdgarToolsProvider(),
-        )
+        self.defeat_beta_provider = defeat_beta_provider
+        if self.defeat_beta_provider is None:
+            try:
+                from providers.yfinance_provider import YFinanceProvider
+                from providers.defeat_beta_provider import DefeatBetaProvider
+                yf_provider = YFinanceProvider()
+                from providers.stockdex_provider import StockdexMacrotrendsProvider
+                from providers.edgar_provider import EdgarToolsProvider
+                self.defeat_beta_provider = DefeatBetaProvider(
+                    yfinance_provider=yf_provider,
+                    stockdex_provider=StockdexMacrotrendsProvider(),
+                    edgar_provider=EdgarToolsProvider(),
+                )
+            except Exception as import_err:
+                logger.warning("Failed to initialize DefeatBetaProvider: %s", import_err)
 
         # Config (with safe defaults)
         self.interval_hours: int = int(getattr(settings, "MARKET_DATA_REFRESH_INTERVAL_HOURS", 24))
@@ -249,6 +256,51 @@ class MarketDataRefreshScheduler:
         self.last_result: Optional[Dict[str, Any]] = None
 
         self.owner_lock_id: str = f"market_data:{uuid.uuid4()}"
+
+    # -------------------------------------------------------------------------
+    # v3 Planner Integration
+    # -------------------------------------------------------------------------
+
+    async def plan(self) -> list:
+        """
+        v3 planner integration — returns company_refresh job dicts for each
+        active company needing market data refresh.
+
+        Handlers (registered in scheduler_worker.py):
+          - handler for 'company_refresh' with scope='market_data'
+            runs price history, splits, revenue/earnings forecasts,
+            company summary, derived ratios, dividend metrics, RI valuation.
+
+        Returns list of dicts, each suitable for SchedulerRepository.enqueue_job:
+            job_type: 'company_refresh'
+            dedupe_key: 'company_refresh:{company_id}:market_data'
+            resource_type: 'company'
+            resource_id: company_id (as str)
+            payload: { company_id, ticker_symbol, security_type, exchange, scope: 'market_data' }
+            priority: 30 (lower than earnings)
+        """
+        try:
+            companies = await self.financial_repo.get_active_companies_for_market_data()
+        except Exception:
+            companies = []
+        jobs = []
+        for c in companies or []:
+            jobs.append({
+                "job_type": "company_refresh",
+                "dedupe_key": f"company_refresh:{c.get('company_id')}:market_data",
+                "resource_type": "company",
+                "resource_id": str(c.get("company_id", "")),
+                "payload": {
+                    "company_id": c.get("company_id"),
+                    "ticker_symbol": c.get("ticker_symbol"),
+                    "security_type": c.get("security_type", "stock"),
+                    "exchange": c.get("exchange"),
+                    "scopes": ["market_data"],
+                },
+                "priority": 30,
+                "max_attempts": 3,
+            })
+        return jobs
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -292,7 +344,7 @@ class MarketDataRefreshScheduler:
 
     async def _run_loop(self) -> None:
         while self._is_running:
-            cycle_started_at = datetime.utcnow()
+            cycle_started_at = now_utc()
             try:
                 self.last_run_at = cycle_started_at
                 self.last_result = await self._refresh_cycle()
@@ -300,7 +352,7 @@ class MarketDataRefreshScheduler:
                 logger.error("Market data cycle failed: %s", e, exc_info=True)
             finally:
                 sleep_seconds = max(1, int(self.interval_hours * 3600))
-                self.next_run_at = datetime.utcnow() + timedelta(seconds=sleep_seconds)
+                self.next_run_at = now_utc() + timedelta(seconds=sleep_seconds)
                 logger.debug(
                     "MarketData scheduler sleeping for %sh (next_run_at=%s)",
                     self.interval_hours,
@@ -472,7 +524,7 @@ class MarketDataRefreshScheduler:
                         last_refreshed_fiscal_year=None,
                         last_refreshed_fiscal_quarter=None,
                         force_full_history=True,
-                        min_fiscal_year=2021,
+                        min_fiscal_year=now_utc().year - 5,
                     )
                     if not financials.income_statements.rows:
                         logger.warning(
@@ -628,7 +680,9 @@ class MarketDataRefreshScheduler:
         Returns the number of monthly rows attempted for upsert.
         """
         has_any = await self._has_any_price_history(company_id)
-        retention_cutoff = self._years_ago(date.today(), self.retention_years)
+        retention_cutoff = self._years_ago(now_utc().date(), self.retention_years)
+
+        await self.financial_repo.update_price_attempt_marker(company_id)
 
         if not has_any:
             daily_rows = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id, exchange=exchange)
@@ -639,12 +693,15 @@ class MarketDataRefreshScheduler:
             monthly_rows = self._compress_daily_to_monthly_eom(daily_rows)
             if monthly_rows:
                 await self.financial_repo.upsert_price_history(monthly_rows)
+                await self.financial_repo.update_price_success_marker(company_id)
                 await self.financial_repo.update_price_refresh_marker(company_id)
                 logger.info("[PH][%s] Bootstrap monthly rows (>= %s): %d", symbol, retention_cutoff, len(monthly_rows))
+            else:
+                await self.financial_repo.increment_price_failures(company_id)
             return len(monthly_rows or [])
 
         lookback = max(self.lookback_days, 40)
-        window_cutoff = date.today() - timedelta(days=lookback)
+        window_cutoff = now_utc().date() - timedelta(days=lookback)
         daily_rows_recent = await self.defeat_beta_provider.get_price_history_optimized(symbol, company_id, exchange=exchange)
         effective_cutoff = max(retention_cutoff, window_cutoff)
         daily_rows_recent = [
@@ -654,8 +711,11 @@ class MarketDataRefreshScheduler:
         monthly_recent = self._compress_daily_to_monthly_eom(daily_rows_recent)
         if monthly_recent:
             await self.financial_repo.upsert_price_history(monthly_recent)
+            await self.financial_repo.update_price_success_marker(company_id)
             await self.financial_repo.update_price_refresh_marker(company_id)
             logger.debug("[PH][%s] Incremental monthly rows (>= %s): %d", symbol, effective_cutoff, len(monthly_recent))
+        else:
+            await self.financial_repo.increment_price_failures(company_id)
         return len(monthly_recent or [])
 
     async def _has_any_price_history(self, company_id: int) -> bool:

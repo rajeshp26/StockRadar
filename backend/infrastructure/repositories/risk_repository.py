@@ -1,10 +1,11 @@
 from __future__ import annotations
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from database import supabase
 from infrastructure.repositories.valuation_repository import ValuationRepository
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class RiskRepository:
     async def get_financial_ratios_history(
         self, company_id: int, years: int = 5
     ) -> List[Dict[str, Any]]:
-        cutoff_year = date.today().year - years
+        cutoff_year = now_utc().date().year - years
         resp = (
             supabase.table("financial_ratios")
             .select("*")
@@ -36,7 +37,7 @@ class RiskRepository:
     async def get_company_summary_history(
         self, company_id: int, years: int = 5
     ) -> List[Dict[str, Any]]:
-        cutoff = (date.today() - timedelta(days=years * 365)).isoformat()
+        cutoff = (now_utc().date() - timedelta(days=years * 365)).isoformat()
         resp = (
             supabase.table("company_summary")
             .select("snapshot_date, trailing_pe, enterprise_to_ebitda, peg_ratio, beta, market_cap, enterprise_value")

@@ -6,7 +6,7 @@ import logging
 import re
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends
 from pydantic import BaseModel, Field, field_validator
-from datetime import datetime
+from shared.time_utils import now_iso
 from typing import Optional
 from providers.yfinance_provider import YFinanceProvider
 from dependencies import (
@@ -204,7 +204,7 @@ async def add_item_to_watchlist(
                 price=float(svc_result.get("current_price") or 0.0),
                 change=float(svc_result.get("change") or 0.0),
                 changePercent=float(svc_result.get("change_percent") or 0.0),
-                lastUpdated=datetime.now().isoformat(),
+                lastUpdated=now_iso(),
             ),
             financials_loading=bool(svc_result.get("financials_loading", False)),
             is_new_stock=bool(svc_result.get("is_new_stock", False)),

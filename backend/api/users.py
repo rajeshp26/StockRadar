@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from database import supabase
 from dependencies import get_current_user_dep
-from datetime import datetime
+from shared.time_utils import now_iso
 import logging
 
 router = APIRouter()
@@ -42,7 +42,7 @@ def sync_user(
         user_data = {
             'email': email,
             'username': body.username,
-            'last_signed_in': datetime.now().isoformat(),
+            'last_signed_in': now_iso(),
             'auth_id': auth_id,
             'preferred_currency': 'USD',
             'first_name': body.first_name,

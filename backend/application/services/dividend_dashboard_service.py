@@ -8,7 +8,7 @@ outputs — never duplicates company-level dividend analysis logic.
 """
 
 import logging
-from datetime import datetime, timedelta
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
@@ -66,7 +66,7 @@ class DividendDashboardService:
         total_cost_dividend_payers = 0.0
         growth_values: List[tuple] = []  # (weight, value)
         safety_values: List[tuple] = []
-        current_year = datetime.now().year
+        current_year = now_utc().year
 
         # Compute YTD from trailing rows filtered to current year
         ytd_by_symbol = defaultdict(float)
@@ -151,7 +151,7 @@ class DividendDashboardService:
             },
             "currency": "Mixed" if len(currency_set) > 1 else (next(iter(currency_set)) if currency_set else None),
             "currencies_mixed": len(currency_set) > 1,
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": now_iso(),
         }
 
     def _trust_label(self, trust_score: float, status: str) -> str:
@@ -392,7 +392,7 @@ class DividendDashboardService:
         trailing = sum(
             float(r["amount"]) for r in trailing_rows if r["symbol"] == symbol.upper()
         )
-        current_year = datetime.now().year
+        current_year = now_utc().year
         ytd = sum(
             float(r["amount"]) for r in trailing_rows
             if r["symbol"] == symbol.upper()
@@ -487,7 +487,7 @@ class DividendDashboardService:
             },
             "currency": None,
             "currencies_mixed": False,
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": now_iso(),
         }
 
     @staticmethod

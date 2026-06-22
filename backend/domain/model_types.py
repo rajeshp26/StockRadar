@@ -314,6 +314,7 @@ class CompleteFundamentals(BaseModel):
 class CompanyRefreshInfo(BaseModel):
     company_id: int
     ticker_symbol: str
+    exchange: Optional[str] = None
 
     first_financial_data_loaded_at: Optional[datetime] = None
     last_financial_refresh_at: Optional[datetime] = None

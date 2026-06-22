@@ -22,6 +22,7 @@ backend/service-account.json
 backend/google_credentials.json
 backend/.env
 backend/venv_wsl/
+backend/.venv_wsl/
 
 # Validation reports (contain raw financial data)
 backend/validation_report_*.txt

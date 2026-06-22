@@ -20,8 +20,8 @@ AI summary: called AFTER intrinsic, upside, and g (g2 for two-stage) are finalis
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
 from typing import Any, Dict, Optional, Tuple
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
  
 from shared.finance_math import (
     build_fingerprint,
@@ -487,9 +487,9 @@ class DdmService:
                 "g_hist": None,  "g_sgr": None,
                 "k_final": 0.0,  "k_source": "no_dividend",
                 "beta": None,
-                "resolved_at": datetime.utcnow().isoformat() + "Z",
+                "resolved_at": now_iso(),
             }
-            now_iso = datetime.utcnow().isoformat() + "Z"
+            now_iso_str = now_iso()
             output_snapshot = {
                 "valuation": valuation.dict(),
                 "applicability": {
@@ -498,12 +498,12 @@ class DdmService:
                     "suitabilitySummary": suitability_summary,
                 },
                 "dataQuality": {
-                    "freshnessDays": {"lastComputedAt": now_iso},
+                    "freshnessDays": {"lastComputedAt": now_iso_str},
                     "fallbacksUsed": True,
                     "inputDecisions": {"ddm": input_decisions},
                 },
                 "suitabilityEvidence": ddm_evidence,
-                "lastComputedAt": now_iso,
+                "lastComputedAt": now_iso_str,
             }
             await self.repo.insert_valuation_run(
                 company_id=company_id, method=method,
@@ -563,7 +563,7 @@ class DdmService:
             "k_source":  k_evidence.get("source"),
             "beta":      round(float(k_evidence["beta"]), 4)
                          if k_evidence.get("beta") is not None else None,
-            "resolved_at": datetime.utcnow().isoformat() + "Z",
+            "resolved_at": now_iso(),
         }
 
         d1 = d0 * (1.0 + g)
@@ -699,7 +699,7 @@ class DdmService:
         try:
             await self.repo.insert_ddm_valuation(payload={
                 "company_id":                  company_id,
-                "analysis_date":               date.today().isoformat(),
+                "analysis_date":               now_utc().date().isoformat(),
                 "current_dps":                 d0,
                 "next_year_dps":               float(d1),
                 "dividend_growth_rate":        float(g),
@@ -722,7 +722,7 @@ class DdmService:
         #   "overrides"              — what the user supplied (unchanged)
         #   "dependency_fingerprint" — SHA-256 of source field values (Gate 2)
         #   "resolved"               — actual D0/g/k used (Gate 3)
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        now_iso_str = now_iso()
         output_snapshot = {
             "valuation": valuation.dict(),
             "applicability": {
@@ -732,12 +732,12 @@ class DdmService:
                 "suitabilitySummary": suitability_summary,
             },
             "dataQuality": {
-                "freshnessDays":  {"lastComputedAt": now_iso},
+                "freshnessDays":  {"lastComputedAt": now_iso_str},
                 "fallbacksUsed":  fallbacks_used,
                 "inputDecisions": {"ddm": input_decisions},
             },
             "suitabilityEvidence": ddm_evidence,
-            "lastComputedAt":      now_iso,
+            "lastComputedAt":      now_iso_str,
         }
         await self.repo.insert_valuation_run(
             company_id=company_id, method=method,

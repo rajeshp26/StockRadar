@@ -11,7 +11,7 @@ Architecture:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Dict, Any
 import csv
@@ -118,7 +118,7 @@ class PortfolioParserBase(ABC):
         if not date_str or not date_str.strip():
             return None
         try:
-            return datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+            return datetime.strptime(date_str.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
         except ValueError:
             self.warnings.append(f"Invalid date format: {date_str}")
             return None

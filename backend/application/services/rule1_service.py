@@ -37,7 +37,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional
 
 from shared.finance_math import (
@@ -226,7 +227,7 @@ class Rule1Service:
             eps0              = float(trailing["trailing_eps"])
             eps_snapshot_date = _as_date(trailing.get("snapshot_date"))
             dq_freshness["trailingEPS"] = (
-                (date.today() - eps_snapshot_date).days if eps_snapshot_date else None
+                (now_utc().date() - eps_snapshot_date).days if eps_snapshot_date else None
             )
         else:
             eps0           = await self.repo.compute_ttm_eps_fallback(company_id)
@@ -266,7 +267,7 @@ class Rule1Service:
                     growth_source = "earnings_forecast.estimate_eps_growth"
                     rep_date      = _as_date(growth_row.get("report_date"))
                     dq_freshness["epsForecast"] = (
-                        (date.today() - rep_date).days if rep_date else None
+                        (now_utc().date() - rep_date).days if rep_date else None
                     )
 
             if growth is None:
@@ -442,8 +443,8 @@ class Rule1Service:
             },
         )
 
-        now_iso = datetime.utcnow().isoformat() + "Z"
-        dq_freshness["lastComputedAt"] = now_iso
+        _now_iso = now_iso()
+        dq_freshness["lastComputedAt"] = _now_iso
 
         resolved_inputs: Dict[str, Any] = {
             "eps0":          eps0_safe,
@@ -456,7 +457,7 @@ class Rule1Service:
             "discount_rate": float(discount_rate),
             "horizon_years": int(horizon_years),
             "mos":           float(mos),
-            "resolved_at":   now_iso,
+            "resolved_at":   _now_iso,
         }
 
         # ── Build output snapshot ──────────────────────────────────────────
@@ -497,7 +498,7 @@ class Rule1Service:
                 },
             },
             "suitabilityEvidence": suitability_evidence,
-            "lastComputedAt":      now_iso,
+            "lastComputedAt":      _now_iso,
         }
 
         # ── Persist: valuation_runs (primary cache + audit record) ─────────

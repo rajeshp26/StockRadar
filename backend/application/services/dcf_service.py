@@ -17,7 +17,7 @@ Price policy: intrinsic is cached; currentPrice + upside computed at read-time o
 from __future__ import annotations
  
 import logging
-from datetime import date, datetime
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional
  
 from application.services.ai_service import generate_suitability_summary
@@ -831,7 +831,7 @@ class DcfService:
         try:
             await self.repo.insert_dcf_valuation(payload={
                 "company_id":                  company_id,
-                "analysis_date":               date.today().isoformat(),
+                "analysis_date":               now_utc().date().isoformat(),
                 "forecast_years":              int(n),
                 "revenue_growth_rate":         None,
                 "terminal_growth_rate":        float(terminal_g_used) if terminal_g_used is not None else None,
@@ -868,11 +868,11 @@ class DcfService:
             "forecast_years":    int(n),
             "net_debt":          round(float(net_debt), 0) if net_debt is not None else None,
             "shares":            round(float(shares), 0)   if shares    is not None else None,
-            "resolved_at":       datetime.utcnow().isoformat() + "Z",
+            "resolved_at":       now_iso(),
         }
 
         # ── Persist: valuation_runs (audited record) ───────────────────────
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        _now_iso = now_iso()
         output_snapshot = {
             "valuation": valuation.dict(),
             "applicability": {
@@ -881,13 +881,13 @@ class DcfService:
                 "suitabilitySummary": suitability_summary,
             },
             "dataQuality": {
-                "freshnessDays": {"lastComputedAt": now_iso},
+                "freshnessDays": {"lastComputedAt": _now_iso},
                 "fallbacksUsed": bool(fallbacks_used),
                 "inputDecisions": input_decisions,
             },
             "sensitivity": sensitivity_grid.dict() if sensitivity_grid is not None else None,
             "suitabilityEvidence": dcf_evidence,
-            "lastComputedAt": now_iso,
+            "lastComputedAt": _now_iso,
         }
         await self.repo.insert_valuation_run(
             company_id=company_id, method="dcf",
@@ -912,7 +912,7 @@ class DcfService:
                 flags=flags, suitabilitySummary=suitability_summary,
             ),
             dataQuality=DataQuality(
-                freshnessDays={"lastComputedAt": now_iso},
+                freshnessDays={"lastComputedAt": _now_iso},
                 fallbacksUsed=bool(fallbacks_used),
                 inputDecisions=input_decisions,
             ),

@@ -20,6 +20,9 @@ from dependencies import get_current_user_dep, limiter
 from api.portfolio import router as portfolio_router
 from api.stocks import router as stocks_router
 
+# Canadian exchange suffixes for yfinance (matches yfinance_provider.EXCHANGE_SUFFIX_MAP)
+_YF_SUFFIXES = [".TO", ".V"]
+
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
@@ -45,19 +48,35 @@ async def background_price_monitor():
                 continue
             
             logger.debug(f"[PRICE-MONITOR-DIAG] Fetching prices for {len(active_symbols)} symbols: {active_symbols}")
-            tickers = yf.Tickers(active_symbols)
+            # Resolve Canadian suffixes: try raw symbol first, fall back to .TO / .V
+            resolved_symbols = []
+            symbol_suffix_map: Dict[str, str] = {}
+            for sym in active_symbols:
+                resolved_symbols.append(sym)
+                symbol_suffix_map[sym] = ""
+                for sfx in _YF_SUFFIXES:
+                    resolved_symbols.append(sym + sfx)
+                    symbol_suffix_map[sym + sfx] = sfx
+
+            all_tickers = yf.Tickers(resolved_symbols)
             updated_count = 0
             skipped_count = 0
             for symbol in active_symbols:
-                ticker = tickers.tickers.get(symbol)
-                if not ticker:
-                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: ticker object is None")
-                    skipped_count += 1
-                    continue
-                
-                info = getattr(ticker, "info", {}) or {}
+                ticker = all_tickers.tickers.get(symbol)
+                info = {}
+                if ticker:
+                    info = getattr(ticker, "info", {}) or {}
                 if not info:
-                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: info dict is empty")
+                    # Try suffixed version
+                    for sfx in _YF_SUFFIXES:
+                        alt = all_tickers.tickers.get(symbol + sfx)
+                        if alt:
+                            alt_info = getattr(alt, "info", {}) or {}
+                            if alt_info:
+                                info = alt_info
+                                break
+                if not info:
+                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: no data (tried raw and {_YF_SUFFIXES})")
                     skipped_count += 1
                     continue
                 
@@ -202,27 +221,78 @@ async def readiness_check():
 @app.get("/scheduler/status", tags=["System"])
 async def schedulers_status():
     """
-    Scheduler status endpoint - returns info about worker process.
-    Note: Schedulers now run in scheduler_worker.py (separate process).
-    This endpoint provides static config info only.
+    Scheduler status endpoint — reads runtime state from DB.
+    Returns scheduler state, worker heartbeats, and job queue stats.
     """
+    from infrastructure.repositories.scheduler_repository import SchedulerRepository
+    repo = SchedulerRepository()
+
+    from datetime import datetime, timezone
+
+    try:
+        # Scheduler state from DB
+        scheduler_names = ["super_investors", "market_data", "earnings", "aggregation"]
+        states = {}
+        for name in scheduler_names:
+            state = repo.get_scheduler_state(name)
+            if state:
+                states[name] = {
+                    "enabled": state.get("enabled", False),
+                    "last_planned_at": state.get("last_planned_at"),
+                    "last_status": state.get("last_status"),
+                    "last_error": state.get("last_error"),
+                    "next_due_at": state.get("next_due_at"),
+                    "interval_hours": state.get("interval_hours"),
+                }
+
+        # Worker heartbeats
+        now = datetime.now(timezone.utc)
+        heartbeats = repo.get_worker_heartbeats(minutes=5)
+        alive = any(
+            h.get("last_hb_at") and (now - datetime.fromisoformat(h["last_hb_at"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc)).total_seconds() < 120
+            for h in (heartbeats or [])
+        )
+
+        # Stale heartbeats count (workers not seen in 2+ minutes)
+        stale_heartbeats = sum(
+            1 for h in (heartbeats or [])
+            if h.get("last_hb_at")
+            and (now - datetime.fromisoformat(h["last_hb_at"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc)).total_seconds() >= 120
+        )
+
+        # Job queue counts
+        job_counts = repo.get_queue_depth()
+
+        # Stale leases
+        stale_leases = repo.get_stale_lock_count()
+
+        # Oldest pending
+        oldest_pending = repo.get_oldest_pending_age_seconds()
+
+    except Exception as e:
+        logger.error("Failed to read scheduler state from DB: %s", e)
+        states = {}
+        heartbeats = []
+        job_counts = {}
+        stale_leases = 0
+        stale_heartbeats = 0
+        oldest_pending = None
+        alive = False
+
     return {
         "environment": settings.ENVIRONMENT,
-        "worker_process": {
-            "note": "Schedulers run in separate worker process (scheduler_worker.py)",
-            "super_investors": {
-                "enabled": getattr(settings, "ENABLE_SUPER_INVESTORS_SCHEDULER", True),
-                "interval_hours": getattr(settings, "SUPER_INVESTORS_REFRESH_INTERVAL_HOURS", 24),
-            },
-            "market_data": {
-                "enabled": getattr(settings, "ENABLE_MARKET_DATA_SCHEDULER", True),
-                "interval_hours": getattr(settings, "MARKET_DATA_REFRESH_INTERVAL_HOURS", 24),
-            },
-            "earnings": {
-                "enabled": getattr(settings, "ENABLE_EARNINGS_SCHEDULER", False),
-                "interval_hours": getattr(settings, "EARNINGS_REFRESH_CHECK_INTERVAL_HOURS", 2),
-            },
+        "schedulers": states,
+        "worker": {
+            "alive": alive,
+            "last_heartbeat": heartbeats[0]["last_hb_at"] if heartbeats else None,
+            "active_jobs": heartbeats[0].get("active_jobs") if heartbeats else None,
         },
+        "queue": {
+            **job_counts,
+            "oldest_pending_age_seconds": oldest_pending,
+        },
+        "stale_leases": stale_leases,
+        "stale_heartbeats": stale_heartbeats,
     }
 
 # -----------------------------------------------------------------------------

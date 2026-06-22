@@ -14,6 +14,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from shared.time_utils import parse_db_timestamp
+
 from config import settings
 from database import supabase
 from application.jobs.aggregation_jobs import compute_and_upsert_group_metric_stats
@@ -36,6 +38,28 @@ class AggregationScheduler:
         self.is_running = False
         self.task: Optional[asyncio.Task] = None
         self.lock_id: str = f"agg:{uuid.uuid4()}"
+
+    async def plan(self) -> list:
+        """
+        v3 planner integration — returns a single aggregation_refresh job.
+
+        Returns list of dicts, each suitable for SchedulerRepository.enqueue_job:
+            job_type: 'aggregation_refresh'
+            dedupe_key: 'aggregation_refresh:sector'
+            resource_type: 'system'
+            resource_id: 'sector_metric_agg'
+            payload: { group_type: 'sector', min_sample_size: 5 }
+            priority: 10
+        """
+        return [{
+            "job_type": "aggregation_refresh",
+            "dedupe_key": "aggregation_refresh:sector",
+            "resource_type": "system",
+            "resource_id": "sector_metric_agg",
+            "payload": {"group_type": "sector", "min_sample_size": 5},
+            "priority": 10,
+            "max_attempts": 3,
+        }]
 
     async def start(self) -> None:
         """Start the scheduler background task."""
@@ -129,7 +153,7 @@ class AggregationScheduler:
             expires_at = state.get("lock_expires_at")
             owner = state.get("lock_owner")
             expires = (
-                datetime.fromisoformat(expires_at)
+                parse_db_timestamp(expires_at)
                 if expires_at and isinstance(expires_at, str)
                 else None
             )

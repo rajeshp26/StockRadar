@@ -17,7 +17,8 @@ Two route groups:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from shared.time_utils import now_utc
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -61,8 +62,7 @@ def _get_latest_quarter() -> str:
 
 def _prev_quarter(quarter_date: str) -> str:
     """Return the quarter_end_date that is one quarter before the given date."""
-    from datetime import date
-    d = datetime.strptime(quarter_date, "%Y-%m-%d").date()
+    d = datetime.strptime(quarter_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
     # Step back ~92 days (one quarter)
     prev = d - timedelta(days=92)
     # Snap to quarter-end
@@ -127,8 +127,8 @@ async def get_super_investors_history(symbol: str) -> Dict[str, Any]:
                     "message": "Stock not found in database."}
 
         company_id = company_result.data[0]["company_id"]
-        five_years_ago = (datetime.now() - timedelta(days=5 * 365)).date()
-        cutoff_date = max(five_years_ago, datetime(2021, 1, 1).date())
+        five_years_ago = (now_utc() - timedelta(days=5 * 365)).date()
+        cutoff_date = max(five_years_ago, datetime(2021, 1, 1, tzinfo=timezone.utc).date())
 
         holdings_result = (
             supabase.table("institutional_holdings")
@@ -1228,7 +1228,7 @@ def _get_holdings_from_db(ticker: str) -> Dict[str, Any] | None:
             return None
         company_id = company_result.data[0]["company_id"]
 
-        cutoff_date = (datetime.now() - timedelta(days=30)).date().isoformat()
+        cutoff_date = (now_utc() - timedelta(days=30)).date().isoformat()
         holdings_result = (
             supabase.table("institutional_holdings")
             .select(

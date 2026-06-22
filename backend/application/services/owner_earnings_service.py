@@ -9,7 +9,7 @@ That dead-code block is removed; _build_empty_response handles early aborts corr
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
  
 from shared.finance_math import (
@@ -800,11 +800,11 @@ class OwnerEarningsService:
             "forecast_years":      int(n),
             "net_debt":            round(float(net_debt), 0)  if net_debt is not None else None,
             "shares":              round(float(shares), 0)    if shares   is not None else None,
-            "resolved_at":         datetime.utcnow().isoformat() + "Z",
+            "resolved_at":         now_iso(),
         }
 
         # ── Audit run ──────────────────────────────────────────────────────
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        now_str = now_iso()
         output_snapshot = {
             "valuation": valuation.dict(),
             "applicability": {
@@ -813,13 +813,13 @@ class OwnerEarningsService:
                 "suitabilitySummary": suitability_summary,
             },
             "dataQuality": {
-                "freshnessDays": {"lastComputedAt": now_iso},
+                "freshnessDays": {"lastComputedAt": now_str},
                 "fallbacksUsed": bool(fallbacks_used),
                 "inputDecisions": input_decisions,
             },
             "sensitivity": sensitivity_grid.dict() if sensitivity_grid is not None else None,
             "suitabilityEvidence": oe_evidence,
-            "lastComputedAt": now_iso,
+            "lastComputedAt": now_str,
         }
         await self.repo.insert_valuation_run(
             company_id=company_id, method="owner_earnings",
@@ -844,7 +844,7 @@ class OwnerEarningsService:
                 suitabilitySummary=suitability_summary,
             ),
             dataQuality=DataQuality(
-                freshnessDays={"lastComputedAt": now_iso},
+                freshnessDays={"lastComputedAt": now_str},
                 fallbacksUsed=bool(fallbacks_used),
                 inputDecisions=input_decisions,
             ),

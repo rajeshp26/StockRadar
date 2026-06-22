@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
+from shared.time_utils import now_utc
 from typing import Any, Dict, List, Optional, Tuple
 
 from domain.models.analysis_technical import (
@@ -116,7 +117,7 @@ class TechnicalAnalysisService:
         Fallback: YFinanceProvider.
         Sorted oldest-first, last _FETCH_DAYS calendar days only.
         """
-        start = date.today() - timedelta(days=_FETCH_DAYS)
+        start = now_utc().date() - timedelta(days=_FETCH_DAYS)
         bars: List[Dict[str, Any]] = []
 
         try:

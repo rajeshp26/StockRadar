@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import timedelta
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
 
 from domain.models.analysis_canslim import (
@@ -85,8 +86,8 @@ class CANSlimService:
         last_computed = snap.get("lastComputedAt")
         if last_computed:
             try:
-                ts = datetime.fromisoformat(last_computed.replace("Z", "+00:00"))
-                age = datetime.utcnow().replace(tzinfo=ts.tzinfo) - ts
+                ts = parse_db_timestamp(last_computed)
+                age = now_utc() - ts
                 if age > timedelta(hours=_CACHE_MAX_AGE_HOURS):
                     return None
             except Exception:
@@ -102,7 +103,7 @@ class CANSlimService:
     async def _compute_and_cache(
         self, symbol: str, company_id: int, currency: str
     ) -> CANSlimResponse:
-        now_iso = datetime.utcnow().isoformat() + "Z"
+        _now_iso = now_iso()
 
         # ── Parallel DB reads ──────────────────────────────────────────────────
         (
@@ -129,7 +130,7 @@ class CANSlimService:
         # ── Live benchmark price fetch ─────────────────────────────────────────
         benchmark_prices: List[Dict] = []
         if benchmark_company_id:
-            start = date.today() - timedelta(days=_FETCH_DAYS_BENCHMARK)
+            start = now_utc().date() - timedelta(days=_FETCH_DAYS_BENCHMARK)
             try:
                 benchmark_prices = await self._dbeta.fetch_price_history(
                     benchmark_symbol, benchmark_company_id, start_date=start
@@ -221,7 +222,7 @@ class CANSlimService:
             benchmark_symbol=benchmark_symbol,
             confidence_adjustment=round(confidence, 3),
             confidence_note=confidence_note,
-            last_computed_at=now_iso,
+            last_computed_at=_now_iso,
         )
 
         response = CANSlimResponse(
@@ -246,7 +247,7 @@ class CANSlimService:
                 "assumption_snapshot": {"weights": _WEIGHTS},
                 "output_snapshot": {
                     "response": response.dict(),
-                    "lastComputedAt": now_iso,
+                    "lastComputedAt": _now_iso,
                 },
                 "data_version_tag": None,
                 "notes": None,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 import logging
 import math
-from datetime import datetime, date, timedelta
+from datetime import timedelta
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional
 
 from domain.models.analysis_moat import (
@@ -89,8 +90,8 @@ class MoatAnalysisService:
             try:
                 ts = computed_at
                 if isinstance(ts, str):
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                age = datetime.utcnow().replace(tzinfo=ts.tzinfo) - ts
+                    ts = parse_db_timestamp(ts)
+                age = now_utc() - ts
                 if age > timedelta(hours=_CACHE_MAX_AGE_HOURS):
                     return None
             except Exception:
@@ -161,8 +162,8 @@ class MoatAnalysisService:
         sector: str,
         industry: str,
     ) -> MoatResponse:
-        now_iso = datetime.utcnow().isoformat() + "Z"
-        now_date = date.today()
+        now_iso_str = now_iso()
+        now_date = now_utc().date()
 
         ratios = await self._repo.get_financial_ratios_history(company_id, years=6)
         income_statements = await self._repo.get_income_statements_annual(
@@ -346,7 +347,7 @@ class MoatAnalysisService:
                 fallbacks_used=(
                     latest_roic is None or wacc is None
                 ),
-                last_computed_at=now_iso,
+                last_computed_at=now_iso_str,
             ),
         )
 
@@ -757,7 +758,7 @@ class MoatAnalysisService:
                 narrative=MoatAiNarrative(
                     narrative=narrative_text,
                     model="openrouter/default",
-                    generated_at=datetime.utcnow().isoformat() + "Z",
+                    generated_at=now_iso(),
                     generation_time_ms=end_ms - start_ms,
                 ),
                 available=True,

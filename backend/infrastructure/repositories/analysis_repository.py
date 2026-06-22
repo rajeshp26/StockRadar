@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from database import supabase
 from infrastructure.repositories.valuation_repository import ValuationRepository
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +354,7 @@ class AnalysisRepository:
         Results are oldest-first for time-series calculations.
         """
         try:
-            cutoff = (date.today() - timedelta(days=months * 31)).isoformat()
+            cutoff = (now_utc().date() - timedelta(days=months * 31)).isoformat()
             resp = (
                 supabase.table("price_history")
                 .select("price_date, close_price, high_price, volume")

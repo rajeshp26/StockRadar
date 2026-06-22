@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime
+from shared.time_utils import now_utc
 from decimal import Decimal, InvalidOperation
 from typing import NamedTuple, Optional, Tuple, List, Dict, Any, Set
 
@@ -571,7 +572,7 @@ class DefeatBetaProvider(StockDataProvider):
                 earnings=earnings_rows,
                 dividends=dividend_rows,
                 next_earnings_date=next_earnings,
-                fetched_at=datetime.utcnow(),
+                fetched_at=now_utc(),
             )
             return fin, gaps
 
@@ -691,6 +692,18 @@ class DefeatBetaProvider(StockDataProvider):
             logger.warning(f"Dividends fetch failed for {symbol}: {str(e)}")
             return DividendRows(rows=[])
 
+    async def fetch_next_earnings_date(self, symbol: str) -> Optional[date]:
+        """
+        Public method — fetch the next earnings date for a symbol.
+        Lightweight (single ticker.calendar() call), suitable for calendar sync.
+        """
+        try:
+            ticker = Ticker(symbol)
+            return await self._fetch_next_earnings_date(ticker, symbol)
+        except Exception as e:
+            logger.warning("fetch_next_earnings_date failed for %s: %s", symbol, e)
+            return None
+
     async def _fetch_next_earnings_date(self, ticker: Ticker, symbol: str) -> Optional[date]:
         """
         Uses Ticker.calendar() per docs; extracts 'report_date' as next earnings date (if present).
@@ -701,7 +714,7 @@ class DefeatBetaProvider(StockDataProvider):
             if df is not None and not df.empty and 'report_date' in df.columns:
                 df = df.copy()
                 df['report_date'] = pd.to_datetime(df['report_date'], errors='coerce')
-                future = df[df['report_date'] >= pd.Timestamp(date.today())].sort_values('report_date')
+                future = df[df['report_date'] >= pd.Timestamp(now_utc().date())].sort_values('report_date')
                 if not future.empty:
                     return future.iloc[0]['report_date'].date()
                 # else: fallback to earliest available
@@ -777,7 +790,7 @@ class DefeatBetaProvider(StockDataProvider):
                 cash_flows=CashFlowRows(rows=[]),
                 earnings=EarningsRows(rows=[]),
                 dividends=DividendRows(rows=[]),
-                fetched_at=datetime.utcnow(),
+                fetched_at=now_utc(),
             )
 
         fb = await self._fetch_all_fallback_statements(symbol, company_id, only_after, exchange, security_type)
@@ -791,7 +804,7 @@ class DefeatBetaProvider(StockDataProvider):
             earnings=EarningsRows(rows=fb.earn_rows),
             dividends=DividendRows(rows=fb.div_rows),
             next_earnings_date=fb.next_earnings_date,
-            fetched_at=datetime.utcnow(),
+            fetched_at=now_utc(),
         )
 
     async def _fill_gaps_with_yfinance(
@@ -1178,7 +1191,7 @@ class DefeatBetaProvider(StockDataProvider):
 
             return {
                 "company_id": company_id,
-                "snapshot_date": date.today(),
+                "snapshot_date": now_utc().date(),
                 "market_cap": self._safe_decimal(self._extract_latest_metric(mcap_df, 'market_capitalization')),
                 "enterprise_value": self._safe_decimal(self._extract_latest_metric(ev_df, 'enterprise_value')),
                 "shares_outstanding": self._safe_decimal(self._extract_latest_metric(shares_df, 'shares_outstanding')),

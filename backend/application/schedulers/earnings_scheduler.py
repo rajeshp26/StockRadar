@@ -9,13 +9,12 @@ Adds per-company distributed locks for multi-replica safety.
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
+from shared.time_utils import now_utc
 from typing import Dict, Any, Optional
 
 from config import settings
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from providers.defeat_beta_provider import DefeatBetaProvider
-from providers.yfinance_provider import YFinanceProvider
 from domain.exceptions import (
     MaxRetriesExceededError,
     SchedulerRefreshError,
@@ -44,7 +43,7 @@ class EarningsRefreshScheduler:
     def __init__(
         self,
         financial_repo: Optional[SupabaseFinancialRepository] = None,
-        defeat_beta_provider: Optional[DefeatBetaProvider] = None,
+        defeat_beta_provider: Optional["DefeatBetaProvider"] = None,
     ):
         """
         Initialize scheduler.
@@ -55,15 +54,23 @@ class EarningsRefreshScheduler:
         """
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
 
-        # Inject fallback chain: Stockdex → Edgar → YFinance
-        yf_provider = YFinanceProvider()
-        from providers.stockdex_provider import StockdexMacrotrendsProvider
-        from providers.edgar_provider import EdgarToolsProvider
-        self.defeat_beta_provider = defeat_beta_provider or DefeatBetaProvider(
-            yfinance_provider=yf_provider,
-            stockdex_provider=StockdexMacrotrendsProvider(),
-            edgar_provider=EdgarToolsProvider(),
-        )
+        # Lazy imports to avoid SSL calls at module import time
+        self.defeat_beta_provider = defeat_beta_provider
+        if self.defeat_beta_provider is None:
+            try:
+                from providers.defeat_beta_provider import DefeatBetaProvider
+                from providers.yfinance_provider import YFinanceProvider
+                yf_provider = YFinanceProvider()
+                from providers.stockdex_provider import StockdexMacrotrendsProvider
+                from providers.edgar_provider import EdgarToolsProvider
+                self.defeat_beta_provider = DefeatBetaProvider(
+                    yfinance_provider=yf_provider,
+                    stockdex_provider=StockdexMacrotrendsProvider(),
+                    edgar_provider=EdgarToolsProvider(),
+                )
+            except Exception as import_err:
+                logger.warning("Failed to initialize DefeatBetaProvider: %s", import_err)
+                self.defeat_beta_provider = None
 
         self.is_running = False
         self.task: Optional[asyncio.Task] = None
@@ -71,6 +78,118 @@ class EarningsRefreshScheduler:
         # Per-company lock TTL; earnings refresh per company may be longer; default 45 min
         self.lock_ttl_seconds: int = int(getattr(settings, "SCHEDULER_COMPANY_LOCK_TTL_SECONDS", 2700))
         self.owner_lock_id: str = f"earnings:{uuid.uuid4()}"
+
+    EARNINGS_DATE_STALE_DAYS = 30
+    EARNINGS_SYNC_BATCH_SIZE = 20
+
+    # ========================================================================
+    # v3 Planner Integration
+    # ========================================================================
+
+    async def plan(self) -> list:
+        """
+        v3 planner integration — returns company_refresh job dicts for
+        companies with upcoming earnings.
+
+        Before querying, syncs the earnings calendar for tracked companies
+        with stale or missing next_earnings_date values (lightweight provider
+        call, best-effort). Over successive cycles, all tracked companies
+        get their earnings dates refreshed.
+
+        Handlers (registered in scheduler_worker.py):
+          - handler for 'company_refresh' with scope='financials'
+            runs IS/BS/CF financial data refresh, derived metrics,
+            audit, RI valuation.
+
+        Higher priority (40) than market_data (30) so financial refreshes
+        are processed first.
+
+        Returns list of dicts, each suitable for SchedulerRepository.enqueue_job:
+            job_type: 'company_refresh'
+            dedupe_key: 'company_refresh:{company_id}:financials'
+            resource_type: 'company'
+            resource_id: company_id (as str)
+            payload: { company_id, ticker_symbol, earnings_date, scope: 'financials' }
+            priority: 40
+        """
+        await self._sync_earnings_calendar()
+
+        today = now_utc().date()
+        buffer_days = getattr(settings, "EARNINGS_REFRESH_BUFFER_DAYS", 14)
+        start_date = today - timedelta(days=buffer_days)
+        end_date = today + timedelta(days=buffer_days)
+
+        try:
+            companies = await self.financial_repo.get_companies_with_upcoming_earnings(
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception:
+            companies = []
+
+        jobs = []
+        for c in companies or []:
+            jobs.append({
+                "job_type": "company_refresh",
+                "dedupe_key": f"company_refresh:{c.get('company_id')}:financials",
+                "resource_type": "company",
+                "resource_id": str(c.get("company_id", "")),
+                "payload": {
+                    "company_id": c.get("company_id"),
+                    "ticker_symbol": c.get("ticker_symbol"),
+                    "earnings_date": c.get("next_earnings_date"),
+                    "scopes": ["financials"],
+                },
+                "priority": 40,
+                "max_attempts": 3,
+            })
+        return jobs
+
+    async def _sync_earnings_calendar(self) -> None:
+        """
+        Lightweight best-effort sync: fetch next_earnings_date from provider
+        for tracked companies with stale or missing dates.
+
+        Processes a batch per cycle so the plan() method stays fast. Over
+        successive cycles, all tracked companies eventually get refreshed.
+        """
+        if not self.defeat_beta_provider:
+            return
+
+        try:
+            companies = await self.financial_repo.get_active_companies_for_market_data()
+        except Exception:
+            return
+
+        if not companies:
+            return
+
+        cutoff_str = (now_utc().date() - timedelta(days=self.EARNINGS_DATE_STALE_DAYS)).isoformat()
+        pending = [
+            c for c in companies
+            if c.get("next_earnings_date") is None
+            or str(c["next_earnings_date"]) < cutoff_str
+        ]
+
+        if not pending:
+            return
+
+        batch = pending[:self.EARNINGS_SYNC_BATCH_SIZE]
+
+        async def _refresh(c: dict) -> bool:
+            try:
+                ed = await self.defeat_beta_provider.fetch_next_earnings_date(c["ticker_symbol"])
+                if ed is not None:
+                    await self.financial_repo.update_next_earnings_date(c["company_id"], ed)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        results = await asyncio.gather(*[_refresh(c) for c in batch], return_exceptions=True)
+        count = sum(1 for r in results if r is True)
+        if count:
+            logger.info("[EARNINGS_CALENDAR] Synced %d/%d earnings dates", count, len(batch))
 
     # ========================================================================
     # SCHEDULER CONTROL
@@ -137,7 +256,7 @@ class EarningsRefreshScheduler:
 
         try:
             # Step 1: Determine earnings window
-            today = date.today()
+            today = now_utc().date()
             buffer_days = settings.EARNINGS_REFRESH_BUFFER_DAYS
 
             start_date = today - timedelta(days=buffer_days)
@@ -265,14 +384,15 @@ class EarningsRefreshScheduler:
                 company_id=company_id,
                 last_refreshed_fiscal_year=refresh_info.last_refreshed_fiscal_year,
                 last_refreshed_fiscal_quarter=refresh_info.last_refreshed_fiscal_quarter,
-                force_full_history=is_first_time_load,  # Full for first load
+                force_full_history=is_first_time_load,
+                exchange=refresh_info.exchange,
             )
 
             # Step 3: Store (upsert prevents duplicates)
             upsert_results = await self.financial_repo.upsert_all_financials(financials)
 
             # Step 4: Update metadata
-            latest_fiscal_year = 2024  # Default
+            latest_fiscal_year = now_utc().year
             latest_fiscal_quarter = None
 
             if financials.income_statements.rows:

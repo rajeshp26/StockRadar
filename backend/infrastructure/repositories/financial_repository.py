@@ -14,6 +14,7 @@ Additions in this version:
 import logging
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Any, Optional
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from decimal import Decimal
 
 from supabase import Client
@@ -145,7 +146,7 @@ class SupabaseFinancialRepository:
             lock_type varchar
           )
         """
-        now = datetime.utcnow()
+        now = now_utc()
         expires = now + timedelta(seconds=ttl_seconds)
 
         try:
@@ -185,7 +186,7 @@ class SupabaseFinancialRepository:
 
     async def refresh_company_lock(self, company_id: int, owner_id: str, ttl_seconds: int = 1800) -> bool:
         """Extend lock expiration (owner-only)."""
-        now = datetime.utcnow()
+        now = now_utc()
         expires = now + timedelta(seconds=ttl_seconds)
         try:
             resp = (
@@ -235,7 +236,7 @@ class SupabaseFinancialRepository:
         if not getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
             return
         try:
-            now = datetime.utcnow().isoformat()
+            now = now_iso()
             payload = {
                 "company_id": company_id,
                 "fiscal_year": fiscal_year if fiscal_year is not None else 0,
@@ -276,10 +277,11 @@ class SupabaseFinancialRepository:
         NOTE: Not called automatically; enable from the scheduler when desired.
         Returns number of rows affected if the driver returns it, else 0.
         """
-        cutoff_year = date.today().year - int(retention_years)
+        today = now_utc().date()
+        cutoff_year = today.year - int(retention_years)
         # Handle Feb 29 etc. by using March 1 - 1 day trick for safety
         try:
-            cutoff = date(cutoff_year, date.today().month, date.today().day)
+            cutoff = date(cutoff_year, today.month, today.day)
         except ValueError:
             cutoff = (date(cutoff_year, 3, 1) - timedelta(days=1))
 
@@ -815,7 +817,7 @@ class SupabaseFinancialRepository:
                 provider = snapshot.get("provider") or "defeatbeta"
                 existing = None
                 try:
-                    existing = (
+                    resp = (
                         self.client.table("company_summary")
                         .select(
                             "market_cap, enterprise_value, shares_outstanding, implied_shares_outstanding, "
@@ -825,9 +827,10 @@ class SupabaseFinancialRepository:
                         .eq("company_id", cid)
                         .eq("snapshot_date", snap_date)
                         .eq("provider", provider)
-                        .single()
+                        .limit(1)
                         .execute()
-                    ).data
+                    )
+                    existing = resp.data[0] if resp.data else None
                 except Exception:
                     existing = None
 
@@ -954,7 +957,7 @@ class SupabaseFinancialRepository:
             # Step 3: Fetch full company rows for active IDs
             resp = (
                 self.client.table("companies")
-                .select("company_id, ticker_symbol, data_completeness_status, security_type")
+                .select("company_id, ticker_symbol, data_completeness_status, security_type, next_earnings_date, exchange")
                 .in_("company_id", list(active_ids))
                 .execute()
             )
@@ -973,7 +976,7 @@ class SupabaseFinancialRepository:
         next_earnings_date: Optional[date] = None,
     ) -> Dict[str, Any]:
         try:
-            now = datetime.utcnow()
+            now = now_utc()
             status = "COMPLETE" if is_first_load else "CURRENT"
             update_data = {
                 'last_financial_refresh_at': now.isoformat(),
@@ -998,6 +1001,16 @@ class SupabaseFinancialRepository:
         except Exception as e:
             logger.error(f"Failed to update metadata for company {company_id}: {str(e)}")
             raise
+
+    async def update_next_earnings_date(self, company_id: int, earnings_date: date) -> None:
+        """Lightweight update of next_earnings_date only (no fiscal year/quarter churn)."""
+        try:
+            self.client.table("companies").update({
+                "next_earnings_date": earnings_date.isoformat(),
+                "data_completeness_status": "CURRENT",
+            }).eq("company_id", company_id).execute()
+        except Exception as e:
+            logger.warning("Failed to update next_earnings_date for company %d: %s", company_id, e)
 
     async def get_companies_with_upcoming_earnings(
         self,
@@ -1036,7 +1049,7 @@ class SupabaseFinancialRepository:
         """Get company's refresh metadata for smart filtering."""
         try:
             response = self.client.table('companies').select(
-                'company_id, ticker_symbol, '
+                'company_id, ticker_symbol, exchange, '
                 'first_financial_data_loaded_at, last_financial_refresh_at, '
                 'last_refreshed_fiscal_year, last_refreshed_fiscal_quarter, '
                 'data_completeness_status, next_earnings_date, '
@@ -1051,13 +1064,14 @@ class SupabaseFinancialRepository:
             return CompanyRefreshInfo(
                 company_id=data['company_id'],
                 ticker_symbol=data['ticker_symbol'],
+                exchange=data.get('exchange'),
                 first_financial_data_loaded_at=(
-                    datetime.fromisoformat(data['first_financial_data_loaded_at'])
+                    parse_db_timestamp(data['first_financial_data_loaded_at'])
                     if data.get('first_financial_data_loaded_at')
                     else None
                 ),
                 last_financial_refresh_at=(
-                    datetime.fromisoformat(data['last_financial_refresh_at'])
+                    parse_db_timestamp(data['last_financial_refresh_at'])
                     if data.get('last_financial_refresh_at')
                     else None
                 ),
@@ -1065,12 +1079,12 @@ class SupabaseFinancialRepository:
                 last_refreshed_fiscal_quarter=data.get('last_refreshed_fiscal_quarter'),
                 data_completeness_status=data.get('data_completeness_status', 'INITIAL'),
                 next_earnings_date=(
-                    datetime.fromisoformat(data['next_earnings_date']).date()
+                    parse_db_timestamp(data['next_earnings_date']).date()
                     if data.get('next_earnings_date')
                     else None
                 ),
                 last_price_refresh_at=(
-                    datetime.fromisoformat(data['last_price_refresh_at'])
+                    parse_db_timestamp(data['last_price_refresh_at'])
                     if data.get('last_price_refresh_at')
                     else None
                 ),
@@ -1084,7 +1098,7 @@ class SupabaseFinancialRepository:
         """Update last_price_refresh_at to now() for incremental tracking."""
         try:
             update_data = DatabaseSerializer.serialize(
-                {'last_price_refresh_at': datetime.utcnow()}
+                {'last_price_refresh_at': now_utc()}
             )
             self.client.table('companies').update(update_data).eq(
                 'company_id', company_id
@@ -1092,6 +1106,31 @@ class SupabaseFinancialRepository:
             logger.debug(f"Updated last_price_refresh_at for company_id={company_id}")
         except Exception as e:
             logger.error(f"Failed to update price refresh marker for {company_id}: {str(e)}")
+
+    async def update_price_attempt_marker(self, company_id: int) -> None:
+        try:
+            self.client.table('companies').update({
+                'last_price_attempt_at': now_utc().isoformat(),
+            }).eq('company_id', company_id).execute()
+        except Exception:
+            pass
+
+    async def update_price_success_marker(self, company_id: int) -> None:
+        try:
+            self.client.table('companies').update({
+                'last_price_success_at': now_utc().isoformat(),
+                'consecutive_price_failures': 0,
+            }).eq('company_id', company_id).execute()
+        except Exception:
+            pass
+
+    async def increment_price_failures(self, company_id: int) -> None:
+        try:
+            self.client.table('companies').update({
+                'consecutive_price_failures': 1,
+            }).eq('company_id', company_id).execute()
+        except Exception:
+            pass
 
     # ========================================================================
     # BATCH OPERATIONS
@@ -1341,8 +1380,8 @@ class SupabaseFinancialRepository:
                 "ex_dividend_date": ex_dividend_date,
                 "trust_score": score,
                 "status": source_status,
-                "source_observed_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "source_observed_at": now_utc(),
+                "updated_at": now_utc(),
             })
 
             self.client.table("upcoming_dividend_events").upsert(
@@ -1366,7 +1405,7 @@ class SupabaseFinancialRepository:
         Only affects upcoming_dividend_events — never touches dividend_history.
         """
         try:
-            cutoff = (date.today() - timedelta(days=14)).isoformat()
+            cutoff = (now_utc().date() - timedelta(days=14)).isoformat()
             self.client.table("upcoming_dividend_events")\
                 .delete()\
                 .eq("company_id", company_id)\

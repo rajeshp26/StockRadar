@@ -9,6 +9,8 @@ No business logic — pure data access layer that delegates to Supabase.
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, datetime
 
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
+
 # Exchange code → market group mapping for holdings enrichment
 EXCHANGE_MARKET_MAP: Dict[str, str] = {
     "NMS": "US", "NASDAQ": "US", "NYSE": "US", "NYSEARCA": "US",
@@ -181,7 +183,7 @@ class PortfolioRepository:
         """Update last_import_at timestamp for an account."""
         try:
             self.client.table("portfolio_accounts").update(
-                {"last_import_at": datetime.now().isoformat()}
+                {"last_import_at": now_iso()}
             ).eq("account_id", account_id).execute()
         except Exception as e:
             logger.error(f"Failed to update import timestamp for account {account_id}: {e}")
@@ -554,7 +556,7 @@ class PortfolioRepository:
         """Get dividend payments within the last 365 days."""
         if not account_ids:
             return []
-        cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        cutoff = (now_utc() - timedelta(days=365)).strftime("%Y-%m-%d")
         try:
             res = (
                 self.client.table("portfolio_dividends")
@@ -620,7 +622,7 @@ class PortfolioRepository:
         """Get upcoming ex-dividend dates for the given companies."""
         if not company_ids:
             return []
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = now_utc().strftime("%Y-%m-%d")
         try:
             res = (
                 self.client.table("dividend_history")
@@ -654,7 +656,7 @@ class PortfolioRepository:
         """
         if not company_ids:
             return []
-        today = date.today().isoformat()
+        today = now_utc().date().isoformat()
         try:
             res = (
                 self.client.table("upcoming_dividend_events")
@@ -807,9 +809,9 @@ class PortfolioRepository:
                 payload["error_message"] = error_message
                 payload["status"] = "failed"
             if status == "processing":
-                payload["started_at"] = datetime.now().isoformat()
+                payload["started_at"] = now_iso()
             if status in ("completed", "failed"):
-                payload["completed_at"] = datetime.now().isoformat()
+                payload["completed_at"] = now_iso()
 
             if not payload:
                 return False

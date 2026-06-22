@@ -13,7 +13,7 @@ Follows existing conventions:
 from __future__ import annotations
 
 import logging
-from datetime import date
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional, Tuple
 
 from application.services.ai_service import generate_wacc_roic_narrative
@@ -194,7 +194,7 @@ class WaccRoicService:
             "marketCapUsed": round(float(mc), 2)    if mc    is not None else None,
             "totalDebtUsed": round(float(td), 2)    if td    is not None else None,
             "dataQuality":  data_quality,
-            "computedAt":   date.today().isoformat(),
+            "computedAt":   now_iso(),
         }
 
         # -- AI narrative ---------------------------------------------------
@@ -298,7 +298,7 @@ class WaccRoicService:
                 "yearsRequested": years,
                 "yearsAvailable": len(valid),
             },
-            "computedAt":     date.today().isoformat(),
+            "computedAt":     now_iso(),
         }
 
         # -- AI narrative ---------------------------------------------------
