@@ -624,6 +624,47 @@ export interface HoldingAccountBreakdown {
 }
 
 // ============================================================================
+// PORTFOLIO DASHBOARD TYPES (bundle endpoint)
+// ============================================================================
+
+export interface DashboardAccount {
+    account_id: number;
+    account_name: string;
+    account_type: string;
+    brokerage_name: string | null;
+    currency: string;
+    holdings_count: number;
+    total_value: number;
+}
+
+export interface DashboardOverview {
+    total_value: number;
+    total_cost_basis: number;
+    total_gain_loss: number;
+    total_gain_loss_pct: number;
+    ytd_dividends: number;
+    holdings_count: number;
+    accounts_count: number;
+}
+
+export interface DashboardHolding {
+    symbol: string;
+    company_name: string;
+    quantity: number;
+    current_price: number;
+    current_value: number;
+    total_cost: number;
+    unrealized_gain_loss: number;
+    unrealized_gain_loss_pct: number;
+}
+
+export interface PortfolioDashboardResponse {
+    accounts: DashboardAccount[];
+    overview: DashboardOverview;
+    holdings: DashboardHolding[];
+}
+
+// ============================================================================
 // TAB NAVIGATION TYPES
 // ============================================================================
 

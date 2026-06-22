@@ -1,42 +1,46 @@
 # backend/application/services/portfolio_service.py
 """
-Portfolio Service
-
-Business logic for portfolio management:
-- Import transactions from CSV
-- Calculate current holdings from transactions (FIFO cost basis)
-- Compute portfolio performance metrics
-- Link stocks to companies table (auto-create if needed)
-- Extract and track dividend payments
+Portfolio Service — Business logic for portfolio management.
 """
 
-from application.services import owner_earnings_suitability
 import asyncio
-import logging
-import uuid
-from datetime import date, datetime, timedelta, timezone
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from decimal import Decimal
+import base64
+import csv
 import hashlib
-from typing import List, Dict, Any, Optional, Tuple
+import io
+import json
+import logging
+import time
+import uuid
 from collections import defaultdict
-import re
-import numpy as np
+from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, List, Optional, Tuple
 
-from shared.portfolio_stats import compute_max_drawdown, compute_annualized_volatility, compute_daily_returns, compute_drawdown_series
-
-from application.parsers.portfolio_parser import (
-    ParsedTransaction,
-    ParseResult,
-    get_parser,
-)
+from application.parsers.portfolio_parser import ParseResult
+from application.services.caching.cache_manager import CacheManager
+from domain.interfaces.stock_provider import StockProvider
+from infrastructure.repositories.financial_repository import SupabaseFinancialRepository as FinancialRepository
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from providers.yfinance_provider import YFinanceProvider
 from providers.base import StockDataProvider
+from providers.yfinance_provider import YFinanceProvider
+from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from database import supabase
 
 logger = logging.getLogger(__name__)
+
+# Timing decorator
+def timed(logger_: logging.Logger = logger):
+    def decorator(fn):
+        async def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                elapsed = (time.perf_counter() - start) * 1000
+                logger_.info(f"[TIMING] {fn.__name__} took {elapsed:.1f}ms")
+        return wrapper
+    return decorator
 
 
 def _map_quote_type(quote_type: Optional[str]) -> str:
@@ -61,11 +65,11 @@ class PortfolioService:
     def __init__(
         self,
         portfolio_repo: Optional[PortfolioRepository] = None,
-        financial_repo: Optional[SupabaseFinancialRepository] = None,
+        financial_repo: Optional[FinancialRepository] = None,
         stock_provider: Optional[StockDataProvider] = None,
     ):
         self.portfolio_repo = portfolio_repo or PortfolioRepository()
-        self.financial_repo = financial_repo or SupabaseFinancialRepository()
+        self.financial_repo = financial_repo or FinancialRepository()
         self.stock_provider = stock_provider or YFinanceProvider()
     
 
@@ -494,6 +498,7 @@ class PortfolioService:
         
         logger.info(f"Holdings recalculated for account {account_id}: {len(holdings_by_symbol)} positions")
     
+    @timed()
     async def enrich_holdings_with_prices(
         self, holdings: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -567,7 +572,11 @@ class PortfolioService:
                 cache_key = f"{h.get('symbol')}:{exchange_override}"
                 if cache_key not in override_cache:
                     try:
-                        sd = self.stock_provider.get_stock_details(h["symbol"], exchange=exchange_override)
+                        sd = await asyncio.to_thread(
+                            self.stock_provider.get_stock_details,
+                            h["symbol"],
+                            exchange=exchange_override,
+                        )
                         override_cache[cache_key] = sd.price if sd else None
                     except Exception:
                         override_cache[cache_key] = None
@@ -1065,6 +1074,7 @@ class PortfolioService:
     # PORTFOLIO SUMMARY
     # ========================================================================
     
+    @timed()
     async def get_user_portfolio_overview(
         self, user_id: int,
         account_ids: Optional[List[int]] = None,
@@ -1115,17 +1125,15 @@ class PortfolioService:
             (total_gain_loss / total_cost * 100) if total_cost > 0 else 0
         )
         
-        # Get dividend summary for current year
+        # Get dividend summary for current year (batched query)
         current_year = now_utc().year
         ytd_dividends = Decimal("0")
-        
-        for account in accounts:
-            account_divs = self.portfolio_repo.get_account_dividends_by_year(
-                account["account_id"], current_year
-            )
-            ytd_dividends += sum(
-                Decimal(str(d.get("amount") or 0)) for d in account_divs
-            )
+        account_ids_list = [a["account_id"] for a in accounts]
+
+        all_divs = self.portfolio_repo.get_accounts_dividends_by_year(account_ids_list, current_year)
+        ytd_dividends = sum(
+            Decimal(str(d.get("amount") or 0)) for d in all_divs
+        )
         
         # Top 10 holdings by value
         top_holdings = sorted(
@@ -1715,17 +1723,16 @@ class PortfolioService:
         Positive amount = deposit (money in), negative = withdrawal (money out).
         """
         raw: List[Dict] = []
-        for aid in account_ids:
-            cft = self.portfolio_repo.get_account_transactions(
-                aid, activity_types=["MoneyMovement", "BonusPayment"]
-            )
-            for t in cft:
-                d = t.get("transaction_date")
-                if isinstance(d, str):
-                    t["transaction_date"] = date.fromisoformat(d)
-                elif isinstance(d, datetime):
-                    t["transaction_date"] = d.date()
-            raw.extend(cft)
+        cft_batch = self.portfolio_repo.get_accounts_transactions(
+            account_ids, activity_types=["MoneyMovement", "BonusPayment"]
+        )
+        for t in cft_batch:
+            d = t.get("transaction_date")
+            if isinstance(d, str):
+                t["transaction_date"] = date.fromisoformat(d)
+            elif isinstance(d, datetime):
+                t["transaction_date"] = d.date()
+        raw.extend(cft_batch)
         raw.sort(key=lambda x: x["transaction_date"])
 
         return [
@@ -1733,6 +1740,7 @@ class PortfolioService:
             for t in raw
         ]
 
+    @timed()
     async def get_portfolio_performance(
         self, user_id: int, period: str = "1Y",
         account_ids: Optional[List[int]] = None,
@@ -1764,18 +1772,16 @@ class PortfolioService:
 
         start_date, end_date = self._period_to_date_range(period, account_ids)
 
-        # Get all trade transactions across accounts
+        # Get all trade transactions across accounts (batched query)
         all_txns: List[Dict] = []
-        for aid in account_ids:
-            txns = self.portfolio_repo.get_account_transactions(aid, activity_types=["Trade"])
-            # Normalize string dates to date objects
-            for t in txns:
-                d = t.get("transaction_date")
-                if isinstance(d, str):
-                    t["transaction_date"] = date.fromisoformat(d)
-                elif isinstance(d, datetime):
-                    t["transaction_date"] = d.date()
-            all_txns.extend(txns)
+        txns_batch = self.portfolio_repo.get_accounts_transactions(account_ids, activity_types=["Trade"])
+        for t in txns_batch:
+            d = t.get("transaction_date")
+            if isinstance(d, str):
+                t["transaction_date"] = date.fromisoformat(d)
+            elif isinstance(d, datetime):
+                t["transaction_date"] = d.date()
+        all_txns.extend(txns_batch)
 
         # Sort all transactions ascending, then split into pre-period (for opening lots) and in-period
         all_txns.sort(key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))

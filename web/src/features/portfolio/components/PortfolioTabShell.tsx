@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Upload, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { usePortfolioAccounts } from '../hooks/usePortfolio';
+import { usePortfolioDashboard } from '../hooks/usePortfolio';
 import { AccountChipStrip } from './AccountChipStrip';
 import { TabBar } from './TabBar';
 import { OverviewTab } from './OverviewTab';
@@ -26,7 +26,8 @@ interface PortfolioTabShellProps {
 export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
     const { activeTab, selectedAccountId, setActiveTab, setSelectedAccountId } =
         usePortfolioNavigation();
-    const { data: accounts, isLoading: accountsLoading } = usePortfolioAccounts();
+    const { data: initialData, isLoading } = usePortfolioDashboard();
+    const accounts = initialData?.accounts;
 
     const [showImportModal, setShowImportModal] = useState(false);
     const [showManualForm, setShowManualForm] = useState(false);
@@ -35,16 +36,6 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
 
     const allAccountIds = accounts?.map(a => a.account_id);
     const accountIds = selectedAccountId ? [selectedAccountId] : allAccountIds;
-
-    if (accountsLoading) {
-        return (
-            <div className="space-y-6">
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-96 w-full" />
-            </div>
-        );
-    }
 
     const renderTab = () => {
         switch (resolvedTab) {
@@ -93,13 +84,16 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
                 </div>
             </div>
 
-            {accounts && accounts.length > 0 && (
+            {/* Account chips — show skeleton while loading, render tabs immediately */}
+            {isLoading ? (
+                <Skeleton className="h-12 w-full" />
+            ) : accounts && accounts.length > 0 ? (
                 <AccountChipStrip
                     accounts={accounts}
                     selectedAccountId={selectedAccountId}
                     onSelect={setSelectedAccountId}
                 />
-            )}
+            ) : null}
 
             <TabBar activeTab={resolvedTab} onTabChange={setActiveTab} />
 

@@ -88,6 +88,8 @@ export const QK = {
   holdingBenchmarkCompare: (symbol: string, period: string, benchmarks: string[]) =>
     ["portfolio", "holding", "benchmark-compare", symbol.toUpperCase(), period, ...benchmarks] as const,
   // Portfolio
+  portfolioDashboard: () =>
+    ["portfolio", "dashboard"] as const,
   portfolioOverview: () =>
     ["portfolio", "overview"] as const,
   portfolioAccounts: () =>

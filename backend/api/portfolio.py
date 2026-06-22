@@ -10,13 +10,17 @@ Endpoints for portfolio management:
 """
 
 import base64
+import json
 import logging
+import time
 import uuid
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from config import settings
 from dependencies import get_current_user_dep, limiter
 from application.services.portfolio_service import PortfolioService
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
@@ -50,9 +54,14 @@ from schemas_portfolio import (
     RollingSharpeResponse,
     RiskContributionResponse,
     FactorExposureResponse,
+    PortfolioDashboardResponse,
+    DashboardAccount,
+    DashboardOverview,
+    DashboardHolding,
 )
 from shared.time_utils import now_utc
 from shared.exceptions.base import AppException
+from shared.metrics import RouteTimer
 from database import supabase
 
 router = APIRouter()
@@ -108,6 +117,43 @@ def _parse_account_ids(raw: Optional[str]) -> Optional[List[int]]:
     if not raw:
         return None
     return [int(x) for x in raw.split(",") if x.strip()]
+
+
+def _compute_overview_from_holdings(
+    all_holdings: List[dict],
+    accounts: List[dict],
+    db_user_id: int,
+    ytd_dividends: float = 0.0,
+) -> dict:
+    """Compute overview metrics from pre-enriched holdings.
+
+    Unlike get_user_portfolio_overview(), this does NOT:
+    - Re-fetch holdings from DB (they're already in all_holdings)
+    - Re-enrich with prices (already done upstream)
+    - Query dividends per-account (uses batched query from caller)
+
+    It aggregates total_value, total_cost_basis, gain/loss from the
+    enriched holdings list in a single O(n) pass instead.
+    """
+    total_value = Decimal("0")
+    total_cost = Decimal("0")
+    for h in all_holdings:
+        total_value += Decimal(str(h.get("current_value") or 0))
+        total_cost += Decimal(str(h.get("total_cost") or 0))
+    total_gain = total_value - total_cost
+    total_gain_pct = (
+        (float(total_gain) / float(total_cost) * 100)
+        if total_cost else 0.0
+    )
+    return {
+        "total_value": float(total_value),
+        "total_cost_basis": float(total_cost),
+        "total_gain_loss": float(total_gain),
+        "total_gain_loss_pct": round(total_gain_pct, 2),
+        "ytd_dividends": ytd_dividends,
+        "holdings_count": len(all_holdings),
+        "accounts_count": len(accounts),
+    }
 
 
 # ============================================================================
@@ -198,6 +244,97 @@ async def list_accounts(
         raise HTTPException(
             status_code=500,
             detail="Failed to list accounts",
+        )
+
+
+@router.get("/portfolio/dashboard", tags=["Portfolio"], status_code=200)
+@limiter.limit("20/minute")
+async def get_portfolio_dashboard(
+    request: Request,
+    user: dict = Depends(get_current_user_dep),
+) -> PortfolioDashboardResponse:
+    """
+    Portfolio Dashboard View Model — single enrichment pass.
+    Returns accounts, overview, and holdings in one response.
+
+    Feature-flagged: only available when ENABLE_PORTFOLIO_DASHBOARD is true.
+    """
+    if not settings.ENABLE_PORTFOLIO_DASHBOARD:
+        raise HTTPException(status_code=404, detail="Dashboard endpoint not available")
+
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        repo = PortfolioRepository()
+        service = _get_portfolio_service()
+
+        timer = RouteTimer(endpoint="get_portfolio_dashboard", user_id=db_user_id)
+
+        with timer:
+            # Single holdings fetch — reused for accounts + overview
+            accounts = repo.get_user_accounts(db_user_id, active_only=True)
+            account_ids = [a["account_id"] for a in accounts]
+            all_holdings = await service.enrich_holdings_with_prices(
+                repo.get_user_all_holdings(db_user_id)
+            ) if account_ids else []
+
+            timer.account_count = len(accounts)
+            timer.holdings_count = len(all_holdings)
+
+            # Build enriched accounts (using the SAME all_holdings data)
+            enriched_accounts = []
+            for acc in accounts:
+                acc_holdings = [h for h in all_holdings if h.get("account_id") == acc["account_id"]]
+                enriched_accounts.append({
+                    "account_id": acc["account_id"],
+                    "account_name": acc["account_name"],
+                    "account_type": acc["account_type"],
+                    "brokerage_name": acc.get("portfolio_brokerages", {}).get("brokerage_name"),
+                    "currency": acc["currency"],
+                    "holdings_count": len(acc_holdings),
+                    "total_value": float(sum(h.get("current_value") or 0 for h in acc_holdings)),
+                })
+
+            # Batched dividend query feeds into overview
+            from datetime import date as dt_date
+            current_year = dt_date.today().year
+            all_divs = repo.get_accounts_dividends_by_year(account_ids, current_year)
+            ytd_dividends = sum(float(d.get("amount") or 0) for d in all_divs)
+
+            overview = _compute_overview_from_holdings(
+                all_holdings, accounts, db_user_id, ytd_dividends
+            )
+
+            # Holdings: only fields needed for the initial holdings table display
+            holdings_summary = [{
+                "symbol": h["symbol"],
+                "company_name": h.get("company_name"),
+                "quantity": float(h.get("quantity") or 0),
+                "current_price": float(h.get("current_price") or 0),
+                "current_value": float(h.get("current_value") or 0),
+                "total_cost": float(h.get("total_cost") or 0),
+                "unrealized_gain_loss": float(h.get("unrealized_gain_loss") or 0),
+                "unrealized_gain_loss_pct": float(h.get("unrealized_gain_loss_pct") or 0),
+            } for h in all_holdings]
+
+            return PortfolioDashboardResponse(
+                accounts=[DashboardAccount(**a) for a in enriched_accounts],
+                overview=DashboardOverview(**{
+                    k: v for k, v in overview.items() if k in (
+                        "total_value", "total_cost_basis", "total_gain_loss",
+                        "total_gain_loss_pct", "ytd_dividends", "holdings_count", "accounts_count",
+                    )
+                }),
+                holdings=[DashboardHolding(**h) for h in holdings_summary],
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dashboard endpoint failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load portfolio dashboard",
         )
 
 

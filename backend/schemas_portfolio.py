@@ -786,3 +786,44 @@ class HoldingAccountBreakdown(BaseModel):
     unrealized_gain_loss: float = 0
     unrealized_gain_loss_pct: float = 0
     dividends_received: float = 0
+
+
+class DashboardAccount(BaseModel):
+    """Account entry in the portfolio dashboard bundle."""
+    account_id: int
+    account_name: str
+    account_type: str
+    brokerage_name: Optional[str] = None
+    currency: str
+    holdings_count: int
+    total_value: float
+
+
+class DashboardOverview(BaseModel):
+    """Overview section of the portfolio dashboard."""
+    total_value: float
+    total_cost_basis: float
+    total_gain_loss: float
+    total_gain_loss_pct: float
+    ytd_dividends: float
+    holdings_count: int
+    accounts_count: int
+
+
+class DashboardHolding(BaseModel):
+    """Holding entry in the portfolio dashboard bundle."""
+    symbol: str
+    company_name: Optional[str] = None
+    quantity: float
+    current_price: float
+    current_value: float
+    total_cost: float
+    unrealized_gain_loss: float
+    unrealized_gain_loss_pct: float
+
+
+class PortfolioDashboardResponse(BaseModel):
+    """Portfolio dashboard bundle — single-enrichment response."""
+    accounts: List[DashboardAccount]
+    overview: DashboardOverview
+    holdings: List[DashboardHolding]

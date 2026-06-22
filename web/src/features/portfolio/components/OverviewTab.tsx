@@ -1,7 +1,7 @@
 'use client';
 
 import { usePortfolioOverview, useAllHoldings } from '../hooks/usePortfolio';
-import { PortfolioPerformanceChart } from './PortfolioPerformanceChart';
+import { LazyPerformanceChart } from './LazyPerformanceChart';
 import { TopMovers } from './TopMovers';
 import { PriceSparkline } from './PriceSparkline';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -173,10 +173,8 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
                     )}
                 </div>
 
-                {/* Performance Chart */}
-                <div className="lg:col-span-2">
-                    <PortfolioPerformanceChart />
-                </div>
+                {/* Performance Chart — lazy loaded via IntersectionObserver */}
+                <LazyPerformanceChart />
             </div>
         </div>
     );

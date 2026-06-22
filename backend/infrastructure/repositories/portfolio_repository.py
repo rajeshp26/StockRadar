@@ -6,7 +6,7 @@ Handles all portfolio database operations following the existing repository patt
 No business logic — pure data access layer that delegates to Supabase.
 """
 
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 from datetime import date, datetime
 
 from shared.time_utils import now_utc, now_iso, parse_db_timestamp
@@ -44,6 +44,42 @@ from database import supabase
 from supabase import Client
 
 logger = logging.getLogger(__name__)
+
+
+# ── Shared chunking helper for batch operations ────────────────────────────
+
+def _batch_execute(
+    account_ids: List[int],
+    batch_fn: Callable[[List[int]], List[Dict[str, Any]]],
+    single_fn: Callable[[int], List[Dict[str, Any]]],
+    batch_size: int = 500,
+) -> List[Dict[str, Any]]:
+    """Execute a batch query across account_ids with chunking + fallback.
+
+    ``batch_fn`` is called with a chunk of account_ids (e.g. 500 at a time).
+    If a chunk fails, each account_id in that chunk is retried individually
+    via ``single_fn`` so a partial failure doesn't lose all data.
+    """
+    if not account_ids:
+        return []
+
+    all_results: List[Dict[str, Any]] = []
+    for i in range(0, len(account_ids), batch_size):
+        chunk = account_ids[i:i + batch_size]
+        try:
+            results = batch_fn(chunk)
+            all_results.extend(results)
+        except Exception as e:
+            logger.warning(
+                f"Batch query failed for chunk {i//batch_size} "
+                f"({len(chunk)} ids): {e}. Falling back to individual queries."
+            )
+            for aid in chunk:
+                try:
+                    all_results.extend(single_fn(aid))
+                except Exception as e2:
+                    logger.error(f"Individual query failed for account {aid}: {e2}")
+    return all_results
 
 
 class PortfolioRepository:
@@ -449,6 +485,34 @@ class PortfolioRepository:
             logger.error(f"Failed to get earliest transaction date: {e}")
             return None
 
+    def get_portfolio_snapshots(
+        self,
+        account_ids: List[int],
+        start_date: date,
+        end_date: date,
+    ) -> List[Dict[str, Any]]:
+        """Read pre-computed snapshots for the given accounts and date range.
+
+        Returns rows sorted by snapshot_date ascending.
+        Falls back to a daily computation if no snapshots exist.
+        """
+        if not account_ids:
+            return []
+        try:
+            res = (
+                self.client.table("portfolio_snapshots")
+                .select("snapshot_date, total_value, cost_basis, net_deposits, holdings_json")
+                .in_("account_id", account_ids)
+                .gte("snapshot_date", start_date.isoformat())
+                .lte("snapshot_date", end_date.isoformat())
+                .order("snapshot_date", desc=False)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to fetch portfolio snapshots: {e}")
+            return []
+
     def get_account_performance_history(
         self, account_id: int, days: int = 90
     ) -> List[Dict[str, Any]]:
@@ -522,6 +586,69 @@ class PortfolioRepository:
             logger.error(f"Failed to get dividends for account {account_id}: {e}")
             return []
     
+    # ── Batch dividend methods ─────────────────────────────────────────────
+
+    def _batch_dividends(
+        self, account_ids: List[int], fiscal_year: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        query = (
+            self.client.table("portfolio_dividends")
+            .select("*")
+            .in_("account_id", account_ids)
+        )
+        if fiscal_year is not None:
+            query = query.eq("fiscal_year", fiscal_year)
+        res = query.limit(10000).execute()
+        return res.data or []
+
+    def get_accounts_dividends_by_year(
+        self,
+        account_ids: List[int],
+        fiscal_year: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Batch query for dividends across multiple accounts with chunking + fallback."""
+        return _batch_execute(
+            account_ids,
+            batch_fn=lambda chunk: self._batch_dividends(chunk, fiscal_year),
+            single_fn=lambda aid: self.get_account_dividends_by_year(aid, fiscal_year),
+            batch_size=500,
+        )
+
+    # ── Batch transaction methods ──────────────────────────────────────────
+
+    def _batch_transactions(
+        self,
+        account_ids: List[int],
+        limit: Optional[int] = None,
+        activity_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        query = (
+            self.client.table("portfolio_transactions")
+            .select("*")
+            .in_("account_id", account_ids)
+        )
+        if activity_types:
+            query = query.in_("activity_type", activity_types)
+        query = query.order("transaction_date", desc=True)
+        if limit:
+            query = query.limit(limit)
+        res = query.execute()
+        return res.data or []
+
+    def get_accounts_transactions(
+        self,
+        account_ids: List[int],
+        limit: Optional[int] = None,
+        activity_types: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Batch query for transactions across multiple accounts with chunking + fallback."""
+        return _batch_execute(
+            account_ids,
+            batch_fn=lambda chunk: self._batch_transactions(chunk, limit, activity_types),
+            single_fn=lambda aid: self.get_account_transactions(aid, limit, activity_types),
+            batch_size=500,
+        )
+
     def get_monthly_dividends(
         self, account_id: int, months: int = 12
     ) -> List[Dict[str, Any]]:

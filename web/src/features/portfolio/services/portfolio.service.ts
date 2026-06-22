@@ -39,6 +39,7 @@ import type {
     PortfolioDividendHolding,
     PortfolioDividendHoldingDetail,
     UpcomingExDate,
+    PortfolioDashboardResponse,
 } from "../types/portfolio.types";
 
 /**
@@ -78,6 +79,17 @@ export class PortfolioService {
 
     async deleteAccount(accountId: number): Promise<void> {
         await this.api.delete(`/portfolio/accounts/${accountId}`);
+    }
+
+    // ========================================================================
+    // DASHBOARD (bundle endpoint)
+    // ========================================================================
+
+    async getDashboardData(): Promise<PortfolioDashboardResponse> {
+        const res = await this.api.get<PortfolioDashboardResponse>(
+            "/portfolio/dashboard"
+        );
+        return res.data;
     }
 
     // ========================================================================

@@ -39,6 +39,7 @@ import type {
     HoldingTransaction,
     HoldingAccountBreakdown,
     TimePeriod,
+    PortfolioDashboardResponse,
 } from "../types/portfolio.types";
 
 /**
@@ -72,6 +73,21 @@ export function usePortfolioAccounts() {
         gcTime: GC.PORTFOLIO,
         retry: 1,
         refetchOnWindowFocus: true,
+    });
+}
+
+/**
+ * Hook for portfolio dashboard bundle data
+ */
+export function usePortfolioDashboard() {
+    const { portfolioService } = useServices();
+
+    return useQuery<PortfolioDashboardResponse, Error>({
+        queryKey: QK.portfolioDashboard(),
+        queryFn: () => portfolioService.getDashboardData(),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
     });
 }
 

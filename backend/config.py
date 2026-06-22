@@ -195,6 +195,10 @@ class Settings(BaseSettings):
     )
     
     # Feature Flags
+    ENABLE_PORTFOLIO_DASHBOARD: bool = Field(
+        default=False,
+        description="Enable the portfolio dashboard view-model endpoint (/portfolio/dashboard)",
+    )
     ENABLE_EARNINGS_SCHEDULER: bool = Field(
         default=True,
         description="Enable the earnings refresh scheduler"

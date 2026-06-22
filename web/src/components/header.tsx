@@ -4,8 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserNav } from "@/components/user-nav";
 import { ErrorBoundary } from "react-error-boundary";
-import { Suspense } from "react";
+import { Suspense, useCallback } from "react";
 import { Eye, PieChart, Users } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { QK } from "@/lib/query-keys";
+import { useServices } from "@/shared/contexts/ServiceContext";
+import { STALE } from "@/lib/query-client";
 import { cn } from "@/lib/utils";
 
 /* ── Nav link definition ────────────────────────────────────── */
@@ -22,9 +26,26 @@ function UserNavSkeleton() {
   );
 }
 
+/* ── Prefetch on hover for Portfolio ────────────────────────── */
+function usePrefetchPortfolio() {
+  const queryClient = useQueryClient();
+  const { portfolioService } = useServices();
+
+  return useCallback(() => {
+    if (!queryClient.getQueryData(QK.portfolioDashboard())) {
+      queryClient.prefetchQuery({
+        queryKey: QK.portfolioDashboard(),
+        queryFn: () => portfolioService.getDashboardData(),
+        staleTime: STALE.PORTFOLIO,
+      });
+    }
+  }, [queryClient, portfolioService]);
+}
+
 /* ── Header ─────────────────────────────────────────────────── */
 export function Header() {
   const pathname = usePathname();
+  const prefetchPortfolio = usePrefetchPortfolio();
 
   return (
     <header
@@ -77,6 +98,7 @@ export function Header() {
                 <Link
                   key={href}
                   href={href}
+                  onMouseEnter={href === '/portfolio' ? prefetchPortfolio : undefined}
                   className={cn(
                     "relative rounded-xl px-4 py-1.5 text-xs font-bold uppercase tracking-widest transition-all duration-200",
                     isActive
