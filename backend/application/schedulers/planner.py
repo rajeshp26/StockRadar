@@ -35,19 +35,35 @@ class SchedulerPlanner:
         self,
         name: str,
         plan_fn: PlanFunction,
-        interval_hours: int,
+        interval_hours: Optional[float] = None,
+        interval_minutes: Optional[float] = None,
         enabled: bool = True,
     ) -> None:
+        if interval_hours is None and interval_minutes is None:
+            raise ValueError("Either interval_hours or interval_minutes is required")
+        if interval_hours is not None and interval_minutes is not None:
+            raise ValueError("Only one of interval_hours or interval_minutes should be provided")
+
+        if interval_minutes is not None:
+            interval_hours = interval_minutes / 60.0
+
         self._schedulers[name] = {
             "name": name,
             "plan_fn": plan_fn,
             "interval_hours": interval_hours,
             "enabled": enabled,
         }
-        logger.info(
-            "[PLANNER] Registered scheduler '%s' (interval=%dh, enabled=%s)",
-            name, interval_hours, enabled,
-        )
+
+        if interval_hours >= 1:
+            logger.info(
+                "[PLANNER] Registered scheduler '%s' (interval=%dh, enabled=%s)",
+                name, int(interval_hours), enabled,
+            )
+        else:
+            logger.info(
+                "[PLANNER] Registered scheduler '%s' (interval=%.0fmin, enabled=%s)",
+                name, interval_hours * 60, enabled,
+            )
 
     async def run_planner_loop(self) -> None:
         logger.info("[PLANNER] Starting planner loop (check interval=%ds)", self._planner_interval)

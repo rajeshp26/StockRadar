@@ -13,8 +13,11 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from functools import lru_cache
+
+import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
 
 from application.parsers.portfolio_parser import ParseResult
@@ -22,9 +25,17 @@ from application.services.caching.cache_manager import CacheManager
 from domain.interfaces.stock_provider import StockProvider
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository as FinancialRepository
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+
 from providers.base import StockDataProvider
 from providers.yfinance_provider import YFinanceProvider
 from shared.time_utils import now_utc, now_iso, parse_db_timestamp
+from shared.snapshot_builder import _classify_lot_action, resolve_price_forward_filled, build_snapshot_row, CDR_RATIO
+from shared.portfolio_stats import (
+    annualize_return, compute_annualized_volatility, compute_daily_returns,
+    compute_max_drawdown, compute_portfolio_twr, compute_portfolio_mwr,
+)
+from config import settings
 from database import supabase
 
 logger = logging.getLogger(__name__)
@@ -297,10 +308,42 @@ class PortfolioService:
                     "created_by_user_id": None,
                 })
 
-            # --- Insert transactions ---
-            inserted_count, duplicate_count = repo.insert_transactions_with_duplicates(
-                db_transactions, import_batch_id, skip_duplicates=True
-            )
+            # --- Write events only (legacy transactions table is frozen) ---
+            inserted_count = len(db_transactions)
+            duplicate_count = 0
+            try:
+                from infrastructure.repositories.event_store import EventStore
+                event_store = EventStore()
+                tx_events = []
+                for i, tx_data in enumerate(db_transactions):
+                    event_key = f"import_{import_batch_id}_{i}"
+                    tx_events.append({
+                        "event_type": "transaction_imported",
+                        "aggregate_id": f"account_{tx_data.get('account_id')}",
+                        "aggregate_type": "account",
+                        "data": {
+                            "account_id": tx_data.get("account_id"),
+                            "company_id": tx_data.get("company_id"),
+                            "transaction_date": tx_data.get("transaction_date"),
+                            "activity_type": tx_data.get("activity_type"),
+                            "symbol": tx_data.get("symbol"),
+                            "quantity": tx_data.get("quantity"),
+                            "unit_price": tx_data.get("unit_price"),
+                            "net_cash_amount": tx_data.get("net_cash_amount"),
+                            "currency": tx_data.get("currency"),
+                        },
+                        "metadata": {
+                            "import_batch_id": str(import_batch_id),
+                            "entry_source": "csv_import",
+                        },
+                        "idempotency_key": event_key,
+                    })
+                event_store.append_events_batch(tx_events)
+            except Exception as e:
+                logger.error(
+                    f"Dual-write event creation failed for batch {import_batch_id}: {e}. "
+                    f"Continuing import — events can be repaired via --repair-all."
+                )
 
             repo.update_import_progress(import_batch_id, rows_inserted=inserted_count)
 
@@ -308,21 +351,8 @@ class PortfolioService:
             for account_id in accounts_map.values():
                 repo.update_account_import_timestamp(account_id)
 
-            # --- Recalculate holdings ---
-            holdings_updated = 0
-            for account_id in accounts_map.values():
-                try:
-                    await self._recalculate_account_holdings(account_id)
-                    holdings_updated += 1
-                except Exception as e:
-                    logger.error(f"Failed to recalculate holdings for account {account_id}: {e}")
-
             # --- Extract dividends ---
             dividends_extracted = await self._extract_dividends(list(accounts_map.values()))
-
-            # --- On-demand price fetch for new symbols (background) ---
-            account_ids_list = list(accounts_map.values())
-            asyncio.create_task(self._fetch_prices_on_import(account_ids_list))
 
             # --- Finalize ---
             result = {
@@ -332,7 +362,7 @@ class PortfolioService:
                 "accounts_updated": len(accounts_map),
                 "transactions_imported": inserted_count,
                 "transactions_duplicate": duplicate_count,
-                "holdings_updated": holdings_updated,
+                "holdings_updated": 0,
                 "dividends_extracted": dividends_extracted,
                 "symbols_missing": list(symbols_missing),
                 "symbols_created": symbols_created,
@@ -429,203 +459,47 @@ class PortfolioService:
     # HOLDINGS CALCULATION (FIFO Cost Basis)
     # ========================================================================
     
-    async def _recalculate_account_holdings(self, account_id: int) -> None:
-        """
-        Recalculate holdings for an account using FIFO cost basis.
-        
-        Algorithm:
-        1. Get all trade transactions (BUY/SELL) ordered by date
-        2. Track lots (purchases) and apply FIFO matching on sells
-        3. Calculate average cost, total cost, realized/unrealized gains
-        4. Upsert holdings into portfolio_holdings table
-        """
-        logger.info(f"Recalculating holdings for account {account_id}")
-        
-        # Get all trade transactions
-        transactions = self.portfolio_repo.get_account_transactions(
-            account_id, activity_types=["Trade"]
-        )
-        
-        if not transactions:
-            logger.info(f"No trade transactions for account {account_id}")
-            return
-        
-        # Group by symbol and calculate holdings
-        holdings_by_symbol: Dict[str, Dict[str, Any]] = {}
-        
-        for symbol_group in self._group_by_symbol(transactions):
-            symbol = symbol_group["symbol"]
-            company_id = symbol_group["company_id"]
-            tx_list = symbol_group["transactions"]
-            
-            # Look up missing company_id from companies table
-            if company_id is None:
-                company = await self.financial_repo.get_company_by_symbol(symbol)
-                if company:
-                    company_id = company["company_id"]
-            
-            if company_id is None:
-                logger.warning(f"Skipping holding for {symbol}: no company found")
-                continue
-            
-            holding = self._calculate_symbol_holding_fifo(
-                symbol, company_id, tx_list
-            )
-            
-            if holding and holding["quantity"] > 0:
-                # Detect CDR from transaction raw_data (symbol or name field) for exchange override
-                exchange_override = None
-                for tx in tx_list:
-                    raw = tx.get("raw_data")
-                    if isinstance(raw, dict):
-                        raw_symbol = raw.get("symbol", "") or ""
-                        raw_name = raw.get("name", "") or ""
-                        if re.search(r"\bCDR\b", raw_symbol + " " + raw_name, re.IGNORECASE):
-                            exchange_override = "TOR"
-                            break
-                if exchange_override:
-                    holding["exchange_override"] = exchange_override
-                holdings_by_symbol[symbol] = holding
-        
-        # Delete old holdings for this account
-        self.portfolio_repo.delete_account_holdings(account_id)
-        
-        # Insert new holdings (price-independent cost-basis fields only)
-        for holding in holdings_by_symbol.values():
-            holding["account_id"] = account_id
-            holding["computed_at"] = now_iso()
-            self.portfolio_repo.upsert_holding(holding)
-        
-        logger.info(f"Holdings recalculated for account {account_id}: {len(holdings_by_symbol)} positions")
     
-    @timed()
-    async def enrich_holdings_with_prices(
+    
+    async def _enrich_holdings(
         self, holdings: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Compute current_value, current_price, unrealized_gain_loss at query time.
-
-        Batches price lookups across all holdings (2 queries total, not N+1).
-        3-tier fallback: current_market_data → price_history latest close → cost basis.
-
-        Holdings with exchange_override (e.g., "TOR" for CDRs) get live YFinance
-        prices using the override exchange, bypassing the cached tables.
-        """
         if not holdings:
             return holdings
-
-        company_ids = list({h["company_id"] for h in holdings if h.get("company_id")})
-        if not company_ids:
-            return holdings
-
-        # Separate holdings with exchange_override (need live lookup)
-        override_holdings = [h for h in holdings if h.get("exchange_override")]
-        standard_holdings = [h for h in holdings if not h.get("exchange_override")]
-
-        # Price map: company_id → price (for standard holdings)
-        price_map: Dict[int, float] = {}
-
-        if standard_holdings:
-            std_ids = list({h["company_id"] for h in standard_holdings if h.get("company_id")})
-
-            # Tier 1: current_market_data (single batch)
-            cm_res = (
-                supabase.table("current_market_data")
-                .select("company_id, current_price")
-                .in_("company_id", std_ids)
-                .execute()
-            )
-            for row in (cm_res.data or []):
-                if row.get("current_price") is not None:
-                    price_map[row["company_id"]] = float(row["current_price"])
-
-            # Tier 2: price_history latest close for missing companies
-            missing_ids = [cid for cid in std_ids if cid not in price_map]
-            if missing_ids:
-                ph_res = (
-                    supabase.table("price_history")
-                    .select("company_id, close_price, price_date")
-                    .in_("company_id", missing_ids)
-                    .order("price_date", desc=True)
-                    .execute()
-                )
-                seen_company: set = set()
-                for row in (ph_res.data or []):
+        cids = list(set(h["company_id"] for h in holdings if h.get("company_id")))
+        prices = {}
+        if cids:
+            try:
+                cmr = supabase.table("current_market_data").select("company_id, current_price").in_("company_id", cids).execute()
+                for row in cmr.data or []:
                     cid = row["company_id"]
-                    if cid not in seen_company and row.get("close_price") is not None:
-                        seen_company.add(cid)
-                        price_map.setdefault(cid, float(row["close_price"]))
-
-        # Live lookup cache for exchange-override holdings
-        override_cache: Dict[str, Optional[float]] = {}
-
-        # Apply prices to each holding
+                    px = row.get("current_price")
+                    if px is not None:
+                        prices[cid] = float(px)
+            except Exception:
+                pass
         for h in holdings:
             cid = h.get("company_id")
+            price = prices.get(cid)
+            qty = h.get("quantity", 0) or 0
             total_cost = h.get("total_cost", 0) or 0
-            quantity = h.get("quantity", 0) or 0
             avg_cost = h.get("average_cost", 0) or 0
-            exchange_override = h.get("exchange_override")
-
-            price = None
-            if exchange_override:
-                # Live lookup with override exchange (bypass cached tables)
-                cache_key = f"{h.get('symbol')}:{exchange_override}"
-                if cache_key not in override_cache:
-                    try:
-                        sd = await asyncio.to_thread(
-                            self.stock_provider.get_stock_details,
-                            h["symbol"],
-                            exchange=exchange_override,
-                        )
-                        override_cache[cache_key] = sd.price if sd else None
-                    except Exception:
-                        override_cache[cache_key] = None
-                price = override_cache[cache_key]
+            if price is not None:
+                effective_price = price
+                if h.get("exchange_override") == "TOR":
+                    effective_price = price / float(CDR_RATIO)
+                h["current_price"] = effective_price
+                h["current_value"] = effective_price * qty
             else:
-                price = price_map.get(cid)
-
-            if price is not None and quantity > 0:
-                h["current_price"] = price
-                h["current_value"] = price * quantity
-            else:
-                # Tier 3: cost-basis fallback
                 h["current_price"] = float(avg_cost) if avg_cost else 0.0
                 h["current_value"] = float(total_cost) if total_cost else 0.0
-
             h["unrealized_gain_loss"] = h["current_value"] - float(total_cost)
             h["unrealized_gain_loss_pct"] = (
                 (h["unrealized_gain_loss"] / float(total_cost) * 100)
                 if float(total_cost) > 0 else 0.0
             )
-
+        holdings.sort(key=lambda h: h.get("current_value") or 0, reverse=True)
         return holdings
-
-    def _group_by_symbol(
-        self, transactions: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Group transactions by symbol."""
-        groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        
-        for tx in transactions:
-            symbol = tx.get("symbol")
-            if symbol:
-                groups[symbol].append(tx)
-        
-        result = []
-        for symbol, tx_list in groups.items():
-            # Sort by date
-            tx_list.sort(key=lambda x: (x["transaction_date"], x["transaction_id"]))
-            
-            # Get company_id from first transaction
-            company_id = tx_list[0].get("company_id")
-            
-            result.append({
-                "symbol": symbol,
-                "company_id": company_id,
-                "transactions": tx_list,
-            })
-        
-        return result
 
     def aggregate_holdings(
         self, holdings: List[Dict[str, Any]]
@@ -707,94 +581,6 @@ class PortfolioService:
         result.sort(key=lambda x: x["current_value"], reverse=True)
         return result
 
-    def _calculate_symbol_holding_fifo(
-        self,
-        symbol: str,
-        company_id: Optional[int],
-        transactions: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Calculate current holding for a symbol using FIFO cost basis.
-        
-        Returns holding dict or None if position is closed.
-        """
-        lots: List[Dict[str, Any]] = []  # Purchase lots (FIFO queue)
-        total_quantity = Decimal("0")
-        total_cost = Decimal("0")
-        realized_gain_loss = Decimal("0")
-        first_purchase_date = None
-        last_transaction_date = None
-        
-        for tx in transactions:
-            tx_date = tx["transaction_date"]
-            activity_sub = (tx.get("activity_sub_type") or "").upper()
-            quantity = Decimal(str(tx.get("quantity") or 0))
-            price = Decimal(str(tx.get("unit_price") or 0))
-            commission = Decimal(str(tx.get("commission") or 0))
-            
-            if not quantity or not price:
-                continue
-            
-            last_transaction_date = tx_date
-            
-            if activity_sub == "BUY":
-                # Add new lot
-                cost_per_share = price + (commission / quantity if quantity else 0)
-                lots.append({
-                    "quantity": quantity,
-                    "cost_per_share": cost_per_share,
-                    "date": tx_date,
-                })
-                total_quantity += quantity
-                total_cost += quantity * cost_per_share
-                
-                if first_purchase_date is None:
-                    first_purchase_date = tx_date
-            
-            elif activity_sub == "SELL":
-                # Match against lots (FIFO)
-                sell_qty = abs(quantity)
-                remaining_to_sell = sell_qty
-                sale_proceeds = sell_qty * price - commission
-                cost_of_sold = Decimal("0")
-                
-                while remaining_to_sell > 0 and lots:
-                    lot = lots[0]
-                    
-                    if lot["quantity"] <= remaining_to_sell:
-                        # Sell entire lot
-                        cost_of_sold += lot["quantity"] * lot["cost_per_share"]
-                        remaining_to_sell -= lot["quantity"]
-                        lots.pop(0)
-                    else:
-                        # Partial lot sale
-                        cost_of_sold += remaining_to_sell * lot["cost_per_share"]
-                        lot["quantity"] -= remaining_to_sell
-                        remaining_to_sell = Decimal("0")
-                
-                realized_gain_loss += sale_proceeds - cost_of_sold
-                total_quantity -= sell_qty
-                total_cost -= cost_of_sold
-        
-        # No position left
-        if total_quantity <= 0:
-            return None
-        
-        # Calculate average cost
-        average_cost = total_cost / total_quantity if total_quantity else Decimal("0")
-        
-        return {
-            "symbol": symbol,
-            "company_id": company_id,
-            "quantity": float(total_quantity),
-            "average_cost": float(average_cost),
-            "total_cost": float(total_cost),
-            "realized_gain_loss": float(realized_gain_loss),
-            "first_purchase_date": first_purchase_date,
-            "last_transaction_date": last_transaction_date,
-            "currency": transactions[0].get("currency", "CAD"),
-        }
-    
     async def _get_current_price(self, symbol: str) -> Optional[Dict[str, float]]:
         """
         Get current price for a symbol with three-tier fallback:
@@ -819,17 +605,33 @@ class PortfolioService:
             if res.data and res.data[0].get("current_price"):
                 return {"price": float(res.data[0]["current_price"]), "source": "current_market_data"}
 
-            # Tier 2: price_history (latest close)
+            # Tier 2: price_history (latest close, split-adjusted)
             res = (
                 supabase.table("price_history")
-                .select("close_price")
+                .select("close_price, price_date")
                 .eq("company_id", cid)
                 .order("price_date", desc=True)
                 .limit(1)
                 .execute()
             )
             if res.data and res.data[0].get("close_price"):
-                return {"price": float(res.data[0]["close_price"]), "source": "price_history"}
+                px = float(res.data[0]["close_price"])
+                pd_str = res.data[0].get("price_date")
+                if pd_str:
+                    if isinstance(pd_str, str):
+                        pd = date.fromisoformat(pd_str)
+                    elif isinstance(pd_str, datetime):
+                        pd = pd_str.date()
+                    else:
+                        pd = pd_str
+                    split_factors = self.portfolio_repo._get_split_factors([cid])
+                    if cid in split_factors:
+                        cumulative_factor = 1.0
+                        for sd, adj in split_factors[cid]:
+                            if pd < sd:
+                                cumulative_factor *= adj
+                        px *= cumulative_factor
+                return {"price": px, "source": "price_history"}
 
         except Exception as e:
             logger.error(f"Failed to get price for {symbol}: {e}")
@@ -840,39 +642,7 @@ class PortfolioService:
     # ON-DEMAND PRICE FETCH (Phase 2)
     # ========================================================================
 
-    async def _fetch_prices_on_import(self, account_ids: List[int]) -> None:
-        """
-        On-demand price fetch for symbols without current_market_data
-        discovered during portfolio import. Runs as a background task.
-
-        For each symbol in the imported accounts:
-        1. Checks if current_market_data already exists → skip
-        2. Fetches current price from YFinance → upserts current_market_data
-        3. Fetches full price history → compresses to monthly EOM → upserts price_history
-        """
-        try:
-            # Gather all unique symbols from holdings
-            symbols: set = set()
-            for aid in account_ids:
-                holdings = self.portfolio_repo.get_account_holdings(aid)
-                symbols.update(h["symbol"] for h in holdings if h.get("symbol"))
-
-            if not symbols:
-                return
-
-            logger.info("On-demand price fetch for %d symbols: %s", len(symbols), sorted(symbols))
-            fetched = 0
-            for symbol in sorted(symbols):
-                try:
-                    await self._fetch_and_store_prices(symbol)
-                    fetched += 1
-                except Exception as e:
-                    logger.warning("Price fetch failed for %s: %s", symbol, e)
-                    continue
-            logger.info("On-demand price fetch complete: %d/%d symbols", fetched, len(symbols))
-
-        except Exception as e:
-            logger.error("On-demand price fetch failed: %s", e)
+    
 
     async def _fetch_and_store_prices(self, symbol: str) -> None:
         """
@@ -1078,12 +848,14 @@ class PortfolioService:
     async def get_user_portfolio_overview(
         self, user_id: int,
         account_ids: Optional[List[int]] = None,
+        display_currency: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get comprehensive portfolio overview for user.
 
         When account_ids is provided, scope to those accounts only.
         None or empty list = all user accounts.
+        When display_currency is provided, converts all values to that currency.
 
         Returns:
             - Total net worth
@@ -1109,11 +881,8 @@ class PortfolioService:
                 "error": "No portfolio accounts found",
             }
 
-        # Get all holdings
-        holdings = await self.enrich_holdings_with_prices(
-            self.portfolio_repo.get_user_all_holdings(user_id)
-        )
-        # Filter by account_ids if specified
+        all_holdings = self.portfolio_repo.get_user_all_holdings(user_id)
+        holdings = await self._enrich_holdings(all_holdings)
         if account_ids:
             holdings = [h for h in holdings if h.get("account_id") in account_ids]
         
@@ -1141,6 +910,7 @@ class PortfolioService:
         )[:10]
         
         # Account breakdown
+        value_currency = display_currency or (holdings[0].get("value_currency") if holdings else "USD")
         account_breakdown = []
         for account in accounts:
             acc_holdings = [
@@ -1161,6 +931,7 @@ class PortfolioService:
                 "gain_loss_pct": (
                     float((acc_value - acc_cost) / acc_cost * 100) if acc_cost > 0 else 0
                 ),
+                "value_currency": value_currency,
             })
         
         return {
@@ -1174,6 +945,7 @@ class PortfolioService:
             "accounts_count": len(accounts),
             "top_holdings": top_holdings,
             "account_breakdown": account_breakdown,
+            "value_currency": value_currency,
         }
     # ========================================================================
     # ALL-ACCOUNTS DIVIDENDS
@@ -1204,14 +976,9 @@ class PortfolioService:
             }
 
         current_year = now_utc().year
-        current_year_total = Decimal("0")
-        all_monthly_summaries = []
-
-        for aid in account_ids:
-            yearly_divs = self.portfolio_repo.get_account_dividends_by_year(aid, current_year)
-            current_year_total += sum(Decimal(str(d.get("amount", 0))) for d in yearly_divs)
-            monthly = self.portfolio_repo.get_monthly_dividends(aid, months=12)
-            all_monthly_summaries.extend(monthly)
+        all_divs = self.portfolio_repo.get_accounts_dividends_by_year(account_ids, current_year)
+        current_year_total = sum(Decimal(str(d.get("amount", 0))) for d in all_divs)
+        all_monthly_summaries = self.portfolio_repo.get_accounts_monthly_dividends(account_ids, months=12)
 
         aggregated = {}
         for m in all_monthly_summaries:
@@ -1274,12 +1041,9 @@ class PortfolioService:
 
         activity_types = [activity_type] if activity_type else None
 
-        all_transactions = []
-        for aid in account_ids:
-            txs = self.portfolio_repo.get_account_transactions(
-                aid, limit=limit, activity_types=activity_types,
-            )
-            all_transactions.extend(txs)
+        all_transactions = self.portfolio_repo.get_accounts_transactions(
+            account_ids, limit=limit, activity_types=activity_types,
+        )
 
         if search:
             search_lower = search.lower()
@@ -1385,26 +1149,12 @@ class PortfolioService:
         commission: Decimal = Decimal("0"),
         notes: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Add a single transaction manually (no CSV).
-        
-        NOW RETURNS:
-        - success: bool
-        - transaction_id: int
-        - transaction: dict
-        - company_created: bool  # NEW
-        - company_name: str      # NEW
-        """
         try:
-            # ... existing validation code ...
-            
-            # 3. Get/create company (TRACK IF CREATED)
             company_id = None
             company_created = False
             company_name = None
-            
+
             if symbol:
-                # Check if exists first
                 existing_check = (
                     supabase.table("companies")
                     .select("company_id, company_name")
@@ -1412,21 +1162,18 @@ class PortfolioService:
                     .limit(1)
                     .execute()
                 )
-                
+
                 if existing_check.data and len(existing_check.data) > 0:
-                    # Company exists
                     company_id = existing_check.data[0]["company_id"]
                     company_name = existing_check.data[0]["company_name"]
                     company_created = False
                     logger.info(f"Using existing company: {symbol} (ID={company_id})")
                 else:
-                    # Need to create
                     logger.info(f"Creating new company for symbol: {symbol}")
                     company_id = await self._create_company_from_symbol(symbol)
-                    
+
                     if company_id:
                         company_created = True
-                        # Fetch the created company name
                         created_company = (
                             supabase.table("companies")
                             .select("company_name")
@@ -1435,24 +1182,51 @@ class PortfolioService:
                             .execute()
                         )
                         company_name = created_company.data.get("company_name", symbol) if created_company.data else symbol
-                        logger.info(f"✅ Created new company: {company_name} (ID={company_id})")
-            
-            # ... rest of existing code to create transaction ...
-            
+                        logger.info(f"Created new company: {company_name} (ID={company_id})")
+
+            from infrastructure.repositories.event_store import EventStore
+            event_store = EventStore()
+            idempotency_key = f"manual_{uuid.uuid4().hex}"
+            net_cash_amount = 0.0
+            if quantity and unit_price:
+                net_cash_amount = float(quantity) * float(unit_price) - float(commission)
+
+            event = event_store.append_event(
+                event_type="transaction_imported",
+                aggregate_id=f"account_{account_id}",
+                aggregate_type="account",
+                data={
+                    "account_id": account_id,
+                    "company_id": company_id,
+                    "transaction_date": transaction_date.isoformat(),
+                    "activity_type": activity_type,
+                    "symbol": symbol,
+                    "quantity": float(quantity) if quantity else None,
+                    "unit_price": float(unit_price) if unit_price else None,
+                    "net_cash_amount": net_cash_amount,
+                    "notes": notes,
+                },
+                metadata={
+                    "entry_source": "manual",
+                    "created_by_user_id": user_id,
+                },
+                idempotency_key=idempotency_key,
+            )
+
             logger.info(
                 f"Manual transaction created: {activity_type} {symbol} "
                 f"for account {account_id} by user {user_id}"
                 + (f" (NEW COMPANY: {company_name})" if company_created else "")
             )
-            
+
             return {
                 "success": True,
-                "transaction_id": created_tx["transaction_id"],
-                "transaction": created_tx,
-                "company_created": company_created,      # NEW
-                "company_name": company_name,            # NEW
+                "transaction_id": event.get("id"),
+                "transaction": event,
+                "company_created": company_created,
+                "company_name": company_name,
             }
-        
+
         except Exception as e:
             logger.error(f"Failed to add manual transaction: {e}", exc_info=True)
             return {"success": False, "error": f"Failed to create transaction: {str(e)}"}
@@ -1740,163 +1514,60 @@ class PortfolioService:
             for t in raw
         ]
 
-    @timed()
-    async def get_portfolio_performance(
-        self, user_id: int, period: str = "1Y",
-        account_ids: Optional[List[int]] = None,
+    def _compress_snapshots_by_interval(
+        self, snapshots: List[Dict], period: str
+    ) -> List[Dict]:
+        if not snapshots:
+            return snapshots
+
+        step_days = {"1D": 0, "1W": 0, "1M": 1, "3M": 3, "1Y": 7, "5Y": 14, "YTD": 7, "ALL": 30}
+        step = step_days.get(period.upper(), 7)
+
+        if step <= 0:
+            return snapshots
+
+        compressed = [snapshots[0]]
+        last_selected = date.fromisoformat(snapshots[0]["date"])
+
+        for s in snapshots[1:]:
+            current = date.fromisoformat(s["date"])
+            if (current - last_selected).days >= step:
+                compressed.append(s)
+                last_selected = current
+
+        if compressed[-1]["date"] != snapshots[-1]["date"]:
+            compressed.append(snapshots[-1])
+
+        return compressed
+
+    def _compute_returns_from_snapshots(
+        self, snapshots: List[Dict], period: str
     ) -> Dict[str, Any]:
+        """Compute all return metrics from a snapshot list.
+
+        Returns dict with:
+          total_return       — dollar gain (last - first)
+          total_return_pct   — simple return %  (backward-compatible)
+          twr_pct            — time-weighted return %
+          mwr_pct            — money-weighted return % (Modified Dietz)
+          cagr_pct           — annualized TWR (CAGR)
+          best_day / worst_day
         """
-        Calculate portfolio value over time by walking through transactions
-        and applying FIFO lot tracking with historical prices.
-
-        When account_ids is provided, only transactions from those accounts
-        are included. None or empty list = all user accounts.
-        """
-        if account_ids is None:
-            accounts = self.portfolio_repo.get_user_accounts(user_id)
-            account_ids = [a["account_id"] for a in accounts]
-        else:
-            # Security: intersect with user's actual accounts
-            user_accounts = self.portfolio_repo.get_user_accounts(user_id)
-            valid_ids = {a["account_id"] for a in user_accounts}
-            account_ids = [aid for aid in account_ids if aid in valid_ids]
-
-        if not account_ids:
-            return {
-                "success": True,
-                "period": period,
-                "snapshots": [],
-                "total_return": 0,
-                "total_return_pct": 0,
-            }
-
-        start_date, end_date = self._period_to_date_range(period, account_ids)
-
-        # Get all trade transactions across accounts (batched query)
-        all_txns: List[Dict] = []
-        txns_batch = self.portfolio_repo.get_accounts_transactions(account_ids, activity_types=["Trade"])
-        for t in txns_batch:
-            d = t.get("transaction_date")
-            if isinstance(d, str):
-                t["transaction_date"] = date.fromisoformat(d)
-            elif isinstance(d, datetime):
-                t["transaction_date"] = d.date()
-        all_txns.extend(txns_batch)
-
-        # Sort all transactions ascending, then split into pre-period (for opening lots) and in-period
-        all_txns.sort(key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
-        pre_txns = [t for t in all_txns if t["transaction_date"] < start_date]
-        in_txns = [t for t in all_txns if start_date <= t["transaction_date"] <= end_date]
-
-        # Get cash flow deltas for cumulative net deposits lookup (ALL TIME)
-        cashflow_deltas = self._get_cashflow_deltas(account_ids)
-        net_deposits_at_date: Dict[date, float] = {}
-        running_nd = 0.0
-        for cf in cashflow_deltas:
-            running_nd += cf["amount"]
-            net_deposits_at_date[cf["date"]] = running_nd
-
-        # Get unique symbols and their company_ids (from ALL transactions for price data)
-        symbols_seen: Dict[str, int] = {}
-        for t in all_txns:
-            sym = t.get("symbol")
-            cid = t.get("company_id")
-            if sym and cid:
-                symbols_seen[sym] = cid
-
-        # Fetch price_history for all symbols in the date range (paginated due to Supabase 1000-row limit)
-        price_map: Dict[str, Dict[str, float]] = {}  # symbol -> {date_str: close_price}
-        company_ids = list(set(symbols_seen.values()))
-        if company_ids:
-            try:
-                sym_by_cid = {cid: sym for sym, cid in symbols_seen.items()}
-                offset = 0
-                batch_size = 1000
-                while True:
-                    batch = (
-                        supabase.table("price_history")
-                        .select("company_id, price_date, close_price")
-                        .in_("company_id", company_ids)
-                        .gte("price_date", (start_date - timedelta(days=7)).isoformat())
-                        .lte("price_date", end_date.isoformat())
-                        .order("price_date", desc=False)
-                        .range(offset, offset + batch_size - 1)
-                        .execute()
-                    )
-                    if not batch.data:
-                        break
-                    for row in batch.data:
-                        cid = row["company_id"]
-                        sym = sym_by_cid.get(cid)
-                        if sym:
-                            price_map.setdefault(sym, {})[row["price_date"]] = float(row["close_price"])
-                    offset += batch_size
-                    if len(batch.data) < batch_size:
-                        break
-            except Exception as e:
-                logger.warning(f"Failed to batch fetch price_history: {e}")
-
-        # ── Process pre-period transactions to establish opening FIFO lots ──
-        # lots: (account_id, symbol) -> [{quantity, cost_per_share, date}]
-        lots: Dict[tuple, list] = defaultdict(list)
-        for t in pre_txns:
-            sym = t.get("symbol")
-            if not sym:
-                continue
-            key = (t.get("account_id"), sym)
-            qty = Decimal(str(t.get("quantity") or 0))
-            price = Decimal(str(t.get("unit_price") or 0))
-            commission = Decimal(str(t.get("commission") or 0))
-            sub = (t.get("activity_sub_type") or "").upper()
-
-            if sub == "BUY" or (sub == "" and qty > 0):
-                cost_per_share = price + (commission / qty) if qty else price
-                lots[key].append({
-                    "quantity": float(qty),
-                    "cost_per_share": float(cost_per_share),
-                    "date": t["transaction_date"].isoformat(),
-                })
-            elif sub == "SELL" or (sub == "" and qty < 0):
-                sell_qty = abs(float(qty))
-                remaining = sell_qty
-                while remaining > 0 and lots[key]:
-                    lot = lots[key][0]
-                    if lot["quantity"] <= remaining:
-                        remaining -= lot["quantity"]
-                        lots[key].pop(0)
-                    else:
-                        lot["quantity"] -= remaining
-                        remaining = 0
-
-        # Sort in-period transactions by date for sequential processing
-        in_txns_sorted = sorted(in_txns, key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
-
-        sorted_dates = self._generate_snapshot_dates(period, start_date, end_date)
-
-        snapshots = self._compute_fifo_snapshots(
-            lots=lots,
-            in_txns_sorted=in_txns_sorted,
-            sorted_dates=sorted_dates,
-            price_map=price_map,
-            cumulative_invested_map=net_deposits_at_date,
-        )
-
         if not snapshots:
             return {
-                "success": True,
-                "period": period,
-                "snapshots": [],
-                "total_return": 0,
-                "total_return_pct": 0,
+                "total_return": 0, "total_return_pct": 0,
+                "twr_pct": 0, "mwr_pct": 0, "cagr_pct": 0,
+                "best_day": None, "worst_day": None,
             }
 
-        # Calculate summary stats
         first_value = snapshots[0]["value"]
         last_value = snapshots[-1]["value"]
         total_return = last_value - first_value
-        total_return_pct = ((last_value - first_value) / first_value * 100) if first_value > 0 else 0
+        total_return_pct = (
+            ((last_value - first_value) / first_value * 100)
+            if first_value > 0 else 0
+        )
 
-        # Find best/worst day
         best_day = None
         worst_day = None
         for i in range(1, len(snapshots)):
@@ -1910,14 +1581,387 @@ class PortfolioService:
                 if worst_day is None or change_pct < worst_day["return_pct"]:
                     worst_day = entry
 
+        twr = compute_portfolio_twr(snapshots)
+        mwr = compute_portfolio_mwr(snapshots)
+
+        period_days = 0
+        if len(snapshots) >= 2:
+            d0 = date.fromisoformat(snapshots[0]["date"])
+            dn = date.fromisoformat(snapshots[-1]["date"])
+            period_days = (dn - d0).days
+        cagr = annualize_return(twr, period_days)
+
+        return {
+            "total_return": round(total_return, 2),
+            "total_return_pct": round(total_return_pct, 2),
+            "twr_pct": round(twr * 100, 2),
+            "mwr_pct": round(mwr * 100, 2),
+            "cagr_pct": round(cagr * 100, 2),
+            "best_day": best_day,
+            "worst_day": worst_day,
+        }
+
+    @timed()
+    async def get_portfolio_performance(
+        self, user_id: int, period: str = "1Y",
+        account_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        if account_ids is None:
+            accounts = self.portfolio_repo.get_user_accounts(user_id)
+            account_ids = [a["account_id"] for a in accounts]
+        else:
+            user_accounts = self.portfolio_repo.get_user_accounts(user_id)
+            valid_ids = {a["account_id"] for a in user_accounts}
+            account_ids = [aid for aid in account_ids if aid in valid_ids]
+
+        if not account_ids:
+            returns = self._compute_returns_from_snapshots([], period)
+            return {
+                "success": True, "period": period,
+                "snapshots": [],
+                "data_source": "snapshots", "data_quality_flag": "OK",
+                "return_methodology": "twr",
+                **returns,
+            }
+
+        if not getattr(settings, "ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH", False):
+            return await self._get_portfolio_performance_legacy(
+                user_id, period, account_ids
+            )
+
+        start_date, end_date = self._period_to_date_range(period, account_ids)
+        snapshots_repo = PortfolioSnapshotsRepository()
+        raw_snapshots = snapshots_repo.get_portfolio_snapshots(
+            account_ids, start_date, end_date
+        )
+
+        if not raw_snapshots:
+            result = await self._compute_performance_fallback(
+                user_id, period, account_ids, start_date, end_date
+            )
+            result["data_source"] = "computed_fallback"
+            return result
+
+        use_locf = getattr(settings, "ENABLE_PERFORMANCE_LOCF", True)
+
+        by_account: Dict[int, List[Dict]] = defaultdict(list)
+        for s in raw_snapshots:
+            by_account[s["account_id"]].append(s)
+
+        accounts_with_data = list(by_account.keys())
+        all_dates = sorted({s["snapshot_date"] for s in raw_snapshots})
+
+        account_iters = {}
+        current_snap: Dict[int, Optional[Dict]] = {}
+        for aid in accounts_with_data:
+            it = iter(by_account[aid])
+            account_iters[aid] = it
+            try:
+                current_snap[aid] = next(it)
+            except StopIteration:
+                current_snap[aid] = None
+
+        last_value: Dict[int, float] = {}
+        last_cost: Dict[int, float] = {}
+        last_cash: Dict[int, float] = {}
+        last_nd: Dict[int, float] = {}
+        locf_count = 0
+        merged: Dict[str, Dict] = {}
+
+        for d in all_dates:
+            total_value = 0.0
+            total_cost = 0.0
+            total_cash = 0.0
+            total_nd = 0.0
+            date_with_locf = False
+
+            for aid in accounts_with_data:
+                cs = current_snap.get(aid)
+                if cs is not None and cs["snapshot_date"] == d:
+                    total_value += cs["total_value"]
+                    total_cost += cs["cost_basis"]
+                    total_cash += cs.get("cash_balance", 0)
+                    total_nd += cs.get("net_deposits", 0)
+                    last_value[aid] = cs["total_value"]
+                    last_cost[aid] = cs["cost_basis"]
+                    last_cash[aid] = cs.get("cash_balance", 0)
+                    last_nd[aid] = cs.get("net_deposits", 0)
+                    try:
+                        current_snap[aid] = next(account_iters[aid])
+                    except StopIteration:
+                        current_snap[aid] = None
+                elif aid in last_value:
+                    if use_locf:
+                        total_value += last_value[aid]
+                        total_cost += last_cost.get(aid, 0)
+                        total_cash += last_cash.get(aid, 0)
+                        total_nd += last_nd.get(aid, 0)
+                        date_with_locf = True
+
+            merged[d] = {
+                "date": d, "value": round(total_value, 2),
+                "cost_basis": round(total_cost, 2),
+                "cash_balance": round(total_cash, 2),
+                "net_deposits": round(total_nd, 2),
+            }
+            if date_with_locf:
+                locf_count += 1
+
+        quality_flags = {s.get("data_quality_flag", "OK") for s in raw_snapshots}
+        overall_quality = "STALE_PRICE" if "STALE_PRICE" in quality_flags else "OK"
+
+        if locf_count and accounts_with_data:
+            locf_pct = locf_count / len(all_dates) * 100
+            logger.info(
+                "LOCF applied to %d/%d dates (%.1f%%) across %d accounts",
+                locf_count, len(all_dates), locf_pct, len(accounts_with_data),
+            )
+
+        sorted_dates = sorted(merged.keys())
+        snapshots = [merged[d] for d in sorted_dates]
+
+        if not snapshots:
+            returns = self._compute_returns_from_snapshots([], period)
+            return {
+                "success": True, "period": period,
+                "snapshots": [],
+                "data_source": "snapshots", "data_quality_flag": overall_quality,
+                "return_methodology": "twr",
+                **returns,
+            }
+
+        snapshots = self._compress_snapshots_by_interval(snapshots, period)
+        returns = self._compute_returns_from_snapshots(snapshots, period)
+
         return {
             "success": True,
             "period": period,
             "snapshots": snapshots,
-            "total_return": round(total_return, 2),
-            "total_return_pct": round(total_return_pct, 2),
-            "best_day": best_day,
-            "worst_day": worst_day,
+            "data_source": "snapshots",
+            "data_quality_flag": overall_quality,
+            "return_methodology": "twr",
+            "locf_count": locf_count,
+            **returns,
+        }
+
+    async def _get_portfolio_performance_legacy(
+        self, user_id: int, period: str = "1Y",
+        account_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        start_date, end_date = self._period_to_date_range(period, account_ids)
+        return await self._compute_performance_fallback(
+            user_id, period, account_ids, start_date, end_date
+        )
+
+    async def _compute_performance_fallback(
+        self, user_id, period, account_ids, start_date, end_date
+    ):
+        txns_batch = self.portfolio_repo.get_accounts_transactions(
+            account_ids, activity_types=["Trade"]
+        )
+        for t in txns_batch:
+            d = t.get("transaction_date")
+            if isinstance(d, str):
+                t["transaction_date"] = date.fromisoformat(d)
+            elif isinstance(d, datetime):
+                t["transaction_date"] = d.date()
+
+        all_txns = sorted(txns_batch, key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
+        pre_txns = [t for t in all_txns if t["transaction_date"] < start_date]
+        in_txns = [t for t in all_txns if start_date <= t["transaction_date"] <= end_date]
+
+        # Pre-fetch ALL cash-related transactions once for in-memory cash/ND computation
+        all_cash_txns = self.portfolio_repo.get_accounts_transactions(
+            account_ids, activity_types=None
+        )
+        for t in all_cash_txns:
+            d = t.get("transaction_date")
+            if isinstance(d, str):
+                t["transaction_date"] = date.fromisoformat(d)
+            elif isinstance(d, datetime):
+                t["transaction_date"] = d.date()
+
+        @lru_cache(maxsize=None)
+        def _cached_cash_balance(aid: int, dt_str: str) -> Decimal:
+            target = date.fromisoformat(dt_str)
+            total = Decimal("0.00")
+            for t in all_cash_txns:
+                if t["account_id"] == aid and t["transaction_date"] <= target:
+                    nca = t.get("net_cash_amount") or 0
+                    act = t.get("activity_type", "")
+                    if act in (
+                        "Trade", "Deposit", "Withdrawal", "Dividend", "MoneyMovement",
+                        "Interest", "Fee", "WithholdingTax", "ReorganizationDividend",
+                    ):
+                        total += Decimal(str(nca))
+            return total
+
+        @lru_cache(maxsize=None)
+        def _cached_net_deposits(aid: int, dt_str: str) -> Decimal:
+            target = date.fromisoformat(dt_str)
+            total = Decimal("0.00")
+            for t in all_cash_txns:
+                if t["account_id"] == aid and t["transaction_date"] <= target:
+                    act = t.get("activity_type", "")
+                    if act in ("MoneyMovement", "BonusPayment"):
+                        total += Decimal(str(t.get("net_cash_amount") or 0))
+            return total
+
+        lots: Dict[tuple, list] = defaultdict(list)
+        for t in pre_txns:
+            action = _classify_lot_action(t)
+            if action is None:
+                continue
+            cid = t.get("company_id")
+            if not cid:
+                continue
+            key = (t.get("account_id"), cid)
+            if action == "BUY":
+                qty = Decimal(str(t.get("quantity") or 0))
+                price = Decimal(str(t.get("unit_price") or 0))
+                commission = Decimal(str(t.get("commission") or 0))
+                cost_per_share = price + (commission / qty) if qty else price
+                lots[key].append({
+                    "quantity": float(qty), "cost_per_share": float(cost_per_share),
+                    "date": t["transaction_date"].isoformat(),
+                    "symbol": t.get("symbol", ""),
+                })
+            elif action == "SELL":
+                sell_qty = abs(float(t.get("quantity") or 0))
+                remaining = sell_qty
+                while remaining > 0 and lots[key]:
+                    lot = lots[key][0]
+                    if lot["quantity"] <= remaining:
+                        remaining -= lot["quantity"]
+                        lots[key].pop(0)
+                    else:
+                        lot["quantity"] -= remaining
+                        remaining = 0
+
+        company_ids = list({t.get("company_id") for t in all_txns if t.get("company_id")})
+        price_map = self.portfolio_repo.get_all_prices_historical(company_ids, end_date)
+
+        sorted_dates = self._generate_snapshot_dates(period, start_date, end_date)
+
+        # Get account currencies
+        all_accounts = self.portfolio_repo.get_user_accounts(user_id)
+        acc_currency = {a["account_id"]: a.get("currency", "CAD") for a in all_accounts}
+
+        snapshots = []
+        in_txns_sorted = sorted(in_txns, key=lambda x: (x["transaction_date"], x.get("transaction_id", 0)))
+        txn_index = 0
+
+        for d in sorted_dates:
+            current_date = date.fromisoformat(d)
+            while txn_index < len(in_txns_sorted) and in_txns_sorted[txn_index]["transaction_date"].isoformat() <= d:
+                t = in_txns_sorted[txn_index]
+                action = _classify_lot_action(t)
+                cid = t.get("company_id")
+                if action and cid:
+                    key = (t.get("account_id"), cid)
+                    if action == "BUY":
+                        qty = Decimal(str(t.get("quantity") or 0))
+                        price = Decimal(str(t.get("unit_price") or 0))
+                        commission = Decimal(str(t.get("commission") or 0))
+                        cost_per_share = price + (commission / qty) if qty else price
+                        lots[key].append({
+                            "quantity": float(qty), "cost_per_share": float(cost_per_share),
+                            "date": d,
+                            "symbol": t.get("symbol", ""),
+                        })
+                    elif action == "SELL":
+                        sell_qty = abs(float(t.get("quantity") or 0))
+                        remaining = sell_qty
+                        while remaining > 0 and lots[key]:
+                            lot = lots[key][0]
+                            if lot["quantity"] <= remaining:
+                                remaining -= lot["quantity"]
+                                lots[key].pop(0)
+                            else:
+                                lot["quantity"] -= remaining
+                                remaining = 0
+                txn_index += 1
+
+            # Group holdings by account_id for per-account snapshots
+            cid_holdings_by_account: Dict[int, Dict[int, dict]] = defaultdict(dict)
+            for (aid, cid), lot_list in lots.items():
+                qty_held = sum(l["quantity"] for l in lot_list)
+                if qty_held <= 0.001:
+                    continue
+                avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
+                total_cost_holding = qty_held * avg_cost
+                if cid in cid_holdings_by_account[aid]:
+                    existing = cid_holdings_by_account[aid][cid]
+                    combined_qty = existing["quantity"] + qty_held
+                    existing["total_cost"] += total_cost_holding
+                    existing["quantity"] = combined_qty
+                    existing["average_cost"] = existing["total_cost"] / combined_qty if combined_qty > 0 else 0
+                else:
+                    symbol = next((l.get("symbol", "") for l in lot_list if l.get("symbol")), "")
+                    cid_holdings_by_account[aid][cid] = {
+                        "company_id": cid, "symbol": symbol,
+                        "quantity": qty_held,
+                        "total_cost": total_cost_holding,
+                        "average_cost": avg_cost,
+                        "account_id": aid,
+                    }
+
+            # Build per-account snapshots and combine
+            total_value = Decimal("0")
+            total_cost = Decimal("0")
+            total_cash = Decimal("0")
+            total_net_deposits = Decimal("0")
+
+            for aid, cid_holdings in cid_holdings_by_account.items():
+                holdings_state = list(cid_holdings.values())
+                prices_by_company = {}
+                for cid in company_ids:
+                    result = resolve_price_forward_filled(cid, current_date, price_map)
+                    if result:
+                        prices_by_company[cid] = result
+
+                # Use in-memory cached computation instead of N+1 DB queries
+                dt_str = current_date.isoformat()
+                cash_balance = _cached_cash_balance(aid, dt_str)
+                net_deposits = _cached_net_deposits(aid, dt_str)
+                account_currency = acc_currency.get(aid, "CAD")
+
+                total_cash += cash_balance
+                total_net_deposits += net_deposits
+
+                snapshot_row = build_snapshot_row(
+                    account_id=aid,
+                    snapshot_date=current_date,
+                    holdings_state=holdings_state,
+                    cash_balance=cash_balance,
+                    net_deposits=net_deposits,
+                    prices_by_company=prices_by_company,
+                    job_id="fallback",
+                    account_currency=account_currency,
+                )
+                total_value += Decimal(str(snapshot_row["total_value"]))
+                total_cost += Decimal(str(snapshot_row["cost_basis"]))
+
+            snapshots.append({
+                "date": d,
+                "value": round(float(total_value), 2),
+                "cost_basis": round(float(total_cost), 2),
+                "net_deposits": round(float(total_net_deposits), 2),
+            })
+
+        if not snapshots:
+            return {"snapshots": [], "total_return": 0, "total_return_pct": 0}
+
+        returns = self._compute_returns_from_snapshots(snapshots, period)
+
+        return {
+            "success": True,
+            "period": period,
+            "snapshots": snapshots,
+            "data_source": "computed_fallback",
+            "data_quality_flag": "OK",
+            "return_methodology": "twr",
+            **returns,
         }
 
     # ========================================================================
@@ -2118,23 +2162,37 @@ class PortfolioService:
         price_map: Dict[str, Dict[str, float]] = {}
         try:
             sym_up = symbol.upper()
-            resp = (
-                supabase.table("price_history")
-                .select("company_id, price_date, close_price")
-                .eq("company_id", txns[0].get("company_id")) if txns else None
-            )
-            if resp:
+            company_id = txns[0].get("company_id") if txns else None
+            split_factors = {}
+            if company_id:
+                split_factors = self.portfolio_repo._get_split_factors([company_id])
+            if company_id:
                 rows = (
                     supabase.table("price_history")
                     .select("price_date, close_price")
+                    .eq("company_id", company_id)
                     .gte("price_date", (start_date - timedelta(days=7)).isoformat())
                     .lte("price_date", end_date.isoformat())
                     .order("price_date", desc=False)
                     .execute()
                 )
                 if rows.data:
+                    cid_factors = split_factors.get(company_id, [])
                     for row in rows.data:
-                        price_map.setdefault(sym_up, {})[row["price_date"]] = float(row["close_price"])
+                        px = float(row["close_price"])
+                        pd_str = row["price_date"]
+                        if isinstance(pd_str, str):
+                            pd = date.fromisoformat(pd_str)
+                        elif isinstance(pd_str, datetime):
+                            pd = pd_str.date()
+                        else:
+                            pd = pd_str
+                        cumulative_factor = 1.0
+                        for sd, adj in cid_factors:
+                            if pd < sd:
+                                cumulative_factor *= adj
+                        px *= cumulative_factor
+                        price_map.setdefault(sym_up, {})[row["price_date"]] = px
         except Exception as e:
             logger.warning(f"Failed to fetch price_history for {symbol}: {e}")
 
@@ -2357,7 +2415,8 @@ class PortfolioService:
         holdings = self.portfolio_repo.get_user_all_holdings(user_id)
         symbol_holdings = [h for h in holdings if h.get("symbol", "").upper() == symbol_up]
 
-        enriched = await self.enrich_holdings_with_prices(symbol_holdings)
+        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        enriched = await self._enrich_holdings(symbol_holdings)
 
         divs = self.portfolio_repo.get_dividends_for_symbol(user_id, symbol)
         divs_by_account: Dict[int, float] = {}
@@ -2525,6 +2584,8 @@ class PortfolioService:
             logger.info("No price history for benchmark company_id=%s", benchmark_company_id)
             return None
 
+        benchmark_split_factors = self.portfolio_repo._get_split_factors([benchmark_company_id]).get(benchmark_company_id, [])
+
         price_map: Dict[str, float] = {}
         for row in resp.data:
             pd_val = row["price_date"]
@@ -2534,7 +2595,15 @@ class PortfolioService:
                 pd_str = pd_val.isoformat()
             else:
                 continue
-            price_map[pd_str] = float(row["close_price"])
+            px = float(row["close_price"])
+            if benchmark_split_factors:
+                pd = date.fromisoformat(pd_str)
+                cumulative_factor = 1.0
+                for sd, adj in benchmark_split_factors:
+                    if pd < sd:
+                        cumulative_factor *= adj
+                px *= cumulative_factor
+            price_map[pd_str] = px
 
         if not price_map:
             return None
@@ -2626,9 +2695,9 @@ class PortfolioService:
                 "total_value": 0,
             }
 
-        holdings = await self.enrich_holdings_with_prices(
-            self.portfolio_repo.get_user_all_holdings(user_id)
-        )
+        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        all_holdings = self.portfolio_repo.get_user_all_holdings(user_id)
+        holdings = await self._enrich_holdings(all_holdings)
         holdings = [h for h in holdings if h.get("account_id") in account_ids]
 
         if not holdings:

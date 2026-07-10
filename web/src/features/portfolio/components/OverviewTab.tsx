@@ -1,21 +1,31 @@
 'use client';
 
-import { usePortfolioOverview, useAllHoldings } from '../hooks/usePortfolio';
+import { useEffect, useRef } from 'react';
+import { usePortfolioDashboard } from '../hooks/usePortfolio';
 import { LazyPerformanceChart } from './LazyPerformanceChart';
 import { TopMovers } from './TopMovers';
 import { PriceSparkline } from './PriceSparkline';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TrendingUp, TrendingDown, DollarSign, Wallet } from 'lucide-react';
+import { formatCurrency } from '@/lib/currency';
+import type { PortfolioDashboardResponse } from '../types/portfolio.types';
 
 interface OverviewTabProps {
     accountIds?: number[];
 }
 
 export function OverviewTab({ accountIds }: OverviewTabProps) {
-    const { data: overview, isLoading: overviewLoading } = usePortfolioOverview(accountIds);
-    const { data: holdings, isLoading: holdingsLoading } = useAllHoldings();
+    const { data: dashboard, isLoading } = usePortfolioDashboard();
+    const renderedRef = useRef(false);
 
-    if (overviewLoading) {
+    useEffect(() => {
+        if (!isLoading && dashboard && !renderedRef.current) {
+            renderedRef.current = true;
+            console.log(`[PERF] OverviewTab rendered: ${dashboard.holdings.length} holdings, ${dashboard.accounts.length} accounts`);
+        }
+    }, [isLoading, dashboard]);
+
+    if (isLoading) {
         return (
             <div className="space-y-4">
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -29,7 +39,7 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
         );
     }
 
-    if (!overview) {
+    if (!dashboard) {
         return (
             <div className="glass-panel rounded-lg p-8 text-center">
                 <p className="text-white/40 text-sm">No portfolio data available.</p>
@@ -37,18 +47,24 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
         );
     }
 
+    const overview = dashboard.overview;
+    const accounts = dashboard.accounts;
+    const holdings = dashboard.holdings;
+
+    const ccy = overview.value_currency;
+
     const cards = [
         {
             label: 'Total Value',
-            value: `$${overview.net_worth.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            value: formatCurrency(overview.total_value, ccy),
             icon: DollarSign,
             color: 'text-white',
         },
         {
             label: 'Total Gain/Loss',
             value: overview.total_gain_loss != null
-                ? `$${overview.total_gain_loss.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                : '—',
+                ? formatCurrency(overview.total_gain_loss, ccy)
+                : '\u2014',
             icon: overview.total_gain_loss != null && overview.total_gain_loss >= 0 ? TrendingUp : TrendingDown,
             color: overview.total_gain_loss != null
                 ? overview.total_gain_loss >= 0 ? 'text-green-400' : 'text-red-400'
@@ -58,7 +74,7 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
             label: 'Gain/Loss %',
             value: overview.total_gain_loss_pct != null
                 ? `${overview.total_gain_loss_pct >= 0 ? '+' : ''}${overview.total_gain_loss_pct.toFixed(2)}%`
-                : '—',
+                : '\u2014',
             icon: overview.total_gain_loss_pct != null && overview.total_gain_loss_pct >= 0 ? TrendingUp : TrendingDown,
             color: overview.total_gain_loss_pct != null
                 ? overview.total_gain_loss_pct >= 0 ? 'text-green-400' : 'text-red-400'
@@ -67,12 +83,20 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
         {
             label: 'Total Dividends',
             value: overview.ytd_dividends != null
-                ? `$${overview.ytd_dividends.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                : '—',
+                ? formatCurrency(overview.ytd_dividends, ccy)
+                : '\u2014',
             icon: Wallet,
             color: 'text-white',
         },
     ];
+
+    // Filter accounts/holdings if accountIds is set
+    const filteredAccounts = accountIds?.length
+        ? accounts.filter(a => accountIds.includes(a.account_id))
+        : accounts;
+    const filteredHoldings = accountIds?.length
+        ? holdings.filter(h => accountIds.includes(h.account_id || -1))
+        : holdings;
 
     return (
         <div className="space-y-6">
@@ -97,13 +121,13 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
             </div>
 
             {/* Account Breakdown */}
-            {overview.account_breakdown && overview.account_breakdown.length > 0 && (
+            {filteredAccounts.length > 0 && (
                 <div className="glass-panel rounded-lg p-4 space-y-3">
                     <h3 className="text-xs font-black uppercase tracking-widest text-white/40">
                         Account Breakdown
                     </h3>
                     <div className="space-y-1">
-                        {overview.account_breakdown.map((acct) => (
+                        {filteredAccounts.map((acct) => (
                             <div
                                 key={acct.account_id}
                                 className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-white/5 transition-colors"
@@ -124,7 +148,7 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
                                 <div className="flex items-center gap-4 shrink-0">
                                     <div className="text-right">
                                         <p className="text-xs text-white/50">
-                                            ${acct.total_value.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                            {formatCurrency(acct.total_value, acct.value_currency || ccy)}
                                         </p>
                                         <p className="text-[10px] text-white/30">
                                             {acct.holdings_count} positions
@@ -132,7 +156,7 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
                                     </div>
                                     <div className="text-right">
                                         <p className={`text-xs font-bold ${acct.gain_loss >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                            {acct.gain_loss >= 0 ? '+' : ''}${acct.gain_loss.toFixed(2)}
+                                            {acct.gain_loss >= 0 ? '+' : ''}{formatCurrency(acct.gain_loss, acct.value_currency || ccy)}
                                         </p>
                                         <p className={`text-[10px] ${acct.gain_loss_pct >= 0 ? 'text-green-400/60' : 'text-red-400/60'}`}>
                                             {acct.gain_loss_pct >= 0 ? '+' : ''}{acct.gain_loss_pct.toFixed(2)}%
@@ -149,15 +173,15 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Top Movers */}
                 <div className="lg:col-span-1">
-                    {!holdingsLoading && holdings && holdings.length > 0 && (
+                    {filteredHoldings.length > 0 && (
                         <div className="space-y-3">
-                            <TopMovers holdings={holdings} />
+                            <TopMovers holdings={filteredHoldings as any} />
                             {/* Sparklines for top holdings */}
                             <div className="glass-panel rounded-lg p-4 space-y-2">
                                 <h3 className="text-xs font-black uppercase tracking-widest text-white/40">
                                     Price Trends
                                 </h3>
-                                {holdings.slice(0, 5).map((h) => (
+                                {filteredHoldings.slice(0, 5).map((h) => (
                                     <div
                                         key={h.symbol}
                                         className="flex items-center justify-between py-1"

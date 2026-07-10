@@ -247,12 +247,14 @@ function GaugeSvg({
         {fmt(current)}
       </div>
 
-      <div className="flex items-center justify-center gap-2 mt-1">
-        <StatPill label="Min" value={fmt(min)} highlighted={false} />
-        <StatPill label="Avg" value={fmt(avg)} highlighted={false} />
-        <StatPill label="Max" value={fmt(max)} highlighted={false} />
-        <StatPill label="Current" value={fmt(current)} highlighted={true} />
-      </div>
+      {!compact && (
+        <div className="flex items-center justify-center gap-2 mt-1">
+          <StatPill label="Min" value={fmt(min)} highlighted={false} />
+          <StatPill label="Avg" value={fmt(avg)} highlighted={false} />
+          <StatPill label="Max" value={fmt(max)} highlighted={false} />
+          <StatPill label="Current" value={fmt(current)} highlighted={true} />
+        </div>
+      )}
 
       <div className="flex justify-center mt-2">
         <span

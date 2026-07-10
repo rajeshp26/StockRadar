@@ -61,19 +61,13 @@ export function usePortfolioOverview(accountIds?: number[]) {
 }
 
 /**
- * Hook for user's portfolio accounts
+ * Hook for user's portfolio accounts.
+ * Reads accounts data from the dashboard query cache — no independent API call.
  */
 export function usePortfolioAccounts() {
-    const { portfolioService } = useServices();
-
-    return useQuery<PortfolioAccount[], Error>({
-        queryKey: QK.portfolioAccounts(),
-        queryFn: () => portfolioService.getAccounts(),
-        staleTime: STALE.PORTFOLIO,
-        gcTime: GC.PORTFOLIO,
-        retry: 1,
-        refetchOnWindowFocus: true,
-    });
+    const { data: dashboard, isLoading, error } = usePortfolioDashboard();
+    const data = (dashboard?.accounts ?? []) as unknown as PortfolioAccount[];
+    return { data, isLoading, error };
 }
 
 /**

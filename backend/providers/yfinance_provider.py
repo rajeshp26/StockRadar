@@ -167,7 +167,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         """
         tkr = yf.Ticker(self._resolve_symbol(symbol, exchange))
         try:
-            hist = tkr.history(period="max", auto_adjust=False)  # columns: Open, High, Low, Close, Volume
+            hist = tkr.history(period="max", auto_adjust=True)  # columns: Open, High, Low, Close, Volume
             if hist is None or hist.empty:
                 return pd.DataFrame()
             df = hist.reset_index().rename(columns={

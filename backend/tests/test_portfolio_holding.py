@@ -569,13 +569,11 @@ class TestGetHoldingAccounts:
         ]
 
         with patch.object(service, 'enrich_holdings_with_prices') as mock_enrich:
-            mock_enrich.return_value = [
-                {"account_id": 1, "symbol": "AAPL", "quantity": 10,
-                 "total_cost": 1500, "current_value": 1800,
-                 "account_name": "Main TFSA", "account_type": "TFSA"},
-                {"account_id": 2, "symbol": "AAPL", "quantity": 5,
-                 "total_cost": 900, "current_value": 900,
-                 "account_name": "RRSP", "account_type": "RRSP"},
+            mock_enrich.side_effect = lambda holdings, account_base_currency=None: [
+                {"account_id": h["account_id"], "symbol": "AAPL", "quantity": h["quantity"],
+                 "total_cost": h["total_cost"], "current_value": 1800 if h["account_id"] == 1 else 900,
+                 "account_name": h.get("account_name", "Unknown"), "account_type": h.get("account_type", "")}
+                for h in holdings
             ]
 
             result = await service.get_holding_accounts(1, "AAPL")

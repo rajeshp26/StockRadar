@@ -15,6 +15,10 @@ def mock_overview_repo():
         {"account_id": 1, "account_name": "TFSA", "account_type": "TFSA", "brokerage_name": "Test", "is_active": True},
         {"account_id": 2, "account_name": "RRSP", "account_type": "RRSP", "brokerage_name": "Test", "is_active": True},
     ]
+    repo.get_user_all_holdings.return_value = [
+        {"company_id": 1, "symbol": "AAPL", "sector": "Technology", "security_type": "stock", "quantity": 10, "total_cost": 40000, "account_id": 1, "account_name": "TFSA", "currency": "USD"},
+        {"company_id": 2, "symbol": "GOOGL", "sector": "Technology", "security_type": "stock", "quantity": 5, "total_cost": 25000, "account_id": 2, "account_name": "RRSP", "currency": "USD"},
+    ]
     repo.get_account_dividends_by_year.return_value = []
     return repo
 
@@ -61,6 +65,9 @@ class TestGetUserPortfolioOverviewFiltering:
         assert len(result.get("account_breakdown", [])) == 2
 
     async def test_overview_filter_single_account(self, service, mock_overview_repo):
+        mock_overview_repo.get_user_all_holdings.return_value = [
+            {"company_id": 1, "symbol": "AAPL", "sector": "Technology", "security_type": "stock", "quantity": 10, "total_cost": 40000, "account_id": 1, "account_name": "TFSA", "currency": "USD"},
+        ]
         single = [_make_holding("AAPL", 50000, 40000, account_id=1)]
         with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=single)):
             result = await service.get_user_portfolio_overview(1, account_ids=[1])
@@ -82,6 +89,9 @@ class TestGetUserPortfolioOverviewFiltering:
     async def test_overview_security_other_user_ids_filtered(self, service, mock_overview_repo):
         mock_overview_repo.get_user_accounts.return_value = [
             {"account_id": 1, "account_name": "TFSA", "account_type": "TFSA", "is_active": True},
+        ]
+        mock_overview_repo.get_user_all_holdings.return_value = [
+            {"company_id": 1, "symbol": "AAPL", "sector": "Technology", "security_type": "stock", "quantity": 10, "total_cost": 40000, "account_id": 1, "account_name": "TFSA", "currency": "USD"},
         ]
         single = [_make_holding("AAPL", 50000, 40000, account_id=1)]
         with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=single)):

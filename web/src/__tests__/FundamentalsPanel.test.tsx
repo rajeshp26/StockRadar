@@ -72,7 +72,24 @@ function makeData(overrides = {}) {
         metrics: [
           { metric_id: "piotroski_f", label: "Piotroski F", unit: "score", quarters: [
             { fiscal_year: 2023, fiscal_quarter: 1, label: "Q1 2023", value: 7 },
-          ], buy_quarter_index: null, trend_direction: "stable", change_pct: null, change_label: "stable" },
+          ], buy_quarter_index: null, trend_direction: "stable", change_pct: null, change_label: "stable",
+            gauge_config: {
+              display_mode: "slider",
+              benchmark: "none",
+              benchmark_value: null,
+              band_low: null,
+              band_high: null,
+              current_value: 7,
+              current_quarter_raw: 7,
+              min_value: 0,
+              max_value: 9,
+              avg_value: 5,
+              positive_count: 4,
+              total_quarters: 4,
+              na_count: 0,
+              warnings: [],
+            },
+          },
         ],
         status: { label: "Intact" },
         score: 70,
@@ -186,7 +203,7 @@ describe("FundamentalsPanel", () => {
     render(<FundamentalsPanel symbol="AAPL" />);
     expect(screen.getAllByText("Quality metrics").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Growth metrics").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Moat signals").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Financial Health").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Valuation").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Narrative").length).toBeGreaterThanOrEqual(1);
   });
@@ -213,7 +230,7 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data: makeData(), loading: false, error: null });
     const { container } = render(<FundamentalsPanel symbol="AAPL" />);
     const scrollContainers = container.querySelectorAll(".overflow-x-auto");
-    expect(scrollContainers.length).toBeGreaterThanOrEqual(5);
+    expect(scrollContainers.length).toBeGreaterThanOrEqual(4);
   });
 
   it("renders data quality footer", () => {
@@ -299,8 +316,8 @@ describe("FundamentalsPanel", () => {
     mockUseFundamentals.mockReturnValue({ data: makeData(), loading: false, error: null });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    expect(screen.getAllByText("All").length).toBe(5);
-    expect(screen.getAllByText("From purchase").length).toBe(5);
+    expect(screen.getAllByText("All").length).toBe(3);
+    expect(screen.getAllByText("From purchase").length).toBe(3);
   });
 
   it("renders All but no From purchase buttons when portfolio not held", () => {
@@ -311,7 +328,7 @@ describe("FundamentalsPanel", () => {
     });
     render(<FundamentalsPanel symbol="AAPL" />);
 
-    expect(screen.getAllByText("All").length).toBe(5);
+    expect(screen.getAllByText("All").length).toBe(3);
     expect(screen.queryByText("From purchase")).toBeNull();
   });
 

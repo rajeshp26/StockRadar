@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Upload, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePortfolioDashboard } from '../hooks/usePortfolio';
@@ -27,6 +27,18 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
     const { activeTab, selectedAccountId, setActiveTab, setSelectedAccountId } =
         usePortfolioNavigation();
     const { data: initialData, isLoading } = usePortfolioDashboard();
+
+    useEffect(() => {
+        console.time('[PERF] PortfolioTabShell mount → first paint');
+        console.log('[PERF] PortfolioTabShell mounted');
+    }, []);
+
+    useEffect(() => {
+        if (!isLoading && initialData) {
+            console.timeEnd('[PERF] PortfolioTabShell mount → first paint');
+            console.log(`[PERF] Dashboard data received: ${initialData.accounts.length} accounts, ${initialData.holdings.length} holdings, ${initialData.overview.total_value}`);
+        }
+    }, [isLoading, initialData]);
     const accounts = initialData?.accounts;
 
     const [showImportModal, setShowImportModal] = useState(false);

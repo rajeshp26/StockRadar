@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { AllocationDonutCard } from './AllocationDonutCard';
 import { ChevronDown, ChevronRight, ArrowLeft, BarChart2 } from 'lucide-react';
 import type { AggregatedHolding } from '../types/portfolio.types';
+import { formatCurrency, getCurrencySymbol } from '@/lib/currency';
 
 interface HoldingsTabProps {
     accountIds?: number[];
@@ -146,7 +147,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                     <h3 className="text-sm font-bold text-white">{selectedSegment}</h3>
                     <span className="text-xs text-white/30">
                         {displayHoldings.length} holding{displayHoldings.length !== 1 ? 's' : ''}
-                        {segmentTotalValue > 0 && ` · $${segmentTotalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                        {segmentTotalValue > 0 && ` · ${formatCurrency(segmentTotalValue, displayHoldings[0]?.value_currency || displayHoldings[0]?.currency)}`}
                     </span>
                 </div>
             )}
@@ -178,7 +179,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                                 <div className="flex items-center gap-6">
                                     <div className="text-right">
                                         <p className="text-sm font-bold text-white">
-                                            ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            {formatCurrency(value, h.value_currency || h.currency)}
                                         </p>
                                         <p className="text-xs text-white/40">{weight.toFixed(1)}%</p>
                                     </div>
@@ -266,21 +267,21 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                                     {/* Current price */}
                                     <div className="text-right">
                                         <p className="text-sm font-bold text-white">
-                                            {h.current_price != null ? `$${h.current_price.toFixed(2)}` : '—'}
+                                            {h.current_price != null ? formatCurrency(h.current_price, h.currency, { maximumFractionDigits: 2 }) : '\u2014'}
                                         </p>
                                     </div>
 
                                     {/* Avg cost */}
                                     <div className="text-right">
                                         <p className="text-sm font-bold text-white">
-                                            {h.average_cost > 0 ? `$${h.average_cost.toFixed(2)}` : '—'}
+                                            {h.average_cost > 0 ? formatCurrency(h.average_cost, h.currency, { maximumFractionDigits: 2 }) : '\u2014'}
                                         </p>
                                     </div>
 
                                     {/* Value */}
                                     <div className="text-right">
                                         <p className="text-sm font-bold text-white">
-                                            ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            {formatCurrency(value, h.currency)}
                                         </p>
                                         <p className="text-xs text-white/40">{weight.toFixed(1)}%</p>
                                     </div>
@@ -289,7 +290,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                                     <div className="text-right">
                                         <p className={cn('text-sm font-bold', h.unrealized_gain_loss >= 0 ? 'text-green-400' : 'text-red-400')}>
                                             {h.unrealized_gain_loss >= 0 ? '+' : ''}
-                                            ${Math.abs(h.unrealized_gain_loss).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            {formatCurrency(Math.abs(h.unrealized_gain_loss), h.currency)}
                                         </p>
                                         <p className={cn('text-xs', h.unrealized_gain_loss >= 0 ? 'text-green-400/60' : 'text-red-400/60')}>
                                             {h.unrealized_gain_loss >= 0 ? '+' : ''}{h.unrealized_gain_loss_pct.toFixed(2)}%
@@ -335,7 +336,7 @@ export function HoldingsTab({ accountIds }: HoldingsTabProps) {
                                                     <div className="flex items-center gap-4">
                                                         <span className="text-white/40">({bWeight.toFixed(1)}%)</span>
                                                         <span className="text-white/60 font-medium">
-                                                            ${b.total_cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                            {formatCurrency(b.total_cost, h.currency)}
                                                         </span>
                                                     </div>
                                                 </div>

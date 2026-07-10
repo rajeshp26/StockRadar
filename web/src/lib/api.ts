@@ -35,7 +35,7 @@ export const api = axios.create({
     Accept: "application/json",
     "X-Requested-With": "XMLHttpRequest",
   },
-  timeout: 12_000,
+  timeout: 30_000,
   validateStatus: (status) => status >= 200 && status < 300,
   withCredentials: true,
 });
@@ -51,6 +51,7 @@ const method = (cfg?: AxiosRequestConfig) =>
 function logRequest(cfg: InternalAxiosRequestConfig) {
   if (isProd) return cfg;
   const safeUrl = `${cfg.baseURL || ""}${redactUrl(cfg.url)}`;
+  (cfg as any).__requestStarted = performance.now();
   console.debug(`[API] → ${method(cfg)} ${safeUrl}`);
   return cfg;
 }
@@ -58,7 +59,10 @@ function logRequest(cfg: InternalAxiosRequestConfig) {
 function logResponse(resp: any) {
   if (isProd) return resp;
   const safeUrl = `${resp.config?.baseURL || ""}${redactUrl(resp.config?.url)}`;
-  console.debug(`[API] ← ${method(resp.config)} ${safeUrl} ${resp.status}`);
+  const ms = resp.config?.__requestStarted
+    ? (performance.now() - resp.config.__requestStarted).toFixed(1)
+    : "?";
+  console.debug(`[API] ← ${method(resp.config)} ${safeUrl} ${resp.status} ${ms}ms`);
   return resp;
 }
 
@@ -127,6 +131,12 @@ api.interceptors.response.use(
   (resp) => logResponse(resp),
   (error: AxiosError) => {
     const status = error.response?.status;
+    const cfg = error.config as any;
+    const safeUrl = `${cfg?.baseURL || ""}${redactUrl(cfg?.url)}`;
+    const ms = cfg?.__requestStarted
+      ? (performance.now() - cfg.__requestStarted).toFixed(1)
+      : "?";
+    console.debug(`[API] ✗ ${method(cfg)} ${safeUrl} ${status ?? "ERR"} ${ms}ms`);
 
     const normalized = new Error(toErrorMessage(error)) as Error & {
       status?: number;
@@ -149,36 +159,5 @@ api.interceptors.response.use(
     return Promise.reject(normalized);
   }
 );
-
-// ── Lightweight retry for transient network errors on safe methods ────────────
-
-const NETWORK_ERROR_CODES = new Set([
-  "ECONNABORTED",
-  "ERR_NETWORK",
-  "ETIMEDOUT",
-]);
-
-api.interceptors.response.use(undefined, async (error: any) => {
-  const rawErr = error?.raw || error;
-  const cfg = rawErr?.config as InternalAxiosRequestConfig & {
-    __retryCount?: number;
-  };
-  const methodName = method(cfg);
-  const isSafeMethod = methodName === "GET" || methodName === "HEAD";
-
-  if (
-    cfg &&
-    isSafeMethod &&
-    NETWORK_ERROR_CODES.has(rawErr?.code || error?.code) &&
-    (cfg.__retryCount || 0) < 2
-  ) {
-    cfg.__retryCount = (cfg.__retryCount || 0) + 1;
-    const backoffMs = [400, 1000][cfg.__retryCount - 1];
-    await new Promise((r) => setTimeout(r, backoffMs));
-    return api.request(cfg);
-  }
-
-  return Promise.reject(error);
-});
 
 export default api;

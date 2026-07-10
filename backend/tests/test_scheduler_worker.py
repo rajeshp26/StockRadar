@@ -157,10 +157,11 @@ class TestWorkerMain:
         handler_types = [
             call[0][0] for call in mocks["engine"].register_handler.call_args_list
         ]
-        assert len(handler_types) == 3
+        assert len(handler_types) == 4
         assert "company_refresh" in handler_types
         assert "investor_refresh" in handler_types
         assert "aggregation_refresh" in handler_types
+        assert "portfolio_snapshot" in handler_types
 
     async def test_registers_schedulers_when_enabled(self, mock_db_env):
         mocks = await self._run_main_quick(enable_all_schedulers=True)

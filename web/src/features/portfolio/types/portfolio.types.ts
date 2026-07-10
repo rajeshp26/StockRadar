@@ -58,6 +58,7 @@ export interface AccountBreakdown {
     total_cost: number;
     gain_loss: number;
     gain_loss_pct: number;
+    value_currency?: string;
 }
 
 export interface PortfolioOverview {
@@ -71,6 +72,7 @@ export interface PortfolioOverview {
     accounts_count: number;
     top_holdings: Holding[];
     account_breakdown: AccountBreakdown[];
+    value_currency?: string;
     error?: string;
 }
 
@@ -635,6 +637,10 @@ export interface DashboardAccount {
     currency: string;
     holdings_count: number;
     total_value: number;
+    total_cost: number;
+    gain_loss: number;
+    gain_loss_pct: number;
+    value_currency?: string;
 }
 
 export interface DashboardOverview {
@@ -645,9 +651,11 @@ export interface DashboardOverview {
     ytd_dividends: number;
     holdings_count: number;
     accounts_count: number;
+    value_currency?: string;
 }
 
 export interface DashboardHolding {
+    company_id?: number;
     symbol: string;
     company_name: string;
     quantity: number;
@@ -656,6 +664,7 @@ export interface DashboardHolding {
     total_cost: number;
     unrealized_gain_loss: number;
     unrealized_gain_loss_pct: number;
+    value_currency?: string;
 }
 
 export interface PortfolioDashboardResponse {

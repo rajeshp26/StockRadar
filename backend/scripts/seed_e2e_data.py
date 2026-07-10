@@ -103,7 +103,7 @@ def get_or_create_companies():
                 "sector": sector,
                 "industry": industry,
                 "exchange": "NMS" if sym in ("AAPL", "SHOP") else "TSX",
-                "currency": "USD" if sym in ("AAPL",) else "CAD",
+                "currency": "USD" if sym in ("AAPL", "SHOP") else "CAD",
                 "security_type": "stock",
             }).execute()
             result[sym] = ins.data[0]["company_id"]

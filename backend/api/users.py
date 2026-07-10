@@ -44,11 +44,12 @@ def sync_user(
             'username': body.username,
             'last_signed_in': now_iso(),
             'auth_id': auth_id,
-            'preferred_currency': 'USD',
             'first_name': body.first_name,
             'last_name': body.last_name,
             'avatar_url': body.avatar_url,
         }
+        if body.preferred_currency is not None:
+            user_data['preferred_currency'] = body.preferred_currency
 
         result = supabase.table('users').upsert(
             user_data,

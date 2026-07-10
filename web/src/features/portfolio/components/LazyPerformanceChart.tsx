@@ -14,6 +14,7 @@ export function LazyPerformanceChart() {
         const observer = new IntersectionObserver(
             ([entry]) => {
                 if (entry.isIntersecting) {
+                    console.log('[PERF] LazyPerformanceChart intersection triggered — loading chart');
                     setInView(true);
                     observer.disconnect();
                 }

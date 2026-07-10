@@ -394,7 +394,7 @@ class PortfolioRepository:
             try:
                 res = (
                     self.client.table("companies")
-                    .select("company_id, company_name, sector, industry, exchange, security_type")
+                    .select("company_id, company_name, sector, industry, exchange, security_type, currency")
                     .in_("company_id", company_ids)
                     .execute()
                 )
@@ -413,6 +413,8 @@ class PortfolioRepository:
                 h["exchange"] = c.get("exchange")
                 h["market_group"] = _exchange_to_market_group(c.get("exchange"))
                 h["security_type"] = c.get("security_type", "stock")
+                h["price_currency"] = c.get("currency") or "USD"
+                h["cost_currency"] = h.get("cost_currency") or h["price_currency"]
             else:
                 h["company_name"] = h.get("symbol", "Unknown")
                 h["sector"] = None
@@ -420,6 +422,10 @@ class PortfolioRepository:
                 h["exchange"] = None
                 h["market_group"] = "OTHER"
                 h["security_type"] = "stock"
+                if "price_currency" not in h:
+                    h["price_currency"] = "USD"
+                if "cost_currency" not in h:
+                    h["cost_currency"] = h["price_currency"]
 
         return holdings
     
@@ -484,34 +490,6 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to get earliest transaction date: {e}")
             return None
-
-    def get_portfolio_snapshots(
-        self,
-        account_ids: List[int],
-        start_date: date,
-        end_date: date,
-    ) -> List[Dict[str, Any]]:
-        """Read pre-computed snapshots for the given accounts and date range.
-
-        Returns rows sorted by snapshot_date ascending.
-        Falls back to a daily computation if no snapshots exist.
-        """
-        if not account_ids:
-            return []
-        try:
-            res = (
-                self.client.table("portfolio_snapshots")
-                .select("snapshot_date, total_value, cost_basis, net_deposits, holdings_json")
-                .in_("account_id", account_ids)
-                .gte("snapshot_date", start_date.isoformat())
-                .lte("snapshot_date", end_date.isoformat())
-                .order("snapshot_date", desc=False)
-                .execute()
-            )
-            return res.data or []
-        except Exception as e:
-            logger.error(f"Failed to fetch portfolio snapshots: {e}")
-            return []
 
     def get_account_performance_history(
         self, account_id: int, days: int = 90
@@ -667,6 +645,25 @@ class PortfolioRepository:
             return res.data or []
         except Exception as e:
             logger.error(f"Failed to get monthly dividends for account {account_id}: {e}")
+            return []
+
+    def get_accounts_monthly_dividends(
+        self, account_ids: List[int], months: int = 12
+    ) -> List[Dict[str, Any]]:
+        """Batch query for monthly dividend summaries across multiple accounts."""
+        if not account_ids:
+            return []
+        try:
+            res = (
+                self.client.table("portfolio_monthly_dividends")
+                .select("*")
+                .in_("account_id", account_ids)
+                .limit(len(account_ids) * months)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get monthly dividends for accounts {account_ids}: {e}")
             return []
     
     # ========================================================================
@@ -1047,3 +1044,294 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to get import history for user {user_id}: {e}")
             return []
+
+    # ========================================================================
+    # PORTFOLIO SNAPSHOT METHODS
+    # ========================================================================
+
+    CASH_ACTIVITY_TYPES = [
+        "Trade", "Deposit", "Withdrawal", "Dividend", "MoneyMovement",
+        "Interest", "Fee", "WithholdingTax", "ReorganizationDividend",
+        "BonusPayment", "FxExchange", "ReturnOfCapital", "Tax",
+    ]
+    """Whitelist of activity_type values that represent actual cash movement.
+    
+    When a new activity type is added to the schema, it must be explicitly
+    reviewed and added to this list if it moves cash. See test
+    `test_all_activity_types_considered_in_cash_filter` for enforcement.
+    """
+
+    def get_cash_balance(self, account_id: int, target_date: date) -> Decimal:
+        result = (
+            self.client.table("portfolio_transactions")
+            .select("net_cash_amount")
+            .eq("account_id", account_id)
+            .in_("activity_type", self.CASH_ACTIVITY_TYPES)
+            .lte("transaction_date", target_date.isoformat())
+            .execute()
+        )
+        total = Decimal("0.00")
+        for row in result.data or []:
+            total += Decimal(str(row.get("net_cash_amount") or 0))
+        return total
+
+    def get_net_deposits(self, account_id: int, target_date: date) -> Decimal:
+        result = (
+            self.client.table("portfolio_transactions")
+            .select("net_cash_amount")
+            .eq("account_id", account_id)
+            .in_("activity_type", ["MoneyMovement", "BonusPayment"])
+            .lte("transaction_date", target_date.isoformat())
+            .execute()
+        )
+        total = Decimal("0.00")
+        for row in result.data or []:
+            total += Decimal(str(row.get("net_cash_amount") or 0))
+        return total
+
+    def get_cash_balance_for_accounts(self, account_ids: List[int], target_date: date) -> Decimal:
+        total = Decimal("0.00")
+        for aid in account_ids:
+            total += self.get_cash_balance(aid, target_date)
+        return total
+
+    def get_net_deposits_for_accounts(self, account_ids: List[int], target_date: date) -> Decimal:
+        total = Decimal("0.00")
+        for aid in account_ids:
+            total += self.get_net_deposits(aid, target_date)
+        return total
+
+    def get_user_accounts_all(self) -> List[Dict[str, Any]]:
+        try:
+            res = self.client.table("portfolio_accounts") \
+                .select("account_id, user_id, account_name") \
+                .execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    def get_holdings_for_accounts(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+        if not account_ids:
+            return []
+        try:
+            res = (
+                self.client.table("portfolio_holdings")
+                .select("*")
+                .in_("account_id", account_ids)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get holdings for accounts: {e}")
+            return []
+
+    def get_holdings(self, account_id: int) -> List[Dict[str, Any]]:
+        try:
+            res = (
+                self.client.table("portfolio_holdings")
+                .select("*")
+                .eq("account_id", account_id)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get holdings for account {account_id}: {e}")
+            return []
+
+    def get_company_names(self, company_ids: List[int]) -> List[Dict[str, Any]]:
+        if not company_ids:
+            return []
+        try:
+            res = (
+                self.client.table("companies")
+                .select("company_id, company_name")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get company names: {e}")
+            return []
+
+    def get_symbol_company_mappings(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+        try:
+            res = self.client.table("portfolio_transactions") \
+                .select("symbol, company_id") \
+                .in_("account_id", account_ids) \
+                .neq("symbol", None) \
+                .neq("company_id", None) \
+                .execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    def get_event_dates(self, account_id: int) -> List[date]:
+        event_dates: set = set()
+        try:
+            res = self.client.table("portfolio_transactions") \
+                .select("transaction_date, activity_type") \
+                .eq("account_id", account_id) \
+                .in_("activity_type", ["Trade", "MoneyMovement", "BonusPayment", "Dividend"]) \
+                .execute()
+
+            for t in res.data or []:
+                d = t["transaction_date"]
+                if isinstance(d, str):
+                    d = date.fromisoformat(d)
+                elif isinstance(d, datetime):
+                    d = d.date()
+                event_dates.add(d)
+
+            if event_dates:
+                earliest = min(event_dates)
+                today = now_utc().date()
+                current = date(earliest.year, earliest.month, 1)
+                while current <= today:
+                    if current.month == 12:
+                        month_end = date(current.year, 12, 31)
+                        next_month = date(current.year + 1, 1, 1)
+                    else:
+                        next_month = date(current.year, current.month + 1, 1)
+                        month_end = next_month - timedelta(days=1)
+                    if month_end >= earliest:
+                        event_dates.add(month_end)
+                    current = next_month
+        except Exception as e:
+            logger.error(f"Failed to get event dates for account {account_id}: {e}")
+
+        return sorted(event_dates)
+
+    def _get_split_factors(
+        self, company_ids: List[int]
+    ) -> Dict[int, List[tuple]]:
+        """
+        Fetch reverse/forward split data for the given companies.
+
+        Returns {company_id: [(split_date, adjustment_factor), ...]} sorted by date asc.
+        adjustment_factor = split_to / split_from (e.g. 1:50 reverse = 0.02).
+        Prices BEFORE this date must be multiplied by this factor to get
+        the post-split-equivalent price.
+        """
+        factors: Dict[int, List[tuple]] = {}
+        if not company_ids:
+            return factors
+        try:
+            res = (
+                self.client.table("splits")
+                .select("company_id, report_date, split_factor")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            for row in res.data or []:
+                cid = row["company_id"]
+                sd = row["report_date"]
+                if isinstance(sd, str):
+                    sd = date.fromisoformat(sd)
+                elif isinstance(sd, datetime):
+                    sd = sd.date()
+                sf = (row.get("split_factor") or "1:1")
+                parts = sf.split(":")
+                if len(parts) == 2:
+                    try:
+                        to_val = float(parts[0])
+                        from_val = float(parts[1])
+                        if from_val > 0:
+                            adj = to_val / from_val
+                            factors.setdefault(cid, []).append((sd, adj))
+                    except (ValueError, ZeroDivisionError):
+                        continue
+            for cid in factors:
+                factors[cid].sort(key=lambda x: x[0])
+        except Exception as e:
+            logger.error(f"Failed to fetch split factors: {e}")
+        return factors
+
+    def get_all_prices_historical(
+        self, company_ids: List[int], target_date: date
+    ) -> Dict[int, List[tuple]]:
+        """
+        Fetch ALL prices <= target_date for the given companies,
+        adjusted for stock splits.
+
+        Prices are adjusted so that historical prices reflect post-split equivalents.
+        Returns {company_id: [(date, adjusted_price), ...]} sorted ascending.
+        """
+        price_map: Dict[int, List[tuple]] = {}
+        if not company_ids:
+            return price_map
+
+        try:
+            result = (
+                self.client.table("price_history")
+                .select("company_id, price_date, close_price")
+                .in_("company_id", company_ids)
+                .lte("price_date", target_date.isoformat())
+                .order("price_date", desc=False)
+                .limit(50000)
+                .execute()
+            )
+            for row in (result.data or []):
+                cid = row["company_id"]
+                pd = row["price_date"]
+                if isinstance(pd, str):
+                    pd = date.fromisoformat(pd)
+                elif isinstance(pd, datetime):
+                    pd = pd.date()
+                price_map.setdefault(cid, []).append((pd, float(row["close_price"])))
+        except Exception as e:
+            logger.error(f"Failed to get all prices historical: {e}")
+
+        # --- Adjust prices for stock splits ---
+        split_factors = self._get_split_factors(company_ids)
+        if split_factors:
+            for cid, prices in price_map.items():
+                cid_splits = split_factors.get(cid, [])
+                if not cid_splits:
+                    continue
+                adjusted = []
+                for pd, pr in prices:
+                    adj = 1.0
+                    for split_date, factor in cid_splits:
+                        if split_date > pd:
+                            adj *= factor
+                    adjusted.append((pd, pr * adj))
+                price_map[cid] = adjusted
+
+        # --- Detect and normalize price unit inconsistencies ---
+        # Some price data was loaded in different units (e.g. monthly prices
+        # at ~5-10% of actual value vs. correct weekly prices).  If consecutive
+        # records within 60 days differ by more than 5x, we assume a unit
+        # mismatch and scale older records to match the newer anchor.
+        MAX_PRICE_RATIO = 5.0
+        MIN_ANOMALY_DAYS = 60
+        for cid, prices in price_map.items():
+            if len(prices) < 2:
+                continue
+            prices.sort(key=lambda x: x[0])
+            # Find the newest anomalous boundary from right to left
+            fix_up_to = 0
+            for i in range(len(prices) - 1, 0, -1):
+                newer = prices[i]
+                older = prices[i - 1]
+                days = (newer[0] - older[0]).days
+                if days > MIN_ANOMALY_DAYS:
+                    break
+                if older[1] > 0 and newer[1] / older[1] > MAX_PRICE_RATIO:
+                    ratio = newer[1] / older[1]
+                    logger.info(
+                        f"Normalising price unit cid={cid}: {older[0]}={older[1]:.2f} "
+                        f"-> {newer[0]}={newer[1]:.2f} (x{ratio:.1f}, {days}d)"
+                    )
+                    fix_up_to = i
+            if fix_up_to > 0:
+                anchor = prices[fix_up_to]
+                scale = anchor[1] / prices[fix_up_to - 1][1] if prices[fix_up_to - 1][1] > 0 else 1.0
+                fixed = []
+                for j, (pd_, pr_) in enumerate(prices):
+                    if j < fix_up_to:
+                        fixed.append((pd_, pr_ * scale))
+                    else:
+                        fixed.append((pd_, pr_))
+                price_map[cid] = fixed
+
+        return price_map

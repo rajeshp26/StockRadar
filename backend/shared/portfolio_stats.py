@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Tuple
+from datetime import date, datetime
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
@@ -119,7 +120,7 @@ def compute_value_at_risk(
     z = norm.ppf(1 - confidence)
     mean = float(np.mean(daily_returns))
     std = float(np.std(daily_returns, ddof=1))
-    var = mean - z * std
+    var = mean + z * std
     return _sanity_bounds(f"VaR_{int(confidence*100)}", var, -0.5, 0.0)
 
 
@@ -229,3 +230,120 @@ def compute_correlation_matrix(returns_matrix: np.ndarray) -> np.ndarray:
     assert np.allclose(np.diag(corr), 1.0), "Correlation diagonal not 1.0"
     assert np.all(np.abs(corr) <= 1.0 + 1e-10), "Correlation outside [-1, 1]"
     return corr
+
+
+def _parse_snapshot_date(d: Any) -> date:
+    if isinstance(d, date) and not isinstance(d, datetime):
+        return d
+    if isinstance(d, datetime):
+        return d.date()
+    if isinstance(d, str):
+        return date.fromisoformat(d)
+    raise TypeError(f"Cannot parse snapshot date: {d!r}")
+
+
+def compute_portfolio_twr(snapshots: List[Dict[str, Any]]) -> float:
+    """
+    Time-Weighted Return — measures investment performance independent of
+    deposit/withdrawal timing.
+
+    For each sub-period between snapshots:
+        r_i = (V_i - V_{i-1} - ΔND_i) / V_{i-1}
+    where ΔND_i is the change in cumulative net deposits.
+
+    Then geometrically linked:  TWR = (1+r₁)(1+r₂)…(1+rₙ) - 1
+
+    Leading zero-value snapshots are skipped to avoid division-by-zero.
+    """
+    if len(snapshots) < 2:
+        return 0.0
+
+    start = 0
+    for i, s in enumerate(snapshots):
+        if s.get("value", 0) > 0:
+            start = i
+            break
+    else:
+        return 0.0
+
+    product = 1.0
+    count = 0
+    for i in range(start + 1, len(snapshots)):
+        pv = float(snapshots[i - 1].get("value", 0))
+        cv = float(snapshots[i].get("value", 0))
+        if pv <= 0:
+            continue
+        pnd = float(snapshots[i - 1].get("net_deposits", 0))
+        cnd = float(snapshots[i].get("net_deposits", 0))
+        cf = cnd - pnd
+        r = (cv - pv - cf) / pv
+        product *= 1.0 + r
+        count += 1
+
+    return product - 1.0 if count >= 1 else 0.0
+
+
+def compute_portfolio_mwr(snapshots: List[Dict[str, Any]]) -> float:
+    """
+    Money-Weighted Return (Modified Dietz) — measures the actual return
+    experienced by the investor, including the impact of deposit/withdrawal
+    size and timing.
+
+        R = (V_end - V_start - ΣCF) / (V_start + Σ(W_i × CF_i))
+
+    Each cash flow CF_i is weighted by the fraction of the period remaining
+    when it occurred:  W_i = (T - t_i) / T
+    """
+    if len(snapshots) < 2:
+        return 0.0
+
+    start = 0
+    for i, s in enumerate(snapshots):
+        if s.get("value", 0) > 0:
+            start = i
+            break
+    else:
+        return 0.0
+
+    first = snapshots[start]
+    last = snapshots[-1]
+
+    V_start = float(first.get("value", 0))
+    V_end = float(last.get("value", 0))
+    if V_start <= 0:
+        return 0.0
+
+    d0 = _parse_snapshot_date(first.get("date"))
+    dn = _parse_snapshot_date(last.get("date"))
+    total_days = (dn - d0).days
+    if total_days <= 0:
+        return 0.0
+
+    total_cf = 0.0
+    weighted_cf = 0.0
+
+    for i in range(start + 1, len(snapshots)):
+        di = _parse_snapshot_date(snapshots[i].get("date"))
+        cf = float(snapshots[i].get("net_deposits", 0)) - float(
+            snapshots[i - 1].get("net_deposits", 0)
+        )
+        total_cf += cf
+        days_left = (dn - di).days
+        weight = days_left / total_days
+        weighted_cf += cf * weight
+
+    denom = V_start + weighted_cf
+    if abs(denom) < 0.001:
+        return 0.0
+
+    return (V_end - V_start - total_cf) / denom
+
+
+def annualize_return(total_return: float, period_days: int) -> float:
+    """Convert a total return to a Compound Annual Growth Rate (CAGR)."""
+    if period_days <= 0 or total_return <= -1.0:
+        return 0.0
+    years = period_days / 365.0
+    if years <= 0:
+        return total_return
+    return (1.0 + total_return) ** (1.0 / years) - 1.0

@@ -32,6 +32,7 @@ def mock_supabase_client():
     table.or_.return_value = table
     table.is_.return_value = table
     table.order.return_value = table
+    table.range.return_value = table
     table.limit.return_value = table
     table.update.return_value = table
     table.upsert.return_value = table

@@ -246,6 +246,12 @@ class MarketDataRefreshScheduler:
         self.retention_years: int = int(getattr(settings, "PRICE_HISTORY_RETENTION_YEARS", 10))
         self.lock_ttl_seconds: int = int(getattr(settings, "SCHEDULER_COMPANY_LOCK_TTL_SECONDS", 1800))
 
+        # FX Service for currency conversion
+        self.fx_service: Optional[Any] = None
+        if settings.ENABLE_FX_CONVERSION:
+            from shared.fx_service import FXService
+            self.fx_service = FXService(supabase)
+
         # Runtime
         self._is_running: bool = False
         self._task: Optional[asyncio.Task] = None
@@ -424,12 +430,39 @@ class MarketDataRefreshScheduler:
         # await self.financial_repo.prune_price_history(retention_years=self.retention_years)
         # ------------------------------------------------------------------
 
+        # FX rate refresh (non-company, runs once per cycle)
+        if settings.ENABLE_FX_CONVERSION:
+            try:
+                self._refresh_fx_rates()
+            except Exception as e:
+                logger.error("FX rate refresh failed: %s", e)
+
         logger.info(
             "✅ Market data cycle complete: %s ok, %s failed",
             results["companies_succeeded"],
             results["companies_failed"],
         )
         return results
+
+    # -------------------------------------------------------------------------
+    # FX Rate Refresh
+    # -------------------------------------------------------------------------
+
+    def _refresh_fx_rates(self) -> None:
+        """Fetch and cache daily FX rates."""
+        from providers.fx_provider import fetch_fx_rate
+        today = now_utc().date()
+
+        usd_to_cad = fetch_fx_rate("USD", "CAD")
+        if usd_to_cad is not None and self.fx_service is not None:
+            self.fx_service._cache_rate("USD", "CAD", usd_to_cad, today)
+            logger.info("FX rate USD->CAD cached: %s", usd_to_cad)
+        else:
+            logger.error("Failed to fetch FX rate USD->CAD — rate cache not updated")
+
+        cad_to_usd = fetch_fx_rate("CAD", "USD")
+        if cad_to_usd is not None and self.fx_service is not None:
+            self.fx_service._cache_rate("CAD", "USD", cad_to_usd, today)
 
     # -------------------------------------------------------------------------
     # Per-Company Process
@@ -764,7 +797,7 @@ class MarketDataRefreshScheduler:
         df = pd.DataFrame(daily_rows)
         if df.empty or "price_date" not in df.columns:
             return []
-        df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
+        df["price_date"] = pd.to_datetime(df["price_date"], utc=True, errors="coerce")
         df = df.dropna(subset=["price_date"])
         if df.empty:
             return []

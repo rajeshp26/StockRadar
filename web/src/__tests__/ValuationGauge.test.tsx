@@ -48,7 +48,7 @@ describe("ValuationGauge", () => {
       renderGauge(makeConfig({ current_value: 18.4 }));
       const matches = screen.getAllByText("18.4");
       expect(matches.length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText("P/E Ratio")).toBeInTheDocument();
+      expect(screen.getByLabelText("P/E Ratio Gauge: 18.4")).toBeInTheDocument();
     });
 
     it("renders all four stat pills", () => {
@@ -61,9 +61,9 @@ describe("ValuationGauge", () => {
 
     it("renders stat pill values", () => {
       renderGauge(makeConfig());
-      expect(screen.getByText("9.2")).toBeInTheDocument();
-      expect(screen.getByText("21.3")).toBeInTheDocument();
-      expect(screen.getByText("42.1")).toBeInTheDocument();
+      expect(screen.getAllByText("9.2").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("21.3").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("42.1").length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText("18.4").length).toBeGreaterThanOrEqual(1);
     });
 
@@ -74,12 +74,12 @@ describe("ValuationGauge", () => {
 
     it("shows Undervalued when current is below band_low", () => {
       renderGauge(makeConfig({ current_value: 10.0, band_low: 15.0, band_high: 25.0, avg_value: 21.3 }));
-      expect(screen.getByText("Undervalued")).toBeInTheDocument();
+      expect(screen.getAllByText("Undervalued").length).toBeGreaterThanOrEqual(1);
     });
 
     it("shows Overvalued when current is above band_high", () => {
       renderGauge(makeConfig({ current_value: 30.0, band_low: 15.0, band_high: 25.0, avg_value: 21.3 }));
-      expect(screen.getByText("Overvalued")).toBeInTheDocument();
+      expect(screen.getAllByText("Overvalued").length).toBeGreaterThanOrEqual(1);
     });
 
     it("falls back to fallback text when critical values are null", () => {

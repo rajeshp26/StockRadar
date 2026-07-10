@@ -70,6 +70,7 @@ vi.mock("@/lib/query-keys", () => ({
 }));
 
 // ── Mock hooks ─────────────────────────────────────────────────────────
+const mockUsePortfolioDashboard = vi.fn();
 const mockUsePortfolioAccounts = vi.fn();
 const mockUsePortfolioOverview = vi.fn();
 const mockUsePortfolioPerformance = vi.fn();
@@ -85,6 +86,7 @@ vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
     usePortfolioAccounts: (...args: any[]) => mockUsePortfolioAccounts(...args),
     usePortfolioOverview: (...args: any[]) => mockUsePortfolioOverview(...args),
     usePortfolioPerformance: (...args: any[]) => mockUsePortfolioPerformance(...args),
+    usePortfolioDashboard: (...args: any[]) => mockUsePortfolioDashboard(...args),
     useBenchmarkCompare: (...args: any[]) => mockUseBenchmarkCompare(...args),
     useBenchmarks: (...args: any[]) => mockUseBenchmarks(...args),
     useAccountHoldings: (...args: any[]) => mockUseAccountHoldings(...args),
@@ -117,6 +119,10 @@ vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
     useHoldingExists: () => ({ data: { held: false }, isLoading: false }),
     useHoldingPerformance: () => ({ data: null, isLoading: false }),
     useHoldingDividends: () => ({ data: [], isLoading: false }),
+    useAggregatedHoldings: () => ({ data: [], isLoading: false }),
+    useDividendSummary: () => ({ data: null, isLoading: false }),
+    useDividendUpcoming: () => ({ data: [], isLoading: false }),
+    useDividendHoldings: () => ({ data: [], isLoading: false }),
 }));
 
 // ── Mock shared components ─────────────────────────────────────────────
@@ -354,6 +360,10 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
         vi.clearAllMocks();
         mockUseSearchParams.mockReturnValue(makeMockSearchParams());
         mockUseRouter.mockReturnValue({ replace: mockReplace });
+        mockUsePortfolioDashboard.mockReturnValue({
+            data: { accounts: makeMockAccounts() },
+            isLoading: false,
+        });
         mockUsePortfolioAccounts.mockReturnValue({
             data: makeMockAccounts(),
             isLoading: false,
@@ -409,7 +419,7 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
     });
 
     it("FT-SHELL-03: shows loading skeleton while accounts load", () => {
-        mockUsePortfolioAccounts.mockReturnValue({
+        mockUsePortfolioDashboard.mockReturnValue({
             data: null,
             isLoading: true,
         });
@@ -454,20 +464,32 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
 
     it("FT-SHELL-05: renders Holdings tab placeholder when no account selected", () => {
         mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "holdings" }));
+        mockUsePortfolioDashboard.mockReturnValue({
+            data: { accounts: [] },
+            isLoading: false,
+        });
         render(<PortfolioTabShell />);
-        expect(screen.getByText(/Select an account to view holdings/)).toBeInTheDocument();
+        expect(screen.getByText("No holdings found")).toBeInTheDocument();
     });
 
     it("FT-SHELL-06: renders Dividends tab placeholder when no account selected", () => {
         mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "dividends" }));
+        mockUsePortfolioDashboard.mockReturnValue({
+            data: { accounts: [] },
+            isLoading: false,
+        });
         render(<PortfolioTabShell />);
-        expect(screen.getByText(/Select an account to view dividends/)).toBeInTheDocument();
+        expect(screen.getByText("Dividend Dashboard")).toBeInTheDocument();
     });
 
     it("FT-SHELL-07: renders Transactions tab placeholder when no account selected", () => {
         mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "transactions" }));
+        mockUsePortfolioDashboard.mockReturnValue({
+            data: { accounts: [] },
+            isLoading: false,
+        });
         render(<PortfolioTabShell />);
-        expect(screen.getByText(/Select an account to view transactions/)).toBeInTheDocument();
+        expect(screen.getByText("No transactions found matching filters")).toBeInTheDocument();
     });
 
     it("FT-SHELL-08: allocation tab shows empty state when no segments", () => {
@@ -490,7 +512,7 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
     it("FT-SHELL-10: clicking account chip in shell updates URL", () => {
         mockUseSearchParams.mockReturnValue(makeMockSearchParams({}));
         render(<PortfolioTabShell />);
-        fireEvent.click(screen.getByText("TFSA"));
+        fireEvent.click(screen.getAllByText("TFSA")[0]);
         expect(mockReplace).toHaveBeenCalledWith("?account=1", { scroll: false });
     });
 

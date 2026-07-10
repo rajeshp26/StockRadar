@@ -196,7 +196,7 @@ class Settings(BaseSettings):
     
     # Feature Flags
     ENABLE_PORTFOLIO_DASHBOARD: bool = Field(
-        default=False,
+        default=True,
         description="Enable the portfolio dashboard view-model endpoint (/portfolio/dashboard)",
     )
     ENABLE_EARNINGS_SCHEDULER: bool = Field(
@@ -242,6 +242,63 @@ class Settings(BaseSettings):
     PRICE_HISTORY_RETENTION_YEARS: int = Field(
     default=10,
     description="Number of years of price history to retain"
+    )
+
+    # Price Ingestion Pipeline
+    ENABLE_PRICE_INGESTION_SCHEDULER: bool = Field(
+        default=True,
+        description="Enable the price ingestion scheduler (refreshes price_sources from yfinance+supabase)"
+    )
+
+    DASHBOARD_READ_PATH: str = Field(
+        default="off",
+        pattern="^(off|shadow|serve)$",
+        description="Dashboard read path mode: 'off' (old only), 'shadow' (both, log compare, old serves), 'serve' (new only)"
+    )
+
+    # FX Currency Conversion
+    ENABLE_FX_CONVERSION: bool = Field(
+        default=False,
+        description="Enable FX currency conversion for multi-currency portfolio holdings"
+    )
+
+    # Portfolio Snapshot Feature Flags
+    ENABLE_PORTFOLIO_SNAPSHOT_SCHEDULER: bool = Field(
+        True,
+        description="Enable daily portfolio snapshot computation job (23:00 UTC)"
+    )
+
+    ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH: bool = Field(
+        True,
+        description="Enable snapshot-based read path for /api/portfolio/performance "
+                    "(shadow-mode before full cutover)"
+    )
+
+    PORTFOLIO_SNAPSHOT_FALLBACK_ENABLED: bool = Field(
+        True,
+        description="Enable fallback FIFO computation when snapshots not yet available"
+    )
+
+    ENABLE_PERFORMANCE_LOCF: bool = Field(
+        True,
+        description="Apply last-observation-carried-forward when merging per-account "
+                    "snapshots: accounts missing a snapshot on a given date will "
+                    "carry forward their last known total_value instead of $0. "
+                    "Eliminates artificial dips in the performance chart."
+    )
+
+    # Event-Replay Feature Flags (Phase 4 cut-over)
+    ENABLE_EVENT_REPLAY_SNAPSHOTS: bool = Field(
+        False,
+        description="Use event-replay engine instead of mutable state to build snapshots "
+                    "(Phase 4: set True after backfill and 7-day comparison pass)"
+    )
+
+    EVENT_REPLAY_COMPARISON_MODE: bool = Field(
+        True,
+        description="When True, compute snapshots via BOTH old and replay paths, log "
+                    "mismatches, but still write the old-path result. Set to False only "
+                    "after comparison passes for all accounts."
     )
     
     # Debugging & Development

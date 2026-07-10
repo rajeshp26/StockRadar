@@ -36,6 +36,8 @@ from typing import Any, Dict, Optional
 
 # v3 infrastructure
 from application.jobs.job_engine import JobEngine, classify_failure
+from application.jobs.portfolio_snapshot_job import handle_portfolio_snapshot
+from application.jobs.price_ingestion_job import handle_price_ingestion
 from application.schedulers.planner import SchedulerPlanner
 from infrastructure.repositories.scheduler_repository import SchedulerRepository
 
@@ -44,6 +46,11 @@ from application.schedulers.super_investors_scheduler import SuperInvestorsRefre
 from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
 from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
 from application.schedulers.aggregation_scheduler import AggregationScheduler
+from application.schedulers.portfolio_snapshot_scheduler import PortfolioSnapshotScheduler
+from application.schedulers.price_ingestion_scheduler import PriceIngestionScheduler
+
+# Event projection handler
+from services.event_projection_handler import EventProjectionHandler
 
 # Providers & Repos
 from providers.defeat_beta_provider import DefeatBetaProvider
@@ -202,6 +209,8 @@ async def main():
     engine.register_handler("company_refresh", handle_company_refresh)
     engine.register_handler("investor_refresh", handle_investor_refresh)
     engine.register_handler("aggregation_refresh", handle_aggregation_refresh)
+    engine.register_handler("portfolio_snapshot", handle_portfolio_snapshot)
+    engine.register_handler("price_ingestion", handle_price_ingestion)
 
     # 2. Planner
     planner = SchedulerPlanner()
@@ -247,6 +256,19 @@ async def main():
     else:
         logger.info("Earnings scheduler disabled")
 
+    # Portfolio Snapshots (daily at 23:00 UTC)
+    if getattr(settings, "ENABLE_PORTFOLIO_SNAPSHOT_SCHEDULER", True):
+        ps_scheduler = PortfolioSnapshotScheduler()
+        planner.register(
+            name="portfolio_snapshot",
+            plan_fn=ps_scheduler.plan,
+            interval_hours=ps_scheduler.interval_hours,
+            enabled=True,
+        )
+        logger.info("Registered portfolio_snapshot planner (interval=%dh)", ps_scheduler.interval_hours)
+    else:
+        logger.info("Portfolio Snapshot scheduler disabled")
+
     # Aggregation (every 24h)
     if getattr(settings, "ENABLE_AGGREGATION_SCHEDULER", True):
         agg_scheduler = AggregationScheduler()
@@ -259,6 +281,19 @@ async def main():
         logger.info("Registered aggregation planner (interval=%dh)", agg_scheduler.interval_hours)
     else:
         logger.info("Aggregation scheduler disabled")
+
+    # Price Ingestion (market-hours-aware, every 5-30 min)
+    if getattr(settings, "ENABLE_PRICE_INGESTION_SCHEDULER", True):
+        pi_scheduler = PriceIngestionScheduler()
+        planner.register(
+            name="price_ingestion",
+            plan_fn=pi_scheduler.plan,
+            interval_minutes=1,
+            enabled=True,
+        )
+        logger.info("Registered price_ingestion planner (market-hours-aware)")
+    else:
+        logger.info("Price Ingestion scheduler disabled")
 
     # ── Launch all loops ───────────────────────────────────────────────────
 
@@ -274,9 +309,13 @@ async def main():
         planner.run_janitor_loop(),
         name="janitor",
     )
+    projection_task = asyncio.create_task(
+        EventProjectionHandler().start_polling(interval_ms=1000),
+        name="event_projection",
+    )
 
     logger.info("=" * 60)
-    logger.info("Worker running — planner + 5 workers + janitor")
+    logger.info("Worker running — planner + 5 workers + janitor + event projection")
     logger.info("=" * 60)
 
     # ── Heartbeat loop ─────────────────────────────────────────────────────
@@ -308,6 +347,7 @@ async def main():
     # 1. Stop planner (no more enqueueing)
     planner_task.cancel()
     janitor_task.cancel()
+    projection_task.cancel()
 
     # 2. Stop heartbeat
     heartbeat_task.cancel()
@@ -318,6 +358,7 @@ async def main():
     await asyncio.gather(
         planner_task,
         janitor_task,
+        projection_task,
         heartbeat_task,
         worker_pool_task,
         return_exceptions=True,

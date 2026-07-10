@@ -31,3 +31,8 @@ export const fetchCurrentUser = async (): Promise<User> => {
   const response = await api.get('/users/me');
   return response.data;
 };
+
+export const updateUserProfile = async (updates: Partial<Pick<User, 'first_name' | 'last_name' | 'avatar_url' | 'username' | 'preferred_currency'>>): Promise<User> => {
+  const response = await api.patch('/users/me', updates);
+  return response.data;
+};

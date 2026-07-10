@@ -26,7 +26,7 @@ vi.mock("@/components/ui/skeleton", () => ({
 vi.mock("lucide-react", () => {
     const React = require("react");
     const mkIcon = () => () => React.createElement("svg", { "data-testid": "icon" });
-    return { TrendingUp: mkIcon(), TrendingDown: mkIcon(), DollarSign: mkIcon() };
+    return { TrendingUp: mkIcon(), TrendingDown: mkIcon(), DollarSign: mkIcon(), Wallet: mkIcon() };
 });
 
 vi.mock("recharts", () => {

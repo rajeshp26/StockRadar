@@ -83,7 +83,7 @@ describe("DividendsTab", () => {
 
     it("renders upcoming ex-dates section", () => {
         render(<DividendsTab accountIds={[1]} />);
-        expect(screen.getByText("Upcoming Ex-Dates")).toBeInTheDocument();
+        expect(screen.getByText("Ex-Dates Calendar")).toBeInTheDocument();
         expect(screen.getAllByText("AAPL").length).toBeGreaterThanOrEqual(1);
     });
 

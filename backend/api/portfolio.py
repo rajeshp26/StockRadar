@@ -9,13 +9,15 @@ Endpoints for portfolio management:
 - Query dividends
 """
 
+import asyncio
 import base64
 import json
 import logging
 import time
 import uuid
+from collections import defaultdict
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -39,6 +41,7 @@ from schemas_portfolio import (
     ManualTransactionRequest,
     ManualTransactionResponse,
     PerformanceResponse,
+    PerformanceBatchResponse,
     BenchmarkListResponse,
     BenchmarkCompareResponse,
     PortfolioAllocationResponse,
@@ -119,6 +122,141 @@ def _parse_account_ids(raw: Optional[str]) -> Optional[List[int]]:
     return [int(x) for x in raw.split(",") if x.strip()]
 
 
+async def _get_dashboard_from_prices(db_user_id: int) -> dict:
+    repo = PortfolioRepository()
+
+    all_holdings = repo.get_user_all_holdings(db_user_id)
+
+    if not all_holdings:
+        return {"accounts": [], "holdings": [], "overview": {}, "data_quality_flag": "OK"}
+
+    cids = list(set(h["company_id"] for h in all_holdings if h.get("company_id")))
+    price_details = {}
+    if cids:
+        try:
+            cmr = (
+                supabase.table("current_market_data")
+                .select("company_id, current_price")
+                .in_("company_id", cids)
+                .execute()
+            )
+            for row in cmr.data or []:
+                cid = row["company_id"]
+                px = row.get("current_price")
+                if px is not None:
+                    price_details[cid] = {"price": float(px), "fetched_at": now_utc(), "ttl_seconds": 86400}
+        except Exception:
+            pass
+
+    accounts = repo.get_user_accounts(db_user_id, active_only=True)
+    account_ids = [a["account_id"] for a in accounts]
+
+    if not account_ids:
+        return {"accounts": [], "holdings": [], "overview": {}, "data_quality_flag": "OK"}
+
+    any_stale = False
+    for h in all_holdings:
+        cid = h.get("company_id")
+        pd = price_details.get(cid) if cid else None
+        if pd is not None and pd["price"] is not None:
+            h["current_price"] = pd["price"]
+            qty = h.get("quantity", 0) or 0
+            h["current_value"] = pd["price"] * qty
+            age = (now_utc() - pd["fetched_at"]).total_seconds() if pd["fetched_at"] else float("inf")
+            h["price_age_seconds"] = age
+            h["data_quality"] = "OK" if age <= pd["ttl_seconds"] else "STALE_PRICE"
+            if h["data_quality"] == "STALE_PRICE":
+                any_stale = True
+        else:
+            h["current_price"] = float(h.get("average_cost") or 0)
+            h["current_value"] = float(h.get("total_cost") or 0)
+            h["price_age_seconds"] = None
+            h["data_quality"] = "MISSING"
+        h["unrealized_gain_loss"] = h["current_value"] - float(h.get("total_cost", 0))
+        h["unrealized_gain_loss_pct"] = (
+            (h["unrealized_gain_loss"] / float(h.get("total_cost", 0)) * 100)
+            if float(h.get("total_cost", 0)) > 0 else 0.0
+        )
+
+    enriched_accounts = []
+    for acc in accounts:
+        acc_holdings = [h for h in all_holdings if h.get("account_id") == acc["account_id"]]
+        acc_total_value = float(sum(h.get("current_value") or 0 for h in acc_holdings))
+        acc_total_cost = float(sum(h.get("total_cost") or 0 for h in acc_holdings))
+        acc_gain_loss = acc_total_value - acc_total_cost
+        acc_gain_loss_pct = (acc_gain_loss / acc_total_cost * 100) if acc_total_cost > 0 else 0.0
+        enriched_accounts.append({
+            "account_id": acc["account_id"],
+            "account_name": acc["account_name"],
+            "account_type": acc["account_type"],
+            "brokerage_name": acc.get("portfolio_brokerages", {}).get("brokerage_name"),
+            "currency": acc["currency"],
+            "holdings_count": len(acc_holdings),
+            "total_value": acc_total_value,
+            "total_cost": acc_total_cost,
+            "gain_loss": round(acc_gain_loss, 2),
+            "gain_loss_pct": round(acc_gain_loss_pct, 2),
+            "value_currency": "USD",
+        })
+
+    current_year = now_utc().year
+    all_divs = repo.get_accounts_dividends_by_year(account_ids, current_year)
+    ytd_dividends = sum(float(d.get("amount") or 0) for d in all_divs)
+    overview = _compute_overview_from_holdings(all_holdings, accounts, db_user_id, ytd_dividends)
+
+    holdings_summary = [{
+        "company_id": h.get("company_id"),
+        "symbol": h["symbol"],
+        "company_name": h.get("company_name"),
+        "quantity": float(h.get("quantity") or 0),
+        "current_price": float(h.get("current_price") or 0),
+        "current_value": float(h.get("current_value") or 0),
+        "total_cost": float(h.get("total_cost") or 0),
+        "unrealized_gain_loss": float(h.get("unrealized_gain_loss") or 0),
+        "unrealized_gain_loss_pct": float(h.get("unrealized_gain_loss_pct") or 0),
+    } for h in all_holdings]
+
+    return {
+        "accounts": enriched_accounts,
+        "holdings": holdings_summary,
+        "overview": overview | {"value_currency": "USD"},
+        "data_quality_flag": "STALE_PRICE" if any_stale else "OK",
+    }
+
+
+def _log_comparison(old: dict, new: dict):
+    old_value = sum(h.get("current_value", 0) for h in old.get("holdings", []))
+    new_value = sum(h.get("current_value", 0) for h in new.get("holdings", []))
+    value_diff = abs(old_value - new_value) / max(old_value, 1) * 100
+    old_by_cid = {h["company_id"]: h["current_price"]
+                  for h in old.get("holdings", []) if h.get("company_id")}
+    new_by_cid = {h["company_id"]: h["current_price"]
+                  for h in new.get("holdings", []) if h.get("company_id")}
+    mismatches = []
+    for cid in set(old_by_cid) | set(new_by_cid):
+        op = old_by_cid.get(cid)
+        np = new_by_cid.get(cid)
+        if op and np and abs(op - np) / max(op, np) > 0.01:
+            mismatches.append(f"company={cid} old={op} new={np}")
+    logger.info(
+        "[SHADOW] old_value=%.2f new_value=%.2f diff=%.2f%%",
+        old_value, new_value, value_diff,
+    )
+    if mismatches:
+        logger.error("[SHADOW] PRICE MISMATCH: %s", "; ".join(mismatches[:5]))
+
+
+def _get_user_preferred_currency(auth_id: str) -> str:
+    """Fetch the user's preferred_currency from the DB. Defaults to 'USD'."""
+    try:
+        result = supabase.table("users").select("preferred_currency").eq("auth_id", auth_id).maybe_single().execute()
+        if result.data and result.data.get("preferred_currency"):
+            return result.data["preferred_currency"]
+    except Exception:
+        logger.warning("Failed to fetch preferred_currency for auth_id %s; falling back to USD", auth_id)
+    return "USD"
+
+
 def _compute_overview_from_holdings(
     all_holdings: List[dict],
     accounts: List[dict],
@@ -195,30 +333,58 @@ async def list_accounts(
     request: Request,
     user: dict = Depends(get_current_user_dep),
 ) -> ListAccountsResponse:
-    """
-    List all portfolio accounts for the authenticated user.
-    
-    Returns account metadata with holdings count and total value per account.
-    """
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         repo = PortfolioRepository()
-        service = _get_portfolio_service()
+
         accounts = repo.get_user_accounts(db_user_id, active_only=True)
-        
-        # Enrich with holdings count and value
+        account_ids = [a["account_id"] for a in accounts]
+
+        if not account_ids:
+            return ListAccountsResponse(accounts=[])
+
+        all_holdings = repo.get_holdings_for_accounts(account_ids)
+        holdings_by_account: Dict[int, List] = defaultdict(list)
+        for h in all_holdings:
+            holdings_by_account[h["account_id"]].append(h)
+
+        cids = list(set(h["company_id"] for h in all_holdings if h.get("company_id")))
+        prices = {}
+        if cids:
+            try:
+                cmr = (
+                    supabase.table("current_market_data")
+                    .select("company_id, current_price")
+                    .in_("company_id", cids)
+                    .execute()
+                )
+                for row in cmr.data or []:
+                    cid = row["company_id"]
+                    px = row.get("current_price")
+                    if px is not None:
+                        prices[cid] = float(px)
+            except Exception:
+                pass
+
         enriched_accounts = []
         for acc in accounts:
-            holdings = await service.enrich_holdings_with_prices(
-                repo.get_account_holdings(acc["account_id"])
-            )
-            total_value = sum(h.get("current_value") or 0 for h in holdings)
-            total_cost = sum(h.get("total_cost") or 0 for h in holdings)
-            
+            acc_holdings = holdings_by_account.get(acc["account_id"], [])
+            for h in acc_holdings:
+                cid = h.get("company_id")
+                price = prices.get(cid)
+                if price is not None:
+                    h["current_price"] = price
+                    h["current_value"] = price * (h.get("quantity", 0) or 0)
+                else:
+                    h["current_price"] = float(h.get("average_cost") or 0)
+                    h["current_value"] = float(h.get("total_cost") or 0)
+
+            total_value = sum(h.get("current_value") or 0 for h in acc_holdings)
+            total_cost = sum(h.get("total_cost") or 0 for h in acc_holdings)
             brokerage_info = acc.get("portfolio_brokerages", {})
-            
+
             enriched_accounts.append({
                 "account_id": acc["account_id"],
                 "account_name": acc["account_name"],
@@ -230,21 +396,22 @@ async def list_accounts(
                 "is_active": acc["is_active"],
                 "created_at": acc["created_at"],
                 "last_import_at": acc.get("last_import_at"),
-                "holdings_count": len(holdings),
-                "total_value": float(total_value),
-                "total_cost": float(total_cost),
+                "holdings_count": len(acc_holdings),
+                "total_value": round(float(total_value), 2),
+                "total_cost": round(float(total_cost), 2),
+                "total_gain_loss": round(float(total_value) - float(total_cost), 2),
+                "total_gain_loss_pct": round(
+                    ((float(total_value) - float(total_cost)) / float(total_cost) * 100)
+                    if float(total_cost) > 0 else 0.0, 2
+                ),
             })
-        
+
         return ListAccountsResponse(accounts=enriched_accounts)
-    
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"List accounts failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to list accounts",
-        )
+        logger.error(f"List accounts failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/portfolio/dashboard", tags=["Portfolio"], status_code=200)
@@ -253,81 +420,20 @@ async def get_portfolio_dashboard(
     request: Request,
     user: dict = Depends(get_current_user_dep),
 ) -> PortfolioDashboardResponse:
-    """
-    Portfolio Dashboard View Model — single enrichment pass.
-    Returns accounts, overview, and holdings in one response.
-
-    Feature-flagged: only available when ENABLE_PORTFOLIO_DASHBOARD is true.
-    """
     if not settings.ENABLE_PORTFOLIO_DASHBOARD:
         raise HTTPException(status_code=404, detail="Dashboard endpoint not available")
 
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-
-        repo = PortfolioRepository()
-        service = _get_portfolio_service()
-
-        timer = RouteTimer(endpoint="get_portfolio_dashboard", user_id=db_user_id)
-
-        with timer:
-            # Single holdings fetch — reused for accounts + overview
-            accounts = repo.get_user_accounts(db_user_id, active_only=True)
-            account_ids = [a["account_id"] for a in accounts]
-            all_holdings = await service.enrich_holdings_with_prices(
-                repo.get_user_all_holdings(db_user_id)
-            ) if account_ids else []
-
-            timer.account_count = len(accounts)
-            timer.holdings_count = len(all_holdings)
-
-            # Build enriched accounts (using the SAME all_holdings data)
-            enriched_accounts = []
-            for acc in accounts:
-                acc_holdings = [h for h in all_holdings if h.get("account_id") == acc["account_id"]]
-                enriched_accounts.append({
-                    "account_id": acc["account_id"],
-                    "account_name": acc["account_name"],
-                    "account_type": acc["account_type"],
-                    "brokerage_name": acc.get("portfolio_brokerages", {}).get("brokerage_name"),
-                    "currency": acc["currency"],
-                    "holdings_count": len(acc_holdings),
-                    "total_value": float(sum(h.get("current_value") or 0 for h in acc_holdings)),
-                })
-
-            # Batched dividend query feeds into overview
-            from datetime import date as dt_date
-            current_year = dt_date.today().year
-            all_divs = repo.get_accounts_dividends_by_year(account_ids, current_year)
-            ytd_dividends = sum(float(d.get("amount") or 0) for d in all_divs)
-
-            overview = _compute_overview_from_holdings(
-                all_holdings, accounts, db_user_id, ytd_dividends
-            )
-
-            # Holdings: only fields needed for the initial holdings table display
-            holdings_summary = [{
-                "symbol": h["symbol"],
-                "company_name": h.get("company_name"),
-                "quantity": float(h.get("quantity") or 0),
-                "current_price": float(h.get("current_price") or 0),
-                "current_value": float(h.get("current_value") or 0),
-                "total_cost": float(h.get("total_cost") or 0),
-                "unrealized_gain_loss": float(h.get("unrealized_gain_loss") or 0),
-                "unrealized_gain_loss_pct": float(h.get("unrealized_gain_loss_pct") or 0),
-            } for h in all_holdings]
-
-            return PortfolioDashboardResponse(
-                accounts=[DashboardAccount(**a) for a in enriched_accounts],
-                overview=DashboardOverview(**{
-                    k: v for k, v in overview.items() if k in (
-                        "total_value", "total_cost_basis", "total_gain_loss",
-                        "total_gain_loss_pct", "ytd_dividends", "holdings_count", "accounts_count",
-                    )
-                }),
-                holdings=[DashboardHolding(**h) for h in holdings_summary],
-            )
+        result = await _get_dashboard_from_prices(db_user_id)
+        overview = DashboardOverview(**result["overview"])
+        resp = PortfolioDashboardResponse(
+            accounts=[DashboardAccount(**a) for a in result["accounts"]],
+            overview=overview,
+            holdings=[DashboardHolding(**h) for h in result["holdings"]],
+        )
+        return resp
     except HTTPException:
         raise
     except Exception as e:
@@ -530,44 +636,61 @@ async def get_account_holdings(
     account_id: int,
     user: dict = Depends(get_current_user_dep),
 ) -> AccountHoldingsResponse:
-    """
-    Get all holdings for a specific account.
-    
-    Returns current positions with:
-    - Quantity, average cost, total cost
-    - Current price and value (from current_market_data)
-    - Unrealized gain/loss
-    - Realized gain/loss (from closed positions)
-    """
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         repo = PortfolioRepository()
         account = repo.get_account_by_id(account_id)
-        
+
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
-        
-        # Verify ownership
+
         if account["user_id"] != db_user_id:
             raise HTTPException(
                 status_code=403,
                 detail="You do not own this account",
             )
-        
-        # Get holdings enriched with computed prices
-        service = _get_portfolio_service()
-        holdings = await service.enrich_holdings_with_prices(
-            repo.get_account_holdings(account_id)
-        )
-        
+
+        holdings = repo.get_account_holdings(account_id)
+
+        cids = list(set(h["company_id"] for h in holdings if h.get("company_id")))
+        prices = {}
+        if cids:
+            try:
+                cmr = supabase.table("current_market_data").select("company_id, current_price").in_("company_id", cids).execute()
+                for row in cmr.data or []:
+                    cid = row["company_id"]
+                    px = row.get("current_price")
+                    if px is not None:
+                        prices[cid] = float(px)
+            except Exception:
+                pass
+
+        for h in holdings:
+            cid = h.get("company_id")
+            price = prices.get(cid)
+            qty = h.get("quantity", 0) or 0
+            total_cost = h.get("total_cost", 0) or 0
+            avg_cost = h.get("average_cost", 0) or 0
+            if price is not None:
+                h["current_price"] = price
+                h["current_value"] = price * qty
+            else:
+                h["current_price"] = float(avg_cost) if avg_cost else 0.0
+                h["current_value"] = float(total_cost) if total_cost else 0.0
+            h["unrealized_gain_loss"] = h["current_value"] - float(total_cost)
+            h["unrealized_gain_loss_pct"] = (
+                (h["unrealized_gain_loss"] / float(total_cost) * 100)
+                if float(total_cost) > 0 else 0.0
+            )
+
         return AccountHoldingsResponse(
             account_id=account_id,
             account_name=account["account_name"],
             holdings=holdings,
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -585,27 +708,51 @@ async def get_all_holdings(
     user: dict = Depends(get_current_user_dep),
     aggregated: bool = Query(False, description="Group by symbol, aggregate quantities across accounts"),
 ):
-    """
-    Get all holdings across all user accounts.
-
-    When ``aggregated=true``, holdings with the same symbol across multiple
-    accounts are combined into a single row with weighted average cost,
-    total quantity, and a per-account breakdown.
-    """
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
         repo = PortfolioRepository()
-        service = _get_portfolio_service()
-        holdings = await service.enrich_holdings_with_prices(
-            repo.get_user_all_holdings(db_user_id)
-        )
+        accounts = repo.get_user_accounts(db_user_id, active_only=True)
+        all_holdings = repo.get_user_all_holdings(db_user_id)
+
+        cids = list(set(h["company_id"] for h in all_holdings if h.get("company_id")))
+        prices = {}
+        if cids:
+            try:
+                cmr = supabase.table("current_market_data").select("company_id, current_price").in_("company_id", cids).execute()
+                for row in cmr.data or []:
+                    cid = row["company_id"]
+                    px = row.get("current_price")
+                    if px is not None:
+                        prices[cid] = float(px)
+            except Exception:
+                pass
+
+        for h in all_holdings:
+            cid = h.get("company_id")
+            price = prices.get(cid)
+            qty = h.get("quantity", 0) or 0
+            total_cost = h.get("total_cost", 0) or 0
+            avg_cost = h.get("average_cost", 0) or 0
+            if price is not None:
+                h["current_price"] = price
+                h["current_value"] = price * qty
+            else:
+                h["current_price"] = float(avg_cost) if avg_cost else 0.0
+                h["current_value"] = float(total_cost) if total_cost else 0.0
+            h["unrealized_gain_loss"] = h["current_value"] - float(total_cost)
+            h["unrealized_gain_loss_pct"] = (
+                (h["unrealized_gain_loss"] / float(total_cost) * 100)
+                if float(total_cost) > 0 else 0.0
+            )
 
         if aggregated:
-            holdings = service.aggregate_holdings(holdings)
+            service = _get_portfolio_service()
+            holdings = service.aggregate_holdings(all_holdings)
+            return {"holdings": holdings}
 
-        return {"holdings": holdings}
+        return {"holdings": all_holdings}
 
     except HTTPException:
         raise
@@ -650,7 +797,10 @@ async def get_portfolio_overview(
         service = _get_portfolio_service()
 
         ids_param = [account_id] if account_id else None
-        overview = await service.get_user_portfolio_overview(db_user_id, account_ids=ids_param)
+        preferred_currency = _get_user_preferred_currency(auth_id)
+        overview = await service.get_user_portfolio_overview(
+            db_user_id, account_ids=ids_param, display_currency=preferred_currency,
+        )
         
         if not overview.get("success"):
             return PortfolioOverviewResponse(
@@ -1432,7 +1582,9 @@ async def get_portfolio_performance(
         parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
 
         service = _get_portfolio_service()
-        result = await service.get_portfolio_performance(db_user_id, period, parsed_ids)
+        timer = RouteTimer(endpoint="get_portfolio_performance", user_id=db_user_id)
+        with timer:
+            result = await service.get_portfolio_performance(db_user_id, period, parsed_ids)
 
         if not result.get("success"):
             return PerformanceResponse(
@@ -1443,6 +1595,14 @@ async def get_portfolio_performance(
                 total_return_pct=0,
                 error=result.get("error"),
             )
+
+        snaps = result.get("snapshots", [])
+        if snaps:
+            logger.info("[PERF_DEBUG] period=%s source=%s rows=%d ret=%.2f%% -----BEGIN ALL ROWS-----",
+                        period, result.get("data_source","?"), len(snaps), result.get("total_return_pct",0))
+            for s in snaps:
+                logger.info("[PERF_DEBUG]   date=%s V=%.2f ND=%.2f", s["date"], s["value"], s.get("net_deposits",0))
+            logger.info("[PERF_DEBUG] -----END ALL ROWS-----")
 
         return PerformanceResponse(**result)
 
@@ -1480,7 +1640,9 @@ async def get_performance_compare(
         parsed_ids = [int(x) for x in account_ids.split(",") if x.strip()] if account_ids else None
 
         service = _get_portfolio_service()
-        result = await service.get_performance_compare(db_user_id, period, benchmark_symbols, parsed_ids)
+        timer = RouteTimer(endpoint="get_performance_compare", user_id=db_user_id)
+        with timer:
+            result = await service.get_performance_compare(db_user_id, period, benchmark_symbols, parsed_ids)
 
         return BenchmarkCompareResponse(**result)
 
@@ -1491,6 +1653,54 @@ async def get_performance_compare(
         raise HTTPException(
             status_code=500,
             detail="Failed to compare performance",
+        )
+
+
+@router.post("/portfolio/performance/batch", tags=["Portfolio"], status_code=200)
+@limiter.limit("60/minute")
+async def get_portfolio_performance_batch(
+    request: Request,
+    body: Dict[str, Any],
+    user: dict = Depends(get_current_user_dep),
+) -> PerformanceBatchResponse:
+    """
+    Batch fetch portfolio performance for multiple periods in a single request.
+
+    Body:
+    ```json
+    {
+      "account_ids": [1, 4, 9],
+      "periods": ["1M", "3M", "1Y", "5Y", "ALL"]
+    }
+    ```
+    Returns a map of period → performance response.
+    """
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+
+        account_ids: Optional[List[int]] = body.get("account_ids")
+        periods: List[str] = body.get("periods", ["1Y"])
+
+        if account_ids is not None and not isinstance(account_ids, list):
+            raise HTTPException(status_code=422, detail="account_ids must be a list of integers")
+
+        service = _get_portfolio_service()
+        results: Dict[str, Any] = {}
+
+        for period in periods:
+            result = await service.get_portfolio_performance(db_user_id, period, account_ids)
+            results[period] = PerformanceResponse(**result) if result.get("success") else None
+
+        return PerformanceBatchResponse(success=True, results=results)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch performance failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch batch performance",
         )
 
 
@@ -1549,7 +1759,9 @@ async def list_benchmarks(
     """
     try:
         service = _get_portfolio_service()
-        benchmarks = await service.get_benchmarks()
+        timer = RouteTimer(endpoint="list_benchmarks", user_id=0)
+        with timer:
+            benchmarks = await service.get_benchmarks()
 
         return BenchmarkListResponse(
             success=True,

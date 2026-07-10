@@ -16,6 +16,11 @@ def mock_alloc_repo():
         {"account_id": 2, "account_name": "RRSP", "account_type": "RRSP", "brokerage_name": "Test", "is_active": True},
         {"account_id": 3, "account_name": "Non-reg", "account_type": "Non-registered", "brokerage_name": "Test", "is_active": True},
     ]
+    repo.get_user_all_holdings.return_value = [
+        {"company_id": 1, "symbol": "AAPL", "sector": "Technology", "security_type": "stock", "total_cost": 8000, "account_id": 1, "account_name": "TFSA", "shares": 10, "currency": "USD", "quantity": 10},
+        {"company_id": 2, "symbol": "GOOGL", "sector": "Technology", "security_type": "stock", "total_cost": 6500, "account_id": 1, "account_name": "TFSA", "shares": 5, "currency": "USD", "quantity": 5},
+        {"company_id": 3, "symbol": "XOM", "sector": "Energy", "security_type": "stock", "total_cost": 5500, "account_id": 1, "account_name": "TFSA", "shares": 20, "currency": "USD", "quantity": 20},
+    ]
     return repo
 
 

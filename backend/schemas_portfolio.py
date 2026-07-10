@@ -114,6 +114,7 @@ class AccountBreakdown(BaseModel):
     total_cost: float
     gain_loss: float
     gain_loss_pct: float
+    value_currency: Optional[str] = None
 
 
 class PortfolioOverviewResponse(BaseModel):
@@ -129,6 +130,7 @@ class PortfolioOverviewResponse(BaseModel):
     accounts_count: int
     top_holdings: List[Dict[str, Any]]
     account_breakdown: List[AccountBreakdown]
+    value_currency: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -285,6 +287,8 @@ class PerformanceSnapshot(BaseModel):
     value: float
     cost_basis: float
     net_deposits: float = 0.0
+    cash_balance: Optional[float] = None
+    holdings: Optional[List[Dict[str, Any]]] = None
 
 
 class PerformanceResponse(BaseModel):
@@ -295,9 +299,22 @@ class PerformanceResponse(BaseModel):
     snapshots: List[PerformanceSnapshot]
     total_return: float
     total_return_pct: float
+    twr_pct: float = 0.0
+    mwr_pct: float = 0.0
+    cagr_pct: float = 0.0
     best_day: Optional[Dict[str, Any]] = None
     worst_day: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    data_source: Optional[str] = None
+    data_quality_flag: Optional[str] = None
+    return_methodology: Optional[str] = None
+
+
+class PerformanceBatchResponse(BaseModel):
+    """Batch portfolio performance response with multiple periods."""
+
+    success: bool
+    results: Dict[str, Optional[PerformanceResponse]]
 
 
 class BenchmarkInfo(BaseModel):
@@ -797,6 +814,10 @@ class DashboardAccount(BaseModel):
     currency: str
     holdings_count: int
     total_value: float
+    total_cost: float
+    gain_loss: float
+    gain_loss_pct: float
+    value_currency: Optional[str] = None
 
 
 class DashboardOverview(BaseModel):
@@ -808,10 +829,12 @@ class DashboardOverview(BaseModel):
     ytd_dividends: float
     holdings_count: int
     accounts_count: int
+    value_currency: Optional[str] = None
 
 
 class DashboardHolding(BaseModel):
     """Holding entry in the portfolio dashboard bundle."""
+    company_id: Optional[int] = None
     symbol: str
     company_name: Optional[str] = None
     quantity: float
@@ -820,6 +843,7 @@ class DashboardHolding(BaseModel):
     total_cost: float
     unrealized_gain_loss: float
     unrealized_gain_loss_pct: float
+    value_currency: Optional[str] = None
 
 
 class PortfolioDashboardResponse(BaseModel):

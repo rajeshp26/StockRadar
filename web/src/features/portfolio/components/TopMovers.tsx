@@ -25,7 +25,7 @@ export function TopMovers({ holdings, limit = 7 }: TopMoversProps) {
         const pct = holding.unrealized_gain_loss_pct ?? 0;
         return (
             <div
-                key={holding.symbol}
+                key={holding.company_id}
                 data-testid="mover-row"
                 className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-white/5 transition-colors"
             >

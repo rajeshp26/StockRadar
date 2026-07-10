@@ -1416,3 +1416,102 @@ class SupabaseFinancialRepository:
                 "[UPCOMING_DIV] Failed to cleanup stale events for company_id=%s: %s",
                 company_id, e,
             )
+
+    # ========================================================================
+    # PORTFOLIO SNAPSHOT PRICE METHODS
+    # ========================================================================
+
+    def _get_split_factors(
+        self, company_ids: List[int]
+    ) -> Dict[int, List[tuple]]:
+        factors: Dict[int, List[tuple]] = {}
+        if not company_ids:
+            return factors
+        try:
+            res = (
+                self.client.table("splits")
+                .select("company_id, report_date, split_factor")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            for row in res.data or []:
+                cid = row["company_id"]
+                sd = row["report_date"]
+                if isinstance(sd, str):
+                    sd = date.fromisoformat(sd)
+                elif isinstance(sd, datetime):
+                    sd = sd.date()
+                sf = (row.get("split_factor") or "1:1")
+                parts = sf.split(":")
+                if len(parts) == 2:
+                    try:
+                        to_val = float(parts[0])
+                        from_val = float(parts[1])
+                        if from_val > 0:
+                            adj = to_val / from_val
+                            factors.setdefault(cid, []).append((sd, adj))
+                    except (ValueError, ZeroDivisionError):
+                        continue
+            for cid in factors:
+                factors[cid].sort(key=lambda x: x[0])
+        except Exception as e:
+            logger.error(f"Failed to fetch split factors: {e}")
+        return factors
+
+    async def get_latest_prices(
+        self, company_ids: List[int], target_date: date
+    ) -> Dict[int, Dict]:
+        if not company_ids:
+            return {}
+
+        split_factors = self._get_split_factors(company_ids)
+
+        result = (
+            self.client.table("price_history")
+            .select("company_id, price_date, close_price")
+            .in_("company_id", company_ids)
+            .lte("price_date", target_date.isoformat())
+            .execute()
+        )
+
+        latest_by_company: Dict[int, Dict] = {}
+        for row in result.data or []:
+            cid = row["company_id"]
+            pd = row["price_date"]
+            if isinstance(pd, str):
+                pd = date.fromisoformat(pd)
+            elif isinstance(pd, datetime):
+                pd = pd.date()
+
+            existing = latest_by_company.get(cid)
+            if existing is None or pd > existing["price_date"]:
+                px = float(row["close_price"])
+                if cid in split_factors:
+                    cumulative_factor = 1.0
+                    for sd, adj in split_factors[cid]:
+                        if pd < sd:
+                            cumulative_factor *= adj
+                    px *= cumulative_factor
+                latest_by_company[cid] = {
+                    "price": px,
+                    "price_date": pd,
+                }
+
+        # Fall back to current_market_data for companies not in price_history
+        missing = [cid for cid in company_ids if cid not in latest_by_company]
+        if missing:
+            cmr = (
+                self.client.table("current_market_data")
+                .select("company_id, current_price")
+                .in_("company_id", missing)
+                .execute()
+            )
+            for row in cmr.data or []:
+                cid = row["company_id"]
+                px = float(row["current_price"])
+                latest_by_company[cid] = {
+                    "price": px,
+                    "price_date": target_date,
+                }
+
+        return latest_by_company

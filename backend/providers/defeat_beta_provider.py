@@ -450,39 +450,50 @@ class DefeatBetaProvider(StockDataProvider):
         exchange: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Primary DBeta -> fallback YF (with optional date filters).
-        Dates are applied client-side after provider retrieval to ensure compatibility.
+        Priority: YFinance (primary) → DefeatBeta (last resort).
+        Dates are applied client-side after provider retrieval.
         """
-        rows = await self.fetch_price_history(symbol, company_id, start_date=start_date, end_date=end_date, exchange=exchange)
-        if rows:
-            return rows
-
-        # yfinance fallback
+        # ── Primary: YFinance (full daily OHLCV, reliable) ──
         if self.yfinance_provider:
-            df = await asyncio.to_thread(self.yfinance_provider.get_price_history_df, symbol, exchange)
-            if df is not None and not df.empty:
-                # apply date filters on df if provided
-                df = df.copy()
-                if start_date is not None:
-                    df = df[df["price_date"] >= pd.Timestamp(start_date)]
-                if end_date is not None:
-                    df = df[df["price_date"] <= pd.Timestamp(end_date)]
-                out: List[Dict[str, Any]] = []
-                for _, r in df.iterrows():
-                    dt = pd.to_datetime(str(r.get("price_date")), errors='coerce')
-                    if pd.isna(dt):
-                        continue
-                    out.append({
-                        "company_id": company_id,
-                        "price_date": dt.date(),
-                        "open_price": self._safe_decimal(r.get("open_price")),
-                        "close_price": self._safe_decimal(r.get("close_price")),
-                        "high_price": self._safe_decimal(r.get("high_price")),
-                        "low_price": self._safe_decimal(r.get("low_price")),
-                        "volume": int(r.get("volume")) if pd.notna(r.get("volume")) else None,
-                        "data_source": "yfinance",
-                    })
-                return out
+            try:
+                df = await asyncio.to_thread(self.yfinance_provider.get_price_history_df, symbol, exchange)
+                if df is not None and not df.empty:
+                    df = df.copy()
+                    if start_date is not None:
+                        df = df[df["price_date"] >= pd.Timestamp(start_date)]
+                    if end_date is not None:
+                        df = df[df["price_date"] <= pd.Timestamp(end_date)]
+                    out: List[Dict[str, Any]] = []
+                    for _, r in df.iterrows():
+                        dt = pd.to_datetime(str(r.get("price_date")), errors='coerce')
+                        if pd.isna(dt):
+                            continue
+                        out.append({
+                            "company_id": company_id,
+                            "price_date": dt.date(),
+                            "open_price": self._safe_decimal(r.get("open_price")),
+                            "close_price": self._safe_decimal(r.get("close_price")),
+                            "high_price": self._safe_decimal(r.get("high_price")),
+                            "low_price": self._safe_decimal(r.get("low_price")),
+                            "volume": int(r.get("volume")) if pd.notna(r.get("volume")) else None,
+                            "data_source": "yfinance",
+                        })
+                    if out:
+                        logger.info("[PRICE] YFinance returned %d rows for %s", len(out), symbol)
+                        return out
+            except Exception as e:
+                logger.warning("[PRICE] YFinance failed for %s: %s", symbol, e)
+
+        # ── Fallback: DefeatBeta (last resort) ──
+        try:
+            rows = await self.fetch_price_history(symbol, company_id, start_date=start_date, end_date=end_date, exchange=exchange)
+            if rows:
+                logger.info("[PRICE] DefeatBeta returned %d rows for %s", len(rows), symbol)
+                return rows
+        except Exception as e:
+            logger.warning("[PRICE] DefeatBeta failed for %s: %s", symbol, e)
+
+        logger.warning("[PRICE] All providers failed for %s", symbol)
         return []
 
     async def get_splits_optimized(

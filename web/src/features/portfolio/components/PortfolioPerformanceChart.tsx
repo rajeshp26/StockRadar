@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
     Area,
     XAxis,
@@ -29,7 +29,34 @@ export function PortfolioPerformanceChart() {
     const { data: benchmarks } = useBenchmarks();
     const { data: compareData, isLoading: compareLoading, isError: compareError } = useBenchmarkCompare(period, selectedBenchmarks, selectedAccountIds);
 
+    const loggedRef = useEffect((() => {
+        console.log('[PERF] PortfolioPerformanceChart mounted — fired accounts, performance, benchmarks requests');
+        return () => {};
+    }) as any, []);
+
+    useEffect(() => {
+        if (accounts) console.log(`[PERF] PortfolioPerformanceChart accounts received: ${accounts.length} accounts`);
+    }, [accounts]);
+
+    useEffect(() => {
+        if (perf && !perfLoading) {
+            const snaps = perf.snapshots ?? [];
+            console.log(`[PERF] performance_response period=${perf.period} source=${perf.dataSource} rows=${snaps.length} ret=${perf.totalReturnPct}%`);
+            snaps.forEach(s => console.log(`[PERF]   date=${s.date} V=${s.value} ND=${s.netDeposits}`));
+        }
+    }, [perf, perfLoading]);
+
+    useEffect(() => {
+        if (benchmarks) console.log(`[PERF] PortfolioPerformanceChart benchmarks received: ${benchmarks.length} benchmarks`);
+    }, [benchmarks]);
+
     const chartData = buildChartData(perf?.snapshots, compareData, selectedBenchmarks);
+    if (chartData.length > 0 && !perfLoading) {
+        console.log(`[PERF] chart_data period=${period} rows=${chartData.length}`);
+        chartData.forEach(d => console.log(`[PERF]   date=${d.date} V=${d.portfolio} ND=${d.netDeposits}`));
+    } else if (!perfLoading) {
+        console.log(`[PERF] chart_data period=${period} rows=0 (empty)`);
+    }
     const hasData = chartData.length > 1 && chartData.some((d) => (d.portfolio as number) > 0 || (d.netDeposits as number) > 0);
     const showBenchmarks = selectedBenchmarks.length > 0;
 
@@ -61,7 +88,7 @@ export function PortfolioPerformanceChart() {
     }
 
     return (
-        <div className="glass-panel p-6">
+        <div className="glass-panel p-6 overflow-visible">
             <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
                 <h3 className="text-sm font-black text-white/60 uppercase tracking-widest">
                     Portfolio Performance
