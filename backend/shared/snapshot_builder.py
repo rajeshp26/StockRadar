@@ -44,7 +44,7 @@ def _resolve_holding_price(
     snapshot_date: date,
     stale_threshold_days: int = 30,
     exchange_override: Optional[str] = None,
-) -> Tuple[Optional[Decimal], PriceTier]:
+) -> Tuple[Optional[Decimal], PriceTier, Optional[date]]:
     """4-tier price cascade.
     
     Tier 1 (CURRENT) only used if price_date is recent enough (<= stale_threshold_days old).
@@ -54,7 +54,7 @@ def _resolve_holding_price(
     and must be divided by CDR_RATIO (10) to get the correct CDR price.
     Tier 3 (cost_basis) is NOT adjusted — CDR purchase prices are already at actual CDR cost.
     
-    Returns (price, tier). Returns (None, UNAVAILABLE) if no price is usable.
+    Returns (price, tier, price_date). Returns (None, UNAVAILABLE, None) if no price is usable.
     """
     is_cdr = exchange_override == "TOR"
     # Tier 1: current market price — only for recent snapshots
@@ -72,19 +72,19 @@ def _resolve_holding_price(
                     price = Decimal(str(info["price"]))
                     if is_cdr:
                         price = price / CDR_RATIO
-                    return price, PriceTier.CURRENT
+                    return price, PriceTier.CURRENT, pd
             else:
                 # current price is from before or same as snapshot — safe to use
                 price = Decimal(str(info["price"]))
                 if is_cdr:
                     price = price / CDR_RATIO
-                return price, PriceTier.CURRENT
+                return price, PriceTier.CURRENT, pd
         else:
             # no price_date — use current price as best-effort
             price = Decimal(str(info["price"]))
             if is_cdr:
                 price = price / CDR_RATIO
-            return price, PriceTier.CURRENT
+            return price, PriceTier.CURRENT, None
 
     # Tier 2: forward-fill from price_history (most recent price <= snapshot_date)
     result = resolve_price_forward_filled(company_id, snapshot_date, price_history)
@@ -92,14 +92,21 @@ def _resolve_holding_price(
         price = Decimal(str(result["price"]))
         if is_cdr:
             price = price / CDR_RATIO
-        return price, PriceTier.FORWARD_FILL
+        result_date = result.get("price_date")
+        if isinstance(result_date, str):
+            result_date = date.fromisoformat(result_date)
+        elif isinstance(result_date, datetime):
+            result_date = result_date.date()
+        return price, PriceTier.FORWARD_FILL, result_date
 
-    # Tier 3: average_cost from holdings data (already at CDR cost — no adjustment needed)
-    if avg_cost is not None and avg_cost > 0:
-        return avg_cost, PriceTier.COST_BASIS
+    # Tier 3: average_cost as price proxy — DISABLED.
+    # Using cost basis as a price produces wildly incorrect values (e.g., TNXP
+    # cost $0.28 vs real price $13.91). Holdings without market prices are
+    # marked UNAVAILABLE and excluded from the snapshot value. The daily job
+    # will capture them once current_market_data has their prices.
 
     # Tier 4: unavailable — skip this holding entirely
-    return None, PriceTier.UNAVAILABLE
+    return None, PriceTier.UNAVAILABLE, None
 
 
 def _validate_snapshot(
@@ -229,7 +236,7 @@ def build_snapshot_row(
         # 4-tier price resolution
         avg_cost = Decimal(str(h.get("average_cost") or 0))
         exch_override = h.get("exchange_override")
-        current_price, tier = _resolve_holding_price(
+        current_price, tier, resolved_price_date = _resolve_holding_price(
             company_id=cid,
             symbol=h.get("symbol", ""),
             avg_cost=avg_cost if avg_cost > 0 else None,
@@ -294,7 +301,7 @@ def build_snapshot_row(
         total_market_value += current_value
         total_cost += cost
 
-        # Price age for quality flag
+        # Price age for quality flag — context-aware staleness
         price_info = prices_by_company.get(cid, {})
         price_date = price_info.get("price_date")
         if price_date is None and price_history:
@@ -305,9 +312,26 @@ def build_snapshot_row(
                     price_date = last_entry[0]
         price_age_days = (snapshot_date - price_date).days if isinstance(price_date, date) else None
 
-        pos_quality = TIER_QUALITY_MAP.get(tier, "OK")
-        if pos_quality == "OK" and price_age_days is not None and price_age_days > stale_threshold_days:
-            pos_quality = "STALE_PRICE"
+        # Quality flag: context-aware staleness
+        # - COST_BASIS and UNAVAILABLE are always their respective flags
+        # - FORWARD_FILL: OK if gap <= stale_threshold (normal for historical data),
+        #   STALE_PRICE if gap is too large (price data is genuinely outdated)
+        # - CURRENT: OK normally, STALE_PRICE if today's price is used for a historical
+        #   snapshot (indicates the system couldn't find a proper as-of-date price)
+        if tier == PriceTier.COST_BASIS:
+            pos_quality = "COST_FALLBACK"
+        elif tier == PriceTier.UNAVAILABLE:
+            pos_quality = "INCOMPLETE"
+        elif tier == PriceTier.FORWARD_FILL:
+            if price_age_days is not None and price_age_days > stale_threshold_days:
+                pos_quality = "STALE_PRICE"
+            else:
+                pos_quality = "OK"
+        else:
+            # CURRENT tier
+            pos_quality = TIER_QUALITY_MAP.get(tier, "OK")
+            if pos_quality == "OK" and price_age_days is not None and price_age_days > stale_threshold_days:
+                pos_quality = "STALE_PRICE"
 
         holdings_detail.append({
             "company_id": cid,
@@ -376,4 +400,49 @@ def build_snapshot_row(
         "validation_warnings": validation_warnings,
         "job_id": job_id,
         "computed_at": now_utc().isoformat(),
+    }
+
+
+def check_snapshot_spike(
+    previous: Dict[str, Any],
+    current: Dict[str, Any],
+    threshold: float = 0.20,
+) -> Optional[Dict[str, Any]]:
+    """Compare consecutive snapshots and detect suspicious value spikes.
+
+    A spike is detected when total_value changes by more than `threshold`
+    (fractional) AND net_deposits did not change proportionally — i.e., the
+    jump is NOT explained by a deposit or withdrawal.
+
+    Returns a dict with spike metadata if detected, None otherwise.
+    """
+    prev_total = float(previous.get("total_value", 0))
+    curr_total = float(current.get("total_value", 0))
+    prev_nd = float(previous.get("net_deposits", 0))
+    curr_nd = float(current.get("net_deposits", 0))
+
+    if prev_total <= 0:
+        return None
+
+    change = curr_total - prev_total
+    change_pct = abs(change) / prev_total
+
+    if change_pct <= threshold:
+        return None
+
+    nd_change = abs(curr_nd - prev_nd)
+    if nd_change > 0.01:
+        return None
+
+    return {
+        "previous_date": previous.get("snapshot_date"),
+        "current_date": current.get("snapshot_date"),
+        "previous_total": round(prev_total, 2),
+        "current_total": round(curr_total, 2),
+        "change": round(change, 2),
+        "change_pct": round(change_pct * 100, 2),
+        "message": (
+            f"Value spike detected: ${prev_total:,.2f} to ${curr_total:,.2f} "
+            f"({change_pct:.1%} change) with no deposit/withdrawal activity"
+        ),
     }

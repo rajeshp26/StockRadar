@@ -26,6 +26,7 @@ from domain.interfaces.stock_provider import StockProvider
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository as FinancialRepository
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from shared.snapshot_builder import check_snapshot_spike
 
 from providers.base import StockDataProvider
 from providers.yfinance_provider import YFinanceProvider
@@ -1650,6 +1651,7 @@ class PortfolioService:
 
         accounts_with_data = list(by_account.keys())
         all_dates = sorted({s["snapshot_date"] for s in raw_snapshots})
+        latest_date = all_dates[-1] if all_dates else None
 
         account_iters = {}
         current_snap: Dict[int, Optional[Dict]] = {}
@@ -1667,6 +1669,9 @@ class PortfolioService:
         last_nd: Dict[int, float] = {}
         locf_count = 0
         merged: Dict[str, Dict] = {}
+        spike_detected = False
+        spike_threshold = getattr(settings, "SNAPSHOT_SPIKE_THRESHOLD", 0.20)
+        prev_merged: Optional[Dict[str, Any]] = None
 
         for d in all_dates:
             total_value = 0.0
@@ -1674,6 +1679,12 @@ class PortfolioService:
             total_cash = 0.0
             total_nd = 0.0
             date_with_locf = False
+
+            # Save per-account state before update (for spike revert)
+            saved_last_value = last_value.copy()
+            saved_last_cost = last_cost.copy()
+            saved_last_cash = last_cash.copy()
+            saved_last_nd = last_nd.copy()
 
             for aid in accounts_with_data:
                 cs = current_snap.get(aid)
@@ -1698,17 +1709,61 @@ class PortfolioService:
                         total_nd += last_nd.get(aid, 0)
                         date_with_locf = True
 
-            merged[d] = {
+            current_merged = {
                 "date": d, "value": round(total_value, 2),
                 "cost_basis": round(total_cost, 2),
                 "cash_balance": round(total_cash, 2),
                 "net_deposits": round(total_nd, 2),
             }
+
+            if prev_merged is not None:
+                spike = check_snapshot_spike(
+                    {"total_value": prev_merged["value"],
+                     "net_deposits": prev_merged["net_deposits"],
+                     "snapshot_date": prev_merged["date"]},
+                    {"total_value": current_merged["value"],
+                     "net_deposits": current_merged["net_deposits"],
+                     "snapshot_date": current_merged["date"]},
+                    threshold=spike_threshold,
+                )
+                if spike and d != latest_date:
+                    # Only suppress spikes on gap-filled dates, NOT on the latest
+                    # date which has real data from the daily job.
+                    logger.warning(
+                        "LOCF merge spike on %s: %s", d, spike["message"]
+                    )
+                    spike_detected = True
+                    # Carry forward previous values (suppress spike)
+                    current_merged = {
+                        "date": d,
+                        "value": prev_merged["value"],
+                        "cost_basis": prev_merged["cost_basis"],
+                        "cash_balance": prev_merged["cash_balance"],
+                        "net_deposits": prev_merged["net_deposits"],
+                    }
+                    # Revert per-account state so future LOCF uses old values
+                    last_value = saved_last_value
+                    last_cost = saved_last_cost
+                    last_cash = saved_last_cash
+                    last_nd = saved_last_nd
+                    date_with_locf = False
+                elif spike:
+                    # Spike on latest date — this is real daily job data, not a spike.
+                    # Log it but do NOT suppress.
+                    logger.info(
+                        "LOCF merge: spike on latest date %s not suppressed (real data): %s",
+                        d, spike["message"],
+                    )
+
+            merged[d] = current_merged
+            prev_merged = current_merged
             if date_with_locf:
                 locf_count += 1
 
-        quality_flags = {s.get("data_quality_flag", "OK") for s in raw_snapshots}
-        overall_quality = "STALE_PRICE" if "STALE_PRICE" in quality_flags else "OK"
+        # Overall quality = quality of the latest snapshot (not worst-of-all).
+        # Historical STALE_PRICE/FORWARD_FILL flags are informational, not system failures.
+        latest_snap = max(raw_snapshots, key=lambda s: s["snapshot_date"]) if raw_snapshots else None
+        overall_quality = latest_snap.get("data_quality_flag", "OK") if latest_snap else "OK"
 
         if locf_count and accounts_with_data:
             locf_pct = locf_count / len(all_dates) * 100
@@ -1727,6 +1782,7 @@ class PortfolioService:
                 "snapshots": [],
                 "data_source": "snapshots", "data_quality_flag": overall_quality,
                 "return_methodology": "twr",
+                "spike_detected": False,
                 **returns,
             }
 
@@ -1741,6 +1797,7 @@ class PortfolioService:
             "data_quality_flag": overall_quality,
             "return_methodology": "twr",
             "locf_count": locf_count,
+            "spike_detected": spike_detected,
             **returns,
         }
 

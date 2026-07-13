@@ -191,6 +191,30 @@ class EventStore:
         )
         return res.data or []
 
+    def get_earliest_event_date(self, account_id: int) -> Optional[str]:
+        """Get the earliest event date for an account.
+
+        Events use aggregate_id format 'account_{id}' and store dates in
+        data->>'transaction_date' or data->>'date'.
+        """
+        aggregate_id = f"account_{account_id}"
+        res = (
+            self.client.table(self.TABLE)
+            .select("data")
+            .eq("aggregate_id", aggregate_id)
+            .order("created_at")
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            data = res.data[0].get("data", {})
+            return (
+                data.get("transaction_date")
+                or data.get("date")
+                or data.get("effective_date")
+            )
+        return None
+
     def _get_by_idempotency_key(self, key: str) -> Optional[dict]:
         res = (
             self.client.table(self.TABLE)

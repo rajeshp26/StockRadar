@@ -1,7 +1,16 @@
-"""Regenerate historical snapshots using the event-replay engine to fix the stale-price spike."""
-import sys, logging
+"""Regenerate historical snapshots using the event-replay engine to fix the stale-price spike.
+
+WARNING: This script overwrites historical snapshots. Use only in development/staging.
+"""
+import os, sys, logging
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+_env = os.environ.get("ENVIRONMENT", "development").lower()
+if _env == "production":
+    print("ERROR: regenerate_historical_snapshots.py must NOT be run in production.")
+    print("Use the daily snapshot job (compute_daily_snapshots) instead.")
+    sys.exit(1)
 
 from database import supabase
 from shared.replay_engine import ReplayEngine

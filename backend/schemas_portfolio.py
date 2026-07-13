@@ -308,6 +308,8 @@ class PerformanceResponse(BaseModel):
     data_source: Optional[str] = None
     data_quality_flag: Optional[str] = None
     return_methodology: Optional[str] = None
+    spike_detected: bool = False
+    locf_count: Optional[int] = None
 
 
 class PerformanceBatchResponse(BaseModel):

@@ -289,8 +289,8 @@ export class PortfolioService {
             { params }
         );
         const snaps = res.data.snapshots ?? [];
-        console.log(`[PERF] raw_api_response period=${period} rows=${snaps.length} ret=${res.data.totalReturnPct}% source=${res.data.dataSource}`);
-        snaps.forEach(s => console.log(`[PERF]   date=${s.date} V=${s.value} ND=${s.netDeposits}`));
+        console.log(`[PERF] raw_api_response period=${period} rows=${snaps.length} ret=${res.data.total_return_pct}% source=${res.data.data_source} spike=${res.data.spike_detected}`);
+        snaps.forEach(s => console.log(`[PERF]   date=${s.date} V=${s.value} ND=${s.net_deposits}`));
         return res.data;
     }
 

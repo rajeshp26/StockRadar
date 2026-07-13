@@ -41,8 +41,8 @@ export function PortfolioPerformanceChart() {
     useEffect(() => {
         if (perf && !perfLoading) {
             const snaps = perf.snapshots ?? [];
-            console.log(`[PERF] performance_response period=${perf.period} source=${perf.dataSource} rows=${snaps.length} ret=${perf.totalReturnPct}%`);
-            snaps.forEach(s => console.log(`[PERF]   date=${s.date} V=${s.value} ND=${s.netDeposits}`));
+            console.log(`[PERF] performance_response period=${perf.period} source=${perf.data_source} rows=${snaps.length} ret=${perf.total_return_pct}%`);
+            snaps.forEach(s => console.log(`[PERF]   date=${s.date} V=${s.value} ND=${s.net_deposits}`));
         }
     }, [perf, perfLoading]);
 
@@ -117,6 +117,20 @@ export function PortfolioPerformanceChart() {
             {isFetching && !perfLoading && (
                 <div className="h-0.5 rounded-full bg-indigo-500/30 overflow-hidden mb-2">
                     <div className="h-full w-1/3 bg-indigo-400 rounded-full animate-pulse" />
+                </div>
+            )}
+            {perf?.spike_detected && (
+                <div className="mb-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                    <p className="text-xs text-amber-400/80">
+                        Data quality notice: One or more data points may reflect pricing inconsistencies and could be corrected as newer data becomes available.
+                    </p>
+                </div>
+            )}
+            {perf?.data_quality_flag && perf.data_quality_flag !== 'OK' && !perf.spike_detected && (
+                <div className="mb-3 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <p className="text-xs text-white/30">
+                        Data quality: {perf.data_quality_flag.replace(/_/g, ' ').toLowerCase()}
+                    </p>
                 </div>
             )}
             {showBenchmarks && compareLoading && (

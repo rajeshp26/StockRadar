@@ -1,7 +1,16 @@
-"""Regenerate today's snapshots from replay data."""
-import sys
+"""Regenerate today's snapshots from replay data.
+
+WARNING: This script overwrites today's snapshots. Use only in development/staging.
+"""
+import os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+_env = os.environ.get("ENVIRONMENT", "development").lower()
+if _env == "production":
+    print("ERROR: step8_regenerate_snapshots.py must NOT be run in production.")
+    print("Use the daily snapshot job (compute_daily_snapshots) instead.")
+    sys.exit(1)
 
 from datetime import date
 from database import supabase

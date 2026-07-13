@@ -230,6 +230,7 @@ class TestBuildSnapshotRow:
         assert row["data_quality_flag"] == "STALE_PRICE"
 
     def test_average_cost_fallback_when_no_price(self):
+        """Tier 3 (COST_BASIS) disabled: UNAVAILABLE holdings get $0 value."""
         row = build_snapshot_row(**_make_minimal_kwargs(
             holdings_state=[{
                 "company_id": 1, "symbol": "AAPL", "quantity": 10,
@@ -237,8 +238,8 @@ class TestBuildSnapshotRow:
             }],
             prices_by_company={},
         ))
-        assert row["holdings_market_value"] == 1500.0
-        assert row["total_value"] == 2500.0
+        assert row["holdings_market_value"] == 0.0
+        assert row["total_value"] == 1000.0
 
     # ── Regression tests for key-name bugs ──────────────────────────────
 
@@ -397,6 +398,7 @@ class TestCashLedgerSemantics:
 
 class TestAvgCostKeyNameMismatch:
     def test_average_cost_key_works_when_no_price(self):
+        """Tier 3 (COST_BASIS) is disabled — UNAVAILABLE holdings get $0 value."""
         holdings_state = [{
             "company_id": 1, "symbol": "AAPL", "quantity": 10,
             "total_cost": Decimal("1500"), "average_cost": Decimal("150"),
@@ -405,8 +407,8 @@ class TestAvgCostKeyNameMismatch:
             holdings_state=holdings_state,
             prices_by_company={},
         ))
-        assert row["holdings_market_value"] == 1500.0, (
-            f"Expected 1500.0 with average_cost fallback, got {row['holdings_market_value']}"
+        assert row["holdings_market_value"] == 0.0, (
+            f"Expected 0.0 (Tier 3 disabled), got {row['holdings_market_value']}"
         )
 
     def test_avg_cost_wrong_key_ignored_when_no_price(self):
@@ -426,6 +428,7 @@ class TestAvgCostKeyNameMismatch:
         )
 
     def test_avg_cost_wrong_key_compared_to_average_cost(self):
+        """Tier 3 disabled — both keys produce $0 value (UNAVAILABLE)."""
         correct = {
             "company_id": 1, "symbol": "AAPL", "quantity": 10,
             "total_cost": Decimal("1500"), "average_cost": Decimal("150"),
@@ -440,9 +443,8 @@ class TestAvgCostKeyNameMismatch:
         row_wrong = build_snapshot_row(**_make_minimal_kwargs(
             holdings_state=[wrong], prices_by_company={},
         ))
-        assert row_correct["holdings_market_value"] != row_wrong["holdings_market_value"], (
-            "Bug: using 'avg_cost' vs 'average_cost' produces same result — "
-            "this means the fallback path never triggers in tests, masking the bug."
+        assert row_correct["holdings_market_value"] == row_wrong["holdings_market_value"] == 0.0, (
+            "With Tier 3 disabled, both keys produce $0 (UNAVAILABLE)"
         )
 
 
@@ -590,7 +592,7 @@ class TestHoldingsStateFromDB:
         assert h["current_price"] == 294.30
 
     def test_db_shaped_holdings_with_missing_prices(self):
-        """When prices_by_company is empty, must fall back to average_cost."""
+        """When prices_by_company is empty, Tier 3 disabled → UNAVAILABLE ($0 value)."""
         holdings = [{
             "holding_id": 1, "account_id": 1, "company_id": 1,
             "symbol": "AAPL", "quantity": 50,
@@ -599,12 +601,12 @@ class TestHoldingsStateFromDB:
         row = build_snapshot_row(**_make_minimal_kwargs(
             holdings_state=holdings, prices_by_company={},
         ))
-        assert row["holdings_market_value"] == 7250.0, (
-            f"Fallback to average_cost failed: "
-            f"holdings_market_value={row['holdings_market_value']}, "
-            f"expected 7250.0. Holding keys: {list(holdings[0].keys())}"
+        assert row["holdings_market_value"] == 0.0, (
+            f"Tier 3 disabled: expected 0.0, got {row['holdings_market_value']}"
         )
-        assert row["holdings_json"][0]["current_price"] == 145.0
+        h = row["holdings_json"][0]
+        assert h["current_price"] == 0.0
+        assert h["price_data_quality"] == "UNAVAILABLE"
 
 
 # ============================================================================
@@ -722,7 +724,7 @@ class TestNegativeTotalMustBeFlagged:
         )
 
     def test_negative_total_has_warning(self):
-        """Negative total must produce a validation warning."""
+        """Negative total with UNAVAILABLE holdings → 'Zero holdings' warning."""
         holdings = [{
             "company_id": 1, "symbol": "AAPL", "quantity": 50,
             "total_cost": Decimal("7250"), "average_cost": Decimal("145"),
@@ -733,15 +735,14 @@ class TestNegativeTotalMustBeFlagged:
             prices_by_company={},
         ))
         warnings = row.get("validation_warnings") or []
-        assert any("negative total" in w.lower() for w in warnings), (
-            f"Fails because current builder has no validation_warnings field. "
-            f"Fix: post-computation validation (Layer 3) must add warning when "
-            f"total_value < 0 and holdings_market_value > 0."
+        assert any("zero holdings" in w.lower() for w in warnings), (
+            f"Tier 3 disabled → holdings MV=0, so warning is about zero MV. "
+            f"Got: {warnings}"
         )
 
     def test_cash_too_negative_warning(self):
-        """Cash balance exceeding -0.7x cost_basis must produce a warning.
-        Captures the zero-deposit account pattern (Accts 10/11/12)."""
+        """Tier 3 disabled → UNAVAILABLE holdings → cost_basis=0, so no cash warning.
+        Instead, W1 fires: 'Zero holdings market value despite N non-zero holdings'."""
         holdings = [
             {"company_id": 1, "symbol": "AAPL", "quantity": 50,
              "total_cost": Decimal("7250"), "average_cost": Decimal("145")},
@@ -756,9 +757,9 @@ class TestNegativeTotalMustBeFlagged:
             prices_by_company={},
         ))
         warnings = row.get("validation_warnings") or []
-        assert any("missing deposit" in w.lower() for w in warnings), (
-            f"Cash=-18790 with cost_basis=18790 should trigger missing-deposit "
-            f"warning (exceeds -0.7x threshold). Got warnings: {warnings}"
+        assert any("zero holdings" in w.lower() for w in warnings), (
+            f"Tier 3 disabled → cost_basis=0 → no cash warning. "
+            f"Expected 'zero holdings' warning. Got: {warnings}"
         )
 
     def test_merged_account_still_shows_original_quality(self):
@@ -893,8 +894,8 @@ class TestWealthSimpleAccountIndependentValidation:
         )
 
     def test_account_10_negative_total_when_prices_missing(self):
-        """Acct 10 profile with NO prices: holdings MV falls back to average_cost
-        but cash=-17350 produces negative total. Must flag WARNING."""
+        """Acct 10 profile with NO prices: Tier 3 disabled → UNAVAILABLE → MV=$0.
+        Total = $0 + cash(-17350) = -$17350. Must flag INCOMPLETE."""
         holdings = [
             {"company_id": 1, "symbol": "AAPL", "quantity": 50,
              "total_cost": Decimal("7250"), "average_cost": Decimal("145")},
@@ -908,14 +909,10 @@ class TestWealthSimpleAccountIndependentValidation:
             holdings_state=holdings, cash_balance=cash,
             prices_by_company={},
         ))
-        average_cost_mv = 50*145 + 100*95 + 30*68  # 18790
-        expected_total = average_cost_mv - 17350.00  # 1440.00
-        assert row["total_value"] > 0, (
-            f"Even without prices, average_cost fallback gives "
-            f"positive total (MV={average_cost_mv}), but got {row['total_value']:.2f}"
+        assert row["total_value"] == -17350.00, (
+            f"Tier 3 disabled → MV=$0, total = cash only. "
+            f"Expected -17350.00, got {row['total_value']:.2f}"
         )
-        assert row["data_quality_flag"] != "OK", (
-            f"Acct 10 without prices: average_cost fallback quality should not be OK. "
-            f"Got {row['data_quality_flag']}. "
-            f"Fails because current builder only has OK/STALE_PRICE."
+        assert row["data_quality_flag"] == "INCOMPLETE", (
+            f"Expected INCOMPLETE quality, got {row['data_quality_flag']}"
         )

@@ -1,14 +1,26 @@
 """Regenerate ALL historical snapshots using event replay for consistent net_deposits.
 
 Optimized: single incremental pass per account, batched writes.
+
+WARNING: This script deletes ALL existing snapshots and rebuilds from scratch.
+It should ONLY be run in development/staging environments.
 """
-import sys; sys.path.insert(0, '.'); sys.path.insert(0, 'backend')
-import json, time
+import os, sys; sys.path.insert(0, '.'); sys.path.insert(0, 'backend')
+
+_env = os.environ.get("ENVIRONMENT", "development").lower()
+if _env == "production":
+    print("ERROR: step9_rebuild_all_snapshots.py must NOT be run in production.")
+    print("Use the daily snapshot job (compute_daily_snapshots) instead.")
+    sys.exit(1)
+
+import json, logging, time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from collections import defaultdict
 from typing import Dict, Optional
 from database import supabase
+
+logger = logging.getLogger("rebuild")
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from shared.replay_engine import ReplayEngine, AccountState
@@ -78,14 +90,19 @@ if cids:
         company_names[int(row['company_id'])] = row['company_name'] or row['ticker_symbol']
 
 # ── Load historical prices (price_history) with split adjustment ──
-# Use PortfolioRepository.get_all_prices_historical which handles split adjustment.
-# Pass empty latest_prices + populated price_history so Tier 2 (forward-fill)
-# is used for all historical snapshots, avoiding retroactive current prices.
+# Query per-company via the repo method to get split adjustment + anomaly
+# normalization, while avoiding Supabase's 1000-row default limit.
 price_history_map = {}
 if cids:
     max_date = date.fromisoformat(all_dates[-1])
     repo = PortfolioRepository(supabase)
-    price_history_map = repo.get_all_prices_historical(list(cids), max_date)
+    for cid in cids:
+        try:
+            single_map = repo.get_all_prices_historical([cid], max_date)
+            if single_map:
+                price_history_map[cid] = single_map[cid]
+        except Exception as e:
+            logger.error(f"Failed to load price_history for cid={cid}: {e}")
     ph_total = sum(len(v) for v in price_history_map.values())
     print(f"Price history: {ph_total} rows for {len(price_history_map)} companies (split-adjusted)")
 
@@ -171,17 +188,17 @@ for aid in AIDS:
             })
         
         try:
-            # Pass current prices + price_history. _resolve_holding_price will use
-            # current prices only for recent snapshots (within stale_threshold_days),
-            # falling through to forward-fill for historical dates.
+            # Pass empty prices_by_company so Tier 1 (current prices) never fires.
+            # All snapshots use Tier 2 forward-fill from price_history, falling to
+            # Tier 3 cost_basis — consistent pricing across ALL dates, no spike.
             snapshot = build_snapshot_row(
                 account_id=aid, snapshot_date=target_date,
                 holdings_state=holdings_state,
                 cash_balance=state.cash_balance,
                 net_deposits=state.net_deposits,
-                prices_by_company=prices_by_company,
+                prices_by_company={},
                 job_id=f"rebuild_{aid}_{sd}",
-                stale_threshold_days=30,
+                stale_threshold_days=0,
                 account_currency=ACCOUNT_CURRENCY,
                 price_history=price_history_map,
             )

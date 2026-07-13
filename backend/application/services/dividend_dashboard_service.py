@@ -256,6 +256,27 @@ class DividendDashboardService:
 
         company_ids = [h["company_id"] for h in holdings if h.get("company_id")]
 
+        # Enrich with live market prices so market_value is correct
+        if company_ids:
+            try:
+                from database import supabase
+                cmr = supabase.table("current_market_data").select(
+                    "company_id, current_price"
+                ).in_("company_id", company_ids).execute()
+                prices = {r["company_id"]: float(r["current_price"]) for r in (cmr.data or []) if r.get("current_price")}
+                for h in holdings:
+                    cid = h.get("company_id")
+                    price = prices.get(cid)
+                    qty = float(h.get("quantity") or 0)
+                    if price is not None:
+                        h["current_price"] = price
+                        h["market_value"] = price * qty
+                    else:
+                        h["current_price"] = float(h.get("average_cost") or 0)
+                        h["market_value"] = float(h.get("total_cost") or 0)
+            except Exception:
+                pass
+
         trailing_rows = self.repo.get_trailing_twelve_month_dividends(account_ids)
         dps_rows = self.repo.get_latest_regular_dps(company_ids) if company_ids else []
         metrics_rows = self.repo.get_dividend_metrics_for_companies(company_ids) if company_ids else []
@@ -376,7 +397,24 @@ class DividendDashboardService:
         # Merge multi-account holdings for the same symbol
         total_shares = sum(float(h.get("quantity") or 0) for h in matching)
         total_cost = sum(float(h.get("total_cost") or 0) for h in matching)
-        total_market_value = sum(float(h.get("current_value") or h.get("market_value") or 0) for h in matching)
+
+        # Enrich with live market prices
+        total_market_value = 0.0
+        if matching and matching[0].get("company_id"):
+            try:
+                from database import supabase
+                cmr = supabase.table("current_market_data").select(
+                    "company_id, current_price"
+                ).eq("company_id", matching[0]["company_id"]).execute()
+                if cmr.data and cmr.data[0].get("current_price"):
+                    price = float(cmr.data[0]["current_price"])
+                    total_market_value = price * total_shares
+                else:
+                    total_market_value = total_cost
+            except Exception:
+                total_market_value = total_cost
+        else:
+            total_market_value = total_cost
         holding = matching[0]  # company info is the same
 
         company_ids = [holding["company_id"]] if holding.get("company_id") else []

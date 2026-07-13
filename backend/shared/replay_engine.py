@@ -225,7 +225,7 @@ class ReplayEngine:
             total_cost += holding.total_cost
 
             exch_override = exchange_overrides.get(cid) if exchange_overrides else None
-            price, tier = _resolve_holding_price(
+            price, tier, resolved_price_date = _resolve_holding_price(
                 company_id=cid,
                 symbol=holding.symbol,
                 avg_cost=holding.average_cost if holding.average_cost > 0 else None,
@@ -244,7 +244,14 @@ class ReplayEngine:
                 current_price = price
                 current_value = qty * current_price
                 total_market_value += current_value
-                pos_quality = TIER_QUALITY_MAP.get(tier, "OK")
+                # Context-aware quality: FORWARD_FILL with small gap is OK
+                if tier == PriceTier.COST_BASIS:
+                    pos_quality = "COST_FALLBACK"
+                elif tier == PriceTier.FORWARD_FILL:
+                    price_age = (target_date - resolved_price_date).days if resolved_price_date else None
+                    pos_quality = "STALE_PRICE" if (price_age is not None and price_age > 30) else "OK"
+                else:
+                    pos_quality = TIER_QUALITY_MAP.get(tier, "OK")
 
             holdings_list.append({
                 "company_id": cid,

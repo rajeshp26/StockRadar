@@ -300,6 +300,19 @@ class Settings(BaseSettings):
                     "mismatches, but still write the old-path result. Set to False only "
                     "after comparison passes for all accounts."
     )
+
+    SNAPSHOT_SPIKE_THRESHOLD: float = Field(
+        default=0.20,
+        description="Maximum allowed fractional change in total_value between consecutive "
+                    "snapshots before flagging as SPIKE_DETECTED. 0.20 = 20%. "
+                    "Deposits/withdrawals are excluded from spike detection."
+    )
+
+    SNAPSHOT_GAP_FILL_ENABLED: bool = Field(
+        default=True,
+        description="When True, the daily snapshot job fills missing dates between the "
+                    "last known snapshot and today using event-replay with consistent pricing."
+    )
     
     # Debugging & Development
     DEBUG_FILTERING_LOGIC: bool = Field(

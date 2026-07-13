@@ -182,6 +182,10 @@ export interface PerformanceResponse {
     best_day: { date: string; return_pct: number } | null;
     worst_day: { date: string; return_pct: number } | null;
     error?: string;
+    data_source?: string;
+    data_quality_flag?: string;
+    spike_detected?: boolean;
+    locf_count?: number;
 }
 
 export type { BenchmarkInfo } from '@/lib/types';

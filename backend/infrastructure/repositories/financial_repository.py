@@ -1459,7 +1459,8 @@ class SupabaseFinancialRepository:
         return factors
 
     async def get_latest_prices(
-        self, company_ids: List[int], target_date: date
+        self, company_ids: List[int], target_date: date,
+        include_current_fallback: bool = True,
     ) -> Dict[int, Dict]:
         if not company_ids:
             return {}
@@ -1497,21 +1498,24 @@ class SupabaseFinancialRepository:
                     "price_date": pd,
                 }
 
-        # Fall back to current_market_data for companies not in price_history
-        missing = [cid for cid in company_ids if cid not in latest_by_company]
-        if missing:
-            cmr = (
-                self.client.table("current_market_data")
-                .select("company_id, current_price")
-                .in_("company_id", missing)
-                .execute()
-            )
-            for row in cmr.data or []:
-                cid = row["company_id"]
-                px = float(row["current_price"])
-                latest_by_company[cid] = {
-                    "price": px,
-                    "price_date": target_date,
-                }
+        # Fall back to current_market_data ONLY when explicitly requested
+        # (daily job uses today's prices). For historical backfill, never inject
+        # today's price for a past date — callers should handle missing prices.
+        if include_current_fallback:
+            missing = [cid for cid in company_ids if cid not in latest_by_company]
+            if missing:
+                cmr = (
+                    self.client.table("current_market_data")
+                    .select("company_id, current_price")
+                    .in_("company_id", missing)
+                    .execute()
+                )
+                for row in cmr.data or []:
+                    cid = row["company_id"]
+                    px = float(row["current_price"])
+                    latest_by_company[cid] = {
+                        "price": px,
+                        "price_date": target_date,
+                    }
 
         return latest_by_company

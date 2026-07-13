@@ -6,10 +6,22 @@ Usage:
 
 Event-driven strategy: Only compute FIFO snapshots on dates where something
 changes (trade, money movement, dividend, month-end).
+
+WARNING: In production, the daily snapshot job handles gap-filling automatically.
+This script should only be used for initial setup or one-time repairs in dev/staging.
 """
 
+import os
 import argparse
 import logging
+
+_env = os.environ.get("ENVIRONMENT", "development").lower()
+if _env == "production":
+    print("ERROR: backfill_portfolio_snapshots.py should NOT be run in production.")
+    print("The daily snapshot job handles gap-filling automatically.")
+    print("Set ENVIRONMENT=development to override (not recommended).")
+    import sys
+    sys.exit(1)
 import sys
 from collections import defaultdict
 from datetime import date, datetime
