@@ -14,10 +14,13 @@ Usage:
 """
 
 import argparse
+import sys
 from datetime import date
 from decimal import Decimal
 import math
 import logging
+
+sys.path.insert(0, ".")
 
 import pandas as pd
 import yfinance as yf

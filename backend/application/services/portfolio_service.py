@@ -31,7 +31,7 @@ from shared.snapshot_builder import check_snapshot_spike
 from providers.base import StockDataProvider
 from providers.yfinance_provider import YFinanceProvider
 from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from shared.snapshot_builder import _classify_lot_action, resolve_price_forward_filled, build_snapshot_row, CDR_RATIO
+from shared.snapshot_builder import _classify_lot_action, resolve_price_forward_filled, build_snapshot_row, CDR_RATIO, convert_holding_fx
 from shared.portfolio_stats import (
     annualize_return, compute_annualized_volatility, compute_daily_returns,
     compute_max_drawdown, compute_portfolio_twr, compute_portfolio_mwr,
@@ -469,6 +469,8 @@ class PortfolioService:
             return holdings
         cids = list(set(h["company_id"] for h in holdings if h.get("company_id")))
         prices = {}
+        # Fetch cdr_ratio for CDR pricing
+        cdr_ratios: Dict[int, float] = {}
         if cids:
             try:
                 cmr = supabase.table("current_market_data").select("company_id, current_price").in_("company_id", cids).execute()
@@ -477,6 +479,17 @@ class PortfolioService:
                     px = row.get("current_price")
                     if px is not None:
                         prices[cid] = float(px)
+            except Exception:
+                pass
+            # Fetch cdr_ratio from companies table (per-company ratio)
+            try:
+                comp_result = supabase.table("companies").select("company_id, cdr_ratio") \
+                    .in_("company_id", cids).execute()
+                for row in comp_result.data or []:
+                    cid = row["company_id"]
+                    ratio = row.get("cdr_ratio")
+                    if ratio is not None:
+                        cdr_ratios[cid] = float(ratio)
             except Exception:
                 pass
         for h in holdings:
@@ -488,12 +501,51 @@ class PortfolioService:
             if price is not None:
                 effective_price = price
                 if h.get("exchange_override") == "TOR":
-                    effective_price = price / float(CDR_RATIO)
+                    # Use per-company ratio if available, fallback to hardcoded CDR_RATIO
+                    ratio = cdr_ratios.get(cid, float(CDR_RATIO))
+                    effective_price = price / ratio
                 h["current_price"] = effective_price
                 h["current_value"] = effective_price * qty
+                # For CDR holdings: price is now in CAD (after ratio division)
+                # Set price_currency so FX conversion doesn't re-convert
+                if h.get("exchange_override") == "TOR":
+                    h["price_currency"] = "CAD"
             else:
                 h["current_price"] = float(avg_cost) if avg_cost else 0.0
                 h["current_value"] = float(total_cost) if total_cost else 0.0
+
+        # Apply FX conversion per-account
+        if settings.ENABLE_FX_CONVERSION:
+            from shared.fx_service import FXService
+            fx_svc = FXService(supabase)
+            account_ids = list(set(h.get("account_id") for h in holdings if h.get("account_id")))
+            account_currency_map = {}
+            if account_ids:
+                try:
+                    acc_result = supabase.table("portfolio_accounts").select("account_id, currency") \
+                        .in_("account_id", account_ids).execute()
+                    account_currency_map = {a["account_id"]: a.get("currency", "CAD") for a in (acc_result.data or [])}
+                except Exception:
+                    pass
+            today = now_utc().date()
+            for h in holdings:
+                acc_id = h.get("account_id")
+                acc_currency = account_currency_map.get(acc_id, "CAD") if acc_id else "CAD"
+                raw_value = Decimal(str(h.get("current_value") or 0))
+                raw_cost = Decimal(str(h.get("total_cost") or 0))
+                conv_value, conv_cost = convert_holding_fx(
+                    h, raw_value, raw_cost, acc_currency,
+                    fx_svc, today, True,
+                )
+                h["current_value"] = float(conv_value)
+                h["total_cost"] = float(conv_cost)
+                h["value_currency"] = acc_currency
+        else:
+            for h in holdings:
+                h["value_currency"] = "CAD"
+
+        for h in holdings:
+            total_cost = h.get("total_cost", 0) or 0
             h["unrealized_gain_loss"] = h["current_value"] - float(total_cost)
             h["unrealized_gain_loss_pct"] = (
                 (h["unrealized_gain_loss"] / float(total_cost) * 100)
@@ -501,6 +553,19 @@ class PortfolioService:
             )
         holdings.sort(key=lambda h: h.get("current_value") or 0, reverse=True)
         return holdings
+
+    def _get_price_currency(self, company_id: Optional[int]) -> str:
+        """Look up the price currency for a company from the companies table."""
+        if not company_id:
+            return "USD"
+        try:
+            result = supabase.table("companies").select("currency") \
+                .eq("company_id", company_id).maybe_single().execute()
+            if result.data:
+                return result.data.get("currency", "USD")
+        except Exception:
+            pass
+        return "USD"
 
     def aggregate_holdings(
         self, holdings: List[Dict[str, Any]]
@@ -1838,30 +1903,48 @@ class PortfolioService:
             elif isinstance(d, datetime):
                 t["transaction_date"] = d.date()
 
+        # FX service for cash balance conversion in cached functions
+        _perf_fx_svc = None
+        if settings.ENABLE_FX_CONVERSION:
+            try:
+                from shared.fx_service import FXService as _FX
+                from database import supabase as _db
+                _perf_fx_svc = _FX(_db)
+            except Exception:
+                _perf_fx_svc = None
+
         @lru_cache(maxsize=None)
-        def _cached_cash_balance(aid: int, dt_str: str) -> Decimal:
+        def _cached_cash_balance(aid: int, dt_str: str, acct_ccy: str) -> Decimal:
             target = date.fromisoformat(dt_str)
             total = Decimal("0.00")
             for t in all_cash_txns:
                 if t["account_id"] == aid and t["transaction_date"] <= target:
                     nca = t.get("net_cash_amount") or 0
                     act = t.get("activity_type", "")
-                    if act in (
-                        "Trade", "Deposit", "Withdrawal", "Dividend", "MoneyMovement",
-                        "Interest", "Fee", "WithholdingTax", "ReorganizationDividend",
-                    ):
+                    if act in PortfolioRepository.CASH_ACTIVITY_TYPES:
+                        txn_ccy = (t.get("currency") or "CAD").upper()
+                        if txn_ccy != acct_ccy.upper() and _perf_fx_svc:
+                            rate = _perf_fx_svc.get_rate(txn_ccy, acct_ccy.upper(), target)
+                            if rate is not None:
+                                nca = float(Decimal(str(nca)) * rate)
                         total += Decimal(str(nca))
             return total
 
         @lru_cache(maxsize=None)
-        def _cached_net_deposits(aid: int, dt_str: str) -> Decimal:
+        def _cached_net_deposits(aid: int, dt_str: str, acct_ccy: str) -> Decimal:
             target = date.fromisoformat(dt_str)
             total = Decimal("0.00")
             for t in all_cash_txns:
                 if t["account_id"] == aid and t["transaction_date"] <= target:
                     act = t.get("activity_type", "")
                     if act in ("MoneyMovement", "BonusPayment"):
-                        total += Decimal(str(t.get("net_cash_amount") or 0))
+                        nca = t.get("net_cash_amount") or 0
+                        txn_ccy = (t.get("currency") or "CAD").upper()
+                        if txn_ccy != acct_ccy.upper() and _perf_fx_svc:
+                            rate = _perf_fx_svc.get_rate(txn_ccy, acct_ccy.upper(), target)
+                            if rate is not None:
+                                nca = float(Decimal(str(nca)) * rate)
+                        total += Decimal(str(nca))
             return total
 
         lots: Dict[tuple, list] = defaultdict(list)
@@ -1947,12 +2030,20 @@ class PortfolioService:
                     continue
                 avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
                 total_cost_holding = qty_held * avg_cost
+                earliest_lot_date = min((l["date"] for l in lot_list if l.get("date")), default=None)
+                lots_for_holding = [
+                    {"quantity": l["quantity"], "cost_per_share": l["cost_per_share"], "date": l.get("date")}
+                    for l in lot_list
+                ]
                 if cid in cid_holdings_by_account[aid]:
                     existing = cid_holdings_by_account[aid][cid]
                     combined_qty = existing["quantity"] + qty_held
                     existing["total_cost"] += total_cost_holding
                     existing["quantity"] = combined_qty
                     existing["average_cost"] = existing["total_cost"] / combined_qty if combined_qty > 0 else 0
+                    existing["lots"].extend(lots_for_holding)
+                    if earliest_lot_date and (existing.get("trade_date") is None or earliest_lot_date < existing["trade_date"]):
+                        existing["trade_date"] = earliest_lot_date
                 else:
                     symbol = next((l.get("symbol", "") for l in lot_list if l.get("symbol")), "")
                     cid_holdings_by_account[aid][cid] = {
@@ -1961,6 +2052,8 @@ class PortfolioService:
                         "total_cost": total_cost_holding,
                         "average_cost": avg_cost,
                         "account_id": aid,
+                        "trade_date": earliest_lot_date,
+                        "lots": lots_for_holding,
                     }
 
             # Build per-account snapshots and combine
@@ -1979,9 +2072,9 @@ class PortfolioService:
 
                 # Use in-memory cached computation instead of N+1 DB queries
                 dt_str = current_date.isoformat()
-                cash_balance = _cached_cash_balance(aid, dt_str)
-                net_deposits = _cached_net_deposits(aid, dt_str)
                 account_currency = acc_currency.get(aid, "CAD")
+                cash_balance = _cached_cash_balance(aid, dt_str, account_currency)
+                net_deposits = _cached_net_deposits(aid, dt_str, account_currency)
 
                 total_cash += cash_balance
                 total_net_deposits += net_deposits
@@ -2221,8 +2314,26 @@ class PortfolioService:
             sym_up = symbol.upper()
             company_id = txns[0].get("company_id") if txns else None
             split_factors = {}
+            is_cdr = False
+            cdr_ratio_val = None
             if company_id:
                 split_factors = self.portfolio_repo._get_split_factors([company_id])
+                # Check if this is a CDR holding
+                try:
+                    hold_check = supabase.table("portfolio_holdings").select("exchange_override") \
+                        .eq("company_id", company_id).eq("exchange_override", "TOR").limit(1).execute()
+                    if hold_check.data:
+                        is_cdr = True
+                        # Look up CDR ratio
+                        comp_res = supabase.table("companies").select("cdr_ratio") \
+                            .eq("company_id", company_id).maybe_single().execute()
+                        if comp_res.data and comp_res.data.get("cdr_ratio") is not None:
+                            cdr_ratio_val = float(comp_res.data["cdr_ratio"])
+                        else:
+                            from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
+                            cdr_ratio_val = float(_CDR_RATIO)
+                except Exception:
+                    pass
             if company_id:
                 rows = (
                     supabase.table("price_history")
@@ -2249,6 +2360,19 @@ class PortfolioService:
                             if pd < sd:
                                 cumulative_factor *= adj
                         px *= cumulative_factor
+                        # Apply CDR adjustment: price_history stores US USD prices
+                        # CDR price = (US_price / ratio) * FX_rate (USD→CAD)
+                        if is_cdr and cdr_ratio_val is not None:
+                            px = px / cdr_ratio_val
+                            # Apply FX conversion (USD→CAD) for historical prices
+                            try:
+                                from shared.fx_service import FXService
+                                fx_svc = FXService(supabase)
+                                fx_rate = fx_svc.get_rate("USD", "CAD", pd)
+                                if fx_rate is not None:
+                                    px = px * fx_rate
+                            except Exception:
+                                pass
                         price_map.setdefault(sym_up, {})[row["price_date"]] = px
         except Exception as e:
             logger.warning(f"Failed to fetch price_history for {symbol}: {e}")

@@ -8,6 +8,97 @@ import logging
 
 from shared.time_utils import now_utc
 
+
+def _normalise_trade_date(val: Any) -> Optional[date]:
+    """Convert trade_date from string or date to date object."""
+    if val is None:
+        return None
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, str):
+        try:
+            return date.fromisoformat(val)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def convert_holding_fx(
+    holding: Dict,
+    raw_value: Decimal,
+    total_cost: Decimal,
+    account_currency: str,
+    fx_service: Any,
+    snapshot_date: date,
+    enable_fx: bool = True,
+) -> Tuple[Decimal, Decimal]:
+    """Convert holding values from price_currency to account_currency.
+
+    Single source of truth for FX conversion at the holding level.
+    Used by build_snapshot_row, build_snapshot_from_replay, and live API enrichment.
+
+    Rules:
+      - Market value is converted at snapshot_date (the price is current).
+      - Cost basis is converted per-lot at each lot's trade_date when lots exist.
+      - Cost basis is converted at trade_date (earliest lot) when lots are absent.
+      - If FX rate is unavailable, the unconverted value is returned with a warning.
+
+    Args:
+        holding: dict with at least price_currency/currency, and optionally lots, trade_date
+        raw_value: market value in price_currency (qty * current_price)
+        total_cost: cost basis in price_currency
+        account_currency: target currency (e.g. "CAD")
+        fx_service: FXService instance (may be None if enable_fx is False)
+        snapshot_date: date for market value FX rate
+        enable_fx: whether FX conversion is enabled globally
+
+    Returns:
+        (converted_value, converted_cost) — both Decimal, in account_currency.
+    """
+    price_currency = (holding.get("price_currency") or holding.get("currency") or "USD").upper()
+    acct = account_currency.upper()
+
+    needs_fx = enable_fx and price_currency != acct and fx_service is not None
+
+    if not needs_fx:
+        return raw_value, total_cost
+
+    # Market value: always at snapshot_date (current price)
+    converted_value = raw_value
+    if raw_value > 0:
+        conv_val, _ = fx_service.convert_or_warn(
+            raw_value, price_currency, acct,
+            as_of=snapshot_date, holding_id=str(holding.get("company_id")),
+        )
+        converted_value = conv_val
+
+    # Cost basis: per-lot when lots exist, single-date fallback otherwise
+    converted_cost = total_cost
+    if total_cost > 0:
+        lots = holding.get("lots") or []
+        if lots:
+            total_cost_converted = Decimal("0")
+            for lot in lots:
+                lot_cost = Decimal(str(lot["quantity"])) * Decimal(str(lot["cost_per_share"]))
+                lot_date = _normalise_trade_date(lot.get("date")) or snapshot_date
+                lot_fx_rate = fx_service.get_rate(price_currency, acct, lot_date)
+                if lot_fx_rate is not None:
+                    total_cost_converted += lot_cost * lot_fx_rate
+                else:
+                    total_cost_converted += lot_cost
+            converted_cost = total_cost_converted
+        else:
+            cost_fx_date = _normalise_trade_date(holding.get("trade_date")) or snapshot_date
+            conv_cost, _ = fx_service.convert_or_warn(
+                total_cost, price_currency, acct,
+                as_of=cost_fx_date, holding_id=str(holding.get("company_id")),
+            )
+            converted_cost = conv_cost
+
+    return converted_value, converted_cost
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +126,22 @@ CDR_RATIO = Decimal("10")
 Applies when holding.exchange_override == "TOR" and the company's primary exchange is US-listed."""
 
 
+def get_cdr_ratio_for_company(
+    company_id: int,
+    companies_map: Optional[Dict[int, Dict]] = None,
+) -> Optional[Decimal]:
+    """Look up per-company CDR ratio from the companies table.
+
+    Returns the ratio if found, None otherwise (callers should fall back to CDR_RATIO constant).
+    """
+    if companies_map and company_id in companies_map:
+        info = companies_map[company_id]
+        ratio = info.get("cdr_ratio")
+        if ratio is not None:
+            return Decimal(str(ratio))
+    return None
+
+
 def _resolve_holding_price(
     company_id: int,
     symbol: str,
@@ -44,23 +151,47 @@ def _resolve_holding_price(
     snapshot_date: date,
     stale_threshold_days: int = 30,
     exchange_override: Optional[str] = None,
+    cdr_ratio: Optional[Decimal] = None,
+    company_currency: Optional[str] = None,
+    price_source: Optional[str] = None,
+    fx_service: Optional[Any] = None,
 ) -> Tuple[Optional[Decimal], PriceTier, Optional[date]]:
     """4-tier price cascade.
-    
+
     Tier 1 (CURRENT) only used if price_date is recent enough (<= stale_threshold_days old).
     Otherwise falls through to Tier 2 (forward-fill) for accurate historical pricing.
-    
+
     When exchange_override="TOR": market-sourced prices (Tiers 1 & 2) come from US exchanges
-    and must be divided by CDR_RATIO (10) to get the correct CDR price.
+    and must be divided by cdr_ratio (per-company, fallback to CDR_RATIO=10).
+
+    Source-aware CDR logic:
+      - price_source="yfinance_tor": price is TSX share price in CAD → divide by ratio only.
+      - price_source="price_history" or other: price is US stock in USD → divide by ratio AND
+        multiply by FX (USD→CAD) to get CDR price in CAD.
+      - fx_service: FXService instance for FX rate lookup (required for non-yfinance_tor sources).
+
     Tier 3 (cost_basis) is NOT adjusted — CDR purchase prices are already at actual CDR cost.
-    
+
     Returns (price, tier, price_date). Returns (None, UNAVAILABLE, None) if no price is usable.
     """
     is_cdr = exchange_override == "TOR"
+    effective_ratio = cdr_ratio if cdr_ratio is not None else CDR_RATIO
+
+    def _apply_cdr(price_val: Decimal, src: Optional[str] = None) -> Decimal:
+        """Apply CDR ratio (and FX if needed) to convert market price to CDR price in CAD."""
+        result = price_val / effective_ratio
+        # For price_history source: price is US USD, need FX to convert to CAD
+        if is_cdr and src == "price_history" and fx_service is not None:
+            fx_rate = fx_service.get_rate("USD", "CAD", snapshot_date)
+            if fx_rate is not None:
+                result = result * fx_rate
+        return result
+
     # Tier 1: current market price — only for recent snapshots
     info = latest_prices.get(company_id, {})
     if info.get("price") is not None:
         pd = info.get("price_date")
+        tier1_source = info.get("source") or price_source
         if pd is not None:
             if isinstance(pd, str):
                 pd = date.fromisoformat(pd)
@@ -71,19 +202,19 @@ def _resolve_holding_price(
                 if (pd - snapshot_date) <= max_age:
                     price = Decimal(str(info["price"]))
                     if is_cdr:
-                        price = price / CDR_RATIO
+                        price = _apply_cdr(price, tier1_source)
                     return price, PriceTier.CURRENT, pd
             else:
                 # current price is from before or same as snapshot — safe to use
                 price = Decimal(str(info["price"]))
                 if is_cdr:
-                    price = price / CDR_RATIO
+                    price = _apply_cdr(price, tier1_source)
                 return price, PriceTier.CURRENT, pd
         else:
             # no price_date — use current price as best-effort
             price = Decimal(str(info["price"]))
             if is_cdr:
-                price = price / CDR_RATIO
+                price = _apply_cdr(price, tier1_source)
             return price, PriceTier.CURRENT, None
 
     # Tier 2: forward-fill from price_history (most recent price <= snapshot_date)
@@ -91,7 +222,7 @@ def _resolve_holding_price(
     if result is not None and result.get("price") is not None:
         price = Decimal(str(result["price"]))
         if is_cdr:
-            price = price / CDR_RATIO
+            price = _apply_cdr(price, "price_history")
         result_date = result.get("price_date")
         if isinstance(result_date, str):
             result_date = date.fromisoformat(result_date)
@@ -197,6 +328,9 @@ def build_snapshot_row(
     account_currency: str = "CAD",
     fx_service: Optional[Any] = None,
     price_history: Optional[Dict[int, List[tuple]]] = None,
+    exchange_overrides: Optional[Dict[int, Optional[str]]] = None,
+    company_currencies: Optional[Dict[int, str]] = None,
+    companies_map: Optional[Dict[int, Dict]] = None,
 ) -> Dict[str, Any]:
     from config import settings
     enable_fx = getattr(settings, "ENABLE_FX_CONVERSION", False)
@@ -235,7 +369,11 @@ def build_snapshot_row(
 
         # 4-tier price resolution
         avg_cost = Decimal(str(h.get("average_cost") or 0))
-        exch_override = h.get("exchange_override")
+        exch_override = exchange_overrides.get(cid) if exchange_overrides else None
+        comp_ccy = (company_currencies.get(cid) if company_currencies else None) or h.get("price_currency") or h.get("currency") or "USD"
+        # Look up per-company CDR ratio
+        comp_ratio = get_cdr_ratio_for_company(cid, companies_map) if companies_map else None
+
         current_price, tier, resolved_price_date = _resolve_holding_price(
             company_id=cid,
             symbol=h.get("symbol", ""),
@@ -245,6 +383,10 @@ def build_snapshot_row(
             snapshot_date=snapshot_date,
             stale_threshold_days=stale_threshold_days,
             exchange_override=exch_override,
+            cdr_ratio=comp_ratio,
+            company_currency=comp_ccy,
+            price_source=prices_by_company.get(cid, {}).get("source"),
+            fx_service=fx_service,
         )
         used_tiers.append(tier)
 
@@ -267,36 +409,33 @@ def build_snapshot_row(
 
         raw_value = qty * current_price
 
-        needs_fx = (
-            enable_fx
-            and price_currency.upper() != account_currency.upper()
-        )
-        if needs_fx:
-            _fx_svc = fx_service
-            if _fx_svc is None:
-                from database import supabase
-                from shared.fx_service import FXService
-                _fx_svc = FXService(supabase)
-            try:
-                conv_val, _ = _fx_svc.convert_or_warn(
-                    raw_value, price_currency, account_currency,
-                    as_of=snapshot_date, holding_id=str(cid),
-                )
-                if cost > 0:
-                    conv_cost, _ = _fx_svc.convert_or_warn(
-                        cost, price_currency, account_currency,
-                        as_of=snapshot_date, holding_id=str(cid),
-                    )
-                    cost = conv_cost
-                current_value = conv_val
-            except Exception:
-                logger.warning(
-                    "FX conversion failed for %s on %s; using unconverted value",
-                    cid, snapshot_date,
-                )
-                current_value = raw_value
-        else:
+        _fx_svc = fx_service
+        if _fx_svc is None and enable_fx:
+            from database import supabase
+            from shared.fx_service import FXService
+            _fx_svc = FXService(supabase)
+
+        # For CDR holdings: the CDR-adjusted price is already in CAD.
+        # Override price_currency to prevent convert_holding_fx from re-converting.
+        _orig_price_currency = h.get("price_currency")
+        if exch_override == "TOR":
+            h["price_currency"] = "CAD"
+
+        try:
+            current_value, cost = convert_holding_fx(
+                h, raw_value, cost, account_currency,
+                _fx_svc, snapshot_date, enable_fx,
+            )
+        except Exception:
+            logger.warning(
+                "FX conversion failed for %s on %s; using unconverted value",
+                cid, snapshot_date,
+            )
             current_value = raw_value
+
+        # Restore original price_currency
+        if exch_override == "TOR" and _orig_price_currency is not None:
+            h["price_currency"] = _orig_price_currency
 
         total_market_value += current_value
         total_cost += cost

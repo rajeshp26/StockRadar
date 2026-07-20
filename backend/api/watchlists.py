@@ -204,7 +204,7 @@ def get_stock_quote(
         raise HTTPException(status_code=400, detail="Missing symbol")
     c = (
         supabase.table("companies")
-        .select("company_id,currency")
+        .select("company_id,currency,cdr_ratio")
         .eq("ticker_symbol", sym)
         .limit(1)
         .execute()
@@ -214,6 +214,23 @@ def get_stock_quote(
         raise HTTPException(status_code=404, detail=f"Symbol '{sym}' not found")
     company_id = company["company_id"]
     currency   = company.get("currency") or "USD"
+    cdr_ratio  = company.get("cdr_ratio")
+
+    # Check if this is a CDR holding (exchange_override = "TOR" in holdings)
+    is_cdr = False
+    try:
+        hold_check = (
+            supabase.table("portfolio_holdings")
+            .select("exchange_override")
+            .eq("company_id", company_id)
+            .eq("exchange_override", "TOR")
+            .limit(1)
+            .execute()
+        )
+        is_cdr = bool(hold_check.data)
+    except Exception:
+        pass
+
     md = (
         supabase.table("current_market_data")
         .select("current_price,close_price,last_updated")
@@ -228,6 +245,16 @@ def get_stock_quote(
     price       = row.get("current_price")
     prev_close  = row.get("close_price")
     last_updated = row.get("last_updated")
+
+    # Apply CDR adjustment if this is a CDR holding
+    if is_cdr:
+        from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
+        ratio = float(cdr_ratio) if cdr_ratio is not None else float(_CDR_RATIO)
+        if price is not None:
+            price = float(price) / ratio
+        if prev_close is not None:
+            prev_close = float(prev_close) / ratio
+
     change = change_percent = None
     try:
         if price is not None and prev_close is not None:

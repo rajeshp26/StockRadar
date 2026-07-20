@@ -1061,10 +1061,25 @@ class PortfolioRepository:
     `test_all_activity_types_considered_in_cash_filter` for enforcement.
     """
 
-    def get_cash_balance(self, account_id: int, target_date: date) -> Decimal:
+    def get_cash_balance(
+        self,
+        account_id: int,
+        target_date: date,
+        account_currency: Optional[str] = None,
+        fx_service: Optional[Any] = None,
+    ) -> Decimal:
+        """Sum net_cash_amount for an account up to target_date.
+
+        When account_currency and fx_service are provided, non-account-currency
+        transactions are converted at today's FX rate before summing.  This
+        produces a cash balance in account_currency suitable for snapshots.
+
+        When called without account_currency (e.g. reconciliation), returns
+        the raw sum of net_cash_amount — backward compatible.
+        """
         result = (
             self.client.table("portfolio_transactions")
-            .select("net_cash_amount")
+            .select("net_cash_amount, currency")
             .eq("account_id", account_id)
             .in_("activity_type", self.CASH_ACTIVITY_TYPES)
             .lte("transaction_date", target_date.isoformat())
@@ -1072,7 +1087,17 @@ class PortfolioRepository:
         )
         total = Decimal("0.00")
         for row in result.data or []:
-            total += Decimal(str(row.get("net_cash_amount") or 0))
+            amount = Decimal(str(row.get("net_cash_amount") or 0))
+            txn_currency = (row.get("currency") or "CAD").upper()
+            if (
+                account_currency
+                and fx_service
+                and txn_currency != account_currency.upper()
+            ):
+                rate = fx_service.get_rate(txn_currency, account_currency.upper(), target_date)
+                if rate is not None:
+                    amount = amount * rate
+            total += amount
         return total
 
     def get_net_deposits(self, account_id: int, target_date: date) -> Decimal:
@@ -1153,6 +1178,37 @@ class PortfolioRepository:
             logger.error(f"Failed to get company names: {e}")
             return []
 
+    def get_company_currencies(self, company_ids: List[int]) -> List[Dict[str, Any]]:
+        if not company_ids:
+            return []
+        try:
+            res = (
+                self.client.table("companies")
+                .select("company_id, currency")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get company currencies: {e}")
+            return []
+
+    def get_companies_info(self, company_ids: List[int]) -> List[Dict[str, Any]]:
+        """Fetch company info including cdr_ratio for CDR pricing."""
+        if not company_ids:
+            return []
+        try:
+            res = (
+                self.client.table("companies")
+                .select("company_id, currency, cdr_ratio, cdr_ratio_date")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get companies info: {e}")
+            return []
+
     def get_symbol_company_mappings(self, account_ids: List[int]) -> List[Dict[str, Any]]:
         try:
             res = self.client.table("portfolio_transactions") \
@@ -1212,9 +1268,9 @@ class PortfolioRepository:
         Prices BEFORE this date must be multiplied by this factor to get
         the post-split-equivalent price.
         """
-        factors: Dict[int, List[tuple]] = {}
         if not company_ids:
-            return factors
+            return {}
+        from shared.split_utils import get_split_factors_from_rows
         try:
             res = (
                 self.client.table("splits")
@@ -1222,29 +1278,10 @@ class PortfolioRepository:
                 .in_("company_id", company_ids)
                 .execute()
             )
-            for row in res.data or []:
-                cid = row["company_id"]
-                sd = row["report_date"]
-                if isinstance(sd, str):
-                    sd = date.fromisoformat(sd)
-                elif isinstance(sd, datetime):
-                    sd = sd.date()
-                sf = (row.get("split_factor") or "1:1")
-                parts = sf.split(":")
-                if len(parts) == 2:
-                    try:
-                        to_val = float(parts[0])
-                        from_val = float(parts[1])
-                        if from_val > 0:
-                            adj = to_val / from_val
-                            factors.setdefault(cid, []).append((sd, adj))
-                    except (ValueError, ZeroDivisionError):
-                        continue
-            for cid in factors:
-                factors[cid].sort(key=lambda x: x[0])
+            return get_split_factors_from_rows(res.data or [])
         except Exception as e:
             logger.error(f"Failed to fetch split factors: {e}")
-        return factors
+            return {}
 
     def get_all_prices_historical(
         self, company_ids: List[int], target_date: date

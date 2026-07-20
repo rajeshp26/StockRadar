@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from config import settings
@@ -110,6 +111,179 @@ async def refresh_all_prices():
         "[PRICE-INGEST] refreshed %d/%d prices (yfinance=%d, supabase=%d)",
         len(prices), len(company_ids), len(yfinance_items), len(supabase_items),
     )
+
+    # Auto-update CDR ratios after price refresh
+    await _update_cdr_ratios()
+
+    # Emit split events for unprocessed splits
+    _emit_split_events()
+
+
+async def _update_cdr_ratios():
+    """Auto-update CDR ratios for all CDR holdings after price refresh.
+
+    Computes cdr_ratio = TSX_share_price / CDR_average_cost and stores in companies table.
+    Called automatically after daily price refresh.
+    """
+    try:
+        # Find all CDR companies (those with exchange_override="TOR" in holdings)
+        hold_result = (
+            repo.client.table("portfolio_holdings")
+            .select("company_id")
+            .eq("exchange_override", "TOR")
+            .execute()
+        )
+        cdr_cids = list(set(row["company_id"] for row in (hold_result.data or [])))
+        if not cdr_cids:
+            return
+
+        # Get current TSX share prices
+        cmr_result = (
+            repo.client.table("current_market_data")
+            .select("company_id, current_price")
+            .in_("company_id", cdr_cids)
+            .execute()
+        )
+        tsx_prices = {row["company_id"]: float(row["current_price"])
+                      for row in (cmr_result.data or [])
+                      if row.get("current_price")}
+
+        # Get weighted average CDR cost per company
+        hold_detail = (
+            repo.client.table("portfolio_holdings")
+            .select("company_id, average_cost, quantity")
+            .in_("company_id", cdr_cids)
+            .eq("exchange_override", "TOR")
+            .execute()
+        )
+        cost_data: Dict[int, Dict] = {}
+        for row in (hold_detail.data or []):
+            cid = row["company_id"]
+            avg = float(row.get("average_cost") or 0)
+            qty = float(row.get("quantity") or 0)
+            if qty > 0 and avg > 0:
+                if cid not in cost_data:
+                    cost_data[cid] = {"total_cost": 0.0, "total_qty": 0.0}
+                cost_data[cid]["total_cost"] += avg * qty
+                cost_data[cid]["total_qty"] += qty
+
+        updated = 0
+        for cid in cdr_cids:
+            tsx_price = tsx_prices.get(cid)
+            if not tsx_price or cid not in cost_data:
+                continue
+            cd = cost_data[cid]
+            if cd["total_qty"] <= 0:
+                continue
+            cdr_avg_cost = cd["total_cost"] / cd["total_qty"]
+            if cdr_avg_cost <= 0:
+                continue
+
+            ratio = tsx_price / cdr_avg_cost
+            # Sanity check: ratio should be between 1 and 100
+            if ratio < 1 or ratio > 100:
+                logger.warning(
+                    "[CDR-RATIO] company=%d ratio=%.2f out of range, skipping",
+                    cid, ratio,
+                )
+                continue
+
+            try:
+                repo.client.table("companies").update({
+                    "cdr_ratio": round(ratio, 2),
+                    "cdr_ratio_date": date.today().isoformat(),
+                }).eq("company_id", cid).execute()
+                updated += 1
+            except Exception as e:
+                logger.warning("[CDR-RATIO] failed to update company %d: %s", cid, e)
+
+        if updated:
+            logger.info("[CDR-RATIO] updated %d/%d CDR ratios", updated, len(cdr_cids))
+
+    except Exception as e:
+        logger.error("[CDR-RATIO] update failed: %s", e)
+
+
+def _emit_split_events() -> None:
+    """For each unprocessed split, emit a split event per affected account."""
+    from infrastructure.repositories.event_store import EventStore
+    from shared.split_utils import parse_split_factor
+
+    event_store = EventStore()
+
+    try:
+        splits_res = (
+            repo.client.table("splits")
+            .select("company_id, report_date, split_factor")
+            .eq("processed", False)
+            .execute()
+        )
+    except Exception as e:
+        logger.error("[SPLIT-EVENT] failed to fetch unprocessed splits: %s", e)
+        return
+
+    if not splits_res.data:
+        return
+
+    for split in splits_res.data:
+        cid = split["company_id"]
+        report_date = split["report_date"]
+        split_factor_str = split.get("split_factor") or ""
+
+        factor = parse_split_factor(split_factor_str)
+        if factor <= 0 or factor == 1:
+            continue
+
+        try:
+            holdings_res = (
+                repo.client.table("portfolio_holdings")
+                .select("account_id")
+                .eq("company_id", cid)
+                .execute()
+            )
+        except Exception as e:
+            logger.error("[SPLIT-EVENT] failed to fetch holdings for company %d: %s", cid, e)
+            continue
+
+        account_ids = list({h["account_id"] for h in (holdings_res.data or [])})
+        if not account_ids:
+            continue
+
+        events = []
+        for aid in account_ids:
+            idempotency_key = f"split_{cid}_{report_date}_{aid}"
+            events.append({
+                "event_type": "split",
+                "event_version": 1,
+                "aggregate_id": f"account_{aid}",
+                "aggregate_type": "account",
+                "data": {
+                    "company_id": cid,
+                    "split_factor": str(factor),
+                    "report_date": report_date,
+                },
+                "metadata": {},
+                "idempotency_key": idempotency_key,
+            })
+
+        if events:
+            try:
+                event_store.append_events_batch(events)
+                logger.info(
+                    "[SPLIT-EVENT] emitted %d split events for company %d (factor=%s)",
+                    len(events), cid, factor,
+                )
+            except Exception as e:
+                logger.error("[SPLIT-EVENT] failed to emit events for company %d: %s", cid, e)
+                continue
+
+        try:
+            repo.client.table("splits").update({"processed": True}) \
+                .eq("company_id", cid) \
+                .eq("report_date", report_date) \
+                .execute()
+        except Exception as e:
+            logger.error("[SPLIT-EVENT] failed to mark split processed for company %d: %s", cid, e)
 
 
 async def _fetch_supabase_prices(company_ids: List[int]) -> Dict[int, Optional[float]]:

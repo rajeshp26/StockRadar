@@ -94,6 +94,12 @@ def reconstruct_holdings_at_date(
         avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
         total_cost = qty_held * avg_cost
         symbol = lot_list[0].get("symbol", "?")
+        earliest_lot_date = min((l["date"] for l in lot_list if l.get("date")), default=None)
+
+        lots_for_holding = [
+            {"quantity": l["quantity"], "cost_per_share": l["cost_per_share"], "date": l.get("date")}
+            for l in lot_list
+        ]
 
         holdings_state.append({
             "company_id": cid,
@@ -101,6 +107,8 @@ def reconstruct_holdings_at_date(
             "quantity": qty_held,
             "total_cost": total_cost,
             "average_cost": avg_cost,
+            "trade_date": earliest_lot_date,
+            "lots": lots_for_holding,
         })
 
     return holdings_state

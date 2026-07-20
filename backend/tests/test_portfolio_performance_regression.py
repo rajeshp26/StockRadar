@@ -98,6 +98,7 @@ def _independent_portfolio_value(
 CASH_ACTIVITY_TYPES = [
     "Trade", "Deposit", "Withdrawal", "Dividend", "MoneyMovement",
     "Interest", "Fee", "WithholdingTax", "ReorganizationDividend",
+    "BonusPayment", "FxExchange", "ReturnOfCapital", "Tax",
 ]
 
 D1 = date(2026, 1, 15)
@@ -659,11 +660,6 @@ def test_case_10_repair_negative_cash_balances():
         "holdings_market_value": 9097.0,
         "cost_basis": 15000.0,
     }
-
-    # The old snapshot needs to be recalculated. After whitelist fix:
-    # cash_balance should be $0.00 (not -$12,000 since transfer is excluded)
-    # holdings_market_value should be $9,097 (still same holdings)
-    # total_value should be $9,097 (not -$2,903)
 
     repaired_cash = Decimal("0.00")  # After whitelist excludes InternalSecurityTransfer
     repaired_mv = Decimal("9097.00")  # Same holdings, same prices

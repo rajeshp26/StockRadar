@@ -36,8 +36,14 @@ web/*.err
 *.tar.gz
 web/tsconfig.tsbuildinfo
 
-# Ad-hoc test scripts (may contain personal info)
+# Ad-hoc test/debug scripts (may contain personal info)
 test_edgar_filings.py
+backend/scripts/_*.py
+backend/account_audit.py
+backend/check_events_*.py
+
+# Raw financial data exports
+docs/*_raw.json
 
 # Broker activity exports (contain personal financial data)
 docs/activities-export-*.csv

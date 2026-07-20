@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from shared.time_utils import now_utc
-from shared.snapshot_builder import build_snapshot_row, check_snapshot_spike
+from shared.fx_service import FXService
+from shared.snapshot_builder import build_snapshot_row, check_snapshot_spike, convert_holding_fx
 from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
@@ -39,6 +40,8 @@ def _build_snapshot_via_replay(
     price_history: Dict[int, List[tuple]],
     account_currency: str = "CAD",
     exchange_overrides: Optional[Dict[int, Optional[str]]] = None,
+    company_currencies: Optional[Dict[int, str]] = None,
+    companies_map: Optional[Dict[int, Dict]] = None,
 ) -> Optional[dict]:
     """Build snapshot using event-replay engine. Returns None if replay fails."""
     try:
@@ -51,6 +54,8 @@ def _build_snapshot_via_replay(
             price_history=price_history,
             account_currency=account_currency,
             exchange_overrides=exchange_overrides,
+            company_currencies=company_currencies,
+            companies_map=companies_map,
         )
     except Exception as e:
         logger.error(f"Event-replay snapshot failed for account {account_id}: {e}")
@@ -69,6 +74,8 @@ async def _fill_snapshot_gaps(
     spike_threshold: float,
     financial_repo: SupabaseFinancialRepository = None,
     all_company_ids: List[int] = None,
+    company_currencies: Optional[Dict[int, str]] = None,
+    companies_map: Optional[Dict[int, Dict]] = None,
 ) -> int:
     """Fill missing snapshot dates between last known snapshot and today.
 
@@ -121,6 +128,8 @@ async def _fill_snapshot_gaps(
             spike_threshold=spike_threshold,
             financial_repo=financial_repo,
             all_company_ids=all_company_ids,
+            company_currencies=company_currencies,
+            companies_map=companies_map,
         )
 
     event_store = EventStore()
@@ -144,6 +153,8 @@ async def _fill_snapshot_gaps(
             price_history=as_of_history,
             account_currency=account_currency,
             exchange_overrides=exchange_overrides,
+            company_currencies=company_currencies,
+            companies_map=companies_map,
         )
         if snapshot is None or snapshot.get("total_value", 0) == 0:
             continue
@@ -181,6 +192,8 @@ async def _fill_snapshot_gaps_incremental(
     spike_threshold: float,
     financial_repo: SupabaseFinancialRepository = None,
     all_company_ids: List[int] = None,
+    company_currencies: Optional[Dict[int, str]] = None,
+    companies_map: Optional[Dict[int, Dict]] = None,
 ) -> int:
     """Cold-start: rebuild snapshots using incremental event replay.
 
@@ -270,9 +283,17 @@ async def _fill_snapshot_gaps_incremental(
 
         for cid, holding in state.holdings.items():
             qty = holding.quantity
-            total_cost += holding.total_cost
 
             exch_override = exchange_overrides.get(cid) if exchange_overrides else None
+            comp_ccy = (company_currencies.get(cid) if company_currencies else None) or "USD"
+            # Look up per-company CDR ratio
+            comp_ratio = None
+            if companies_map and cid in companies_map:
+                r = companies_map[cid].get("cdr_ratio")
+                if r is not None:
+                    from decimal import Decimal as _D
+                    comp_ratio = _D(str(r))
+
             price, tier, resolved_price_date = _resolve_holding_price(
                 company_id=cid,
                 symbol=holding.symbol,
@@ -281,16 +302,56 @@ async def _fill_snapshot_gaps_incremental(
                 price_history=as_of_history or {},
                 snapshot_date=gap_date,
                 exchange_override=exch_override,
+                cdr_ratio=comp_ratio,
+                company_currency=comp_ccy,
+                price_source=as_of_prices.get(cid, {}).get("source"),
             )
 
             if tier == PriceTier.UNAVAILABLE:
                 current_value = _decimal("0")
                 current_price = _decimal("0")
                 pos_quality = "UNAVAILABLE"
+                cost = holding.total_cost
             else:
                 current_price = price
-                current_value = qty * current_price
+                raw_value = qty * current_price
+
+                # FX conversion for inline snapshot building
+                price_currency = "USD"
+                if company_currencies and cid in company_currencies:
+                    price_currency = company_currencies[cid]
+                holding_dict = {
+                    "company_id": cid,
+                    "price_currency": price_currency,
+                    "trade_date": holding.trade_date,
+                    "lots": [
+                        {
+                            "quantity": lot["quantity"],
+                            "cost_per_share": lot["cost_per_share"],
+                            "date": lot.get("date"),
+                        }
+                        for lot in holding.lots
+                    ] if holding.lots else [],
+                }
+                # For CDR holdings: CDR-adjusted price is already in CAD.
+                # Override price_currency to prevent convert_holding_fx from re-converting.
+                if exch_override == "TOR":
+                    holding_dict["price_currency"] = "CAD"
+                try:
+                    from shared.fx_service import FXService
+                    from database import supabase as _sb
+                    _fx_svc = FXService(_sb) if settings.ENABLE_FX_CONVERSION else None
+                    current_value, cost = convert_holding_fx(
+                        holding_dict, raw_value, holding.total_cost,
+                        account_currency, _fx_svc, gap_date,
+                        settings.ENABLE_FX_CONVERSION,
+                    )
+                except Exception:
+                    current_value = raw_value
+                    cost = holding.total_cost
+
                 total_market_value += current_value
+                total_cost += cost
                 # Context-aware quality
                 if tier == PriceTier.COST_BASIS:
                     pos_quality = "COST_FALLBACK"
@@ -306,11 +367,11 @@ async def _fill_snapshot_gaps_incremental(
                 "quantity": float(qty),
                 "current_price": float(current_price),
                 "current_value": float(current_value),
-                "cost_basis": float(holding.total_cost),
-                "unrealized_gain_loss": float(current_value - holding.total_cost),
+                "cost_basis": float(cost),
+                "unrealized_gain_loss": float(current_value - cost),
                 "unrealized_gain_loss_pct": float(
-                    (current_value - holding.total_cost) / holding.total_cost * 100
-                ) if holding.total_cost > 0 else 0.0,
+                    (current_value - cost) / cost * 100
+                ) if cost > 0 else 0.0,
                 "price_age_days": None,
                 "price_data_quality": pos_quality,
             })
@@ -398,10 +459,19 @@ async def compute_daily_snapshots():
                     all_company_ids.add(h["company_id"])
 
         company_names: Dict[int, str] = {}
+        company_currencies: Dict[int, str] = {}
+        companies_map: Dict[int, Dict] = {}
         if all_company_ids:
             names_result = portfolio_repo.get_company_names(list(all_company_ids))
             for row in names_result:
                 company_names[row["company_id"]] = row.get("company_name")
+            cur_result = portfolio_repo.get_company_currencies(list(all_company_ids))
+            for row in cur_result:
+                company_currencies[row["company_id"]] = row.get("currency", "USD")
+            # Fetch companies info including cdr_ratio for CDR pricing
+            companies_info = portfolio_repo.get_companies_info(list(all_company_ids))
+            for row in companies_info:
+                companies_map[row["company_id"]] = row
 
         prices_by_company = await financial_repo.get_latest_prices(list(all_company_ids), today)
 
@@ -427,6 +497,8 @@ async def compute_daily_snapshots():
                     price_history=price_history,
                     account_currency=account_currency,
                     exchange_overrides=exchange_overrides,
+                    company_currencies=company_currencies,
+                    companies_map=companies_map,
                 )
                 if snapshot_row is None:
                     logger.warning(f"Replay failed for account {aid}, skipping")
@@ -442,9 +514,13 @@ async def compute_daily_snapshots():
                     if qty == 0:
                         continue
                     h["company_name"] = company_names.get(h.get("company_id"), h.get("symbol", "?"))
+                    h["trade_date"] = h.get("first_purchase_date")
                     clean_holdings.append(h)
 
-                cash_balance = portfolio_repo.get_cash_balance(aid, today)
+                cash_balance = portfolio_repo.get_cash_balance(
+                    aid, today, account_currency,
+                    FXService(supabase) if settings.ENABLE_FX_CONVERSION else None,
+                )
                 net_deposits = portfolio_repo.get_net_deposits(aid, today)
 
                 snapshot_row = build_snapshot_row(

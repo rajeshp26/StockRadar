@@ -131,6 +131,30 @@ class WatchlistService:
             if market_data_res.data:
                 market_data_map = {item['company_id']: item for item in market_data_res.data}
 
+        # Fetch CDR ratios and exchange overrides for CDR pricing
+        cdr_ratios = {}
+        exchange_overrides = {}
+        if company_ids:
+            try:
+                comp_res = supabase.table('companies').select('company_id, cdr_ratio, exchange').in_('company_id', company_ids).execute()
+                for row in (comp_res.data or []):
+                    cid = row['company_id']
+                    ratio = row.get('cdr_ratio')
+                    if ratio is not None:
+                        cdr_ratios[cid] = float(ratio)
+            except Exception:
+                pass
+            # Check portfolio_holdings for exchange_override
+            try:
+                holdings_res = supabase.table('portfolio_holdings').select('company_id, exchange_override').in_('company_id', company_ids).execute()
+                for row in (holdings_res.data or []):
+                    cid = row['company_id']
+                    exch = row.get('exchange_override')
+                    if exch:
+                        exchange_overrides[cid] = exch
+            except Exception:
+                pass
+
         # 4. Combine data
         stocks_list = []
         for item in raw_watchlist_items:
@@ -140,6 +164,7 @@ class WatchlistService:
 
             ticker_symbol = company['ticker_symbol']
             ticker_data = all_tickers_data.get(ticker_symbol)
+            cid = company['company_id']
 
             current_price = None
             previous_close = None
@@ -149,7 +174,7 @@ class WatchlistService:
                 current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
                 previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
 
-            db_market_data = market_data_map.get(company['company_id'])
+            db_market_data = market_data_map.get(cid)
             if db_market_data:
                 last_updated = db_market_data.get('last_updated')
                 if current_price is None or previous_close is None:
@@ -158,6 +183,13 @@ class WatchlistService:
 
             if current_price is None or previous_close is None:
                 continue
+
+            # Apply CDR adjustment if this is a CDR holding
+            if exchange_overrides.get(cid) == "TOR":
+                from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
+                ratio = cdr_ratios.get(cid, float(_CDR_RATIO))
+                current_price = current_price / ratio
+                previous_close = previous_close / ratio
 
             change = current_price - previous_close
             change_percent = (change / previous_close) * 100 if previous_close else 0

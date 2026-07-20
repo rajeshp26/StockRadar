@@ -30,7 +30,18 @@ event_store = EventStore()
 replay_engine = ReplayEngine(event_store)
 
 AIDS = [7, 8, 9, 10, 11, 12]
-ACCOUNT_CURRENCY = "USD"
+
+# ── Load account currencies from DB ──
+acct_ccy_map = {}
+try:
+    acct_rows = supabase.table("portfolio_accounts").select("account_id, currency").execute()
+    for r in acct_rows.data or []:
+        acct_ccy_map[int(r["account_id"])] = r.get("currency", "USD")
+except Exception:
+    pass
+for aid in AIDS:
+    if aid not in acct_ccy_map:
+        acct_ccy_map[aid] = "USD"
 
 # ── Load all events once per account ──
 print("Loading events...")
@@ -84,10 +95,15 @@ for aid in AIDS:
         if cid: cids.add(int(cid))
 
 company_names = {}
+companies_map = {}
+company_currencies = {}
 if cids:
-    comps = supabase.table('companies').select('company_id,company_name,ticker_symbol').in_('company_id', list(cids)).execute()
+    comps = supabase.table('companies').select('company_id,company_name,ticker_symbol,cdr_ratio,currency').in_('company_id', list(cids)).execute()
     for row in comps.data or []:
-        company_names[int(row['company_id'])] = row['company_name'] or row['ticker_symbol']
+        cid_key = int(row['company_id'])
+        company_names[cid_key] = row['company_name'] or row['ticker_symbol']
+        companies_map[cid_key] = row
+        company_currencies[cid_key] = row.get('currency', 'USD')
 
 # ── Load historical prices (price_history) with split adjustment ──
 # Query per-company via the repo method to get split adjustment + anomaly
@@ -183,8 +199,11 @@ for aid in AIDS:
                 'total_cost': float(h.total_cost),
                 'average_cost': float(h.average_cost),
                 'realized_gain_loss': float(h.realized_gain_loss),
-                'currency': ACCOUNT_CURRENCY,
+                'currency': acct_ccy_map[aid],
                 'exchange_override': acct_overrides.get(cid),
+                'lots': [{'quantity': float(l['quantity']), 'cost_per_share': float(l['cost_per_share']),
+                           'date': l['date'].isoformat() if hasattr(l.get('date'), 'isoformat') else str(l.get('date', '')) if l.get('date') else None}
+                          for l in h.lots] if h.lots else None,
             })
         
         try:
@@ -199,8 +218,11 @@ for aid in AIDS:
                 prices_by_company={},
                 job_id=f"rebuild_{aid}_{sd}",
                 stale_threshold_days=0,
-                account_currency=ACCOUNT_CURRENCY,
+                account_currency=acct_ccy_map[aid],
                 price_history=price_history_map,
+                exchange_overrides=exchange_overrides.get(aid, {}),
+                company_currencies=company_currencies,
+                companies_map=companies_map,
             )
         except Exception as e:
             print(f"  ERROR building snapshot {aid} {sd}: {e}")

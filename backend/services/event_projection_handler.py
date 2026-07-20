@@ -143,6 +143,7 @@ class EventProjectionHandler:
                 "realized_gain_loss": float(holding.realized_gain_loss),
                 "currency": "CAD",
                 "exchange_override": current_overrides.get(cid),
+                "first_purchase_date": holding.trade_date.isoformat() if holding.trade_date else None,
                 "last_transaction_date": datetime.now(timezone.utc).date().isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             })

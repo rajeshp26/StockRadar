@@ -415,6 +415,40 @@ class DividendDashboardService:
                 total_market_value = total_cost
         else:
             total_market_value = total_cost
+
+        # Apply FX conversion to market value and cost basis (convert from price currency to account currency)
+        if settings.ENABLE_FX_CONVERSION and (total_market_value > 0 or total_cost > 0):
+            try:
+                from shared.fx_service import FXService
+                from shared.snapshot_builder import convert_holding_fx
+                from decimal import Decimal as D
+                from shared.time_utils import now_utc as _now
+                _fx = FXService(supabase)
+                # Determine price currency from company
+                comp = supabase.table("companies").select("currency") \
+                    .eq("company_id", matching[0]["company_id"]).maybe_single().execute()
+                price_currency = (comp.data or {}).get("currency", "USD") if comp.data else "USD"
+                # Determine account currency (use first matching account)
+                account_ids_for_ccy = list(set(h.get("account_id") for h in matching if h.get("account_id")))
+                account_currency = "CAD"
+                if account_ids_for_ccy:
+                    acc = supabase.table("portfolio_accounts").select("currency") \
+                        .eq("account_id", account_ids_for_ccy[0]).maybe_single().execute()
+                    if acc.data:
+                        account_currency = acc.data.get("currency", "CAD")
+                holding_dict = {
+                    "company_id": matching[0].get("company_id"),
+                    "price_currency": price_currency,
+                }
+                conv_value, conv_cost = convert_holding_fx(
+                    holding_dict, D(str(total_market_value)), D(str(total_cost)),
+                    account_currency, _fx, _now().date(), True,
+                )
+                total_market_value = float(conv_value)
+                total_cost = float(conv_cost)
+            except Exception:
+                pass
+
         holding = matching[0]  # company info is the same
 
         company_ids = [holding["company_id"]] if holding.get("company_id") else []

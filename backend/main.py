@@ -83,6 +83,24 @@ async def background_price_monitor():
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice")
                 prev_close = info.get("regularMarketPreviousClose")
                 
+                # Apply CDR adjustment if this symbol is a CDR
+                try:
+                    from database import supabase as _sb
+                    comp_res = _sb.table("companies").select("company_id, cdr_ratio").eq("ticker_symbol", symbol).limit(1).execute()
+                    comp_row = comp_res.data[0] if comp_res.data else None
+                    if comp_row:
+                        cid = comp_row["company_id"]
+                        hold_check = _sb.table("portfolio_holdings").select("exchange_override").eq("company_id", cid).eq("exchange_override", "TOR").limit(1).execute()
+                        if hold_check.data:
+                            from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
+                            ratio = float(comp_row["cdr_ratio"]) if comp_row.get("cdr_ratio") is not None else float(_CDR_RATIO)
+                            if current_price:
+                                current_price = float(current_price) / ratio
+                            if prev_close:
+                                prev_close = float(prev_close) / ratio
+                except Exception:
+                    pass
+
                 # Log ALL available close-related keys for diagnostics
                 close_keys = [k for k in info.keys() if 'close' in k.lower()]
                 current_keys = [k for k in info.keys() if 'price' in k.lower() or 'current' in k.lower()]

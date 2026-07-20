@@ -1,12 +1,15 @@
 """Event-replay engine: rebuild portfolio state from immutable event log."""
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from infrastructure.repositories.event_store import EventStore
-from shared.snapshot_builder import PriceTier, _resolve_holding_price, TIER_QUALITY_MAP
+from shared.snapshot_builder import PriceTier, _resolve_holding_price, TIER_QUALITY_MAP, convert_holding_fx
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -17,6 +20,8 @@ class HoldingState:
     total_cost: Decimal
     average_cost: Decimal
     realized_gain_loss: Decimal = Decimal("0")
+    trade_date: Optional[date] = None
+    lots: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -62,6 +67,10 @@ class ReplayEngine:
 
     DEPOSIT_ACTIVITY_TYPES = {"MoneyMovement", "BonusPayment"}
 
+    COST_REDUCTION_ACTIVITY_TYPES = {"ReturnOfCapital"}
+
+    HOLDING_ACTIVITY_TYPES = {"Trade", "InternalSecurityTransfer"}
+
     def __init__(self, event_store: EventStore):
         self.event_store = event_store
 
@@ -70,6 +79,7 @@ class ReplayEngine:
         data = event.get("data", {}) or {}
         state.cash_balance = _decimal(data.get("cash_balance"))
         state.net_deposits = _decimal(data.get("net_deposits"))
+        event_date = self._get_event_date(event)
         holdings = data.get("holdings", []) or []
         for h in holdings:
             cid = int(h["company_id"])
@@ -83,6 +93,7 @@ class ReplayEngine:
                     quantity=qty,
                     total_cost=total_cost if total_cost > 0 else qty * avg_cost,
                     average_cost=avg_cost,
+                    trade_date=event_date,
                 )
 
     def _handle_transaction_imported(self, state: AccountState, event: dict) -> None:
@@ -93,6 +104,7 @@ class ReplayEngine:
         company_id = data.get("company_id")
         quantity = _decimal(data.get("quantity"))
         unit_price = _decimal(data.get("unit_price"))
+        txn_date = self._get_event_date(event)
 
         # Cash
         if activity_type in self.CASH_ACTIVITY_TYPES:
@@ -102,39 +114,126 @@ class ReplayEngine:
         if activity_type in self.DEPOSIT_ACTIVITY_TYPES and net_cash > 0:
             state.net_deposits += net_cash
 
+        # Cost basis reduction for ReturnOfCapital
+        if activity_type in self.COST_REDUCTION_ACTIVITY_TYPES and company_id:
+            self._handle_return_of_capital(state, event)
+
         # Holdings
-        if company_id and activity_type == "Trade" and quantity != 0:
+        if company_id and activity_type in self.HOLDING_ACTIVITY_TYPES and quantity != 0:
             cid = int(company_id)
             holding = state.holdings.get(cid)
 
-            if quantity > 0:  # Buy
-                total_cost = quantity * unit_price
+            if quantity > 0:  # Buy or inbound IST
+                if activity_type == "InternalSecurityTransfer":
+                    # IST: derive cost from net_cash_amount (value of securities transferred)
+                    nca = abs(_decimal(data.get("net_cash_amount")))
+                    cost_per_share = nca / quantity if quantity else unit_price
+                else:
+                    commission = _decimal(data.get("commission"))
+                    cost_per_share = unit_price + (commission / quantity) if quantity else unit_price
+                total_cost = quantity * cost_per_share
+                lot = {"quantity": quantity, "cost_per_share": cost_per_share, "date": txn_date}
                 if holding:
                     new_qty = holding.quantity + quantity
                     new_cost = holding.total_cost + total_cost
                     holding.quantity = new_qty
                     holding.total_cost = new_cost
                     holding.average_cost = new_cost / new_qty if new_qty else Decimal("0")
+                    holding.lots.append(lot)
                 else:
                     state.holdings[cid] = HoldingState(
                         company_id=cid,
                         symbol=symbol or "?",
                         quantity=quantity,
                         total_cost=total_cost,
-                        average_cost=unit_price if quantity else Decimal("0"),
+                        average_cost=cost_per_share if quantity else Decimal("0"),
+                        trade_date=txn_date,
+                        lots=[lot],
                     )
 
-            elif quantity < 0:  # Sell
+            elif quantity < 0:  # Sell or outbound IST
                 sell_qty = abs(quantity)
                 if holding:
                     sold = min(sell_qty, holding.quantity)
+                    if sell_qty > holding.quantity:
+                        logger.warning(
+                            "Sell truncation: account=%s company=%s sell_qty=%s > holding_qty=%s",
+                            state.account_id, cid, sell_qty, holding.quantity,
+                        )
                     sale_proceeds = sold * unit_price
-                    cost_of_sold = sold * holding.average_cost if holding.average_cost else Decimal("0")
+                    # FIFO cost basis: remove lots from front, accumulate cost
+                    cost_of_sold = Decimal("0")
+                    remaining_to_remove = sold
+                    while remaining_to_remove > 0 and holding.lots:
+                        front = holding.lots[0]
+                        lot_qty = front["quantity"]
+                        lot_cost = front["cost_per_share"]
+                        if lot_qty <= remaining_to_remove:
+                            cost_of_sold += lot_qty * lot_cost
+                            remaining_to_remove -= lot_qty
+                            holding.lots.pop(0)
+                        else:
+                            cost_of_sold += remaining_to_remove * lot_cost
+                            front["quantity"] -= remaining_to_remove
+                            remaining_to_remove = Decimal("0")
+                    # Fallback: if lots didn't cover the full sell, use average_cost for remainder
+                    if sold > 0 and remaining_to_remove > 0 and holding.average_cost:
+                        cost_of_sold += remaining_to_remove * holding.average_cost
+                    elif cost_of_sold == 0 and sold > 0 and holding.average_cost:
+                        cost_of_sold = sold * holding.average_cost
                     holding.realized_gain_loss += sale_proceeds - cost_of_sold
                     holding.total_cost -= cost_of_sold
                     holding.quantity -= sold
+                    # Recalculate average_cost from remaining lots
+                    if holding.lots:
+                        total_qty = sum(l["quantity"] for l in holding.lots)
+                        total_lot_cost = sum(l["quantity"] * l["cost_per_share"] for l in holding.lots)
+                        holding.average_cost = total_lot_cost / total_qty if total_qty else Decimal("0")
                     if holding.quantity <= 0:
                         del state.holdings[cid]
+
+    def _handle_split(self, state: AccountState, event: dict) -> None:
+        """Adjust holdings for a stock split event."""
+        data = event.get("data", {}) or {}
+        company_id = data.get("company_id")
+        split_factor = _decimal(data.get("split_factor"))
+        if not company_id or split_factor <= 0 or split_factor == 1:
+            return
+        holding = state.holdings.get(int(company_id))
+        if not holding:
+            return
+        holding.quantity *= split_factor
+        holding.average_cost /= split_factor
+        for lot in holding.lots:
+            lot["quantity"] *= split_factor
+            lot["cost_per_share"] /= split_factor
+
+    def _handle_return_of_capital(self, state: AccountState, event: dict) -> None:
+        """Reduce cost basis when ReturnOfCapital is received."""
+        data = event.get("data", {}) or {}
+        company_id = data.get("company_id")
+        net_cash = _decimal(data.get("net_cash_amount"))
+        if not company_id or net_cash <= 0:
+            return
+        holding = state.holdings.get(int(company_id))
+        if not holding:
+            return
+        # Reduce cost basis by ROC amount (cannot go below zero)
+        if holding.total_cost > 0:
+            reduction = min(net_cash, holding.total_cost)
+            holding.total_cost -= reduction
+            # Reduce each lot proportionally
+            if holding.lots:
+                lot_total_cost = sum(l["quantity"] * l["cost_per_share"] for l in holding.lots)
+                if lot_total_cost > 0:
+                    ratio = reduction / lot_total_cost
+                    for lot in holding.lots:
+                        lot["cost_per_share"] *= (1 - ratio)
+                        if lot["cost_per_share"] < 0:
+                            lot["cost_per_share"] = Decimal("0")
+            # Recalculate average_cost
+            if holding.quantity > 0:
+                holding.average_cost = holding.total_cost / holding.quantity
 
     def _get_event_date(self, event: dict) -> Optional[date]:
         """Extract the relevant date from an event — prefers data.effective_date / transaction_date over created_at."""
@@ -206,13 +305,27 @@ class ReplayEngine:
         price_history: Optional[Dict[int, List[tuple]]] = None,
         account_currency: str = "CAD",
         exchange_overrides: Optional[Dict[int, Optional[str]]] = None,
+        company_currencies: Optional[Dict[int, str]] = None,
+        companies_map: Optional[Dict[int, Dict]] = None,
     ) -> dict:
         """Build a snapshot dict from replay state (compatible with build_snapshot_row output).
 
         Args:
             exchange_overrides: Optional dict mapping company_id → exchange_override
                 (e.g. {42: "TOR"} for CDR holdings). Used to apply CDR ratio in pricing.
+            company_currencies: Optional dict mapping company_id → price currency
+                (e.g. {478: "USD", 1027: "CAD"}). Used for FX conversion.
+            companies_map: Optional dict mapping company_id → companies row dict
+                (with cdr_ratio field). Used for per-company CDR ratio lookup.
         """
+        from config import settings
+        from shared.fx_service import FXService
+        from database import supabase as _sb
+        from shared.snapshot_builder import get_cdr_ratio_for_company
+
+        enable_fx = getattr(settings, "ENABLE_FX_CONVERSION", False)
+        fx_svc = FXService(_sb) if enable_fx else None
+
         state = self.replay_to_date(account_id, target_date)
 
         holdings_list = []
@@ -222,9 +335,12 @@ class ReplayEngine:
 
         for cid, holding in state.holdings.items():
             qty = holding.quantity
-            total_cost += holding.total_cost
+            cost = holding.total_cost
 
             exch_override = exchange_overrides.get(cid) if exchange_overrides else None
+            comp_ccy = (company_currencies.get(cid) if company_currencies else None) or "USD"
+            comp_ratio = get_cdr_ratio_for_company(cid, companies_map) if companies_map else None
+
             price, tier, resolved_price_date = _resolve_holding_price(
                 company_id=cid,
                 symbol=holding.symbol,
@@ -233,6 +349,10 @@ class ReplayEngine:
                 price_history=price_history or {},
                 snapshot_date=target_date,
                 exchange_override=exch_override,
+                cdr_ratio=comp_ratio,
+                company_currency=comp_ccy,
+                price_source=prices_by_company.get(cid, {}).get("source"),
+                fx_service=fx_svc,
             )
             used_tiers.append(tier)
 
@@ -242,9 +362,44 @@ class ReplayEngine:
                 pos_quality = "UNAVAILABLE"
             else:
                 current_price = price
-                current_value = qty * current_price
+                raw_value = qty * current_price
+
+                price_currency = "USD"
+                if company_currencies and cid in company_currencies:
+                    price_currency = company_currencies[cid]
+
+                holding_dict = {
+                    "company_id": cid,
+                    "price_currency": price_currency,
+                    "lots": [
+                        {
+                            "quantity": lot["quantity"],
+                            "cost_per_share": lot["cost_per_share"],
+                            "date": lot.get("date"),
+                        }
+                        for lot in holding.lots
+                    ] if holding.lots else [],
+                    "trade_date": holding.trade_date,
+                }
+                # For CDR holdings: CDR-adjusted price is already in CAD.
+                # Override price_currency to prevent convert_holding_fx from re-converting.
+                if exch_override == "TOR":
+                    holding_dict["price_currency"] = "CAD"
+
+                try:
+                    current_value, cost = convert_holding_fx(
+                        holding_dict, raw_value, cost, account_currency,
+                        fx_svc, target_date, enable_fx,
+                    )
+                except Exception:
+                    logger.warning(
+                        "FX conversion failed for %s on %s; using unconverted value",
+                        cid, target_date,
+                    )
+                    current_value = raw_value
+
                 total_market_value += current_value
-                # Context-aware quality: FORWARD_FILL with small gap is OK
+                total_cost += cost
                 if tier == PriceTier.COST_BASIS:
                     pos_quality = "COST_FALLBACK"
                 elif tier == PriceTier.FORWARD_FILL:
@@ -253,19 +408,30 @@ class ReplayEngine:
                 else:
                     pos_quality = TIER_QUALITY_MAP.get(tier, "OK")
 
+            lots_out = [
+                {
+                    "quantity": float(lot["quantity"]),
+                    "cost_per_share": float(lot["cost_per_share"]),
+                    "date": lot["date"].isoformat() if lot.get("date") else None,
+                }
+                for lot in holding.lots
+            ] if holding.lots else []
+
             holdings_list.append({
                 "company_id": cid,
                 "symbol": holding.symbol,
                 "quantity": float(qty),
                 "current_price": float(current_price),
                 "current_value": float(current_value),
-                "cost_basis": float(holding.total_cost),
-                "unrealized_gain_loss": float(current_value - holding.total_cost),
+                "cost_basis": float(cost),
+                "unrealized_gain_loss": float(current_value - cost),
                 "unrealized_gain_loss_pct": float(
-                    (current_value - holding.total_cost) / holding.total_cost * 100
-                ) if holding.total_cost > 0 else 0.0,
+                    (current_value - cost) / cost * 100
+                ) if cost > 0 else 0.0,
                 "price_age_days": None,
                 "price_data_quality": pos_quality,
+                "trade_date": holding.trade_date.isoformat() if holding.trade_date else None,
+                "lots": lots_out,
             })
 
         total_value = total_market_value + state.cash_balance
@@ -306,6 +472,8 @@ class ReplayEngine:
         prices_by_company: Dict[int, Dict],
         price_history: Optional[Dict[int, List[tuple]]] = None,
         account_currency: str = "CAD",
+        company_currencies: Optional[Dict[int, str]] = None,
+        companies_map: Optional[Dict[int, Dict]] = None,
     ) -> ComparisonResult:
         """Compare replay result with a stored portfolio_snapshot row."""
         replay = self.build_snapshot_from_replay(
@@ -314,6 +482,8 @@ class ReplayEngine:
             prices_by_company=prices_by_company,
             price_history=price_history,
             account_currency=account_currency,
+            company_currencies=company_currencies,
+            companies_map=companies_map,
         )
 
         differences: List[str] = []

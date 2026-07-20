@@ -258,7 +258,7 @@ class Settings(BaseSettings):
 
     # FX Currency Conversion
     ENABLE_FX_CONVERSION: bool = Field(
-        default=False,
+        default=True,
         description="Enable FX currency conversion for multi-currency portfolio holdings"
     )
 

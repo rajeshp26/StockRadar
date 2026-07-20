@@ -1421,43 +1421,6 @@ class SupabaseFinancialRepository:
     # PORTFOLIO SNAPSHOT PRICE METHODS
     # ========================================================================
 
-    def _get_split_factors(
-        self, company_ids: List[int]
-    ) -> Dict[int, List[tuple]]:
-        factors: Dict[int, List[tuple]] = {}
-        if not company_ids:
-            return factors
-        try:
-            res = (
-                self.client.table("splits")
-                .select("company_id, report_date, split_factor")
-                .in_("company_id", company_ids)
-                .execute()
-            )
-            for row in res.data or []:
-                cid = row["company_id"]
-                sd = row["report_date"]
-                if isinstance(sd, str):
-                    sd = date.fromisoformat(sd)
-                elif isinstance(sd, datetime):
-                    sd = sd.date()
-                sf = (row.get("split_factor") or "1:1")
-                parts = sf.split(":")
-                if len(parts) == 2:
-                    try:
-                        to_val = float(parts[0])
-                        from_val = float(parts[1])
-                        if from_val > 0:
-                            adj = to_val / from_val
-                            factors.setdefault(cid, []).append((sd, adj))
-                    except (ValueError, ZeroDivisionError):
-                        continue
-            for cid in factors:
-                factors[cid].sort(key=lambda x: x[0])
-        except Exception as e:
-            logger.error(f"Failed to fetch split factors: {e}")
-        return factors
-
     async def get_latest_prices(
         self, company_ids: List[int], target_date: date,
         include_current_fallback: bool = True,
@@ -1465,7 +1428,17 @@ class SupabaseFinancialRepository:
         if not company_ids:
             return {}
 
-        split_factors = self._get_split_factors(company_ids)
+        from shared.split_utils import get_split_factors_from_rows
+        try:
+            splits_res = (
+                self.client.table("splits")
+                .select("company_id, report_date, split_factor")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            split_factors = get_split_factors_from_rows(splits_res.data or [])
+        except Exception:
+            split_factors = {}
 
         result = (
             self.client.table("price_history")
