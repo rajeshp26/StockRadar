@@ -37,8 +37,6 @@ import type {
   FundamentalsResponse,
 } from "../types/analysis.types";
 
-import type { OverviewRecommendation } from "../hooks/useValuationOverview";
-
 type Json = Record<string, any>;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -370,22 +368,80 @@ export async function fetchResidualIncomeHistory(ticker: string): Promise<Residu
   return { symbol: ticker.toUpperCase(), items: [] };
 }
 
+/* -------------------------------------------------------------------------- */
+/* VALUATION SUMMARY (canonical cross-method read model, §6.1)                */
+/*                                                                            */
+/* Single GET /analysis/{symbol}/valuation-summary replaces the per-method    */
+/* GETs + /overview as the page's valuation critical path. One request, one   */
+/* SQL view, zero compute on the request path.                                */
+/* -------------------------------------------------------------------------- */
+
+export type ValuationMethodKey =
+  | "rule1"
+  | "dcf"
+  | "ddm_gordon"
+  | "owner_earnings"
+  | "residual_income";
+
+export type ValuationMethodStatus =
+  | "available"
+  | "stale"
+  | "not_computed"
+  | "not_applicable"
+  | "failed_without_previous_result";
+
+/** Per-method section of the summary contract (v_valuation_latest_runs). */
+export type MethodSummaryResponse = {
+  method: ValuationMethodKey;
+  status: ValuationMethodStatus;
+  reasonCode: string | null;      // e.g. "NEGATIVE_EPS" | "NOT_MEANINGFUL" | "MISSING_SNAPSHOT"
+  intrinsicValue: number | null;
+  referencePrice: number | null;
+  referencePriceAsOf: string | null;
+  upsideDownside: number | null;
+  computedAt: string | null;
+  inputAsOf: string | null;
+  modelVersion: string | null;
+  freshnessDays: number | null;
+  score: number | null;
+  category: string | null;
+  currency: string;
+  refresh: unknown;               // future extension — always null today
+};
+
+export type RecommendationSummary = {
+  status: "pending" | "disabled" | "available";
+  reasonCode: string | null;      // e.g. "PROVIDER_NOT_CONFIGURED"
+  text: string | null;            // deterministic or AI summary text (never silent-null contract)
+  generatedAt: string | null;
+  sourceSnapshotVersion: string | null;
+  provider: string | null;
+  model: string | null;
+};
+
+export type ValuationSummaryResponse = {
+  symbol: string;
+  currency: string;
+  sector: string | null;
+  generatedAt: string;
+  methods: Record<ValuationMethodKey, MethodSummaryResponse>;
+  recommendation: RecommendationSummary;
+};
+
 /**
- * GET — Fetches cross-method overview with AI recommendation.
- * Returns null if no methods have been computed yet (backend returns empty data).
- * Never throws — returns null on any failure so the overview renders without it.
+ * GET — Canonical cross-method valuation summary from the published read model.
+ * One request on the page's critical path. 404 only for unknown symbols.
  */
-export async function fetchOverviewSummary(
+export async function fetchValuationSummary(
   symbol: string
-): Promise<OverviewRecommendation | null> {
-  const url = apiPath(`/valuations/${encodeURIComponent(symbol)}/overview`);
-  try {
-    const resp = await api.get(url, { timeout: DEFAULT_TIMEOUT_MS });
-    const body = resp.data as { recommendation?: OverviewRecommendation };
-    return body?.recommendation ?? null;
-  } catch {
-    return null;
+): Promise<ValuationSummaryResponse> {
+  const url = apiPath(`/analysis/${encodeURIComponent(symbol)}/valuation-summary`);
+  const resp = await api.get(url, { timeout: DEFAULT_TIMEOUT_MS });
+  const body = resp.data as ValuationSummaryResponse;
+  if (!body || typeof body !== "object" || !body.methods) {
+    throw new Error("Invalid response from server (missing valuation summary).");
   }
+  return body;
 }
 
 /* -------------------------------------------------------------------------- */

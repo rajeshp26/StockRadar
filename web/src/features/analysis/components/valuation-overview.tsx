@@ -347,7 +347,7 @@ export function ValuationOverview({ symbol, onSelectMethod }: ValuationOverviewP
     loadingRec,
     anyComputed,
     allLoading,
-  } = useValuationOverview(symbol, onSelectMethod);
+  } = useValuationOverview(symbol);
 
   const handleMethodClick = (id: IntrinsicMethod) => {
     onSelectMethod?.(id);

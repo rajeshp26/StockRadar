@@ -124,8 +124,8 @@ export function useDdmAnalysis(
         freshness:   toFreshnessInfoFromDataQuality(dataQuality),
         notComputed: false,
       });
-      // Invalidate overview so AI recommendation regenerates with fresh data
-      queryClient.invalidateQueries({ queryKey: QK.overview(currentSymbol) });
+      // Invalidate summary so the overview reflects fresh data
+      queryClient.invalidateQueries({ queryKey: QK.valuationSummary(currentSymbol) });
     } else {
       throw new Error(outcome.message || "Failed to compute DDM.");
     }

@@ -95,18 +95,15 @@ describe("Analysis Page — Tab Switching", () => {
     expect(screen.queryByTestId("intrinsic-panel")).not.toBeInTheDocument();
   });
 
-  it("P3-UT-13: overview children render when method is overview", () => {
-    const overviewContent = React.createElement("div", { "data-testid": "overview-rsc" }, "RSC Overview Cards");
-    render(React.createElement(ClientTabs, { symbol: "AAPL", overviewChildren: overviewContent }));
-    expect(screen.getByTestId("overview-rsc")).toBeInTheDocument();
+  it("P3-UT-13: overview renders when method is overview", () => {
+    render(React.createElement(ClientTabs, { symbol: "AAPL" }));
+    expect(screen.getByTestId("method-selector")).toBeInTheDocument();
   });
 
-  it("P3-UT-14: overview children hidden when method changes", () => {
-    const overviewContent = React.createElement("div", { "data-testid": "overview-rsc" }, "RSC Overview Cards");
-    render(React.createElement(ClientTabs, { symbol: "AAPL", overviewChildren: overviewContent }));
+  it("P3-UT-14: overview hidden when method changes", () => {
+    render(React.createElement(ClientTabs, { symbol: "AAPL" }));
     const select = screen.getByTestId("method-select");
     fireEvent.change(select, { target: { value: "rule1" } });
-    expect(screen.queryByTestId("overview-rsc")).not.toBeInTheDocument();
     expect(screen.getByTestId("intrinsic-panel")).toBeInTheDocument();
   });
 

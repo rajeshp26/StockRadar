@@ -1,9 +1,8 @@
 "use client";
-import { useState, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { formatTimestamp } from "@/lib/time";
 import { prefetchAllValuations } from "@/features/analysis/utils/prefetch-valuations";
 import { useHoldingExists } from "@/features/portfolio/hooks/usePortfolio";
 import { usePredictiveTabPrefetch } from "@/features/analysis/hooks/usePredictiveTabPrefetch";
@@ -11,6 +10,7 @@ import {
   MethodSelector,
   type IntrinsicMethod,
 } from "@/features/analysis/components/method-selector";
+import { ValuationOverviewTab } from "@/components/analysis/valuation-overview-tab";
 import { IntrinsicPanel } from "@/features/analysis/components/intrinsic-panel";
 import { DcfPanel } from "@/features/analysis/components/dcf-panel";
 import { DdmPanel } from "@/features/analysis/components/ddm-panel";
@@ -115,15 +115,31 @@ function ComingSoonPanel({
   );
 }
 
-export function ClientTabs({ symbol, overviewChildren }: { symbol: string; overviewChildren?: ReactNode }) {
+export function ClientTabs({ symbol }: { symbol: string }) {
   const queryClient = useQueryClient();
   const upperSymbol = symbol.toUpperCase();
 
   const [method, setMethod] = useState<IntrinsicMethod>("overview");
+
+  const handleSelectMethod = (m: IntrinsicMethod) => {
+    setMethod(m);
+  };
   const [tab, setTab] = useState<TopTab>("intrinsic");
   const [othersMethod, setOthersMethod] = useState<OthersMethod>("magic_formula");
 
-  const { data: holdingExists } = useHoldingExists(upperSymbol);
+  // holdings/exists is not on the page critical path — defer it to idle so a
+  // fresh page load issues exactly 2 valuation requests (summary + quote).
+  const [idleReady, setIdleReady] = useState(false);
+  useEffect(() => {
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      const id = requestIdleCallback(() => setIdleReady(true), { timeout: 2000 });
+      return () => cancelIdleCallback(id);
+    }
+    const t = setTimeout(() => setIdleReady(true), 1000);
+    return () => clearTimeout(t);
+  }, []);
+
+  const { data: holdingExists } = useHoldingExists(upperSymbol, { enabled: idleReady });
   const isHeld = holdingExists?.held ?? false;
 
   const TOP_TABS = useMemo(() => {
@@ -160,7 +176,7 @@ export function ClientTabs({ symbol, overviewChildren }: { symbol: string; overv
         {tab === "intrinsic" && (
           <div className="space-y-6 animate-fade-up">
             <MethodSelector method={method} onChange={setMethod} />
-            {method === "overview" && overviewChildren}
+            {method === "overview" && <ValuationOverviewTab symbol={upperSymbol} onSelectMethod={handleSelectMethod} />}
             {method === "rule1" && <IntrinsicPanel symbol={upperSymbol} />}
             {method === "dcf" && <DcfPanel symbol={upperSymbol} />}
             {method === "ddm" && <DdmPanel symbol={upperSymbol} />}

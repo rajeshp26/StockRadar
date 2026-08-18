@@ -126,9 +126,9 @@ export function useValuationStream({
 
           const qkFactory = METHOD_TO_QK[method];
           if (!qkFactory) {
-            // Unknown method — invalidate the overview which aggregates all methods
+            // Unknown method — invalidate the summary which aggregates all methods
             queryClient.invalidateQueries({
-              queryKey: QK.overview(upperSymbol),
+              queryKey: QK.valuationSummary(upperSymbol),
             });
             return;
           }
@@ -138,9 +138,9 @@ export function useValuationStream({
             queryKey: qkFactory(upperSymbol),
           });
 
-          // Also invalidate the overview since a new method result is available
+          // Also invalidate the summary since a new method result is available
           queryClient.invalidateQueries({
-            queryKey: QK.overview(upperSymbol),
+            queryKey: QK.valuationSummary(upperSymbol),
           });
 
           return;

@@ -1,53 +1,50 @@
 // web/src/features/analysis/hooks/useValuationOverview.ts
 "use client";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { IntrinsicMethod } from "../components/method-selector";
-import type {
-  DdmVariant,
-  DcfResponse,
-  DdmResponse,
-  OwnerEarningsResponse,
-  ResidualIncomeResponse,
-} from "../types/analysis.types";
-import type { Rule1Data } from "./useAnalysis";
-import { rule1QueryFn }                 from "./useAnalysis";
-import { dcfQueryFn }                   from "./useDcfAnalysis";
 import {
-  fetchDdmCached,
-  fetchOwnerEarningsCached,
-  fetchResidualIncomeCached,
+  fetchValuationSummary,
+  type RecommendationSummary,
+  type ValuationMethodKey,
 } from "../services/analysis.service";
-import { fetchOverviewSummary }         from "../services/analysis.service";
-import { QK }                           from "@/lib/query-keys";
-import { STALE, GC }                    from "@/lib/query-client";
+import { QK } from "@/lib/query-keys";
+import { STALE, GC } from "@/lib/query-client";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type MethodStatus = "loading" | "computed" | "not_computed" | "error";
+export type MethodStatus =
+  | "loading"
+  | "computed"
+  | "stale"
+  | "not_computed"
+  | "not_applicable"
+  | "error";
 
 export type MethodSummary = {
   id:             IntrinsicMethod;
   label:          string;
   description:    string;
   status:         MethodStatus;
-  intrinsicValue: number | null;    // primary per-share value
+  intrinsicValue: number | null;
   currentPrice:   number | null;
-  upsideDownside: number | null;    // fraction e.g. 0.25 = 25% upside
-  score:          number | null;    // 0–100
-  category:       string | null;    // "Good" | "Caution" | "Poor"
-  lastComputedAt: string | null;    // ISO timestamp
+  upsideDownside: number | null;
+  score:          number | null;
+  category:       string | null;
+  lastComputedAt: string | null;
   currency:       string;
+  reasonCode:     string | null;
+  freshnessDays:  number | null;
   errorMessage?:  string;
 };
 
-export type OverviewRecommendation = {
-  bestMethod:       string;
-  bestMethodLabel:  string;
-  reasoning:        string;
-  consensus:        string;   // "Undervalued" | "Fairly Valued" | "Overvalued" | "Mixed"
-  confidenceNote:   string;
+export type OverviewRecommendation = RecommendationSummary & {
+  bestMethod:      string | null;
+  bestMethodLabel: string | null;
+  consensus:       string;
+  reasoning:       string;
+  confidenceNote:  string;
 };
 
 export type ValuationOverviewData = {
@@ -56,6 +53,9 @@ export type ValuationOverviewData = {
   loadingRec:     boolean;
   anyComputed:    boolean;
   allLoading:     boolean;
+  generatedAt:    string | null;
+  currency:       string;
+  sector:         string | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,230 +71,141 @@ const METHOD_META: Record<IntrinsicMethod, { label: string; description: string 
   residualIncome: { label: "Residual Income",            description: "Economic profit based valuation" },
 };
 
+const API_TO_METHOD: Record<ValuationMethodKey, IntrinsicMethod> = {
+  rule1:           "rule1",
+  dcf:             "dcf",
+  ddm_gordon:      "ddm",
+  owner_earnings:  "ownerEarnings",
+  residual_income: "residualIncome",
+};
+
+const METHOD_KEYS = Object.keys(API_TO_METHOD) as ValuationMethodKey[];
+
+/** Value is considered stale after this many days since computedAt. */
+const STALE_AFTER_DAYS = 7;
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Extractor helpers
-// Returns null for any field that is missing or not yet computed.
+// Mappers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function extractRule1(data: Rule1Data | undefined, id: IntrinsicMethod): Partial<MethodSummary> {
-  if (!data || data.notComputed) return {};
-  const v   = data.valuation as any;
-  const app = data.applicability as any;
-  const dq  = data.dataQuality   as any;
-  const iv  = v?.stickerPrice ?? null;
-  const cur = v?.currentPrice  ?? null;
-  const upside = iv && cur && cur > 0 ? (iv - cur) / cur : null;
-  return {
-    intrinsicValue: iv,
-    currentPrice:   cur,
-    upsideDownside: upside,
-    score:          app?.score          ?? null,
-    category:       app?.category       ?? null,
-    lastComputedAt: dq?.freshnessDays?.lastComputedAt ?? null,
-    currency:       "USD",
-  };
+function mapStatus(status: string | undefined, isPending: boolean, isError: boolean): MethodStatus {
+  if (isPending) return "loading";
+  if (isError) return "error";
+  switch (status) {
+    case "available": return "computed";
+    case "stale":     return "stale";
+    case "not_computed": return "not_computed";
+    case "not_applicable": return "not_applicable";
+    case "failed_without_previous_result": return "error";
+    default: return "not_computed";
+  }
 }
 
-function extractFromSnapshot(
-  data:     any | undefined,
-  ivField:  string,
-): Partial<MethodSummary> {
-  if (!data || data.notComputed) return {};
-  const v   = data.valuation     as any;
-  const app = data.applicability as any;
-  const dq  = data.dataQuality   as any;
-  const iv  = v?.[ivField]       ?? null;
-  const cur = v?.currentPrice    ?? null;
-  const upside = iv && cur && cur > 0 ? (iv - cur) / cur : null;
-  return {
-    intrinsicValue: iv    != null ? Number(iv)    : null,
-    currentPrice:   cur   != null ? Number(cur)   : null,
-    upsideDownside: upside != null ? Number(upside) : null,
-    score:          app?.score    ?? null,
-    category:       app?.category ?? null,
-    lastComputedAt: (dq?.freshnessDays as any)?.lastComputedAt ?? null,
-    currency:       v?.currency ?? "USD",
-  };
-}
-
-function resolveStatus(isPending: boolean, isError: boolean, isNotComputed: boolean): MethodStatus {
-  if (isPending)      return "loading";
-  if (isError)        return "error";
-  if (isNotComputed)  return "not_computed";
-  return "computed";
+function deriveConsensus(methods: MethodSummary[]): string {
+  const computed = methods.filter((m) => m.status === "computed" || m.status === "stale");
+  if (computed.length === 0) return "No Data";
+  const positive = computed.filter((m) => (m.upsideDownside ?? 0) > 0.02);
+  const negative = computed.filter((m) => (m.upsideDownside ?? 0) < -0.02);
+  if (negative.length === 0) return "Undervalued";
+  if (positive.length === 0) return "Overvalued";
+  return "Mixed";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook
 //
-// Reads from the SAME React Query cache keys as the individual method tabs.
-// When a user visits the Rule1 tab and it computes, the overview reflects that
-// update immediately — no extra network calls, no synchronisation needed.
-//
-// The AI recommendation is a separate lightweight query (QK.overview) that
-// fires once all methods have been attempted.
+// Single useQuery on the canonical /analysis/{symbol}/valuation-summary
+// endpoint (§6.1). One request on the page critical path replaces the five
+// per-method GETs + /overview. Statuses are mapped 1:1 from the read-model
+// contract; a broken section never fails the whole page.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useValuationOverview(
-  symbol:      string,
-  onSelectMethod?: (method: IntrinsicMethod) => void,
+  symbol: string,
 ): ValuationOverviewData {
   const upper = (symbol ?? "").toUpperCase();
-  const ddmVariant: DdmVariant = "gordon";
 
-  // ── Read all 5 method caches (same keys as individual hooks) ───────────────
-  const rule1Q = useQuery({
-    queryKey:  QK.rule1(upper),
-    queryFn:   () => rule1QueryFn(upper),
+  const q = useQuery({
+    queryKey:  QK.valuationSummary(upper),
+    queryFn:   () => fetchValuationSummary(upper),
     enabled:   !!upper,
     staleTime: STALE.VALUATION,
     gcTime:    GC.VALUATION,
     retry:     1,
   });
 
-  const dcfQ = useQuery({
-    queryKey:  QK.dcf(upper),
-    queryFn:   () => dcfQueryFn(upper),
-    enabled:   !!upper,
-    staleTime: STALE.VALUATION,
-    gcTime:    GC.VALUATION,
-    retry:     1,
+  const data  = q.data;
+  const raw   = data?.methods;
+  const isPending = q.isPending;
+  const isError   = q.isError;
+
+  const methods: MethodSummary[] = METHOD_KEYS.map((key) => {
+    const id  = API_TO_METHOD[key];
+    const sec = raw?.[key];
+    const status = mapStatus(sec?.status, isPending, isError);
+    const isComputed = status === "computed" || status === "stale";
+    const lastComputedAt = sec?.computedAt ?? null;
+    const freshnessDays  = sec?.freshnessDays ?? null;
+    return {
+      id,
+      ...METHOD_META[id],
+      status: status === "computed" && freshnessDays != null && freshnessDays > STALE_AFTER_DAYS
+        ? "stale" as MethodStatus
+        : status,
+      intrinsicValue: sec?.intrinsicValue ?? null,
+      currentPrice:   sec?.referencePrice ?? null,
+      upsideDownside: sec?.upsideDownside ?? null,
+      score:          sec?.score ?? null,
+      category:       sec?.category ?? null,
+      lastComputedAt,
+      currency:       sec?.currency ?? "USD",
+      reasonCode:     sec?.reasonCode ?? null,
+      freshnessDays,
+      errorMessage:   isError
+        ? q.error?.message ?? "Failed to load valuation summary"
+        : (status === "error" ? (sec?.reasonCode ?? "Computation failed") : undefined),
+    } satisfies MethodSummary;
   });
 
-  const ddmQ = useQuery({
-    queryKey:  QK.ddm(upper, ddmVariant),
-    queryFn:   async () => {
-      const outcome = await fetchDdmCached(upper, ddmVariant);
-      if (outcome.status === "not_computed") return { notComputed: true };
-      if (outcome.status === "ok")           return { ...outcome.payload, notComputed: false };
-      throw new Error(outcome.message);
-    },
-    enabled:   !!upper,
-    staleTime: STALE.VALUATION,
-    gcTime:    GC.VALUATION,
-    retry:     1,
-  });
-
-  const oeQ = useQuery({
-    queryKey:  QK.ownerEarnings(upper),
-    queryFn:   async () => {
-      const outcome = await fetchOwnerEarningsCached(upper);
-      if (outcome.status === "not_computed") return { notComputed: true };
-      if (outcome.status === "ok")           return { ...outcome.payload, notComputed: false };
-      throw new Error(outcome.message);
-    },
-    enabled:   !!upper,
-    staleTime: STALE.VALUATION,
-    gcTime:    GC.VALUATION,
-    retry:     1,
-  });
-
-  const riQ = useQuery({
-    queryKey:  QK.residualIncome(upper),
-    queryFn:   async () => {
-      const outcome = await fetchResidualIncomeCached(upper);
-      if (outcome.status === "not_computed") return { notComputed: true };
-      if (outcome.status === "ok")           return { ...outcome.payload, notComputed: false };
-      throw new Error(outcome.message);
-    },
-    enabled:   !!upper,
-    staleTime: STALE.VALUATION,
-    gcTime:    GC.VALUATION,
-    retry:     1,
-  });
-
-  // ── Build per-method summaries ─────────────────────────────────────────────
-  const methods: MethodSummary[] = [
-    {
-      id:    "rule1",
-      ...METHOD_META.rule1,
-      status: resolveStatus(
-        rule1Q.isPending,
-        rule1Q.isError,
-        !!(rule1Q.data as any)?.notComputed,
-      ),
-      ...extractRule1(rule1Q.data as Rule1Data, "rule1"),
-      intrinsicValue: (rule1Q.data as any)?.valuation?.stickerPrice ?? null,
-      currentPrice:   (rule1Q.data as any)?.valuation?.currentPrice  ?? null,
-      upsideDownside: null, // computed below
-      score:          (rule1Q.data as any)?.applicability?.score    ?? null,
-      category:       (rule1Q.data as any)?.applicability?.category ?? null,
-      lastComputedAt: (rule1Q.data as any)?.dataQuality?.freshnessDays?.lastComputedAt ?? null,
-      currency:       "USD",
-      errorMessage:   rule1Q.error?.message,
-    },
-    {
-      id:    "dcf",
-      ...METHOD_META.dcf,
-      status: resolveStatus(
-        dcfQ.isPending,
-        dcfQ.isError,
-        !!(dcfQ.data as any)?.notComputed,
-      ),
-      ...extractFromSnapshot(dcfQ.data, "intrinsicValuePerShare"),
-      errorMessage: dcfQ.error?.message,
-    },
-    {
-      id:    "ddm",
-      ...METHOD_META.ddm,
-      status: resolveStatus(
-        ddmQ.isPending,
-        ddmQ.isError,
-        !!(ddmQ.data as any)?.notComputed,
-      ),
-      ...extractFromSnapshot(ddmQ.data, "intrinsicValue"),
-      errorMessage: ddmQ.error?.message,
-    },
-    {
-      id:    "ownerEarnings",
-      ...METHOD_META.ownerEarnings,
-      status: resolveStatus(
-        oeQ.isPending,
-        oeQ.isError,
-        !!(oeQ.data as any)?.notComputed,
-      ),
-      ...extractFromSnapshot(oeQ.data, "intrinsicValuePerShare"),
-      errorMessage: oeQ.error?.message,
-    },
-    {
-      id:    "residualIncome",
-      ...METHOD_META.residualIncome,
-      status: resolveStatus(
-        riQ.isPending,
-        riQ.isError,
-        !!(riQ.data as any)?.notComputed,
-      ),
-      ...extractFromSnapshot(riQ.data, "intrinsicValuePerShare"),
-      errorMessage: riQ.error?.message,
-    },
-  ];
-
-  // Fix upside for Rule1 (stickerPrice vs currentPrice)
-  const r1 = methods[0];
-  if (r1.intrinsicValue != null && r1.currentPrice != null && r1.currentPrice > 0) {
-    r1.upsideDownside = (r1.intrinsicValue - r1.currentPrice) / r1.currentPrice;
-  }
-
-  // ── AI recommendation ──────────────────────────────────────────────────────
-  // Only fires when at least one method is computed and none are still loading.
-  const anyComputed = methods.some((m) => m.status === "computed");
+  const anyComputed = methods.some((m) => m.status === "computed" || m.status === "stale");
   const allLoading  = methods.every((m) => m.status === "loading");
-  const anyLoading  = methods.some((m) => m.status === "loading");
 
-  const recQ = useQuery<OverviewRecommendation | null, Error>({
-    queryKey:  QK.overview(upper),
-    queryFn:   () => fetchOverviewSummary(upper),
-    enabled:   !!upper && anyComputed && !anyLoading,
-    staleTime: STALE.VALUATION,
-    gcTime:    GC.VALUATION,
-    retry:     0,  // AI call — don't retry on failure, just show no recommendation
-  });
+  const recRaw: RecommendationSummary | null = data?.recommendation ?? null;
+
+  let recommendation: OverviewRecommendation | null = null;
+  if (recRaw) {
+    const best = methods
+      .filter((m) => m.status === "computed" || m.status === "stale")
+      .sort((a, b) => (b.score ?? -1) - (a.score ?? -1))[0] ?? null;
+    const consensus = deriveConsensus(methods);
+    const computedCount = methods.filter((m) => m.status === "computed" || m.status === "stale").length;
+    const reasoning = recRaw.text ?? (
+      computedCount === 0
+        ? "No valuation methods have been computed yet."
+        : `${consensus} — ${computedCount} of ${methods.length} methods have published values.`
+    );
+    recommendation = {
+      ...recRaw,
+      bestMethod:      best?.id ?? null,
+      bestMethodLabel: best?.label ?? null,
+      consensus,
+      reasoning,
+      confidenceNote:  recRaw.status === "disabled"
+        ? "AI summary disabled — showing deterministic valuation summary."
+        : recRaw.status === "pending"
+          ? "AI summary pending — showing deterministic valuation summary."
+          : "",
+    };
+  }
 
   return {
     methods,
-    recommendation: recQ.data ?? null,
-    loadingRec:     recQ.isPending && anyComputed && !anyLoading,
+    recommendation,
+    loadingRec: isPending && anyComputed,
     anyComputed,
     allLoading,
+    generatedAt: data?.generatedAt ?? null,
+    currency:    data?.currency ?? "USD",
+    sector:      data?.sector ?? null,
   };
 }
