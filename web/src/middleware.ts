@@ -34,6 +34,7 @@ function buildCsp(isDev: boolean): string {
             " http://localhost:*" +
             " ws://localhost:*" +
             " wss://localhost:*" +
+            " http://localhost:54321" +
             " https://viqdqgxcumcdhqxooplw.supabase.co" +
             " https://*.googleapis.com",
             "worker-src 'self' blob:",
@@ -51,6 +52,7 @@ function buildCsp(isDev: boolean): string {
         "img-src 'self' data: blob: https://images.unsplash.com",
         "font-src 'self' data:",
         "connect-src 'self'" +
+        " http://localhost:54321" +
         " https://viqdqgxcumcdhqxooplw.supabase.co" +
         " https://*.googleapis.com",
         "worker-src 'self' blob:",

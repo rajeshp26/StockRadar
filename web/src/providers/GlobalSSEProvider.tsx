@@ -41,6 +41,8 @@ export interface CachedPrice {
   changePercent: number | null;
   lastUpdated:   string | null;
   currency?:     string | null;
+  source?:       string | null;
+  isStale?:      boolean | null;
 }
 
 interface SSEContextValue {
@@ -154,6 +156,10 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
           //      finds the data fresh and silently skips its HTTP GET.
           //   b) notifies all useQuery(QK.price) subscribers (StockCard,
           //      useLivePrice) → instant re-render with new price.
+          const current = queryClient.getQueryData<CachedPrice>(QK.price(symbol));
+          if (data.lastUpdated && current?.lastUpdated && data.lastUpdated < current.lastUpdated) {
+            return; // Drop stale update — cache is fresher
+          }
           queryClient.setQueryData<CachedPrice>(QK.price(symbol), {
             symbol,
             price:         typeof data.price         === "number" ? data.price         : null,
@@ -161,6 +167,8 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
             changePercent: typeof data.changePercent === "number" ? data.changePercent : null,
             lastUpdated:   typeof data.lastUpdated   === "string" ? data.lastUpdated   : null,
             currency:      typeof data.currency      === "string" ? data.currency      : null,
+            source:        typeof data.source        === "string" ? data.source        : null,
+            isStale:       typeof data.isStale       === "boolean" ? data.isStale      : null,
           });
           return;
         }
@@ -175,12 +183,12 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
           if (qkFn) {
             queryClient.invalidateQueries({ queryKey: qkFn(sym) });
           } else {
-            // Unknown method — fall back to invalidating the overview
-            queryClient.invalidateQueries({ queryKey: QK.overview(sym) });
+            // Unknown method — fall back to invalidating the summary
+            queryClient.invalidateQueries({ queryKey: QK.valuationSummary(sym) });
           }
-          // Always invalidate the cross-method overview so it reflects the
+          // Always invalidate the cross-method summary so it reflects the
           // newly available result
-          queryClient.invalidateQueries({ queryKey: QK.overview(sym) });
+          queryClient.invalidateQueries({ queryKey: QK.valuationSummary(sym) });
         }
       };
 

@@ -1,42 +1,33 @@
 'use client';
 
-import type { Stock } from '@/lib/types';
+import React from 'react';
+import type { StockPriceInfo } from '@/features/watchlists/types/watchlist.types';
 import { cn } from '@/lib/utils';
 import { TrendingUp, TrendingDown, X, Pencil, Target as TargetIcon, Clock, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
-import { usePriceData } from '@/hooks/usePriceData';
 import { formatTimestamp } from '@/lib/time';
 
 interface StockCardProps {
-  stock: Stock;
+  stock: StockPriceInfo;
   onRemove: (stockId: number) => void;
-  onEdit: (stock: Stock) => void;
+  onEdit: (stock: StockPriceInfo) => void;
 }
 
-export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
-  /* ── Live price from shared cache (written by GlobalSSEProvider) ────────── */
-  const priceData        = usePriceData(stock.symbol);
-  const price            = priceData?.price         ?? null;
-  const change           = priceData?.change        ?? null;
-  const changePercent    = priceData?.changePercent ?? null;
+export const StockCard = React.memo(function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
+  const price            = stock.price         ?? null;
+  const change           = stock.change        ?? null;
+  const changePercent    = stock.changePercent ?? null;
   const isPositiveChange = (change ?? 0) >= 0;
 
-  if (process.env.NODE_ENV !== 'production') {
-    console.log(`[PRICE-DIAG] ${stock.symbol}: priceData=`, priceData, `price=${price}`);
-  }
-
-  
-
-  const getBuyVariance = () => {
+  const buyVariance = React.useMemo(() => {
     if (!stock.targetBuy || price == null) return null;
     const diff        = price - stock.targetBuy;
     const diffPercent = (diff / stock.targetBuy) * 100;
     const isTargetHit = diff <= 0;
     return { diff, diffPercent, isTargetHit };
-  };
-  const buyVariance = getBuyVariance();
+  }, [stock.targetBuy, price]);
 
-  const lastUpdatedTime = formatTimestamp(priceData?.lastUpdated ?? null, "relative");
+  const lastUpdatedTime = formatTimestamp(stock.lastUpdated ?? null, "relative");
   const sellHit = stock.targetSell != null && price != null && price >= stock.targetSell;
 
   /* ── Letter avatar color (deterministic by ticker) ─────── */
@@ -218,4 +209,4 @@ export function StockCard({ stock, onRemove, onEdit }: StockCardProps) {
 
     </Link>
   );
-}
+});

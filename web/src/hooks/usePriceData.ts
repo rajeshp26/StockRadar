@@ -17,7 +17,7 @@
 //   exactly as before — no regression.
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { QK } from "@/lib/query-keys";
 import { GC } from "@/lib/query-client";
 import type { CachedPrice } from "@/providers/GlobalSSEProvider";
@@ -46,4 +46,46 @@ export function usePriceData(symbol: string): CachedPrice | null {
   });
 
   return data ?? null;
+}
+
+/**
+ * Fetch initial watchlist prices via REST and seed the React Query cache.
+ * Call this on watchlist load so prices are available immediately —
+ * the SSE stream handles live updates after this.
+ *
+ * @param watchlistId  The watchlist ID to fetch prices for.
+ */
+export function useWatchlistPrices(watchlistId: number | null) {
+  const queryClient = useQueryClient();
+
+  return useQuery({
+    queryKey: ["watchlistPrices", watchlistId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/proxy/watchlists/${watchlistId}/prices?page_size=50`
+      );
+      if (!res.ok) throw new Error(`Failed to fetch prices: ${res.status}`);
+      const data = await res.json();
+
+      // Seed individual price caches so usePriceData works immediately
+      const prices: Record<string, CachedPrice> = {};
+      for (const p of data.prices ?? []) {
+        const cached: CachedPrice = {
+          symbol:        p.symbol,
+          price:         p.price,
+          change:        p.change,
+          changePercent: p.changePercent,
+          lastUpdated:   p.lastUpdated,
+          source:        p.source,
+          isStale:       p.isStale,
+        };
+        prices[p.symbol] = cached;
+        queryClient.setQueryData<CachedPrice>(QK.price(p.symbol), cached);
+      }
+      return prices;
+    },
+    enabled: watchlistId !== null,
+    gcTime: GC.PRICE,
+    staleTime: 60_000, // 1 min — SSE will keep it fresh
+  });
 }

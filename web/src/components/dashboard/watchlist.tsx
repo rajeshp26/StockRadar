@@ -14,7 +14,8 @@ import { WatchlistToolbar, type SortKey, type ViewMode } from "./watchlist-toolb
 import { WatchlistSectorView } from "./watchlist-sector-view";
 import { QK } from "@/lib/query-keys";
 import { GC } from "@/lib/query-client";
-import type { CachedPrice } from "@/providers/GlobalSSEProvider";import {
+import type { CachedPrice } from "@/providers/GlobalSSEProvider";
+import { useWatchlistPrices } from "@/hooks/usePriceData";import {
   Plus, RefreshCw, Pencil, Check, X,
   BarChart2, AlertTriangle,
 } from "lucide-react";
@@ -145,6 +146,11 @@ function FullCapNotice({ onClose }: { onClose: () => void }) {
 export function Watchlist({ initialWatchlist }: WatchlistProps) {
   const wl = useWatchlist({ initialWatchlist });
 
+  // ── Fetch initial prices via REST on mount ────────────────────────────────
+  // This seeds the React Query cache so prices are available immediately
+  // without waiting for the SSE stream to deliver them.
+  useWatchlistPrices(wl.watchlistId ?? null);
+
   // ── Reactive price subscriptions for all stocks ───────────────────────────
   //
   // useQueries subscribes to every QK.price(symbol) cache entry.
@@ -166,21 +172,38 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
   });
 
   // Merge structure + cached prices into a single enriched list.
-  // Falls back gracefully to whatever price the structure returned (usually null).
-  const stocksWithPrices: StockPriceInfo[] = useMemo(
-    () =>
-      wl.stocks.map((s, i) => {
-        const cached = priceQueries[i]?.data;
-        return {
-          ...s,
-          price:         cached?.price         ?? s.price         ?? null,
-          change:        cached?.change        ?? s.change        ?? null,
-          changePercent: cached?.changePercent ?? s.changePercent ?? null,
-        };
-      }),
+  // Uses ref-based comparison so unchanged stocks keep the same object reference,
+  // allowing React.memo in StockCard/StockListRow to skip unnecessary re-renders.
+  const stocksWithPricesPrevRef = useRef<StockPriceInfo[]>([]);
+
+  const stocksWithPrices: StockPriceInfo[] = useMemo(() => {
+    const next = wl.stocks.map((s, i) => {
+      const cached = priceQueries[i]?.data;
+      return {
+        ...s,
+        price:         cached?.price         ?? s.price         ?? null,
+        change:        cached?.change        ?? s.change        ?? null,
+        changePercent: cached?.changePercent ?? s.changePercent ?? null,
+      };
+    });
+
+    // Return previous references for unchanged stocks (stable identity for React.memo)
+    const prev = stocksWithPricesPrevRef.current;
+    const stabilized = next.map((stock, i) => {
+      const p = prev[i];
+      if (p && p.symbol === stock.symbol &&
+          p.price === stock.price &&
+          p.change === stock.change &&
+          p.changePercent === stock.changePercent) {
+        return p;
+      }
+      return stock;
+    });
+
+    stocksWithPricesPrevRef.current = stabilized;
+    return stabilized;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [wl.stocks, priceQueries],
-  );
+  }, [wl.stocks, priceQueries]);
 
   // ── Session-persistent view state ─────────────────────────────────────────
   // Survives navigation back/forward within the tab session.
@@ -279,6 +302,10 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
     await wl.renameWatchlist(name);
     setRenamingUI(false);
   }, [wl]);
+
+  // Stable callbacks for StockCard/StockListRow — prevents new references on every render
+  const handleEditStock = useCallback((stock: StockPriceInfo) => setEditStock(stock), []);
+  const handleRemoveStock = useCallback((id: number) => wl.removeStock(id), [wl.removeStock]);
 
   // ── Loading ────────────────────────────────────────────────────────────────
   if (wl.isLoading) {
@@ -444,16 +471,16 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
             <StockCard
               key={stock.id}
               stock={stock}
-              onEdit={() => setEditStock(stock)}
-              onRemove={() => wl.removeStock(stock.id)}
+              onEdit={handleEditStock}
+              onRemove={handleRemoveStock}
             />
           ))}
         </div>
       ) : viewMode === "sector" ? (
         <WatchlistSectorView
           stocks={processedStocks}
-          onEdit={(stock) => setEditStock(stock)}
-          onRemove={(id) => wl.removeStock(id)}
+          onEdit={handleEditStock}
+          onRemove={handleRemoveStock}
         />
       ) : (
         <div className="space-y-1.5">
@@ -470,8 +497,8 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
             <StockListRow
               key={stock.id}
               stock={stock}
-              onEdit={(s) => setEditStock(s)}
-              onRemove={(id) => wl.removeStock(id)}
+              onEdit={handleEditStock}
+              onRemove={handleRemoveStock}
             />
           ))}
         </div>

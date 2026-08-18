@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import React from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ArrowRight, Edit2, Trash2 } from "lucide-react";
 import type { StockPriceInfo } from "@/features/watchlists/types/watchlist.types";
-import { usePriceData } from "@/hooks/usePriceData";
 
 interface StockListRowProps {
   stock:        StockPriceInfo;
@@ -22,25 +21,24 @@ const AVATAR_COLORS = [
   "from-amber-600/80  to-amber-800/60  border-amber-500/30",
 ] as const;
 
-export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
+export const StockListRow = React.memo(function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
   const avatarColor = AVATAR_COLORS[stock.symbol.charCodeAt(0) % AVATAR_COLORS.length];
 
-  /* ── Live price from shared cache (written by GlobalSSEProvider) ────────── */
-  const priceData  = usePriceData(stock.symbol);
-  const isPositive = (priceData?.change ?? 0) >= 0;
+  const price    = stock.price ?? null;
+  const isPositive = (stock.change ?? 0) >= 0;
   const changeColor = isPositive ? "text-emerald-400" : "text-rose-400";
 
-  const buyVariance = useMemo(() => {
-    if (stock.targetBuy == null || priceData?.price == null) return null;
-    const gap = ((priceData.price - stock.targetBuy) / stock.targetBuy) * 100;
-    return { gap, isTargetHit: priceData.price <= stock.targetBuy };
-  }, [priceData?.price, stock.targetBuy]);
+  const buyVariance = React.useMemo(() => {
+    if (stock.targetBuy == null || price == null) return null;
+    const gap = ((price - stock.targetBuy) / stock.targetBuy) * 100;
+    return { gap, isTargetHit: price <= stock.targetBuy };
+  }, [price, stock.targetBuy]);
 
-  const sellVariance = useMemo(() => {
-    if (stock.targetSell == null || priceData?.price == null) return null;
-    const gap = ((priceData.price - stock.targetSell) / stock.targetSell) * 100;
-    return { gap, isTargetHit: priceData.price >= stock.targetSell };
-  }, [priceData?.price, stock.targetSell]);
+  const sellVariance = React.useMemo(() => {
+    if (stock.targetSell == null || price == null) return null;
+    const gap = ((price - stock.targetSell) / stock.targetSell) * 100;
+    return { gap, isTargetHit: price >= stock.targetSell };
+  }, [price, stock.targetSell]);
 
   const hasBuyAlert  = buyVariance?.isTargetHit;
   const hasSellAlert = sellVariance?.isTargetHit;
@@ -72,15 +70,15 @@ export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
       {/* Price */}
       <div className="w-24 flex-shrink-0 text-right hidden sm:block">
         <p className="text-sm font-black text-white tabular-nums">
-          {priceData?.price != null ? `$${priceData.price.toFixed(2)}` : "—"}
+          {price != null ? `$${price.toFixed(2)}` : "—"}
         </p>
       </div>
 
       {/* Change */}
       <div className="w-24 flex-shrink-0 text-right hidden md:block">
-        {priceData?.changePercent != null ? (
+        {stock.changePercent != null ? (
           <span className={cn("text-xs font-bold tabular-nums", changeColor)}>
-            {isPositive ? "+" : ""}{priceData.changePercent.toFixed(2)}%
+            {isPositive ? "+" : ""}{stock.changePercent.toFixed(2)}%
           </span>
         ) : (
           <span className="text-xs text-white/20">—</span>
@@ -168,4 +166,4 @@ export function StockListRow({ stock, onEdit, onRemove }: StockListRowProps) {
       </div>
     </div>
   );
-}
+});

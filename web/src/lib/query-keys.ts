@@ -36,6 +36,9 @@ export const QK = {
   // ── Valuation overview (cross-method AI recommendation) ──────────────────
   overview: (symbol: string) =>
     ["valuation", "overview", symbol.toUpperCase()] as const,
+  // ── Valuation summary (canonical read model, §6.1) ───────────────────────
+  valuationSummary: (symbol: string) =>
+    ["valuation", "summary", symbol.toUpperCase()] as const,
   // ── Live price ───────────────────────────────────────────────────────────
   price: (symbol: string) =>
     ["price", symbol.toUpperCase()] as const,

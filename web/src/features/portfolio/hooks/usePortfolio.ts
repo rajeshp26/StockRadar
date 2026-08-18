@@ -281,11 +281,12 @@ export function useImportStatus(importBatchId: string | null) {
 /**
  * Hook: check if user holds a position in the given symbol
  */
-export function useHoldingExists(symbol: string) {
+export function useHoldingExists(symbol: string, options?: { enabled?: boolean }) {
     const { portfolioService } = useServices();
     return useQuery<HoldingExistsResponse, Error>({
         queryKey: QK.holdingExists(symbol),
         queryFn: () => portfolioService.checkHoldingExists(symbol),
+        enabled: options?.enabled ?? true,
         staleTime: STALE.PORTFOLIO,
         gcTime: GC.PORTFOLIO,
     });
