@@ -85,3 +85,11 @@ backend/start_both.sh
 backend/start_wsl.sh
 backend/stderr.log
 backend/stdout.log
+
+# DB migration data dumps (ephemeral, large files)
+docs/migration_baseline/table_data/
+docs/migration_baseline/BACKUP_*.sql
+docs/migration_baseline/view_*.json
+
+# Generated tool output
+docs/graphify-out/
