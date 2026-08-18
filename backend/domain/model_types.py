@@ -7,7 +7,7 @@ Compatible with Pydantic v2.
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -63,6 +63,7 @@ class IncomeStatementRow(BaseModel):
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     validation_notes: Optional[str] = None
+    field_sources: Optional[Dict[str, List[str]]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -126,6 +127,7 @@ class BalanceSheetRow(BaseModel):
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     validation_notes: Optional[str] = None
+    field_sources: Optional[Dict[str, List[str]]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -179,6 +181,7 @@ class CashFlowRow(BaseModel):
     data_source: str = "defeat_beta"
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
     validation_notes: Optional[str] = None
+    field_sources: Optional[Dict[str, List[str]]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

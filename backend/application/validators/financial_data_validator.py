@@ -52,6 +52,7 @@ class ValidationResult:
     statement_type: str  # "income", "balance", "cashflow"
     issues: List[ValidationIssue]
     quality_score: int  # 0-100
+    field_sources: Optional[Dict[str, List[str]]] = None
     
     def has_critical_issues(self) -> bool:
         return any(i.severity == Severity.CRITICAL for i in self.issues)
@@ -258,6 +259,7 @@ class FinancialDataValidator:
                 ))
         
         quality_score = _calculate_quality_score(issues)
+        field_sources = row.get("field_sources")
         
         return ValidationResult(
             symbol=symbol,
@@ -265,7 +267,8 @@ class FinancialDataValidator:
             fiscal_quarter=fq,
             statement_type="income",
             issues=issues,
-            quality_score=quality_score
+            quality_score=quality_score,
+            field_sources=field_sources,
         )
     
     # ========================================================================
@@ -335,6 +338,7 @@ class FinancialDataValidator:
                 ))
         
         quality_score = _calculate_quality_score(issues)
+        field_sources = row.get("field_sources")
         
         return ValidationResult(
             symbol=symbol,
@@ -342,7 +346,8 @@ class FinancialDataValidator:
             fiscal_quarter=fq,
             statement_type="balance",
             issues=issues,
-            quality_score=quality_score
+            quality_score=quality_score,
+            field_sources=field_sources,
         )
     
     # ========================================================================
@@ -392,6 +397,7 @@ class FinancialDataValidator:
             ))
         
         quality_score = _calculate_quality_score(issues)
+        field_sources = row.get("field_sources")
         
         return ValidationResult(
             symbol=symbol,
@@ -399,7 +405,8 @@ class FinancialDataValidator:
             fiscal_quarter=fq,
             statement_type="cashflow",
             issues=issues,
-            quality_score=quality_score
+            quality_score=quality_score,
+            field_sources=field_sources,
         )
 
 
@@ -526,7 +533,7 @@ def verify_database_write(
 # ============================================================================
 
 def log_validation_result(result: ValidationResult) -> None:
-    """Log validation result with severity-based formatting (like super_investors)."""
+    """Log validation result with severity-based formatting and provider attribution."""
     if not result.issues:
         logger.debug("[DQ] %s FY%s Q%s %s: ✅ PASS (score: %d/100)",
                     result.symbol, result.fiscal_year, 
@@ -554,6 +561,14 @@ def log_validation_result(result: ValidationResult) -> None:
         msg = f"[DQ]   {prefix}: {issue.field} - {issue.message}"
         if issue.expected is not None:
             msg += f" (expected: {issue.expected}, got: {issue.actual})"
+        
+        if result.field_sources and issue.severity in (Severity.CRITICAL, Severity.WARNING):
+            sources = result.field_sources.get(issue.field)
+            if sources:
+                msg += f" [provider: {', '.join(sources)}]"
+            else:
+                msg += " [provider: NONE]"
+        
         if issue.suggestion:
             msg += f" → {issue.suggestion}"
         

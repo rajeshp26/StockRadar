@@ -57,6 +57,14 @@ _LABEL_MAP: Dict[str, str] = {
     "Change In Accounts Receivable": "Change In Working Capital",
     "Change In Inventories": "Change In Working Capital",
     "Change In Accounts Payable": "Change In Working Capital",
+    # IFRS-specific labels (Canadian banks)
+    "Net Revenue": "Total Revenue",
+    "Turnover": "Total Revenue",
+    "Operating Profit": "Operating Income",
+    "Profit Before Tax": "Pretax Income",
+    "Profit For The Year": "Net Income",
+    "Total Current Assets": "Total Current Assets",
+    "Dividends Paid": "Cash Dividends Paid",
 }
 
 

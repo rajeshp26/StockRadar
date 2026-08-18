@@ -321,7 +321,7 @@ class DefeatBetaProvider(StockDataProvider):
             client = get_duckdb_client()
             spec_url = "https://huggingface.co/datasets/defeatbeta/yahoo-finance-data/resolve/main/spec.json"
             client.query(f"SELECT * FROM '{spec_url}'")
-            logger.info("✅ DuckDB cache pre-warmed")
+            logger.info("DuckDB cache pre-warmed")
         except Exception as e:
             logger.warning(f"DuckDB cache pre-warm failed: {e}")
 
@@ -332,7 +332,7 @@ class DefeatBetaProvider(StockDataProvider):
             from defeatbeta_api.client.duckdb_client import get_duckdb_client
             client = get_duckdb_client()
             client._clear_cache()
-            logger.info("✅ DuckDB httpfs cache cleared")
+            logger.info("DuckDB httpfs cache cleared")
         except Exception as e:
             logger.warning(f"Failed to clear DuckDB cache: {e}")
 
@@ -1323,47 +1323,47 @@ class DefeatBetaProvider(StockDataProvider):
 
         a = self.DB_INCOME_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
+            fv = {
+                'revenue': self._safe_decimal(self._db_val(df, a.get('revenue', []), col)),
+                'cost_of_goods_sold': self._safe_decimal(self._db_val(df, a.get('cost_of_goods_sold', []), col)),
+                'gross_profit': self._safe_decimal(self._db_val(df, a.get('gross_profit', []), col)),
+                'operating_expenses': self._safe_decimal(self._db_val(df, a.get('operating_expenses', []), col)),
+                'rd_expenses': self._safe_decimal(self._db_val(df, a.get('rd_expenses', []), col)),
+                'sga_expenses': self._safe_decimal(self._db_val(df, a.get('sga_expenses', []), col)),
+                'operating_income': self._safe_decimal(self._db_val(df, a.get('operating_income', []), col)),
+                'interest_expense': self._safe_decimal(self._db_val(df, a.get('interest_expense', []), col)),
+                'tax_expense': self._safe_decimal(self._db_val(df, a.get('tax_expense', []), col)),
+                'net_income': self._safe_decimal(self._db_val(df, a.get('net_income', []), col)),
+                'ebitda': self._safe_decimal(self._db_val(df, a.get('ebitda', []), col)),
+                'non_operating_income_expense': self._safe_decimal(self._db_val(df, a.get('non_operating_income_expense', []), col)),
+                'pretax_income': self._safe_decimal(self._db_val(df, a.get('pretax_income', []), col)),
+                'equity_in_earnings': self._safe_decimal(self._db_val(df, a.get('equity_in_earnings', []), col)),
+                'minority_interest': self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col)),
+                'income_from_continuing_operations': self._safe_decimal(self._db_val(df, a.get('income_from_continuing_operations', []), col)),
+                'discontinued_operations': self._safe_decimal(self._db_val(df, a.get('discontinued_operations', []), col)),
+                'net_income_to_common': self._safe_decimal(self._db_val(df, a.get('net_income_to_common', []), col)),
+                'preferred_dividends': self._safe_decimal(self._db_val(df, a.get('preferred_dividends', []), col)),
+                'ebit': self._safe_decimal(self._db_val(df, a.get('ebit', []), col)),
+                'eps_basic': self._safe_decimal(self._db_val(df, a.get('eps_basic', []), col)),
+                'eps_diluted': self._safe_decimal(self._db_val(df, a.get('eps_diluted', []), col)),
+                'shares_outstanding_basic': self._safe_int_field(self._db_val(df, a.get('shares_outstanding_basic', []), col)),
+                'shares_outstanding_diluted': self._safe_int_field(self._db_val(df, a.get('shares_outstanding_diluted', []), col)),
+                'interest_income': self._safe_decimal(self._db_val(df, a.get('interest_income', []), col)),
+                'effective_tax_rate': self._safe_decimal(self._db_val(df, a.get('effective_tax_rate', []), col)),
+                'total_unusual_items': self._safe_decimal(self._db_val(df, a.get('total_unusual_items', []), col)),
+                'special_charges': self._safe_decimal(self._db_val(df, a.get('special_charges', []), col)),
+            }
             row = IncomeStatementRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
                 period_end_date=period_end,
-
-                revenue=self._safe_decimal(self._db_val(df, a.get('revenue', []), col)),
-                cost_of_goods_sold=self._safe_decimal(self._db_val(df, a.get('cost_of_goods_sold', []), col)),
-                gross_profit=self._safe_decimal(self._db_val(df, a.get('gross_profit', []), col)),
-                operating_expenses=self._safe_decimal(self._db_val(df, a.get('operating_expenses', []), col)),
-                rd_expenses=self._safe_decimal(self._db_val(df, a.get('rd_expenses', []), col)),
-                sga_expenses=self._safe_decimal(self._db_val(df, a.get('sga_expenses', []), col)),
-                operating_income=self._safe_decimal(self._db_val(df, a.get('operating_income', []), col)),
-                interest_expense=self._safe_decimal(self._db_val(df, a.get('interest_expense', []), col)),
-                tax_expense=self._safe_decimal(self._db_val(df, a.get('tax_expense', []), col)),
-                net_income=self._safe_decimal(self._db_val(df, a.get('net_income', []), col)),
-                ebitda=self._safe_decimal(self._db_val(df, a.get('ebitda', []), col)),
                 currency="USD",
-
-                non_operating_income_expense=self._safe_decimal(self._db_val(df, a.get('non_operating_income_expense', []), col)),
-                pretax_income=self._safe_decimal(self._db_val(df, a.get('pretax_income', []), col)),
-                equity_in_earnings=self._safe_decimal(self._db_val(df, a.get('equity_in_earnings', []), col)),
-                minority_interest=self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col)),
-                income_from_continuing_operations=self._safe_decimal(self._db_val(df, a.get('income_from_continuing_operations', []), col)),
-                discontinued_operations=self._safe_decimal(self._db_val(df, a.get('discontinued_operations', []), col)),
-                net_income_to_common=self._safe_decimal(self._db_val(df, a.get('net_income_to_common', []), col)),
-                preferred_dividends=self._safe_decimal(self._db_val(df, a.get('preferred_dividends', []), col)),
-                ebit=self._safe_decimal(self._db_val(df, a.get('ebit', []), col)),
                 last_validated_at=None,
-
-                eps_basic=self._safe_decimal(self._db_val(df, a.get('eps_basic', []), col)),
-                eps_diluted=self._safe_decimal(self._db_val(df, a.get('eps_diluted', []), col)),
-                shares_outstanding_basic=self._safe_int_field(self._db_val(df, a.get('shares_outstanding_basic', []), col)),
-                shares_outstanding_diluted=self._safe_int_field(self._db_val(df, a.get('shares_outstanding_diluted', []), col)),
-                interest_income=self._safe_decimal(self._db_val(df, a.get('interest_income', []), col)),
-                effective_tax_rate=self._safe_decimal(self._db_val(df, a.get('effective_tax_rate', []), col)),
-                # Phase 5 additions
-                total_unusual_items=self._safe_decimal(self._db_val(df, a.get('total_unusual_items', []), col)),
-                special_charges=self._safe_decimal(self._db_val(df, a.get('special_charges', []), col)),
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
+                field_sources=self._build_field_sources(fv, "defeat_beta"),
+                **fv,
             )
             # Normalize row
             normalized_row = normalize_income_row(row)
@@ -1404,91 +1404,63 @@ class DefeatBetaProvider(StockDataProvider):
                 logger.debug("[DBETA][%s] BS coverage for %s — missing canonicals: %s",
                             symbol, last_col, missing)
 
-            # Extract leaves
-            total_assets   = self._safe_decimal(self._db_val(df, a.get('total_assets', []), col))
-            current_assets = self._safe_decimal(self._db_val(df, a.get('current_assets', []), col))
-            cash_eq        = self._safe_decimal(self._db_val(df, a.get('cash_and_cash_equivalents', []), col))
-            accounts_recv  = self._safe_decimal(self._db_val(df, a.get('accounts_receivable', []), col))
-            inventory      = self._safe_decimal(self._db_val(df, a.get('inventory', []), col))
-            ppe_net        = self._safe_decimal(self._db_val(df, a.get('property_plant_equipment_net', []), col))
-            intangible     = self._safe_decimal(self._db_val(df, a.get('intangible_assets', []), col))
-            goodwill       = self._safe_decimal(self._db_val(df, a.get('goodwill', []), col))
+            fv = {
+                'total_assets': self._safe_decimal(self._db_val(df, a.get('total_assets', []), col)),
+                'current_assets': self._safe_decimal(self._db_val(df, a.get('current_assets', []), col)),
+                'cash_and_cash_equivalents': self._safe_decimal(self._db_val(df, a.get('cash_and_cash_equivalents', []), col)),
+                'accounts_receivable': self._safe_decimal(self._db_val(df, a.get('accounts_receivable', []), col)),
+                'inventory': self._safe_decimal(self._db_val(df, a.get('inventory', []), col)),
+                'property_plant_equipment_net': self._safe_decimal(self._db_val(df, a.get('property_plant_equipment_net', []), col)),
+                'intangible_assets': self._safe_decimal(self._db_val(df, a.get('intangible_assets', []), col)),
+                'goodwill': self._safe_decimal(self._db_val(df, a.get('goodwill', []), col)),
+                'total_liabilities': self._safe_decimal(self._db_val(df, a.get('total_liabilities', []), col)),
+                'current_liabilities': self._safe_decimal(self._db_val(df, a.get('current_liabilities', []), col)),
+                'accounts_payable': self._safe_decimal(self._db_val(df, a.get('accounts_payable', []), col)),
+                'short_term_debt': self._safe_decimal(self._db_val(df, a.get('short_term_debt', []), col)),
+                'long_term_debt': self._safe_decimal(self._db_val(df, a.get('long_term_debt', []), col)),
+                'total_debt': self._safe_decimal(self._db_val(df, a.get('total_debt', []), col)),
+                'shareholders_equity': self._safe_decimal(self._db_val(df, a.get('shareholders_equity', []), col)),
+                'retained_earnings': self._safe_decimal(self._db_val(df, a.get('retained_earnings', []), col)),
+                'common_stock': self._safe_decimal(self._db_val(df, a.get('common_stock', []), col)),
+                'long_term_investments': self._safe_decimal(self._db_val(df, a.get('long_term_investments', []), col)),
+                'other_non_current_assets': self._safe_decimal(self._db_val(df, a.get('other_non_current_assets', []), col)),
+                'other_current_liabilities': self._safe_decimal(self._db_val(df, a.get('other_current_liabilities', []), col)),
+                'minority_interest': self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col)),
+                'total_liabilities_and_equity': self._safe_decimal(self._db_val(df, a.get('total_liabilities_and_equity', []), col)),
+                'shares_outstanding': self._safe_int_field(self._db_val(df, a.get('shares_outstanding', []), col)),
+                'invested_capital': self._safe_decimal(self._db_val(df, a.get('invested_capital', []), col)),
+                'capital_lease_obligations': self._safe_decimal(self._db_val(df, a.get('capital_lease_obligations', []), col)),
+                'total_non_current_liabilities': self._safe_decimal(self._db_val(df, a.get('total_non_current_liabilities', []), col)),
+                'total_non_current_assets': self._safe_decimal(self._db_val(df, a.get('total_non_current_assets', []), col)),
+                'tangible_book_value': self._safe_decimal(self._db_val(df, a.get('tangible_book_value', []), col)),
+                'deferred_revenue_current': self._safe_decimal(self._db_val(df, a.get('deferred_revenue_current', []), col)),
+                'deferred_revenue_non_current': self._safe_decimal(self._db_val(df, a.get('deferred_revenue_non_current', []), col)),
+                'other_current_assets': self._safe_decimal(self._db_val(df, a.get('other_current_assets', []), col)),
+            }
 
-            total_liab     = self._safe_decimal(self._db_val(df, a.get('total_liabilities', []), col))
-            current_liab   = self._safe_decimal(self._db_val(df, a.get('current_liabilities', []), col))
-            accounts_pay   = self._safe_decimal(self._db_val(df, a.get('accounts_payable', []), col))
-            short_debt     = self._safe_decimal(self._db_val(df, a.get('short_term_debt', []), col))
-            long_debt      = self._safe_decimal(self._db_val(df, a.get('long_term_debt', []), col))
-            total_debt     = self._safe_decimal(self._db_val(df, a.get('total_debt', []), col))
-
-            if total_debt is None and short_debt is not None and long_debt is not None:
+            if fv['total_debt'] is None and fv['short_term_debt'] is not None and fv['long_term_debt'] is not None:
                 try:
-                    total_debt = Decimal(str(short_debt)) + Decimal(str(long_debt))
+                    fv['total_debt'] = Decimal(str(fv['short_term_debt'])) + Decimal(str(fv['long_term_debt']))
                 except InvalidOperation:
                     pass
 
-            sh_equity      = self._safe_decimal(self._db_val(df, a.get('shareholders_equity', []), col))
-            retained       = self._safe_decimal(self._db_val(df, a.get('retained_earnings', []), col))
-            common_stock   = self._safe_decimal(self._db_val(df, a.get('common_stock', []), col))
-
-            long_inv       = self._safe_decimal(self._db_val(df, a.get('long_term_investments', []), col))
-            other_nca      = self._safe_decimal(self._db_val(df, a.get('other_non_current_assets', []), col))
-            other_cl       = self._safe_decimal(self._db_val(df, a.get('other_current_liabilities', []), col))
-            minority       = self._safe_decimal(self._db_val(df, a.get('minority_interest', []), col))
-            total_leq      = self._safe_decimal(self._db_val(df, a.get('total_liabilities_and_equity', []), col))
-
-            if total_leq is None and total_liab is not None and sh_equity is not None:
+            if fv['total_liabilities_and_equity'] is None and fv['total_liabilities'] is not None and fv['shareholders_equity'] is not None:
                 try:
-                    total_leq = Decimal(str(total_liab)) + Decimal(str(sh_equity)) + (Decimal(str(minority)) if minority is not None else Decimal('0'))
+                    fv['total_liabilities_and_equity'] = Decimal(str(fv['total_liabilities'])) + Decimal(str(fv['shareholders_equity'])) + (Decimal(str(fv['minority_interest'])) if fv['minority_interest'] is not None else Decimal('0'))
                 except InvalidOperation:
                     pass
+
             row = BalanceSheetRow(
-
                 company_id=company_id,
                 fiscal_year=fy,
-                shares_outstanding=self._safe_int_field(self._db_val(df, a.get('shares_outstanding', []), col)),
-                invested_capital=self._safe_decimal(self._db_val(df, a.get('invested_capital', []), col)),
-                # Phase 5 additions
-                capital_lease_obligations=self._safe_decimal(self._db_val(df, a.get('capital_lease_obligations', []), col)),
-                total_non_current_liabilities=self._safe_decimal(self._db_val(df, a.get('total_non_current_liabilities', []), col)),
-                total_non_current_assets=self._safe_decimal(self._db_val(df, a.get('total_non_current_assets', []), col)),
-                tangible_book_value=self._safe_decimal(self._db_val(df, a.get('tangible_book_value', []), col)),
-                deferred_revenue_current=self._safe_decimal(self._db_val(df, a.get('deferred_revenue_current', []), col)),
-                deferred_revenue_non_current=self._safe_decimal(self._db_val(df, a.get('deferred_revenue_non_current', []), col)),
-                other_current_assets=self._safe_decimal(self._db_val(df, a.get('other_current_assets', []), col)),
                 fiscal_quarter=fq,
                 period_end_date=period_end,
-
-                total_assets=total_assets,
-                current_assets=current_assets,
-                cash_and_cash_equivalents=cash_eq,
-                accounts_receivable=accounts_recv,
-                inventory=inventory,
-                property_plant_equipment_net=ppe_net,
-                intangible_assets=intangible,
-                goodwill=goodwill,
-
-                total_liabilities=total_liab,
-                current_liabilities=current_liab,
-                accounts_payable=accounts_pay,
-                short_term_debt=short_debt,
-                long_term_debt=long_debt,
-                total_debt=total_debt,
-
-                shareholders_equity=sh_equity,
-                retained_earnings=retained,
-                common_stock=common_stock,
                 currency="USD",
-
-                long_term_investments=long_inv,
-                other_non_current_assets=other_nca,
-                other_current_liabilities=other_cl,
-                minority_interest=minority,
-                total_liabilities_and_equity=total_leq,
                 last_validated_at=None,
-
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
+                field_sources=self._build_field_sources(fv, "defeat_beta"),
+                **fv,
             )
             # Normalize row
             normalized_row = normalize_balance_row(row)
@@ -1517,43 +1489,43 @@ class DefeatBetaProvider(StockDataProvider):
 
         a = self.DB_CASHFLOW_ALIASES
         for col, period_end, fy, fq in self._iter_defeatbeta_periods(df, is_quarterly):
+            fv = {
+                'cash_from_operating_activities': self._safe_decimal(self._db_val(df, a.get('cash_from_operating_activities', []), col)),
+                'net_income': self._safe_decimal(self._db_val(df, a.get('net_income', []), col)),
+                'depreciation_amortization': self._safe_decimal(self._db_val(df, a.get('depreciation_amortization', []), col)),
+                'capital_expenditures': self._safe_decimal(self._db_val(df, a.get('capital_expenditures', []), col)),
+                'cash_from_investing_activities': self._safe_decimal(self._db_val(df, a.get('cash_from_investing_activities', []), col)),
+                'cash_from_financing_activities': self._safe_decimal(self._db_val(df, a.get('cash_from_financing_activities', []), col)),
+                'dividends_paid': self._safe_decimal(self._db_val(df, a.get('dividends_paid', []), col)),
+                'net_change_in_cash': self._safe_decimal(self._db_val(df, a.get('net_change_in_cash', []), col)),
+                'effect_of_fx_on_cash': self._safe_decimal(self._db_val(df, a.get('effect_of_fx_on_cash', []), col)),
+                'beginning_cash': self._safe_decimal(self._db_val(df, a.get('beginning_cash', []), col)),
+                'ending_cash': self._safe_decimal(self._db_val(df, a.get('ending_cash', []), col)),
+                'short_term_debt_net_change': self._safe_decimal(self._db_val(df, a.get('short_term_debt_net_change', []), col)),
+                'asset_impairment_charge': self._safe_decimal(self._db_val(df, a.get('asset_impairment_charge', []), col)),
+                'free_cash_flow': self._safe_decimal(self._db_val(df, a.get('free_cash_flow', []), col)),
+                'change_in_working_capital': self._safe_decimal(self._db_val(df, a.get('change_in_working_capital', []), col)),
+                'deferred_taxes': self._safe_decimal(self._db_val(df, a.get('deferred_taxes', []), col)),
+                'stock_based_compensation': self._safe_decimal(self._db_val(df, a.get('stock_based_compensation', []), col)),
+                'acquisitions': self._safe_decimal(self._db_val(df, a.get('acquisitions', []), col)),
+                'asset_sales': self._safe_decimal(self._db_val(df, a.get('asset_sales', []), col)),
+                'investment_purchases': self._safe_decimal(self._db_val(df, a.get('investment_purchases', []), col)),
+                'debt_issued': self._safe_decimal(self._db_val(df, a.get('debt_issued', []), col)),
+                'debt_repayment': self._safe_decimal(self._db_val(df, a.get('debt_repayment', []), col)),
+                'share_repurchases': self._safe_decimal(self._db_val(df, a.get('share_repurchases', []), col)),
+                'share_issuance': self._safe_decimal(self._db_val(df, a.get('share_issuance', []), col)),
+            }
             row = CashFlowRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
                 period_end_date=period_end,
-
-                cash_from_operating_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_operating_activities', []), col)),
-                net_income=self._safe_decimal(self._db_val(df, a.get('net_income', []), col)),
-                depreciation_amortization=self._safe_decimal(self._db_val(df, a.get('depreciation_amortization', []), col)),
-                capital_expenditures=self._safe_decimal(self._db_val(df, a.get('capital_expenditures', []), col)),
-                cash_from_investing_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_investing_activities', []), col)),
-                cash_from_financing_activities=self._safe_decimal(self._db_val(df, a.get('cash_from_financing_activities', []), col)),
-                dividends_paid=self._safe_decimal(self._db_val(df, a.get('dividends_paid', []), col)),
-                # Phase 5 additions
-                net_change_in_cash=self._safe_decimal(self._db_val(df, a.get('net_change_in_cash', []), col)),
-                effect_of_fx_on_cash=self._safe_decimal(self._db_val(df, a.get('effect_of_fx_on_cash', []), col)),
-                beginning_cash=self._safe_decimal(self._db_val(df, a.get('beginning_cash', []), col)),
-                ending_cash=self._safe_decimal(self._db_val(df, a.get('ending_cash', []), col)),
-                short_term_debt_net_change=self._safe_decimal(self._db_val(df, a.get('short_term_debt_net_change', []), col)),
-                asset_impairment_charge=self._safe_decimal(self._db_val(df, a.get('asset_impairment_charge', []), col)),
-                free_cash_flow=self._safe_decimal(self._db_val(df, a.get('free_cash_flow', []), col)),
                 currency="USD",
-
-                change_in_working_capital=self._safe_decimal(self._db_val(df, a.get('change_in_working_capital', []), col)),
-                deferred_taxes=self._safe_decimal(self._db_val(df, a.get('deferred_taxes', []), col)),
-                stock_based_compensation=self._safe_decimal(self._db_val(df, a.get('stock_based_compensation', []), col)),
-                acquisitions=self._safe_decimal(self._db_val(df, a.get('acquisitions', []), col)),
-                asset_sales=self._safe_decimal(self._db_val(df, a.get('asset_sales', []), col)),
-                investment_purchases=self._safe_decimal(self._db_val(df, a.get('investment_purchases', []), col)),
-                debt_issued=self._safe_decimal(self._db_val(df, a.get('debt_issued', []), col)),
-                debt_repayment=self._safe_decimal(self._db_val(df, a.get('debt_repayment', []), col)),
-                share_repurchases=self._safe_decimal(self._db_val(df, a.get('share_repurchases', []), col)),
-                share_issuance=self._safe_decimal(self._db_val(df, a.get('share_issuance', []), col)),
                 last_validated_at=None,
-
                 confidence_score=self.settings.DEFEAT_BETA_CONFIDENCE_SCORE,
                 validation_notes=None,
+                field_sources=self._build_field_sources(fv, "defeat_beta"),
+                **fv,
             )
             # Normalize row
             normalized_row = normalize_cashflow_row(row)
@@ -1663,49 +1635,38 @@ class DefeatBetaProvider(StockDataProvider):
                         return v
                 return None
 
+            fv = {
+                'revenue': self._safe_decimal(pd.to_numeric(gv(['Total Revenue', 'TotalRevenue', 'Revenue']), errors='coerce')),
+                'cost_of_goods_sold': self._safe_decimal(pd.to_numeric(gv(['Cost Of Revenue', 'Cost of Revenue', 'CostOfRevenue']), errors='coerce')),
+                'gross_profit': self._safe_decimal(pd.to_numeric(gv(['Gross Profit', 'GrossProfit']), errors='coerce')),
+                'operating_income': self._safe_decimal(pd.to_numeric(gv(['Operating Income', 'OperatingIncome']), errors='coerce')),
+                'interest_expense': self._safe_decimal(pd.to_numeric(gv(['Interest Expense', 'InterestExpense']), errors='coerce')),
+                'tax_expense': self._safe_decimal(pd.to_numeric(gv(['Income Tax Expense', 'Tax Provision']), errors='coerce')),
+                'net_income': self._safe_decimal(pd.to_numeric(gv(['Net Income', 'NetIncome', 'Net Income Common Stockholders']), errors='coerce')),
+                'ebitda': self._safe_decimal(pd.to_numeric(gv(['EBITDA']), errors='coerce')),
+                'ebit': self._safe_decimal(pd.to_numeric(gv(['EBIT']), errors='coerce')),
+                'pretax_income': self._safe_decimal(pd.to_numeric(gv(['Pretax Income', 'Income Before Tax', 'Earnings Before Tax']), errors='coerce')),
+                'shares_outstanding_basic': self._safe_int_field(
+                    pd.to_numeric(gv(['BasicAverageShares', 'Basic Average Shares', 'Ordinary Shares Number']), errors='coerce')
+                ),
+                'shares_outstanding_diluted': self._safe_int_field(
+                    pd.to_numeric(gv(['DilutedAverageShares', 'Diluted Average Shares', 'BasicAverageShares', 'Basic Average Shares']), errors='coerce')
+                ),
+                'eps_basic': self._safe_decimal(pd.to_numeric(gv(['Basic EPS', 'BasicEps']), errors='coerce')),
+                'eps_diluted': self._safe_decimal(pd.to_numeric(gv(['Diluted EPS', 'DilutedEps']), errors='coerce')),
+            }
             rows.append(IncomeStatementRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
                 period_end_date=col.date(),
-
-                revenue=self._safe_decimal(pd.to_numeric(gv(['Total Revenue', 'TotalRevenue', 'Revenue']), errors='coerce')),
-                cost_of_goods_sold=self._safe_decimal(pd.to_numeric(gv(['Cost Of Revenue', 'Cost of Revenue', 'CostOfRevenue']), errors='coerce')),
-                gross_profit=self._safe_decimal(pd.to_numeric(gv(['Gross Profit', 'GrossProfit']), errors='coerce')),
-                operating_expenses=None,
-                rd_expenses=None,
-                sga_expenses=None,
-                operating_income=self._safe_decimal(pd.to_numeric(gv(['Operating Income', 'OperatingIncome']), errors='coerce')),
-                interest_expense=self._safe_decimal(pd.to_numeric(gv(['Interest Expense', 'InterestExpense']), errors='coerce')),
-                tax_expense=self._safe_decimal(pd.to_numeric(gv(['Income Tax Expense', 'Tax Provision']), errors='coerce')),
-                net_income=self._safe_decimal(pd.to_numeric(gv(['Net Income', 'NetIncome', 'Net Income Common Stockholders']), errors='coerce')),
-                ebitda=self._safe_decimal(pd.to_numeric(gv(['EBITDA']), errors='coerce')),
-                ebit=self._safe_decimal(pd.to_numeric(gv(['EBIT']), errors='coerce')),
                 currency="USD",
-
-                non_operating_income_expense=None,
-                pretax_income=self._safe_decimal(pd.to_numeric(gv(['Pretax Income', 'Income Before Tax', 'Earnings Before Tax']), errors='coerce')),
-                equity_in_earnings=None,
-                minority_interest=None,
-                income_from_continuing_operations=None,
-                discontinued_operations=None,
-                net_income_to_common=None,
-                preferred_dividends=None,
-                shares_outstanding_basic=self._safe_int_field(
-                    pd.to_numeric(gv(['BasicAverageShares', 'Basic Average Shares', 'Ordinary Shares Number']), errors='coerce')
-                ),
-                shares_outstanding_diluted=self._safe_int_field(
-                    pd.to_numeric(gv(['DilutedAverageShares', 'Diluted Average Shares', 'BasicAverageShares', 'Basic Average Shares']), errors='coerce')
-                ),
-
-                eps_basic=self._safe_decimal(pd.to_numeric(gv(['Basic EPS', 'BasicEps']), errors='coerce')),
-                eps_diluted=self._safe_decimal(pd.to_numeric(gv(['Diluted EPS', 'DilutedEps']), errors='coerce')),
-
                 last_validated_at=None,
-
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
                 data_source=source,
                 validation_notes=None,
+                field_sources=self._build_field_sources(fv, source),
+                **fv,
             ))
         return rows
 
@@ -1735,43 +1696,38 @@ class DefeatBetaProvider(StockDataProvider):
                         return v
                 return None
 
+            fv = {
+                'total_assets': self._safe_decimal(pd.to_numeric(gv(['Total Assets', 'TotalAssets']), errors='coerce')),
+                'current_assets': self._safe_decimal(pd.to_numeric(gv(['Total Current Assets', 'TotalCurrentAssets']), errors='coerce')),
+                'cash_and_cash_equivalents': self._safe_decimal(pd.to_numeric(gv(['Cash And Cash Equivalents', 'CashAndCashEquivalents']), errors='coerce')),
+                'accounts_receivable': self._safe_decimal(pd.to_numeric(gv(['Accounts Receivable', 'Receivables']), errors='coerce')),
+                'inventory': self._safe_decimal(pd.to_numeric(gv(['Inventory']), errors='coerce')),
+                'property_plant_equipment_net': self._safe_decimal(pd.to_numeric(gv(['Net PPE', 'Property Plant And Equipment Net']), errors='coerce')),
+                'intangible_assets': self._safe_decimal(pd.to_numeric(gv(['Intangible Assets']), errors='coerce')),
+                'goodwill': self._safe_decimal(pd.to_numeric(gv(['Goodwill']), errors='coerce')),
+                'total_liabilities': self._safe_decimal(pd.to_numeric(gv(['Total Liabilities', 'TotalLiab']), errors='coerce')),
+                'current_liabilities': self._safe_decimal(pd.to_numeric(gv(['Total Current Liabilities', 'TotalCurrentLiabilities']), errors='coerce')),
+                'accounts_payable': self._safe_decimal(pd.to_numeric(gv(['Accounts Payable']), errors='coerce')),
+                'short_term_debt': self._safe_decimal(pd.to_numeric(gv(['Short Term Debt']), errors='coerce')),
+                'long_term_debt': self._safe_decimal(pd.to_numeric(gv(['Long Term Debt', 'LongTermDebt']), errors='coerce')),
+                'total_debt': self._safe_decimal(pd.to_numeric(gv(['Total Debt']), errors='coerce')),
+                'shareholders_equity': self._safe_decimal(pd.to_numeric(gv(["Stockholders' Equity", 'Total Stockholder Equity']), errors='coerce')),
+                'retained_earnings': self._safe_decimal(pd.to_numeric(gv(['Retained Earnings']), errors='coerce')),
+                'long_term_investments': self._safe_decimal(pd.to_numeric(gv(['Long Term Investments', 'LongTermInvestments']), errors='coerce')),
+                'minority_interest': self._safe_decimal(pd.to_numeric(gv(['Minority Interest', 'MinorityInterest']), errors='coerce')),
+            }
             rows.append(BalanceSheetRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
                 period_end_date=col.date(),
-
-                total_assets=self._safe_decimal(pd.to_numeric(gv(['Total Assets', 'TotalAssets']), errors='coerce')),
-                current_assets=self._safe_decimal(pd.to_numeric(gv(['Total Current Assets', 'TotalCurrentAssets']), errors='coerce')),
-                cash_and_cash_equivalents=self._safe_decimal(pd.to_numeric(gv(['Cash And Cash Equivalents', 'CashAndCashEquivalents']), errors='coerce')),
-                accounts_receivable=self._safe_decimal(pd.to_numeric(gv(['Accounts Receivable', 'Receivables']), errors='coerce')),
-                inventory=self._safe_decimal(pd.to_numeric(gv(['Inventory']), errors='coerce')),
-                property_plant_equipment_net=self._safe_decimal(pd.to_numeric(gv(['Net PPE', 'Property Plant And Equipment Net']), errors='coerce')),
-                intangible_assets=self._safe_decimal(pd.to_numeric(gv(['Intangible Assets']), errors='coerce')),
-                goodwill=self._safe_decimal(pd.to_numeric(gv(['Goodwill']), errors='coerce')),
-
-                total_liabilities=self._safe_decimal(pd.to_numeric(gv(['Total Liabilities', 'TotalLiab']), errors='coerce')),
-                current_liabilities=self._safe_decimal(pd.to_numeric(gv(['Total Current Liabilities', 'TotalCurrentLiabilities']), errors='coerce')),
-                accounts_payable=self._safe_decimal(pd.to_numeric(gv(['Accounts Payable']), errors='coerce')),
-                short_term_debt=self._safe_decimal(pd.to_numeric(gv(['Short Term Debt']), errors='coerce')),
-                long_term_debt=self._safe_decimal(pd.to_numeric(gv(['Long Term Debt', 'LongTermDebt']), errors='coerce')),
-                total_debt=self._safe_decimal(pd.to_numeric(gv(['Total Debt']), errors='coerce')),
-
-                shareholders_equity=self._safe_decimal(pd.to_numeric(gv(["Stockholders' Equity", 'Total Stockholder Equity']), errors='coerce')),
-                retained_earnings=self._safe_decimal(pd.to_numeric(gv(['Retained Earnings']), errors='coerce')),
-                common_stock=None,
                 currency="USD",
-
-                long_term_investments=self._safe_decimal(pd.to_numeric(gv(['Long Term Investments', 'LongTermInvestments']), errors='coerce')),
-                other_non_current_assets=None,
-                other_current_liabilities=None,
-                minority_interest=self._safe_decimal(pd.to_numeric(gv(['Minority Interest', 'MinorityInterest']), errors='coerce')),
-                total_liabilities_and_equity=None,
                 last_validated_at=None,
-
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
                 data_source=source,
                 validation_notes=None,
+                field_sources=self._build_field_sources(fv, source),
+                **fv,
             ))
         return rows
 
@@ -1801,36 +1757,37 @@ class DefeatBetaProvider(StockDataProvider):
                         return v
                 return None
 
+            fv = {
+                'cash_from_operating_activities': self._safe_decimal(pd.to_numeric(gv(['Operating Cash Flow', 'Total Cash From Operating Activities']), errors='coerce')),
+                'net_income': self._safe_decimal(pd.to_numeric(gv(['Net Income', 'NetIncome']), errors='coerce')),
+                'depreciation_amortization': self._safe_decimal(pd.to_numeric(gv(['Depreciation & Amortization', 'Depreciation']), errors='coerce')),
+                'capital_expenditures': self._safe_decimal(pd.to_numeric(gv(['Capital Expenditure', 'Capital Expenditures']), errors='coerce')),
+                'cash_from_investing_activities': self._safe_decimal(pd.to_numeric(gv(['Total Cash From Investing Activities']), errors='coerce')),
+                'cash_from_financing_activities': self._safe_decimal(pd.to_numeric(gv(['Total Cash From Financing Activities']), errors='coerce')),
+                'dividends_paid': self._safe_decimal(pd.to_numeric(gv(['Cash Dividends Paid', 'Dividends Paid']), errors='coerce')),
+                'change_in_working_capital': self._safe_decimal(pd.to_numeric(gv(['Change In Working Capital']), errors='coerce')),
+                'deferred_taxes': self._safe_decimal(pd.to_numeric(gv(['Deferred Income Tax', 'DeferredTax']), errors='coerce')),
+                'stock_based_compensation': self._safe_decimal(pd.to_numeric(gv(['Stock Based Compensation']), errors='coerce')),
+                'acquisitions': self._safe_decimal(pd.to_numeric(gv(['Purchase of Business']), errors='coerce')),
+                'asset_sales': self._safe_decimal(pd.to_numeric(gv(['Sale Of Property Plant Equipment']), errors='coerce')),
+                'investment_purchases': self._safe_decimal(pd.to_numeric(gv(['Investments', 'Purchase Of Investments']), errors='coerce')),
+                'debt_issued': self._safe_decimal(pd.to_numeric(gv(['Issuance Of Debt', 'Issuance Of Long Term Debt']), errors='coerce')),
+                'debt_repayment': self._safe_decimal(pd.to_numeric(gv(['Repayment Of Debt', 'Repayment Of Long Term Debt']), errors='coerce')),
+                'share_repurchases': self._safe_decimal(pd.to_numeric(gv(['Sale Purchase Of Stock', 'Repurchase Of Capital Stock']), errors='coerce')),
+                'share_issuance': self._safe_decimal(pd.to_numeric(gv(['Sale Of Stock', 'Issuance Of Capital Stock']), errors='coerce')),
+            }
             rows.append(CashFlowRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
                 period_end_date=col.date(),
-
-                cash_from_operating_activities=self._safe_decimal(pd.to_numeric(gv(['Operating Cash Flow', 'Total Cash From Operating Activities']), errors='coerce')),
-                net_income=self._safe_decimal(pd.to_numeric(gv(['Net Income', 'NetIncome']), errors='coerce')),
-                depreciation_amortization=self._safe_decimal(pd.to_numeric(gv(['Depreciation & Amortization', 'Depreciation']), errors='coerce')),
-                capital_expenditures=self._safe_decimal(pd.to_numeric(gv(['Capital Expenditure', 'Capital Expenditures']), errors='coerce')),
-                cash_from_investing_activities=self._safe_decimal(pd.to_numeric(gv(['Total Cash From Investing Activities']), errors='coerce')),
-                cash_from_financing_activities=self._safe_decimal(pd.to_numeric(gv(['Total Cash From Financing Activities']), errors='coerce')),
-                dividends_paid=self._safe_decimal(pd.to_numeric(gv(['Cash Dividends Paid', 'Dividends Paid']), errors='coerce')),
                 currency="USD",
-
-                change_in_working_capital=self._safe_decimal(pd.to_numeric(gv(['Change In Working Capital']), errors='coerce')),
-                deferred_taxes=self._safe_decimal(pd.to_numeric(gv(['Deferred Income Tax', 'DeferredTax']), errors='coerce')),
-                stock_based_compensation=self._safe_decimal(pd.to_numeric(gv(['Stock Based Compensation']), errors='coerce')),
-                acquisitions=self._safe_decimal(pd.to_numeric(gv(['Purchase of Business']), errors='coerce')),
-                asset_sales=self._safe_decimal(pd.to_numeric(gv(['Sale Of Property Plant Equipment']), errors='coerce')),
-                investment_purchases=self._safe_decimal(pd.to_numeric(gv(['Investments', 'Purchase Of Investments']), errors='coerce')),
-                debt_issued=self._safe_decimal(pd.to_numeric(gv(['Issuance Of Debt', 'Issuance Of Long Term Debt']), errors='coerce')),
-                debt_repayment=self._safe_decimal(pd.to_numeric(gv(['Repayment Of Debt', 'Repayment Of Long Term Debt']), errors='coerce')),
-                share_repurchases=self._safe_decimal(pd.to_numeric(gv(['Sale Purchase Of Stock', 'Repurchase Of Capital Stock']), errors='coerce')),
-                share_issuance=self._safe_decimal(pd.to_numeric(gv(['Sale Of Stock', 'Issuance Of Capital Stock']), errors='coerce')),
                 last_validated_at=None,
-
                 confidence_score=self.settings.YFINANCE_FALLBACK_CONFIDENCE_SCORE,
                 data_source=source,
                 validation_notes=None,
+                field_sources=self._build_field_sources(fv, source),
+                **fv,
             ))
         return rows
 
@@ -1994,6 +1951,11 @@ class DefeatBetaProvider(StockDataProvider):
             return int(float(val))
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def _build_field_sources(field_values: Dict[str, Any], source: str) -> Dict[str, List[str]]:
+        """Build field_sources metadata: maps non-null field names to their provider source."""
+        return {k: [source] for k, v in field_values.items() if v is not None}
 
     @staticmethod
     def _extract_latest_metric(df, column: str):

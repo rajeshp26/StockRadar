@@ -4,6 +4,7 @@ Stock data endpoints — price history, news, and related data.
 Endpoints:
   GET /stocks/{symbol}/price-history?days=7|30  → OHLCV time-series
   GET /stocks/{symbol}/news?limit=10             → Recent news articles
+  GET /stocks/{symbol}/financial-coverage        → Per-provider field coverage
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import logging
 import re
 from datetime import timedelta
 from shared.time_utils import now_utc
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -292,4 +293,149 @@ async def get_stock_news(
         return NewsResponse(
             success=False, symbol=sym, articles=[], source="none",
             error="Failed to fetch news",
+        )
+
+
+# ── Financial Coverage Report ─────────────────────────────────────────────
+
+class FieldCoverage(BaseModel):
+    field: str
+    total_rows: int
+    present: int
+    missing: int
+    providers: Dict[str, int]
+
+
+class StatementCoverage(BaseModel):
+    statement_type: str
+    total_rows: int
+    fields: List[FieldCoverage]
+    data_source_breakdown: Dict[str, int]
+
+
+class FinancialCoverageResponse(BaseModel):
+    success: bool
+    symbol: str
+    company_id: Optional[int] = None
+    statements: Optional[Dict[str, StatementCoverage]] = None
+    error: Optional[str] = None
+
+
+_INCOME_FIELDS = [
+    "revenue", "cost_of_goods_sold", "gross_profit", "operating_expenses",
+    "operating_income", "interest_expense", "tax_expense", "net_income",
+    "ebitda", "ebit", "pretax_income", "rd_expenses", "sga_expenses",
+    "eps_basic", "eps_diluted", "shares_outstanding_diluted",
+]
+
+_BALANCE_FIELDS = [
+    "total_assets", "current_assets", "cash_and_cash_equivalents",
+    "accounts_receivable", "inventory", "property_plant_equipment_net",
+    "total_liabilities", "current_liabilities", "accounts_payable",
+    "short_term_debt", "long_term_debt", "total_debt",
+    "shareholders_equity", "retained_earnings",
+]
+
+_CASHFLOW_FIELDS = [
+    "cash_from_operating_activities", "cash_from_investing_activities",
+    "cash_from_financing_activities", "capital_expenditures",
+    "depreciation_amortization", "net_income", "dividends_paid",
+    "stock_based_compensation", "free_cash_flow",
+]
+
+
+def _analyze_statement(
+    rows: List[Dict[str, Any]], fields: List[str], stmt_type: str,
+) -> StatementCoverage:
+    total = len(rows)
+    source_counts: Dict[str, int] = {}
+    field_covs: List[FieldCoverage] = []
+
+    for fld in fields:
+        present = 0
+        providers: Dict[str, int] = {}
+        for r in rows:
+            if r.get(fld) is not None:
+                present += 1
+                src = r.get("data_source", "unknown")
+                providers[src] = providers.get(src, 0) + 1
+        field_covs.append(FieldCoverage(
+            field=fld, total_rows=total, present=present,
+            missing=total - present, providers=providers,
+        ))
+
+    for r in rows:
+        src = r.get("data_source", "unknown")
+        source_counts[src] = source_counts.get(src, 0) + 1
+
+    return StatementCoverage(
+        statement_type=stmt_type, total_rows=total,
+        fields=field_covs, data_source_breakdown=source_counts,
+    )
+
+
+@router.get("/stocks/{symbol}/financial-coverage", status_code=200)
+@limiter.limit("10/minute")
+async def get_financial_coverage(
+    request: Request,
+    symbol: str,
+    user: dict = Depends(get_current_user_dep),
+) -> FinancialCoverageResponse:
+    """Per-provider, per-field financial data coverage report for a symbol."""
+    sym = _normalize(symbol)
+
+    try:
+        company_resp = supabase.table("companies").select("company_id").eq("ticker_symbol", sym).limit(1).execute()
+        if not company_resp.data:
+            return FinancialCoverageResponse(
+                success=False, symbol=sym,
+                error=f"Company not found for {sym}",
+            )
+        company_id = company_resp.data[0]["company_id"]
+
+        is_resp = (
+            supabase.table("income_statements")
+            .select("*")
+            .eq("company_id", company_id)
+            .order("fiscal_year", desc=True)
+            .order("fiscal_quarter", desc=True)
+            .limit(20)
+            .execute()
+        )
+        bs_resp = (
+            supabase.table("balance_sheets")
+            .select("*")
+            .eq("company_id", company_id)
+            .order("fiscal_year", desc=True)
+            .order("fiscal_quarter", desc=True)
+            .limit(20)
+            .execute()
+        )
+        cf_resp = (
+            supabase.table("cash_flow_statements")
+            .select("*")
+            .eq("company_id", company_id)
+            .order("fiscal_year", desc=True)
+            .order("fiscal_quarter", desc=True)
+            .limit(20)
+            .execute()
+        )
+
+        statements = {
+            "income": _analyze_statement(is_resp.data or [], _INCOME_FIELDS, "income"),
+            "balance": _analyze_statement(bs_resp.data or [], _BALANCE_FIELDS, "balance"),
+            "cashflow": _analyze_statement(cf_resp.data or [], _CASHFLOW_FIELDS, "cashflow"),
+        }
+
+        return FinancialCoverageResponse(
+            success=True, symbol=sym, company_id=company_id,
+            statements=statements,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Financial coverage failed for {sym}: {e}")
+        return FinancialCoverageResponse(
+            success=False, symbol=sym, error="Failed to fetch coverage",
         )

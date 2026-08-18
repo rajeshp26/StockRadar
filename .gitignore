@@ -55,3 +55,33 @@ web/debug-*.png
 web/playwright-report/
 web/test-results/
 web/e2e/
+
+# AI agent working files
+.omo/
+.opencode/
+.playwright-mcp/
+
+# Backend log files
+backend/*.log
+
+# Debug screenshots
+*.png
+
+# Ad-hoc scripts (not part of application)
+backend/scripts/smoke_*.py
+backend/scripts/check_*.py
+backend/scripts/verify_*.py
+backend/scripts/investigate_*.py
+backend/scripts/debug_*.py
+backend/scripts/start_backend.sh
+backend/scripts/start_worker.sh
+backend/scripts/stop_all.sh
+backend/scripts/backup_cloud.py
+backend/scripts/import_local.py
+backend/scripts/migrate_auth_users.py
+backend/scripts/rag_ingest_docs.py
+backend/restart_wsl.sh
+backend/start_both.sh
+backend/start_wsl.sh
+backend/stderr.log
+backend/stdout.log
