@@ -250,6 +250,16 @@ class Settings(BaseSettings):
         description="Enable the price ingestion scheduler (refreshes price_sources from yfinance+supabase)"
     )
 
+    # Valuation Computation Pipeline
+    ENABLE_VALUATION_SCHEDULER: bool = Field(
+        default=True,
+        description="Enable the valuation computation scheduler (pre-computes all 5 methods for active companies)"
+    )
+    VALUATION_REFRESH_INTERVAL_HOURS: int = Field(
+        default=24,
+        description="Hours between valuation computation scheduler runs"
+    )
+
     DASHBOARD_READ_PATH: str = Field(
         default="off",
         pattern="^(off|shadow|serve)$",

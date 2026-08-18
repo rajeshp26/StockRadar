@@ -1,25 +1,83 @@
 [project]
 requires-python = ">=3.12,<3.13"
 
+# =============================================================================
+# Testing
+# =============================================================================
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
 
+[tool.coverage.run]
+source = ["backend"]
+omit = ["tests/*", "scripts/*", "__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 60
+
+# =============================================================================
+# Ruff (Linter + Formatter)
+# =============================================================================
 [tool.ruff]
 target-version = "py312"
+line-length = 100
 
 [tool.ruff.lint]
 select = [
-    "DTZ001",  # datetime.utcnow()
-    "DTZ002",  # datetime.utcfromtimestamp()
-    "DTZ003",  # datetime.now() without tz
-    "DTZ004",  # datetime.fromtimestamp() without tz
-    "DTZ005",  # datetime.datetime.utcnow()
-    "DTZ006",  # datetime.datetime.utcfromtimestamp()
-    "DTZ007",  # datetime.datetime.now() without tz
-    "DTZ011",  # date.today() — timezone-naive
-    "DTZ012",  # datetime.date() — timezone-naive
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "DTZ",    # flake8-datetimez
+    "TCH",    # flake8-type-checking
+    "RUF",    # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["DTZ"]
+"tests/**/*.py" = ["DTZ", "S101"]  # allow assert in tests
 "scripts/**/*.py" = ["DTZ"]
+"__init__.py" = ["F401"]  # allow unused imports
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]
+
+# =============================================================================
+# Black (Formatter)
+# =============================================================================
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+# =============================================================================
+# Mypy (Type Checker)
+# =============================================================================
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # Gradual adoption
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "scripts/",
+    "__pycache__/",
+    "venv/",
+    ".venv/",
+]
+
+# =============================================================================
+# Bandit (Security Scanner)
+# =============================================================================
+[tool.bandit]
+exclude_dirs = ["tests", "scripts", "venv", ".venv"]
+skips = ["B101"]  # allow assert in non-test code

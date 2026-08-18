@@ -1,5 +1,16 @@
 # Development-only dependencies (not for production)
 -c requirements.txt
 
+# Testing
 pytest==9.0.3
 pytest-asyncio==1.3.0
+pytest-cov
+
+# Code Quality
+ruff
+black
+mypy
+
+# Security
+bandit
+semgrep

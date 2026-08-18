@@ -48,6 +48,7 @@ from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
 from application.schedulers.aggregation_scheduler import AggregationScheduler
 from application.schedulers.portfolio_snapshot_scheduler import PortfolioSnapshotScheduler
 from application.schedulers.price_ingestion_scheduler import PriceIngestionScheduler
+from application.schedulers.valuation_computation_scheduler import ValuationComputationScheduler
 
 # Event projection handler
 from services.event_projection_handler import EventProjectionHandler
@@ -189,6 +190,25 @@ async def handle_aggregation_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+async def handle_valuation_computation(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Handler for 'valuation_computation' jobs — pre-compute all valuation methods for a symbol."""
+    payload = job.get("payload", {})
+    symbol = payload.get("symbol")
+    user_id = payload.get("user_id")
+    force = payload.get("force", True)
+
+    if not symbol:
+        raise ValueError(f"Missing symbol in valuation_computation payload: {payload}")
+
+    scheduler = ValuationComputationScheduler()
+    result = await scheduler.compute_all(
+        symbol=symbol,
+        user_id=user_id,
+        force=force,
+    )
+    return result
+
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -211,6 +231,7 @@ async def main():
     engine.register_handler("aggregation_refresh", handle_aggregation_refresh)
     engine.register_handler("portfolio_snapshot", handle_portfolio_snapshot)
     engine.register_handler("price_ingestion", handle_price_ingestion)
+    engine.register_handler("valuation_computation", handle_valuation_computation)
 
     # 2. Planner
     planner = SchedulerPlanner()
@@ -294,6 +315,22 @@ async def main():
         logger.info("Registered price_ingestion planner (market-hours-aware)")
     else:
         logger.info("Price Ingestion scheduler disabled")
+
+    # Valuation Computation (every 24h)
+    if getattr(settings, "ENABLE_VALUATION_SCHEDULER", True):
+        vc_scheduler = ValuationComputationScheduler()
+        planner.register(
+            name="valuation_computation",
+            plan_fn=vc_scheduler.plan,
+            interval_hours=vc_scheduler.interval_hours,
+            enabled=True,
+        )
+        logger.info(
+            "Registered valuation_computation planner (interval=%dh)",
+            vc_scheduler.interval_hours,
+        )
+    else:
+        logger.info("Valuation Computation scheduler disabled")
 
     # ── Launch all loops ───────────────────────────────────────────────────
 

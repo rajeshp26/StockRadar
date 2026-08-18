@@ -6,6 +6,7 @@ from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+from datetime import datetime, timezone
 import yfinance as yf
 from typing import Optional, Dict, Any
 
@@ -29,6 +30,25 @@ _YF_SUFFIXES = [".TO", ".V"]
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, logging.INFO))
 logger = logging.getLogger("stockerpro.main")
 
+# §4.8: correlation IDs — one ID per request, echoed on the response and
+# attached to every log record via a contextvar + filter so a request's logs
+# can be traced end-to-end.
+import uuid as _uuid
+from contextvars import ContextVar
+
+_request_correlation_id: ContextVar[str] = ContextVar(
+    "correlation_id", default="-"
+)
+
+
+class CorrelationIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.correlation_id = _request_correlation_id.get()
+        return True
+
+
+logging.getLogger().addFilter(CorrelationIdFilter())
+
 # -----------------------------------------------------------------------------
 # Background: real-time price monitor (existing)
 # -----------------------------------------------------------------------------
@@ -36,7 +56,10 @@ async def background_price_monitor():
     """
     Background task to monitor and broadcast real-time stock prices.
     Uses yfinance every N seconds based on settings.SSE_UPDATE_INTERVAL_SECONDS.
+    CDR adjustment is batch-fetched via shared utility (2 queries, not 2N).
     """
+    from shared.price_utils import get_cdr_maps_for_companies, apply_cdr_adjustment
+
     interval = max(1, int(getattr(settings, "SSE_UPDATE_INTERVAL_SECONDS", 10)))
     while True:
         try:
@@ -46,7 +69,7 @@ async def background_price_monitor():
                 logger.debug("[PRICE-MONITOR-DIAG] No active symbol subscribers — sleeping 5s")
                 await asyncio.sleep(min(5, interval))
                 continue
-            
+
             logger.debug(f"[PRICE-MONITOR-DIAG] Fetching prices for {len(active_symbols)} symbols: {active_symbols}")
             # Resolve Canadian suffixes: try raw symbol first, fall back to .TO / .V
             resolved_symbols = []
@@ -59,6 +82,25 @@ async def background_price_monitor():
                     symbol_suffix_map[sym + sfx] = sfx
 
             all_tickers = yf.Tickers(resolved_symbols)
+
+            # Batch-fetch CDR maps once per cycle (2 queries regardless of symbol count)
+            from database import supabase as _sb
+            comp_res = (
+                _sb.table("companies")
+                .select("company_id, ticker_symbol, cdr_ratio")
+                .in_("ticker_symbol", active_symbols)
+                .execute()
+            )
+            sym_to_cid: Dict[str, int] = {}
+            cid_ratios: Dict[int, float] = {}
+            for row in (comp_res.data or []):
+                sym_to_cid[row["ticker_symbol"]] = row["company_id"]
+                if row.get("cdr_ratio") is not None:
+                    cid_ratios[row["company_id"]] = float(row["cdr_ratio"])
+
+            company_ids = list(sym_to_cid.values())
+            _, tor_cids = get_cdr_maps_for_companies(_sb, company_ids) if company_ids else ({}, set())
+
             updated_count = 0
             skipped_count = 0
             for symbol in active_symbols:
@@ -67,7 +109,6 @@ async def background_price_monitor():
                 if ticker:
                     info = getattr(ticker, "info", {}) or {}
                 if not info:
-                    # Try suffixed version
                     for sfx in _YF_SUFFIXES:
                         alt = all_tickers.tickers.get(symbol + sfx)
                         if alt:
@@ -79,46 +120,80 @@ async def background_price_monitor():
                     logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: no data (tried raw and {_YF_SUFFIXES})")
                     skipped_count += 1
                     continue
-                
+
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice")
                 prev_close = info.get("regularMarketPreviousClose")
-                
-                # Apply CDR adjustment if this symbol is a CDR
-                try:
-                    from database import supabase as _sb
-                    comp_res = _sb.table("companies").select("company_id, cdr_ratio").eq("ticker_symbol", symbol).limit(1).execute()
-                    comp_row = comp_res.data[0] if comp_res.data else None
-                    if comp_row:
-                        cid = comp_row["company_id"]
-                        hold_check = _sb.table("portfolio_holdings").select("exchange_override").eq("company_id", cid).eq("exchange_override", "TOR").limit(1).execute()
-                        if hold_check.data:
-                            from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
-                            ratio = float(comp_row["cdr_ratio"]) if comp_row.get("cdr_ratio") is not None else float(_CDR_RATIO)
-                            if current_price:
-                                current_price = float(current_price) / ratio
-                            if prev_close:
-                                prev_close = float(prev_close) / ratio
-                except Exception:
-                    pass
 
-                # Log ALL available close-related keys for diagnostics
-                close_keys = [k for k in info.keys() if 'close' in k.lower()]
-                current_keys = [k for k in info.keys() if 'price' in k.lower() or 'current' in k.lower()]
-                logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: currentPrice={current_price}, prev_close={prev_close}, close_keys={close_keys}, current_keys={current_keys}")
-                
+                if current_price is not None:
+                    current_price = float(current_price)
+                if prev_close is not None:
+                    prev_close = float(prev_close)
+
+                # Save raw yfinance prices BEFORE CDR adjustment.
+                # current_market_data stores raw prices — build_price_snapshot()
+                # applies CDR adjustment when reading (price_utils.py:101).
+                raw_current_price = current_price
+                raw_prev_close = prev_close
+
+                # Apply CDR adjustment using batch-fetched maps (0 extra queries)
+                cid = sym_to_cid.get(symbol)
+                if cid is not None and current_price is not None:
+                    current_price, prev_close = apply_cdr_adjustment(
+                        current_price, prev_close, cid, cid_ratios, tor_cids,
+                    )
+
+                if not (current_price and prev_close):
+                    # yfinance didn't return both values — try current_market_data as fallback
+                    cid = sym_to_cid.get(symbol)
+                    if cid is not None:
+                        try:
+                            from database import supabase as _sb
+                            md = _sb.table("current_market_data") \
+                                .select("current_price, close_price, last_updated") \
+                                .eq("company_id", cid) \
+                                .execute()
+                            row = (md.data or [{}])[0]
+                            fb_price = row.get("current_price")
+                            fb_close = row.get("close_price")
+                            if fb_price and fb_close:
+                                current_price = float(fb_price)
+                                prev_close = float(fb_close)
+                                logger.debug(
+                                    "[PRICE-MONITOR] %s: yfinance unavailable, used DB fallback price=%s",
+                                    symbol, current_price,
+                                )
+                        except Exception as e:
+                            logger.debug("[PRICE-MONITOR] %s: DB fallback failed: %s", symbol, e)
+
                 if current_price and prev_close:
-                    change = float(current_price) - float(prev_close)
-                    change_percent = (change / float(prev_close)) * 100
+                    change = current_price - prev_close
+                    change_percent = (change / prev_close) * 100
                     await broadcast_stock_update(symbol, current_price, change, change_percent)
                     updated_count += 1
+
+                    # Write RAW prices to current_market_data so REST endpoint
+                    # serves fresh data on initial page load (no stale flash).
+                    # build_price_snapshot() reads raw + applies CDR adjustment.
+                    if raw_current_price is not None and cid is not None:
+                        try:
+                            _sb.table("current_market_data").upsert(
+                                {
+                                    "company_id":   cid,
+                                    "current_price": raw_current_price,
+                                    "close_price":  raw_prev_close,
+                                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                                },
+                                on_conflict="company_id",
+                            ).execute()
+                        except Exception as e:
+                            logger.debug("[PRICE-MONITOR] %s: DB write failed: %s", symbol, e)
                 else:
                     skipped_count += 1
-                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: SKIPPED broadcast — current_price={current_price}, prev_close={prev_close}")
-            
+
             logger.debug(f"[PRICE-MONITOR-DIAG] Cycle complete: {updated_count} updated, {skipped_count} skipped")
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
-            break  # graceful shutdown
+            break
         except Exception as e:
             logger.error(f"[PriceMonitor] error: {e}", exc_info=True)
             await asyncio.sleep(interval)
@@ -140,6 +215,13 @@ async def lifespan(app: FastAPI):
     price_task = asyncio.create_task(background_price_monitor(), name="price_monitor")
     app.state.tasks["price_monitor"] = price_task
     logger.info("✅ Price monitor started")
+
+    # §4.1 tracer: event-loop lag sampler (times every sync .execute() via
+    # database.TimedClient; summary at GET /internal/trace)
+    from tracing import start_loop_lag_sampler
+    lag_task = asyncio.create_task(start_loop_lag_sampler(), name="loop_lag_sampler")
+    app.state.tasks["loop_lag_sampler"] = lag_task
+    logger.info("📈 Loop-lag sampler started")
 
     # DuckDB cache pre-warm (non-blocking)
     from dependencies import get_defeat_beta_provider
@@ -200,6 +282,31 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.middleware("http")
+async def correlation_id_middleware(request, call_next):
+    corr_id = request.headers.get("X-Request-ID") or str(_uuid.uuid4())
+    token = _request_correlation_id.set(corr_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = corr_id
+        return response
+    finally:
+        _request_correlation_id.reset(token)
+
+
+@app.middleware("http")
+async def trace_request_middleware(request, call_next):
+    from tracing import tracer
+    import time as _time
+    tracer.active_requests += 1
+    t0 = _time.perf_counter()
+    try:
+        return await call_next(request)
+    finally:
+        tracer.active_requests -= 1
+        tracer.record_request((_time.perf_counter() - t0) * 1000.0)
+
+
+@app.middleware("http")
 async def clear_request_cache_middleware(request, call_next):
     try:
         response = await call_next(request)
@@ -226,6 +333,12 @@ app.add_middleware(
 @app.get("/health", tags=["System"])
 async def health_check():
     return {"status": "healthy", "environment": settings.ENVIRONMENT}
+
+@app.get("/internal/trace", tags=["System"])
+async def internal_trace():
+    """§4.1 evidence: event-loop lag, sync .execute() timings, request spans."""
+    from tracing import tracer
+    return tracer.summary()
 
 @app.get("/ready", tags=["System"])
 async def readiness_check():

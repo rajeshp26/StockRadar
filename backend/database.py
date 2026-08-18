@@ -10,6 +10,7 @@ from supabase import create_client, Client
 from supabase.lib.client_options import SyncClientOptions
 from supabase_auth import SyncMemoryStorage
 from config import settings
+from tracing import TimedClient
 
 
 _client: Client = None
@@ -17,7 +18,7 @@ _client: Client = None
 def get_supabase() -> Client:
     global _client
     if _client is None:
-        _client = create_client(
+        raw = create_client(
             settings.SUPABASE_URL,
             settings.SUPABASE_SERVICE_ROLE_KEY,
             options=SyncClientOptions(
@@ -25,6 +26,8 @@ def get_supabase() -> Client:
                 postgrest_client_timeout=30,
             ),
         )
+        # Wrap with the §4.1 timing instrument (times every sync .execute()).
+        _client = TimedClient(raw)  # type: ignore[assignment]
     return _client
 
 

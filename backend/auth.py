@@ -10,7 +10,7 @@ import json
 import time
 import httpx
 from jwt import decode as jwt_decode, get_unverified_header
-from jwt.algorithms import RSAAlgorithm
+from jwt.algorithms import RSAAlgorithm, ECAlgorithm
 from fastapi import Request, HTTPException
 from config import settings
 from shared.constants import AUTHORIZATION_HEADER, BEARER_PREFIX
@@ -45,6 +45,10 @@ def _get_public_key(kid: str):
     key_data = next((k for k in _jwks["keys"] if k["kid"] == kid), None)
     if not key_data:
         raise HTTPException(status_code=401, detail="Invalid token: unknown key ID")
+
+    kty = key_data.get("kty")
+    if kty == "EC":
+        return ECAlgorithm.from_jwk(json.dumps(key_data))
     return RSAAlgorithm.from_jwk(json.dumps(key_data))
 
 
@@ -71,10 +75,22 @@ def _verify_rs256(token: str, kid: str, options: dict) -> dict:
     )
 
 
+def _verify_es256(token: str, kid: str, options: dict) -> dict:
+    """Verify a Supabase JWT signed with ES256 using cached JWKS public keys."""
+    public_key = _get_public_key(kid)
+    return jwt_decode(
+        token,
+        public_key,
+        algorithms=["ES256"],
+        audience="authenticated",
+        options=options,
+    )
+
+
 def verify_jwt(token: str) -> dict:
     """Verify a Supabase JWT locally.
 
-    Supports both HS256 (shared secret) and RS256 (JWKS) algorithms.
+    Supports HS256 (shared secret), RS256 (JWKS), and ES256 (JWKS) algorithms.
     """
     try:
         unverified = get_unverified_header(token)
@@ -93,6 +109,10 @@ def verify_jwt(token: str) -> dict:
             if not kid:
                 raise HTTPException(status_code=401, detail="Invalid token: missing key ID")
             decoded = _verify_rs256(token, kid, options)
+        elif alg == "ES256":
+            if not kid:
+                raise HTTPException(status_code=401, detail="Invalid token: missing key ID")
+            decoded = _verify_es256(token, kid, options)
         else:
             logger.warning(f"Unsupported JWT algorithm: {alg}")
             raise HTTPException(status_code=401, detail=f"Unsupported token algorithm: {alg}")

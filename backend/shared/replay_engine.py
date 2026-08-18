@@ -236,7 +236,14 @@ class ReplayEngine:
                 holding.average_cost = holding.total_cost / holding.quantity
 
     def _get_event_date(self, event: dict) -> Optional[date]:
-        """Extract the relevant date from an event — prefers data.effective_date / transaction_date over created_at."""
+        """Extract the relevant date from an event.
+
+        Priority:
+        1. data.effective_date — explicit override
+        2. data.transaction_date — for trade/dividend events
+        3. data.report_date — for split/corporate-action events (historical date)
+        4. event.created_at — fallback (insertion timestamp)
+        """
         data = event.get("data", {}) or {}
         eff_date = data.get("effective_date")
         if eff_date:
@@ -254,6 +261,19 @@ class ReplayEngine:
             if isinstance(txn_date, str):
                 try:
                     return date.fromisoformat(txn_date)
+                except (ValueError, TypeError):
+                    pass
+        # Split / corporate-action events store the historical date in report_date.
+        # Without this, bulk-inserted splits all share created_at and replay in the
+        # wrong order — AFTER buy transactions — inflating quantities by the
+        # cumulative split factor.
+        report_date = data.get("report_date")
+        if report_date:
+            if isinstance(report_date, date):
+                return report_date
+            if isinstance(report_date, str):
+                try:
+                    return date.fromisoformat(report_date)
                 except (ValueError, TypeError):
                     pass
         created_str = event.get("created_at", "")
