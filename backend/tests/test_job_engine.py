@@ -49,6 +49,23 @@ class TestClassifyFailure:
         assert classify_failure("some random text", status_code=429) == "rate_limited"
         assert classify_failure("", status_code=503) == "provider_5xx"
 
+    def test_postgres_constraint_errors_not_provider_5xx(self):
+        from application.jobs.job_engine import classify_failure
+        assert classify_failure(
+            'null value in column "company_id" violates not-null constraint '
+            '(23502)'
+        ) == "code_exception"
+        assert classify_failure(
+            'new row violates check constraint "check_conflict_values" (23514)'
+        ) == "code_exception"
+        assert classify_failure(
+            'insert or update on table "splits" violates foreign key constraint '
+            '(23503)'
+        ) == "code_exception"
+        assert classify_failure(
+            'duplicate key value violates unique constraint "splits_pkey" (23505)'
+        ) == "code_exception"
+
 
 # ── Backoff Rules ─────────────────────────────────────────────────────────────
 

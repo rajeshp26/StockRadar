@@ -266,8 +266,23 @@ class Rule1Service:
                     growth        = float(growth_row["estimate_eps_growth"])
                     growth_source = "earnings_forecast.estimate_eps_growth"
                     rep_date      = _as_date(growth_row.get("report_date"))
+                    captured_at   = None
+                    raw_created   = growth_row.get("created_at")
+                    if raw_created:
+                        try:
+                            captured_at = parse_db_timestamp(str(raw_created))
+                        except Exception:
+                            captured_at = None
+                    # Freshness is measured from when the forecast was captured
+                    # (created_at), not from the future target period end.
                     dq_freshness["epsForecast"] = (
-                        (now_utc().date() - rep_date).days if rep_date else None
+                        max((now_utc() - captured_at).days, 0) if captured_at else None
+                    )
+                    dq_freshness["epsForecastCapturedAt"] = (
+                        captured_at.isoformat() if captured_at else None
+                    )
+                    dq_freshness["epsForecastTargetPeriodEnd"] = (
+                        rep_date.isoformat() if rep_date else None
                     )
 
             if growth is None:

@@ -28,74 +28,49 @@ def timed(logger=logger):
 
 @timed()
 async def refresh_all_prices():
-    holdings = repo.get_all_active_holdings()
-    company_ids = {h["company_id"] for h in holdings if h.get("company_id")}
+    symbols = repo.get_all_active_symbols()
+    company_ids = {s["company_id"] for s in symbols if s.get("company_id")}
     if not company_ids:
-        logger.info("[PRICE-INGEST] no active holdings, skipping")
+        logger.info("[PRICE-INGEST] no active symbols, skipping")
         return
 
-    prefs = repo.get_price_source_preferences(list(company_ids))
+    yfinance_items_by_exchange: Dict[str, list] = {}
 
-    yfinance_items = []
-    supabase_items = set()
-
-    for h in holdings:
-        cid = h.get("company_id")
-        exchange = h.get("exchange_override") or "UNKNOWN"
-        pref = prefs.get((cid, exchange))
-        if pref is None:
-            logger.warning(
-                "[PRICE-INGEST] no preference for (company=%s, exchange=%s) — skipped",
-                cid, exchange,
-            )
-            continue
-        if pref == "yfinance_tor":
-            yfinance_items.append((cid, h["symbol"], exchange))
-        elif pref == "supabase_market_data":
-            supabase_items.add(cid)
+    for s in symbols:
+        cid = s.get("company_id")
+        exchange = s.get("exchange_override") or "UNKNOWN"
+        if exchange not in yfinance_items_by_exchange:
+            yfinance_items_by_exchange[exchange] = []
+        yfinance_items_by_exchange[exchange].append((cid, s["symbol"], exchange))
 
     prices = {}
 
-    if yfinance_items:
-        symbols = list(set(item[1] for item in yfinance_items))
-        exchange = yfinance_items[0][2]
+    if yfinance_items_by_exchange:
+        for exchange, items in yfinance_items_by_exchange.items():
+            syms = list(set(item[1] for item in items))
 
-        yf_results = await _fetch_yfinance_batch(
-            symbols, exchange,
-            per_symbol_timeout=getattr(settings, "YFINANCE_SINGLE_TIMEOUT_SECONDS", 10),
-            max_concurrent=5,
-        )
+            yf_results = await _fetch_yfinance_batch(
+                syms, exchange,
+                per_symbol_timeout=getattr(settings, "YFINANCE_SINGLE_TIMEOUT_SECONDS", 10),
+                max_concurrent=5,
+            )
 
-        symbol_to_cid = {item[1]: item[0] for item in yfinance_items}
-        for sym, result in yf_results.items():
-            cid = symbol_to_cid.get(sym)
-            if result["error"]:
-                logger.warning(
-                    "[PRICE-INGEST] symbol=%s exchange=%s error=%s",
-                    sym, exchange, result["error"],
-                )
-                continue
-            if cid and result["price"] is not None:
-                prices[(cid, exchange)] = {
-                    "price": result["price"],
-                    "source": "yfinance_tor",
-                    "currency": "CAD",
-                    "ttl_seconds": 300,
-                }
-
-    company_exchanges: Dict[int, str] = {}
-    if supabase_items:
-        company_exchanges = repo.get_company_exchanges(list(supabase_items))
-        supabase_prices = await _fetch_supabase_prices(list(supabase_items))
-        for cid, price in supabase_prices.items():
-            if price is not None:
-                exchange = company_exchanges.get(cid, "UNKNOWN")
-                prices[(cid, exchange)] = {
-                    "price": price,
-                    "source": "supabase_market_data",
-                    "currency": "USD",
-                    "ttl_seconds": 30,
-                }
+            symbol_to_cid = {item[1]: item[0] for item in items}
+            for sym, result in yf_results.items():
+                cid = symbol_to_cid.get(sym)
+                if result["error"]:
+                    logger.warning(
+                        "[PRICE-INGEST] symbol=%s exchange=%s error=%s",
+                        sym, exchange, result["error"],
+                    )
+                    continue
+                if cid and result["price"] is not None:
+                    prices[(cid, exchange)] = {
+                        "price": result["price"],
+                        "source": "yfinance",
+                        "currency": "CAD" if exchange in ("TOR", "TSX", "TO", "VAN", "TSXV", "V", "CNQ", "NEO") else "USD",
+                        "ttl_seconds": 300,
+                    }
 
     for (cid, exchange), data in prices.items():
         repo.upsert_price_source(
@@ -108,8 +83,8 @@ async def refresh_all_prices():
         )
 
     logger.info(
-        "[PRICE-INGEST] refreshed %d/%d prices (yfinance=%d, supabase=%d)",
-        len(prices), len(company_ids), len(yfinance_items), len(supabase_items),
+        "[PRICE-INGEST] refreshed %d/%d prices across %d exchanges",
+        len(prices), len(company_ids), len(yfinance_items_by_exchange),
     )
 
     # Auto-update CDR ratios after price refresh
@@ -284,22 +259,6 @@ def _emit_split_events() -> None:
                 .execute()
         except Exception as e:
             logger.error("[SPLIT-EVENT] failed to mark split processed for company %d: %s", cid, e)
-
-
-async def _fetch_supabase_prices(company_ids: List[int]) -> Dict[int, Optional[float]]:
-    if not company_ids:
-        return {}
-    try:
-        result = (
-            repo.client.table("current_market_data")
-            .select("company_id, current_price")
-            .in_("company_id", company_ids)
-            .execute()
-        )
-        return {row["company_id"]: row.get("current_price") for row in (result.data or [])}
-    except Exception as e:
-        logger.error("[PRICE-INGEST] supabase bulk query failed: %s", e)
-        return {}
 
 
 async def _fetch_yfinance_batch(

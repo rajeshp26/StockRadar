@@ -1,5 +1,6 @@
 # infrastructure/repositories/valuation_repository.py
 from __future__ import annotations
+import asyncio
 import logging
 import math
 from datetime import datetime, date, time, timedelta
@@ -141,13 +142,15 @@ class ValuationRepository:
 
     async def get_company_context(self, symbol: str) -> Optional[Dict[str, Any]]:
         try:
-            resp = (
-                supabase.table("companies")
-                .select("company_id, currency, sector, industry, ticker_symbol")
-                .eq("ticker_symbol", symbol.upper())
-                .limit(1)
-                .execute()
-            )
+            def _query():
+                return (
+                    supabase.table("companies")
+                    .select("company_id, currency, sector, industry, ticker_symbol")
+                    .eq("ticker_symbol", symbol.upper())
+                    .limit(1)
+                    .execute()
+                )
+            resp = await asyncio.to_thread(_query)
             return _first(resp.data)
         except Exception as e:
             logger.error("get_company_context failed for %s: %s", symbol, e)
@@ -866,6 +869,26 @@ class ValuationRepository:
             logger.error("get_last_output_snapshots failed for company_id=%s methods=%s: %s", company_id, methods, exc)
             return {m: None for m in methods}
 
+    async def get_valuation_summary_rows(self, company_id: int) -> List[Dict[str, Any]]:
+        """One query on the Phase 2 read model (v_valuation_latest_runs).
+
+        Returns the latest run row per method for the company (may be []).
+        Used by GET /analysis/{symbol}/valuation-summary.
+        """
+        try:
+            def _query():
+                return (
+                    supabase.table("v_valuation_latest_runs")
+                    .select("method, run_at, data_version_tag, input_snapshot, output_snapshot")
+                    .eq("company_id", company_id)
+                    .execute()
+                )
+            resp = await asyncio.to_thread(_query)
+            return resp.data or []
+        except Exception as exc:
+            logger.error("get_valuation_summary_rows failed for company_id=%s: %s", company_id, exc)
+            return []
+
     async def get_last_input_snapshot(self, company_id: int, method: str) -> Optional[Dict[str, Any]]:
         """
         Returns the input_snapshot from the most recent valuation run.
@@ -1480,7 +1503,7 @@ class ValuationRepository:
         try:
             resp = (
                 supabase.table("earnings_forecast")
-                .select("estimate_eps_growth, report_date, period_type")
+                .select("estimate_eps_growth, report_date, period_type, created_at")
                 .eq("company_id", company_id)
                 .order("report_date", desc=True)
                 .limit(1)

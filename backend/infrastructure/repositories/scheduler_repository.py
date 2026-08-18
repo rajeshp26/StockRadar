@@ -58,7 +58,7 @@ class JobRow:
 class SchedulerStateRow:
     scheduler_name: str
     enabled: bool = True
-    interval_hours: int = 24
+    interval_hours: float = 24.0
     last_planned_at: Optional[str] = None
     last_status: Optional[str] = None
     last_error: Optional[str] = None

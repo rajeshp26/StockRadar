@@ -90,6 +90,46 @@ class PriceRepository:
             logger.error("Failed to fetch active holdings: %s", e)
             return []
 
+    def get_all_active_symbols(self) -> List[Dict[str, Any]]:
+        """Returns ALL unique (company_id, symbol, exchange) that any user
+        cares about — portfolio holdings AND watchlist items combined.
+
+        Deduplicates by company_id so a stock in both is only returned once.
+        """
+        seen: Dict[int, Dict[str, Any]] = {}
+
+        # 1) Portfolio holdings (existing path)
+        holdings = self.get_all_active_holdings()
+        for h in holdings:
+            cid = h.get("company_id")
+            if cid and cid not in seen:
+                seen[cid] = {
+                    "company_id": cid,
+                    "symbol": h["symbol"],
+                    "exchange_override": h.get("exchange_override") or "UNKNOWN",
+                }
+
+        # 2) Watchlist items (new path)
+        try:
+            wl_result = (
+                self.client.table("watchlist_items")
+                .select("company_id, companies(ticker_symbol, exchange)")
+                .execute()
+            )
+            for row in (wl_result.data or []):
+                cid = row.get("company_id")
+                co = row.get("companies")
+                if cid and co and cid not in seen:
+                    seen[cid] = {
+                        "company_id": cid,
+                        "symbol": co["ticker_symbol"],
+                        "exchange_override": co.get("exchange") or "UNKNOWN",
+                    }
+        except Exception as e:
+            logger.error("Failed to fetch watchlist items for price refresh: %s", e)
+
+        return list(seen.values())
+
     def get_holdings_for_accounts(self, account_ids: List[int]) -> List[Dict[str, Any]]:
         if not account_ids:
             return []

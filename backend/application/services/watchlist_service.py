@@ -22,6 +22,7 @@ from shared.exceptions.base import NotFoundError, ExternalServiceError
 from database import supabase
 
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from shared.price_utils import build_price_snapshot
 if TYPE_CHECKING:
     from providers.defeat_beta_provider import DefeatBetaProvider
 
@@ -221,10 +222,9 @@ class WatchlistService:
     def get_default_watchlist_structure(self, firebase_uid: str) -> Dict[str, Any]:
         """
         Fast path for initial watchlist render:
-        - Returns watchlist + items WITHOUT price enrichment
-        - No YFinance calls
-        - No current_market_data merge
-        - Prices are expected to arrive via SSE
+        - Returns watchlist + items WITH prices from current_market_data
+        - No YFinance calls (reads cached DB data via shared snapshot builder)
+        - Prices appear at first paint (~200-300ms)
         """
         db_user_id = self.get_db_user_id(firebase_uid)
 
@@ -256,19 +256,35 @@ class WatchlistService:
             stocks.append(
                 {
                     "id": item["watchlist_item_id"],
+                    "companyId": company["company_id"],
                     "symbol": company["ticker_symbol"],
                     "name": company["company_name"],
                     "sector": company.get("sector"),
                     "industry": company.get("industry"),
                     "targetBuy": item.get("target_buy"),
                     "targetSell": item.get("target_sell"),
-                    # Explicitly present but null; FE will hydrate via SSE
                     "price": None,
                     "change": None,
                     "changePercent": None,
+                    "isStale": False,
                     "lastUpdated": None,
                 }
             )
+
+        # 3) Enrich with prices from current_market_data (batch, sub-50ms)
+        if stocks:
+            company_ids = [s["companyId"] for s in stocks]
+            snapshots = build_price_snapshot(supabase, company_ids, source="db_cached")
+
+            for s in stocks:
+                snap = snapshots.get(s["companyId"])
+                if not snap:
+                    continue
+                s["price"] = snap["price"]
+                s["change"] = snap["change"]
+                s["changePercent"] = snap["changePercent"]
+                s["isStale"] = snap["isStale"]
+                s["lastUpdated"] = snap["lastUpdated"]
 
         return {
             "watchlist_id": watchlist_id,
@@ -402,6 +418,12 @@ class WatchlistService:
                 )
             )
             logger.debug("[WATCHLIST][%s] Background task started (is_new=%s)", symbol, is_new_company)
+
+            # 6b) Schedule background valuation computation
+            asyncio.create_task(
+                self._compute_valuations_background(symbol=symbol, user_id=user_id)
+            )
+            logger.debug("[WATCHLIST][%s] Background valuation computation scheduled", symbol)
 
             # 7) Calculate change data from price info
             prev_close = getattr(sd, 'previous_close', None) if sd else None
@@ -970,3 +992,12 @@ class WatchlistService:
             })
         out.sort(key=lambda x: x["price_date"])
         return out
+
+    async def _compute_valuations_background(self, symbol: str, user_id: int) -> None:
+        try:
+            from application.schedulers.valuation_computation_scheduler import ValuationComputationScheduler
+            scheduler = ValuationComputationScheduler()
+            await scheduler.compute_all(symbol=symbol, user_id=user_id, force=False)
+            logger.info("Background valuation computation completed for %s", symbol)
+        except Exception as e:
+            logger.warning("Background valuation computation failed for %s: %s", symbol, e)

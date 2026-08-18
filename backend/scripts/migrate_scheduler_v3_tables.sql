@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS job_attempts (
 CREATE TABLE IF NOT EXISTS scheduler_state (
     scheduler_name  TEXT PRIMARY KEY,
     enabled         BOOLEAN DEFAULT TRUE,
-    interval_hours  INT,
+    interval_hours  NUMERIC DEFAULT 24,
     last_planned_at TIMESTAMPTZ,
     last_status     TEXT,           -- 'succeeded' | 'failed'
     last_error      TEXT,

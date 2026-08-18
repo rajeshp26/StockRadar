@@ -11,7 +11,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 
-from dependencies import get_current_user_dep, limiter
+from dependencies import get_current_user_dep, limiter, get_valuation_service
 
 logger = logging.getLogger(__name__)
 
@@ -522,4 +522,33 @@ async def get_fundamentals(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Fundamentals analysis failed.",
+        )
+
+
+@router.get(
+    "/{symbol}/valuation-summary",
+    summary=(
+        "Cross-method valuation summary from the published read model "
+        "(no recompute, no AI on the request path)."
+    ),
+)
+@limiter.limit("30/minute")
+async def get_valuation_summary(
+    request: Request,
+    symbol: str,
+    user=Depends(get_current_user_dep),
+    valuation_service=Depends(get_valuation_service),
+) -> dict:
+    try:
+        sym = _normalize(symbol)
+        return await valuation_service.get_valuation_summary(sym)
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+    except Exception as exc:
+        logger.error("get_valuation_summary failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Valuation summary failed.",
         )

@@ -12,6 +12,7 @@ from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
+from config import settings
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 
 logger = logging.getLogger(__name__)

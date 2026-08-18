@@ -27,7 +27,19 @@ from domain.models.valuation_residual_income import (
 )
 from infrastructure.repositories.valuation_repository import ValuationRepository
 
+from shared.finance_math import safe_float
+from shared.time_utils import now_utc, parse_db_timestamp
+
 logger = logging.getLogger(__name__)
+
+_METHODS = ["rule1", "dcf", "ddm_gordon", "owner_earnings", "residual_income"]
+_METHOD_IV_FIELD = {
+    "rule1": "stickerPrice",
+    "dcf": "intrinsicValuePerShare",
+    "ddm_gordon": "intrinsicValue",
+    "owner_earnings": "intrinsicValuePerShare",
+    "residual_income": "intrinsicValuePerShare",
+}
 
 
 class ValuationService:
@@ -270,4 +282,210 @@ class ValuationService:
             "methods":         methods,
             "recommendation":  recommendation,
         }
+
+    # ── Phase 2: canonical read-model summary (§6.1-B/C/E) ────────────────────
+
+    async def get_valuation_summary(self, symbol: str) -> dict:
+        """
+        Cross-method valuation summary straight from the read model
+        (v_valuation_latest_runs). One query; no compute, no LLM, no quote fetch.
+
+        Contract (§6.1-E): status ∈ {available, stale, not_computed,
+        not_applicable, failed_without_previous_result} + reasonCode +
+        computedAt + inputAsOf + modelVersion + refresh + nullable numerics.
+        A broken snapshot for one method never fails the whole response — that
+        method becomes failed_without_previous_result.
+        """
+        ctx = await self.repo.get_company_context(symbol)
+        if not ctx:
+            raise ValueError(f"Symbol '{symbol}' not found.")
+        company_id = int(ctx["company_id"])
+        currency = ctx.get("currency") or "USD"
+        sector = ctx.get("sector")
+
+        rows = await self.repo.get_valuation_summary_rows(company_id)
+        by_method = {r.get("method"): r for r in rows}
+
+        methods = {}
+        for method in _METHODS:
+            try:
+                methods[method] = self._build_method_summary(
+                    method, by_method.get(method), currency
+                )
+            except Exception as exc:
+                logger.warning("valuation summary section failed for %s: %s", method, exc)
+                methods[method] = {
+                    "method": method,
+                    "status": "failed_without_previous_result",
+                    "reasonCode": "SECTION_BUILD_ERROR",
+                    "intrinsicValue": None,
+                    "referencePrice": None,
+                    "referencePriceAsOf": None,
+                    "upsideDownside": None,
+                    "computedAt": None,
+                    "inputAsOf": None,
+                    "modelVersion": None,
+                    "freshnessDays": None,
+                    "score": None,
+                    "category": None,
+                    "currency": currency,
+                    "refresh": None,
+                }
+
+        return {
+            "symbol": symbol.upper(),
+            "currency": currency,
+            "sector": sector,
+            "generatedAt": now_utc().isoformat(),
+            "methods": methods,
+            "recommendation": self._recommendation_status(methods),
+        }
+
+    def _build_method_summary(
+        self, method: str, row: Optional[Dict[str, Any]], currency: str
+    ) -> Dict[str, Any]:
+        base = {
+            "method": method,
+            "intrinsicValue": None,
+            "referencePrice": None,
+            "referencePriceAsOf": None,
+            "upsideDownside": None,
+            "computedAt": None,
+            "inputAsOf": None,
+            "modelVersion": None,
+            "freshnessDays": None,
+            "score": None,
+            "category": None,
+            "currency": currency,
+            "refresh": None,
+        }
+        if not row:
+            base["status"] = "not_computed"
+            base["reasonCode"] = None
+            return base
+
+        snap = row.get("output_snapshot") or {}
+        if not isinstance(snap, dict):
+            base["status"] = "failed_without_previous_result"
+            base["reasonCode"] = "MISSING_SNAPSHOT"
+            return base
+
+        val = snap.get("valuation") or {}
+        app = snap.get("applicability") or {}
+        dq = snap.get("dataQuality") or {}
+        iv_field = _METHOD_IV_FIELD.get(method, "intrinsicValuePerShare")
+        iv = safe_float(val.get(iv_field))
+
+        computed_at = (
+            (dq.get("freshnessDays") or {}).get("lastComputedAt")
+            or snap.get("lastComputedAt")
+            or row.get("run_at")
+        )
+        input_as_of = self._extract_input_as_of(row.get("input_snapshot"))
+        base["computedAt"] = computed_at
+        base["inputAsOf"] = input_as_of
+        base["modelVersion"] = row.get("data_version_tag")
+        base["freshnessDays"] = self._freshness_days(computed_at)
+
+        score, category, hard_fail = self._extract_applicability(app)
+        base["score"] = score
+        base["category"] = category
+
+        if iv is None or iv <= 0:
+            if method == "rule1" and safe_float(val.get("eps0")) is not None and safe_float(val.get("eps0")) <= 0:
+                base["status"] = "not_applicable"
+                base["reasonCode"] = "NEGATIVE_EPS"
+            elif hard_fail:
+                base["status"] = "not_applicable"
+                base["reasonCode"] = "NOT_MEANINGFUL"
+            else:
+                base["status"] = "not_applicable"
+                base["reasonCode"] = "NO_MEANINGFUL_VALUE"
+            return base
+
+        base["status"] = "available"
+        base["reasonCode"] = None
+        base["intrinsicValue"] = iv
+
+        ref = safe_float(val.get("currentPrice"))
+        if ref is not None and ref > 0:
+            base["referencePrice"] = ref
+            base["referencePriceAsOf"] = computed_at
+            base["upsideDownside"] = (iv - ref) / ref
+        return base
+
+    @staticmethod
+    def _extract_input_as_of(input_snapshot: Any) -> Optional[Any]:
+        if not isinstance(input_snapshot, dict):
+            return None
+        resolved = input_snapshot.get("resolved")
+        if isinstance(resolved, dict):
+            return resolved.get("resolved_at")
+        return None
+
+    @staticmethod
+    def _freshness_days(computed_at: Any) -> Optional[int]:
+        if not computed_at:
+            return None
+        try:
+            dt = parse_db_timestamp(str(computed_at))
+            days = (now_utc() - dt).days
+            return max(days, 0)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_applicability(app: Dict[str, Any]) -> tuple:
+        score, category, hard_fail = None, None, False
+        for flag in app.get("flags") or []:
+            evidence = flag.get("evidence") or {}
+            if not isinstance(evidence, dict):
+                continue
+            if evidence.get("score0to100") is not None:
+                score = evidence.get("score0to100")
+            if evidence.get("category"):
+                category = evidence.get("category")
+            if evidence.get("hardFail") is True:
+                hard_fail = True
+        return score, category, hard_fail
+
+    @staticmethod
+    def _recommendation_status(methods: Dict[str, Any]) -> Dict[str, Any]:
+        from config import settings
+        configured = bool(settings.OPEN_ROUTER_KEY)
+        base = {
+            "status": "pending" if configured else "disabled",
+            "reasonCode": None if configured else "PROVIDER_NOT_CONFIGURED",
+            "text": None,
+            "generatedAt": None,
+            "sourceSnapshotVersion": None,
+            "provider": None,
+            "model": None,
+        }
+        if not configured:
+            base["text"] = ValuationService._deterministic_recommendation(methods)
+            base["provider"] = "deterministic"
+        return base
+
+    @staticmethod
+    def _deterministic_recommendation(methods: Dict[str, Any]) -> str:
+        available = [
+            m for m in methods.values()
+            if m.get("status") == "available" and m.get("upsideDownside") is not None
+        ]
+        if not available:
+            return "No computed valuations available yet."
+
+        upsides = [m["upsideDownside"] for m in available]
+        avg = sum(upsides) / len(upsides)
+        if avg > 0.02:
+            stance = "Undervalued"
+        elif avg < -0.02:
+            stance = "Overvalued"
+        else:
+            stance = "Fairly valued"
+        return (
+            f"{stance} — {len(available)} of {len(methods)} methods computed "
+            f"(average upside {avg:+.1%})."
+        )
  

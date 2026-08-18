@@ -623,29 +623,30 @@ class SupabaseFinancialRepository:
                     except Exception:
                         existing = None
                     if existing:
+                        # Categorical fields (split_factor is VARCHAR, reverse_split is
+                        # BOOLEAN) cannot be stored in data_conflicts' numeric columns
+                        # without violating check_conflict_values (both values NULL).
+                        # Log these as informational mismatches only when values differ;
+                        # skip the numeric conflict table for non-numeric fields.
                         if (existing.get("split_factor") or "") != (r.get("split_factor") or ""):
-                            await self.log_conflict(
-                                company_id=cid,
-                                fiscal_year=None,
-                                fiscal_quarter=None,
-                                field="split_factor",
-                                existing_value=None,
-                                existing_source=existing.get("data_source") or "unknown",
-                                new_value=None,
-                                new_source=r.get("data_source") or "unknown",
-                                pct_diff=100.0,
+                            logger.info(
+                                "[SPLIT] split_factor mismatch for company_id=%s "
+                                "report_date=%s: existing=%r new=%r source=%s→%s",
+                                cid, rdate,
+                                existing.get("split_factor"),
+                                r.get("split_factor"),
+                                existing.get("data_source"),
+                                r.get("data_source"),
                             )
                         if bool(existing.get("reverse_split")) != bool(r.get("reverse_split")):
-                            await self.log_conflict(
-                                company_id=cid,
-                                fiscal_year=None,
-                                fiscal_quarter=None,
-                                field="reverse_split",
-                                existing_value=None,
-                                existing_source=existing.get("data_source") or "unknown",
-                                new_value=None,
-                                new_source=r.get("data_source") or "unknown",
-                                pct_diff=100.0,
+                            logger.info(
+                                "[SPLIT] reverse_split mismatch for company_id=%s "
+                                "report_date=%s: existing=%r new=%r source=%s→%s",
+                                cid, rdate,
+                                existing.get("reverse_split"),
+                                r.get("reverse_split"),
+                                existing.get("data_source"),
+                                r.get("data_source"),
                             )
 
             seen = {}

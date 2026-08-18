@@ -39,6 +39,8 @@ BACKOFF_RULES: Dict[str, Dict[str, Any]] = {
 
 def classify_failure(error: str, status_code: Optional[int] = None) -> str:
     """Classify a failure into a backoff category based on error message and status code."""
+    import re
+
     if status_code:
         if status_code == 429:
             return "rate_limited"
@@ -54,7 +56,9 @@ def classify_failure(error: str, status_code: Optional[int] = None) -> str:
         return "network_timeout"
     if "429" in error_lower or "rate limit" in error_lower:
         return "rate_limited"
-    if "50" in error_lower or "server error" in error_lower or "unavailable" in error_lower:
+    # Match standalone 5xx status codes (e.g. "503 Service Unavailable") but NOT
+    # Postgres error codes like "23502" which contain "50" as a substring.
+    if re.search(r'\b5\d{2}\b', error_lower) or "server error" in error_lower or "unavailable" in error_lower:
         return "provider_5xx"
     if "validation" in error_lower or "invalid" in error_lower:
         return "data_validation"

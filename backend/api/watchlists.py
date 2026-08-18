@@ -28,10 +28,29 @@ MAX_STOCKS_PER_WATCHLIST = 50
 MAX_NAME_LENGTH          = 50
 
 # -----------------------------------------------------------------------------
-# SSE in‑memory state (UNCHANGED)
+# SSE in-memory state
 # -----------------------------------------------------------------------------
 user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
 symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
+
+
+def _safe_put(queue: asyncio.Queue, payload: dict) -> bool:
+    """Non-blocking put with drop-oldest backpressure.
+
+    If queue is full, removes the oldest item to make room for the new one.
+    This ensures the newest price always reaches the client (latest-wins).
+    """
+    if queue.full():
+        try:
+            queue.get_nowait()  # drop oldest
+        except asyncio.QueueEmpty:
+            pass
+    try:
+        queue.put_nowait(payload)
+        return True
+    except asyncio.QueueFull:
+        logger.warning("[SSE] Queue full after drop-oldest — dropping event")
+        return False
 
 
 
@@ -138,30 +157,26 @@ async def stream_watchlist_updates(
     auth_id = user["sub"]
 
     async def event_generator():
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         user_queues[auth_id].append(queue)
         try:
             items_res = (
                 supabase.table("watchlist_items")
-                .select("companies(ticker_symbol), watchlists(users(auth_id))")
+                .select("companies(company_id, ticker_symbol), watchlists(users(auth_id))")
                 .eq("watchlists.users.auth_id", auth_id)
                 .execute()
             )
             rows = items_res.data or []
-            logger.info(f"[SSE-DIAG] {auth_id}: subscription query returned {len(rows)} rows")
-            if rows:
-                logger.info(f"[SSE-DIAG] First row keys: {list(rows[0].keys()) if rows else 'N/A'}")
-                logger.info(f"[SSE-DIAG] First row companies: {rows[0].get('companies')}")
-                logger.info(f"[SSE-DIAG] First row watchlists: {rows[0].get('watchlists')}")
             user_symbols = [
                 row["companies"]["ticker_symbol"]
                 for row in rows
                 if row.get("companies")
             ]
-            logger.info(f"[SSE-DIAG] {auth_id}: resolved {len(user_symbols)} user symbols: {user_symbols}")
             for sym in user_symbols:
                 symbol_subscribers[sym].add(auth_id)
-            logger.info(f"[SSE-DIAG] symbol_subscribers now has {len(symbol_subscribers)} unique symbols")
+
+            # Initial prices are now served via REST (GET /watchlists/:id/prices).
+            # SSE stream handles live updates only.
 
             while True:
                 if await request.is_disconnected():
@@ -284,23 +299,13 @@ async def broadcast_stock_update(symbol: str, price: float, change: float, chang
         "change":        float(change),
         "changePercent": float(change_percent),
         "lastUpdated":   now_iso(),
+        "source":        "live",
     }
     for uid in uids:
         for queue in user_queues.get(uid, []):
-            await queue.put(payload)
+            _safe_put(queue, payload)
 
 async def broadcast_valuation_ready(symbol: str, method: str, company_id: int) -> None:
-    """
-    Push a valuation_ready event to all users who have this symbol in their
-    watchlist. The frontend invalidates the React Query cache for the specific
-    method, triggering a refetch that renders the newly computed result.
-
-    Uses the same symbol_subscribers registry as broadcast_stock_update so no
-    additional subscription tracking is needed.
-
-    Called by watchlist_service._fetch_and_store_financials_optimized() after
-    each valuation method completes for a new company load.
-    """
     uids = symbol_subscribers.get(symbol, set())
     if not uids:
         return
@@ -312,7 +317,50 @@ async def broadcast_valuation_ready(symbol: str, method: str, company_id: int) -
     }
     for uid in uids:
         for queue in user_queues.get(uid, []):
-            await queue.put(payload)
+            _safe_put(queue, payload)
+
+
+async def _push_initial_prices(rows: list, queue: asyncio.Queue) -> None:
+    """Push one-time price snapshot from current_market_data into SSE queue."""
+    from shared.price_utils import build_price_snapshot
+
+    try:
+        if not rows:
+            return
+
+        company_ids = list({
+            row["companies"]["company_id"]
+            for row in rows
+            if row.get("companies") and "company_id" in row["companies"]
+        })
+        if not company_ids:
+            return
+
+        snapshots = build_price_snapshot(supabase, company_ids, source="db_cached")
+
+        for row in rows:
+            company = row.get("companies") or {}
+            cid = company.get("company_id")
+            symbol = company.get("ticker_symbol")
+            if cid is None or not symbol:
+                continue
+            snap = snapshots.get(cid)
+            if not snap:
+                continue
+
+            payload = {
+                "type":          "price_update",
+                "symbol":        symbol,
+                "price":         snap["price"],
+                "change":        snap["change"],
+                "changePercent": snap["changePercent"],
+                "lastUpdated":   snap["lastUpdated"],
+                "source":        "cached",
+                "isStale":       snap["isStale"],
+            }
+            _safe_put(queue, payload)
+    except Exception as e:
+        logger.warning(f"[SSE] Failed to push initial prices: {e}")
 
 
 # =============================================================================
@@ -610,4 +658,85 @@ def get_watchlist_structure_by_id(
         raise HTTPException(status_code=e.status_code, detail=e.message)
     except Exception as e:
         print(f"[ERROR] get_watchlist_structure_by_id: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+# ── GET /watchlists/{watchlist_id}/prices ─────────────────────────────────
+@router.get("/watchlists/{watchlist_id}/prices", tags=["Watchlists"], status_code=200)
+@limiter.limit("30/minute")
+def get_watchlist_prices(
+    request: Request,
+    watchlist_id: int,
+    user: dict = Depends(get_current_user_dep),
+):
+    """Return current prices for all stocks in a watchlist.
+
+    Used by the frontend on initial load instead of relying on the SSE
+    initial push. Paginated at 50 stocks per page (default).
+    """
+    from shared.price_utils import build_price_snapshot
+
+    try:
+        auth_id = user["sub"]
+        db_user_id = _resolve_db_user_id(auth_id)
+        _assert_watchlist_ownership(watchlist_id, db_user_id)
+
+        page = max(1, int(request.query_params.get("page", 1)))
+        page_size = min(100, max(1, int(request.query_params.get("page_size", 50))))
+
+        items_res = (
+            supabase.table("watchlist_items")
+            .select("companies(company_id, ticker_symbol)")
+            .eq("watchlist_id", watchlist_id)
+            .execute()
+        )
+        rows = items_res.data or []
+        stocks = [
+            {
+                "company_id": row["companies"]["company_id"],
+                "symbol": row["companies"]["ticker_symbol"],
+            }
+            for row in rows
+            if row.get("companies") and "company_id" in row["companies"]
+        ]
+
+        total = len(stocks)
+        start = (page - 1) * page_size
+        end = min(start + page_size, total)
+        page_stocks = stocks[start:end]
+
+        company_ids = [s["company_id"] for s in page_stocks]
+        price_snapshot = build_price_snapshot(supabase, company_ids, source="db_cached")
+
+        results = []
+        for s in page_stocks:
+            cid = s["company_id"]
+            ps = price_snapshot.get(cid, {})
+            results.append({
+                "company_id": cid,
+                "symbol": s["symbol"],
+                "price": ps.get("price"),
+                "prevClose": ps.get("prevClose"),
+                "change": ps.get("change"),
+                "changePercent": ps.get("changePercent"),
+                "isStale": ps.get("isStale", True),
+                "lastUpdated": ps.get("lastUpdated"),
+                "source": ps.get("source", "unknown"),
+            })
+
+        return {
+            "watchlist_id": watchlist_id,
+            "prices": results,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] get_watchlist_prices: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")

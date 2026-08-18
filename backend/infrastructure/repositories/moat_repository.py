@@ -60,8 +60,8 @@ class MoatRepository:
             resp = (
                 supabase.table("income_statements")
                 .select(
-                    "fiscal_year, revenue, cost_of_revenue, operating_income, "
-                    "net_income, ebit, interest_expense, income_tax_expense, "
+                    "fiscal_year, revenue, cost_of_goods_sold, operating_income, "
+                    "net_income, ebit, interest_expense, tax_expense, "
                     "shares_outstanding_diluted"
                 )
                 .eq("company_id", company_id)
@@ -121,7 +121,9 @@ class MoatRepository:
                 supabase.table("company_summary")
                 .select(
                     "market_cap, enterprise_value, beta, shares_outstanding, "
-                    "current_price, pe_ratio, price_to_book, snapshot_date"
+                    "trailing_pe, forward_pe, trailing_eps, forward_eps, "
+                    "enterprise_to_ebitda, enterprise_to_revenue, "
+                    "peg_ratio, snapshot_date"
                 )
                 .eq("company_id", company_id)
                 .order("snapshot_date", desc=True)
@@ -160,20 +162,12 @@ class MoatRepository:
 
     async def upsert_moat_analysis(self, company_id: int, data: Dict[str, Any]) -> bool:
         try:
-            existing = (
-                supabase.table("moat_analysis")
-                .select("id")
-                .eq("company_id", company_id)
-                .limit(1)
-                .execute()
-            )
-            record = {**data, "computed_at": "now()"}
-            if existing.data:
-                supabase.table("moat_analysis").update(record).eq(
-                    "company_id", company_id
-                ).execute()
-            else:
-                supabase.table("moat_analysis").insert(record).execute()
+            record = {**data, "company_id": company_id, "computed_at": "now()"}
+            # Remove id if present to avoid conflict — company_id has a unique constraint
+            record.pop("id", None)
+            supabase.table("moat_analysis").upsert(
+                record, on_conflict="company_id"
+            ).execute()
             return True
         except Exception as e:
             logger.error("upsert_moat_analysis failed: %s", e)
@@ -273,10 +267,10 @@ class MoatRepository:
     async def get_current_market_price(self, company_id: int) -> Optional[float]:
         try:
             resp = (
-                supabase.table("company_summary")
+                supabase.table("current_market_data")
                 .select("current_price")
                 .eq("company_id", company_id)
-                .order("snapshot_date", desc=True)
+                .order("last_updated", desc=True)
                 .limit(1)
                 .execute()
             )

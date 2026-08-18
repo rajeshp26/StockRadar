@@ -48,8 +48,7 @@ def sync_user(
             'last_name': body.last_name,
             'avatar_url': body.avatar_url,
         }
-        if body.preferred_currency is not None:
-            user_data['preferred_currency'] = body.preferred_currency
+        user_data['preferred_currency'] = body.preferred_currency or 'USD'
 
         result = supabase.table('users').upsert(
             user_data,

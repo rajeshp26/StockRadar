@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from datetime import timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from database import supabase
@@ -68,7 +68,7 @@ class RiskRepository:
             .execute()
         )
         rows = resp.data or []
-        cutoff_date = (date.today() - timedelta(days=years * 365)).isoformat()
+        cutoff_date = (datetime.now(tz=timezone.utc).date() - timedelta(days=years * 365)).isoformat()
         return [r for r in rows if r.get("price_date", "") >= cutoff_date]
 
     async def get_current_market_price(self, company_id: int) -> Optional[float]:
