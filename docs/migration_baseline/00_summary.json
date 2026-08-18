@@ -1,0 +1,241 @@
+{
+  "cloud_url": "https://viqdqgxcumcdhqxooplw.supabase.co",
+  "backup_time": "2026-08-02T18:06:41Z",
+  "mode": "full",
+  "tables_found": 58,
+  "total_rows": 180368,
+  "tables": {
+    "companies": {
+      "row_count": 3122,
+      "columns": 25
+    },
+    "users": {
+      "row_count": 5,
+      "columns": 11
+    },
+    "currencies": {
+      "row_count": 2,
+      "columns": 3
+    },
+    "current_market_data": {
+      "row_count": 167,
+      "columns": 9
+    },
+    "price_history": {
+      "row_count": 40327,
+      "columns": 9
+    },
+    "income_statements": {
+      "row_count": 3265,
+      "columns": 40
+    },
+    "balance_sheets": {
+      "row_count": 3341,
+      "columns": 43
+    },
+    "cash_flow_statements": {
+      "row_count": 3328,
+      "columns": 36
+    },
+    "financial_ratios": {
+      "row_count": 3193,
+      "columns": 51
+    },
+    "earnings": {
+      "row_count": 1069,
+      "columns": 24
+    },
+    "splits": {
+      "row_count": 346,
+      "columns": 8
+    },
+    "analyst_eps_estimates": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "dividend_history": {
+      "row_count": 13424,
+      "columns": 15
+    },
+    "dividend_metrics": {
+      "row_count": 2683,
+      "columns": 14
+    },
+    "upcoming_dividend_events": {
+      "row_count": 73,
+      "columns": 9
+    },
+    "portfolio_accounts": {
+      "row_count": 6,
+      "columns": 11
+    },
+    "portfolio_holdings": {
+      "row_count": 150,
+      "columns": 14
+    },
+    "portfolio_transactions": {
+      "row_count": 2734,
+      "columns": 20
+    },
+    "portfolio_dividends": {
+      "row_count": 1498,
+      "columns": 11
+    },
+    "portfolio_events": {
+      "row_count": 2727,
+      "columns": 9
+    },
+    "portfolio_snapshots": {
+      "row_count": 8693,
+      "columns": 13
+    },
+    "portfolio_performance": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "portfolio_brokerages": {
+      "row_count": 6,
+      "columns": 7
+    },
+    "portfolio_import_history": {
+      "row_count": 1,
+      "columns": 20
+    },
+    "portfolio_user_import_history": {
+      "row_count": 1,
+      "columns": 14
+    },
+    "watchlists": {
+      "row_count": 3,
+      "columns": 7
+    },
+    "watchlist_items": {
+      "row_count": 63,
+      "columns": 9
+    },
+    "valuation_runs": {
+      "row_count": 4174,
+      "columns": 10
+    },
+    "valuation_method_defaults": {
+      "row_count": 4,
+      "columns": 3
+    },
+    "company_valuation_overrides": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "intrinsic_value_analysis": {
+      "row_count": 62,
+      "columns": 9
+    },
+    "dcf_valuations": {
+      "row_count": 76,
+      "columns": 22
+    },
+    "ddm_valuations": {
+      "row_count": 107,
+      "columns": 17
+    },
+    "industry_multiples": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "company_summary": {
+      "row_count": 3412,
+      "columns": 18
+    },
+    "benchmark_config": {
+      "row_count": 5,
+      "columns": 8
+    },
+    "moat_analysis": {
+      "row_count": 59,
+      "columns": 26
+    },
+    "moat_keyword_evidence": {
+      "row_count": 552,
+      "columns": 12
+    },
+    "moat_ai_narratives": {
+      "row_count": 1,
+      "columns": 10
+    },
+    "institutional_investors": {
+      "row_count": 24,
+      "columns": 12
+    },
+    "institutional_holdings": {
+      "row_count": 48664,
+      "columns": 13
+    },
+    "jobs": {
+      "row_count": 9381,
+      "columns": 19
+    },
+    "job_attempts": {
+      "row_count": 9412,
+      "columns": 8
+    },
+    "scheduler_state": {
+      "row_count": 6,
+      "columns": 8
+    },
+    "scheduler_run_history": {
+      "row_count": 9477,
+      "columns": 7
+    },
+    "worker_heartbeats": {
+      "row_count": 3,
+      "columns": 6
+    },
+    "resource_locks": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "company_refresh_requests": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "scheduler_locks": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "exchange_rates": {
+      "row_count": 3401,
+      "columns": 7
+    },
+    "fx_rate_history": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "security_master": {
+      "row_count": 0,
+      "columns": 0
+    },
+    "data_quality_events": {
+      "row_count": 507,
+      "columns": 8
+    },
+    "data_conflicts": {
+      "row_count": 717,
+      "columns": 16
+    },
+    "group_metric_stats": {
+      "row_count": 16,
+      "columns": 12
+    },
+    "aggregation_state": {
+      "row_count": 1,
+      "columns": 6
+    },
+    "revenue_forecast": {
+      "row_count": 40,
+      "columns": 13
+    },
+    "earnings_forecast": {
+      "row_count": 40,
+      "columns": 16
+    }
+  }
+}

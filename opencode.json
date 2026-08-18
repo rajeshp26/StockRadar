@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "memory": {
+      "type": "local",
+      "command": ["mcp-server-memory"]
+    },
+    "context7": {
+      "type": "local",
+      "command": ["context7-mcp"]
+    },
+    "playwright": {
+      "type": "local",
+      "command": ["playwright-mcp"]
+    }
+  },
+  "references": {
+    "docs": {
+      "path": "docs",
+      "description": "Full project documentation: architecture, design, testing, security, migration guides"
+    }
+  },
+  "instructions": [
+    ".ai/architecture.md",
+    ".ai/coding-rules.md",
+    ".ai/testing.md",
+    ".ai/design-and-implementation.md",
+    ".ai/testing-guidelines.md"
+  ]
+}

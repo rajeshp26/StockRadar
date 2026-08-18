@@ -41,8 +41,6 @@ if (-not $SkipCleanup) {
     Write-Host "Cleaning up ports 3000, 8001..." -ForegroundColor Cyan
     Stop-ProcessOnPort -Port 3000
     Stop-ProcessOnPort -Port 8001
-    Write-Host "   Cleaning up WSL processes..." -ForegroundColor Yellow
-    wsl bash -c "pkill -f uvicorn 2>/dev/null; pkill -f 'python.*main:app' 2>/dev/null; sleep 1"
     Write-Host "   Done" -ForegroundColor Gray
     Write-Host ""
 }
@@ -60,22 +58,14 @@ Write-Host ""
 Write-Host "Waiting for frontend to initialize..." -ForegroundColor Cyan
 Start-Sleep -Seconds 3
 
-# ── Backend — runs in WSL (Linux) so DefeatBeta works ────────────────────────
+# ── Backend — runs natively on Windows with local Supabase ──────────────
 Write-Host ""
-Write-Host "Starting Backend on port 8001 (via WSL)..." -ForegroundColor Green
+Write-Host "Starting Backend on port 8001..." -ForegroundColor Green
 Write-Host ("-" * 50)
 Write-Host ""
 
-# Convert Windows path to WSL path reliably
-# C:\Project\StockerPro\StockerPro\backend -> /mnt/c/Project/StockerPro/StockerPro/backend
-$DriveLetter = $BackendDir.Substring(0, 1).ToLower()
-$PathWithoutDrive = $BackendDir.Substring(2).Replace("\", "/")
-$WslBackendDir = "/mnt/$DriveLetter$PathWithoutDrive"
-
-$WslCommand = "source ~/venv_stockerpro/bin/activate && cd '$WslBackendDir' && export PYTHONPATH='$WslBackendDir/..:$WslBackendDir' && uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
-
-# Run backend in current terminal via WSL (blocking — all logs visible here)
-wsl bash -c $WslCommand
+Set-Location $BackendDir
+python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 
 # If we reach here, backend exited
 Write-Host ""

@@ -1,0 +1,67 @@
+[
+  {
+    "user_id": 227,
+    "email": "new-user-test2@test.com",
+    "username": "new-user-test2",
+    "created_at": "2026-06-24T22:28:46.274413+00:00",
+    "last_signed_in": "2026-06-24T22:00:00+00:00",
+    "preferred_currency": "USD",
+    "auth_id": "some-new-uuid-here-2",
+    "timezone": "America/New_York",
+    "first_name": null,
+    "last_name": null,
+    "avatar_url": null
+  },
+  {
+    "user_id": 49,
+    "email": "e2e-test-2026@stockerpro-test.com",
+    "username": "e2e-test-2026@stockerpro-test.com",
+    "created_at": "2026-05-31T00:21:43.415993+00:00",
+    "last_signed_in": "2026-05-30T20:23:01.396421+00:00",
+    "preferred_currency": "USD",
+    "auth_id": "OVUH9KDf7TORSB4KuvrGEIRAvTI2",
+    "timezone": "America/New_York",
+    "first_name": null,
+    "last_name": null,
+    "avatar_url": null
+  },
+  {
+    "user_id": 50,
+    "email": "e2e-test-auth@stockerpro-test.com",
+    "username": "e2e-test-auth",
+    "created_at": "2026-06-01T01:04:26.148477+00:00",
+    "last_signed_in": "2026-05-31T21:45:26.222603+00:00",
+    "preferred_currency": "USD",
+    "auth_id": "9a2d97bb-0937-46cf-96f5-d0eacdf73f33",
+    "timezone": "America/New_York",
+    "first_name": null,
+    "last_name": null,
+    "avatar_url": null
+  },
+  {
+    "user_id": 1,
+    "email": "rajeshp01@gmail.com",
+    "username": "rajeshp01@gmail.com",
+    "created_at": "2025-12-29T00:06:20.105842+00:00",
+    "last_signed_in": "2026-07-27T12:25:57.755288+00:00",
+    "preferred_currency": "USD",
+    "auth_id": "59a7ced9-aa7c-4f34-b77e-266fc8a8e796",
+    "timezone": "America/New_York",
+    "first_name": null,
+    "last_name": null,
+    "avatar_url": null
+  },
+  {
+    "user_id": 48,
+    "email": "e2e-test@stockerpro-test.com",
+    "username": "e2e-test@stockerpro-test.com",
+    "created_at": "2026-05-28T00:41:36.588552+00:00",
+    "last_signed_in": "2026-05-30T20:22:14.309866+00:00",
+    "preferred_currency": "USD",
+    "auth_id": "Gf05gjXB39cl2XFQ0hRFxIOmMrk1",
+    "timezone": "America/New_York",
+    "first_name": null,
+    "last_name": null,
+    "avatar_url": null
+  }
+]

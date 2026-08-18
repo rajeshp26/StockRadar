@@ -1,0 +1,1186 @@
+[
+  {
+    "table": "companies",
+    "exists": true,
+    "row_count": 3122,
+    "columns": [
+      "company_id",
+      "ticker_symbol",
+      "company_name",
+      "exchange",
+      "sector",
+      "industry",
+      "currency",
+      "fiscal_year_end_month",
+      "description",
+      "website",
+      "created_at",
+      "updated_at",
+      "next_earnings_date",
+      "first_financial_data_loaded_at",
+      "last_financial_refresh_at",
+      "last_refreshed_fiscal_year",
+      "last_refreshed_fiscal_quarter",
+      "data_completeness_status",
+      "security_type",
+      "last_price_refresh_at",
+      "last_price_attempt_at",
+      "last_price_success_at",
+      "consecutive_price_failures",
+      "cdr_ratio",
+      "cdr_ratio_date"
+    ]
+  },
+  {
+    "table": "users",
+    "exists": true,
+    "row_count": 5,
+    "columns": [
+      "user_id",
+      "email",
+      "username",
+      "created_at",
+      "last_signed_in",
+      "preferred_currency",
+      "auth_id",
+      "timezone",
+      "first_name",
+      "last_name",
+      "avatar_url"
+    ]
+  },
+  {
+    "table": "currencies",
+    "exists": true,
+    "row_count": 2,
+    "columns": [
+      "code",
+      "name",
+      "symbol"
+    ]
+  },
+  {
+    "table": "current_market_data",
+    "exists": true,
+    "row_count": 167,
+    "columns": [
+      "company_id",
+      "current_price",
+      "open_price",
+      "high_price",
+      "low_price",
+      "close_price",
+      "volume",
+      "market_state",
+      "last_updated"
+    ]
+  },
+  {
+    "table": "price_history",
+    "exists": true,
+    "row_count": 40327,
+    "columns": [
+      "company_id",
+      "price_date",
+      "open_price",
+      "close_price",
+      "high_price",
+      "low_price",
+      "volume",
+      "data_source",
+      "created_at"
+    ]
+  },
+  {
+    "table": "income_statements",
+    "exists": true,
+    "row_count": 3265,
+    "columns": [
+      "is_id",
+      "company_id",
+      "fiscal_year",
+      "fiscal_quarter",
+      "period_end_date",
+      "revenue",
+      "cost_of_goods_sold",
+      "gross_profit",
+      "operating_expenses",
+      "rd_expenses",
+      "sga_expenses",
+      "operating_income",
+      "interest_expense",
+      "tax_expense",
+      "net_income",
+      "ebitda",
+      "currency",
+      "data_source",
+      "created_at",
+      "updated_at",
+      "non_operating_income_expense",
+      "pretax_income",
+      "equity_in_earnings",
+      "minority_interest",
+      "income_from_continuing_operations",
+      "discontinued_operations",
+      "net_income_to_common",
+      "preferred_dividends",
+      "ebit",
+      "confidence_score",
+      "last_validated_at",
+      "validation_notes",
+      "eps_basic",
+      "eps_diluted",
+      "shares_outstanding_basic",
+      "shares_outstanding_diluted",
+      "interest_income",
+      "effective_tax_rate",
+      "total_unusual_items",
+      "special_charges"
+    ]
+  },
+  {
+    "table": "balance_sheets",
+    "exists": true,
+    "row_count": 3341,
+    "columns": [
+      "bs_id",
+      "company_id",
+      "fiscal_year",
+      "fiscal_quarter",
+      "period_end_date",
+      "total_assets",
+      "current_assets",
+      "cash_and_cash_equivalents",
+      "accounts_receivable",
+      "inventory",
+      "property_plant_equipment_net",
+      "intangible_assets",
+      "goodwill",
+      "total_liabilities",
+      "current_liabilities",
+      "accounts_payable",
+      "short_term_debt",
+      "long_term_debt",
+      "total_debt",
+      "shareholders_equity",
+      "retained_earnings",
+      "common_stock",
+      "currency",
+      "data_source",
+      "created_at",
+      "updated_at",
+      "long_term_investments",
+      "other_non_current_assets",
+      "other_current_liabilities",
+      "minority_interest",
+      "total_liabilities_and_equity",
+      "confidence_score",
+      "last_validated_at",
+      "validation_notes",
+      "shares_outstanding",
+      "invested_capital",
+      "capital_lease_obligations",
+      "total_non_current_liabilities",
+      "total_non_current_assets",
+      "tangible_book_value",
+      "deferred_revenue_current",
+      "deferred_revenue_non_current",
+      "other_current_assets"
+    ]
+  },
+  {
+    "table": "cash_flow_statements",
+    "exists": true,
+    "row_count": 3328,
+    "columns": [
+      "cf_id",
+      "company_id",
+      "fiscal_year",
+      "fiscal_quarter",
+      "period_end_date",
+      "cash_from_operating_activities",
+      "net_income",
+      "depreciation_amortization",
+      "change_in_working_capital",
+      "deferred_taxes",
+      "stock_based_compensation",
+      "capital_expenditures",
+      "acquisitions",
+      "asset_sales",
+      "investment_purchases",
+      "debt_issued",
+      "debt_repayment",
+      "dividends_paid",
+      "share_repurchases",
+      "share_issuance",
+      "currency",
+      "data_source",
+      "created_at",
+      "updated_at",
+      "cash_from_investing_activities",
+      "cash_from_financing_activities",
+      "confidence_score",
+      "last_validated_at",
+      "validation_notes",
+      "net_change_in_cash",
+      "effect_of_fx_on_cash",
+      "beginning_cash",
+      "ending_cash",
+      "short_term_debt_net_change",
+      "asset_impairment_charge",
+      "free_cash_flow"
+    ]
+  },
+  {
+    "table": "financial_ratios",
+    "exists": true,
+    "row_count": 3193,
+    "columns": [
+      "ratio_id",
+      "company_id",
+      "fiscal_year",
+      "period_end_date",
+      "roic",
+      "roe",
+      "roa",
+      "gross_margin",
+      "operating_margin",
+      "ebitda_margin",
+      "net_margin",
+      "fcf_margin",
+      "free_cash_flow",
+      "fcf_conversion",
+      "dividend_payout_ratio",
+      "fcf_dividend_payout_ratio",
+      "dividend_coverage_fcf",
+      "debt_to_equity",
+      "debt_to_assets",
+      "long_term_debt_to_equity",
+      "long_term_debt_to_assets",
+      "interest_coverage",
+      "current_ratio",
+      "quick_ratio",
+      "asset_turnover",
+      "inventory_turnover",
+      "revenue_per_share",
+      "ocf_per_share",
+      "fcf_per_share",
+      "ebit_per_share",
+      "ebitda_per_share",
+      "book_value_per_share",
+      "tangible_book_value_per_share",
+      "cash_per_share",
+      "total_debt_per_share",
+      "working_capital_per_share",
+      "capex_per_share",
+      "computed_at",
+      "source_version_tag",
+      "data_source",
+      "confidence_score",
+      "validation_notes",
+      "fiscal_quarter",
+      "piotroski_score",
+      "altman_z_score",
+      "trailing_pe",
+      "quarter_end_price",
+      "market_cap",
+      "enterprise_value",
+      "ev_ebitda",
+      "price_to_fcf"
+    ]
+  },
+  {
+    "table": "portfolio_accounts",
+    "exists": true,
+    "row_count": 6,
+    "columns": [
+      "account_id",
+      "user_id",
+      "brokerage_id",
+      "account_external_id",
+      "account_name",
+      "account_type",
+      "currency",
+      "is_active",
+      "created_at",
+      "updated_at",
+      "last_import_at"
+    ]
+  },
+  {
+    "table": "portfolio_holdings",
+    "exists": true,
+    "row_count": 150,
+    "columns": [
+      "holding_id",
+      "account_id",
+      "company_id",
+      "symbol",
+      "quantity",
+      "average_cost",
+      "total_cost",
+      "realized_gain_loss",
+      "currency",
+      "first_purchase_date",
+      "last_transaction_date",
+      "computed_at",
+      "updated_at",
+      "exchange_override"
+    ]
+  },
+  {
+    "table": "portfolio_transactions",
+    "exists": true,
+    "row_count": 2734,
+    "columns": [
+      "transaction_id",
+      "account_id",
+      "company_id",
+      "transaction_date",
+      "settlement_date",
+      "activity_type",
+      "activity_sub_type",
+      "direction",
+      "symbol",
+      "security_name",
+      "currency",
+      "quantity",
+      "unit_price",
+      "commission",
+      "net_cash_amount",
+      "import_batch_id",
+      "raw_data",
+      "created_at",
+      "entry_source",
+      "created_by_user_id"
+    ]
+  },
+  {
+    "table": "portfolio_dividends",
+    "exists": true,
+    "row_count": 1498,
+    "columns": [
+      "dividend_id",
+      "account_id",
+      "company_id",
+      "transaction_id",
+      "symbol",
+      "payment_date",
+      "amount",
+      "currency",
+      "fiscal_year",
+      "fiscal_month",
+      "created_at"
+    ]
+  },
+  {
+    "table": "portfolio_events",
+    "exists": true,
+    "row_count": 2727,
+    "columns": [
+      "id",
+      "event_type",
+      "event_version",
+      "aggregate_id",
+      "aggregate_type",
+      "data",
+      "metadata",
+      "idempotency_key",
+      "created_at"
+    ]
+  },
+  {
+    "table": "portfolio_snapshots",
+    "exists": true,
+    "row_count": 8693,
+    "columns": [
+      "id",
+      "account_id",
+      "snapshot_date",
+      "total_value",
+      "holdings_market_value",
+      "cost_basis",
+      "cash_balance",
+      "net_deposits",
+      "holdings_json",
+      "data_quality_flag",
+      "job_id",
+      "computed_at",
+      "created_at"
+    ]
+  },
+  {
+    "table": "portfolio_performance",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "portfolio_brokerages",
+    "exists": true,
+    "row_count": 6,
+    "columns": [
+      "brokerage_id",
+      "brokerage_code",
+      "brokerage_name",
+      "country_code",
+      "is_active",
+      "parser_class",
+      "created_at"
+    ]
+  },
+  {
+    "table": "portfolio_import_history",
+    "exists": true,
+    "row_count": 1,
+    "columns": [
+      "import_id",
+      "user_id",
+      "brokerage_id",
+      "import_batch_id",
+      "csv_hash",
+      "csv_filename",
+      "csv_size_bytes",
+      "total_rows",
+      "imported_rows",
+      "duplicate_rows",
+      "error_rows",
+      "account_filter",
+      "accounts_created",
+      "accounts_updated",
+      "symbols_created",
+      "status",
+      "error_message",
+      "started_at",
+      "completed_at",
+      "rows_parsed"
+    ]
+  },
+  {
+    "table": "portfolio_user_import_history",
+    "exists": true,
+    "row_count": 1,
+    "columns": [
+      "import_id",
+      "user_id",
+      "import_batch_id",
+      "csv_filename",
+      "csv_size_bytes",
+      "total_rows",
+      "imported_rows",
+      "duplicate_rows",
+      "status",
+      "started_at",
+      "completed_at",
+      "brokerage_name",
+      "brokerage_code",
+      "accounts_affected"
+    ]
+  },
+  {
+    "table": "portfolio_monthly_dividends",
+    "exists": true,
+    "row_count": 108,
+    "columns": [
+      "account_id",
+      "fiscal_year",
+      "fiscal_month",
+      "payment_count",
+      "total_amount",
+      "paying_companies"
+    ]
+  },
+  {
+    "table": "watchlists",
+    "exists": true,
+    "row_count": 3,
+    "columns": [
+      "id",
+      "user_id",
+      "watchlist_name",
+      "description",
+      "is_default",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "table": "watchlist_items",
+    "exists": true,
+    "row_count": 63,
+    "columns": [
+      "watchlist_item_id",
+      "watchlist_id",
+      "company_id",
+      "target_buy",
+      "target_sell",
+      "notes",
+      "position",
+      "added_at",
+      "updated_at"
+    ]
+  },
+  {
+    "table": "valuation_runs",
+    "exists": true,
+    "row_count": 4174,
+    "columns": [
+      "valuation_run_id",
+      "company_id",
+      "method",
+      "run_at",
+      "run_by_user_id",
+      "input_snapshot",
+      "assumption_snapshot",
+      "output_snapshot",
+      "data_version_tag",
+      "notes"
+    ]
+  },
+  {
+    "table": "valuation_method_defaults",
+    "exists": true,
+    "row_count": 4,
+    "columns": [
+      "method",
+      "params",
+      "updated_at"
+    ]
+  },
+  {
+    "table": "company_valuation_overrides",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "intrinsic_value_analysis",
+    "exists": true,
+    "row_count": 62,
+    "columns": [
+      "analysis_id",
+      "company_id",
+      "growth_rate",
+      "current_eps",
+      "future_pe",
+      "future_price",
+      "sticker_price",
+      "mos_price",
+      "last_updated"
+    ]
+  },
+  {
+    "table": "dcf_valuations",
+    "exists": true,
+    "row_count": 76,
+    "columns": [
+      "dcf_id",
+      "company_id",
+      "analysis_date",
+      "forecast_years",
+      "revenue_growth_rate",
+      "terminal_growth_rate",
+      "wacc_used",
+      "fcf_margin_assumption",
+      "total_pv_fcf",
+      "terminal_value",
+      "pv_terminal_value",
+      "enterprise_value_dcf",
+      "less_net_debt",
+      "equity_value",
+      "shares_outstanding",
+      "intrinsic_value_per_share",
+      "current_stock_price",
+      "upside_downside_pct",
+      "analyst_name",
+      "sensitivity_scenarios",
+      "notes",
+      "created_at"
+    ]
+  },
+  {
+    "table": "ddm_valuations",
+    "exists": true,
+    "row_count": 107,
+    "columns": [
+      "ddm_id",
+      "company_id",
+      "analysis_date",
+      "current_dps",
+      "next_year_dps",
+      "dividend_growth_rate",
+      "required_return",
+      "intrinsic_value_gordon",
+      "high_growth_years",
+      "high_growth_rate",
+      "stable_growth_rate",
+      "intrinsic_value_multistage",
+      "current_stock_price",
+      "upside_downside_pct",
+      "analyst_name",
+      "notes",
+      "created_at"
+    ]
+  },
+  {
+    "table": "industry_multiples",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "company_summary",
+    "exists": true,
+    "row_count": 3412,
+    "columns": [
+      "summary_id",
+      "company_id",
+      "snapshot_date",
+      "market_cap",
+      "enterprise_value",
+      "shares_outstanding",
+      "implied_shares_outstanding",
+      "beta",
+      "trailing_pe",
+      "forward_pe",
+      "trailing_eps",
+      "forward_eps",
+      "enterprise_to_ebitda",
+      "enterprise_to_revenue",
+      "peg_ratio",
+      "currency",
+      "provider",
+      "created_at"
+    ]
+  },
+  {
+    "table": "benchmark_config",
+    "exists": true,
+    "row_count": 5,
+    "columns": [
+      "role",
+      "company_id",
+      "symbol",
+      "market",
+      "description",
+      "is_active",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "table": "moat_analysis",
+    "exists": true,
+    "row_count": 59,
+    "columns": [
+      "id",
+      "company_id",
+      "symbol",
+      "roic",
+      "wacc",
+      "roic_minus_wacc",
+      "gross_margin_pct",
+      "operating_margin_pct",
+      "net_margin_pct",
+      "roic_5y_avg",
+      "roic_5y_std",
+      "roic_stability_score",
+      "asset_turnover",
+      "capital_efficiency_score",
+      "moat_score",
+      "moat_category",
+      "text_analysis_available",
+      "keyword_matches_count",
+      "sector",
+      "sector_adjustment",
+      "ai_narrative_available",
+      "fiscal_years_used",
+      "data_sources",
+      "quarters_used",
+      "fallbacks_used",
+      "computed_at"
+    ]
+  },
+  {
+    "table": "moat_keyword_evidence",
+    "exists": true,
+    "row_count": 552,
+    "columns": [
+      "id",
+      "company_id",
+      "symbol",
+      "filing_type",
+      "filing_date",
+      "accession_number",
+      "section",
+      "keyword",
+      "keyword_group",
+      "snippet",
+      "relevance_score",
+      "matched_at"
+    ]
+  },
+  {
+    "table": "moat_ai_narratives",
+    "exists": true,
+    "row_count": 1,
+    "columns": [
+      "id",
+      "company_id",
+      "symbol",
+      "model",
+      "narrative",
+      "summary",
+      "quant_snapshot",
+      "evidence_count",
+      "generated_at",
+      "generation_time_ms"
+    ]
+  },
+  {
+    "table": "dividend_history",
+    "exists": true,
+    "row_count": 13424,
+    "columns": [
+      "dividend_id",
+      "company_id",
+      "ex_dividend_date",
+      "payment_date",
+      "record_date",
+      "dividend_amount",
+      "dividend_type",
+      "currency",
+      "frequency",
+      "data_source",
+      "created_at",
+      "updated_at",
+      "confidence_score",
+      "last_validated_at",
+      "validation_notes"
+    ]
+  },
+  {
+    "table": "dividend_metrics",
+    "exists": true,
+    "row_count": 2683,
+    "columns": [
+      "metric_id",
+      "company_id",
+      "fiscal_year",
+      "annual_dps",
+      "dividend_yield",
+      "dividend_growth_rate_3yr",
+      "dividend_growth_rate_5yr",
+      "dividend_growth_rate_10yr",
+      "consecutive_years_paid",
+      "fcfe_coverage_ratio",
+      "created_at",
+      "cash_dividend_payout_ratio",
+      "ebitda_dividend_coverage",
+      "retention_ratio"
+    ]
+  },
+  {
+    "table": "upcoming_dividend_events",
+    "exists": true,
+    "row_count": 73,
+    "columns": [
+      "id",
+      "company_id",
+      "data_source",
+      "ex_dividend_date",
+      "trust_score",
+      "status",
+      "source_observed_at",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "table": "institutional_investors",
+    "exists": true,
+    "row_count": 24,
+    "columns": [
+      "investor_id",
+      "cik",
+      "investor_name",
+      "firm_name",
+      "is_super_investor",
+      "investor_tag",
+      "investment_style",
+      "created_at",
+      "updated_at",
+      "last_filed_period",
+      "last_filed_date",
+      "is_active"
+    ]
+  },
+  {
+    "table": "institutional_holdings",
+    "exists": true,
+    "row_count": 48664,
+    "columns": [
+      "holding_id",
+      "investor_id",
+      "company_id",
+      "quarter_end_date",
+      "filing_date",
+      "shares_held",
+      "position_value",
+      "portfolio_weight",
+      "shares_change",
+      "shares_change_pct",
+      "change_type",
+      "data_source",
+      "created_at"
+    ]
+  },
+  {
+    "table": "jobs",
+    "exists": true,
+    "row_count": 9381,
+    "columns": [
+      "id",
+      "job_type",
+      "resource_type",
+      "resource_id",
+      "dedupe_key",
+      "priority",
+      "status",
+      "payload",
+      "not_before",
+      "available_at",
+      "lease_owner",
+      "lease_token",
+      "leased_until",
+      "attempts",
+      "max_attempts",
+      "last_error",
+      "last_error_at",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "table": "job_attempts",
+    "exists": true,
+    "row_count": 9412,
+    "columns": [
+      "id",
+      "job_id",
+      "attempt",
+      "status",
+      "started_at",
+      "finished_at",
+      "error",
+      "duration_ms"
+    ]
+  },
+  {
+    "table": "scheduler_state",
+    "exists": true,
+    "row_count": 6,
+    "columns": [
+      "scheduler_name",
+      "enabled",
+      "interval_hours",
+      "last_planned_at",
+      "last_status",
+      "last_error",
+      "next_due_at",
+      "updated_at"
+    ]
+  },
+  {
+    "table": "scheduler_run_history",
+    "exists": true,
+    "row_count": 9477,
+    "columns": [
+      "id",
+      "scheduler_name",
+      "planned_at",
+      "jobs_enqueued",
+      "status",
+      "error",
+      "duration_ms"
+    ]
+  },
+  {
+    "table": "worker_heartbeats",
+    "exists": true,
+    "row_count": 3,
+    "columns": [
+      "worker_id",
+      "hostname",
+      "pid",
+      "started_at",
+      "last_hb_at",
+      "active_jobs"
+    ]
+  },
+  {
+    "table": "resource_locks",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "company_refresh_requests",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "scheduler_locks",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "event_sequence",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.event_sequence' in the schema cache\", 'code': 'PGRST205', 'hint': None, 'details': None}"
+  },
+  {
+    "table": "projection_checkpoint",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.projection_checkpoint' in the schema cache\", 'code': 'PGRST205', 'hint': \"Perhaps you meant the table 'public.portfolio_accounts'\", 'details': None}"
+  },
+  {
+    "table": "exchange_rates",
+    "exists": true,
+    "row_count": 3401,
+    "columns": [
+      "id",
+      "base_currency",
+      "target_currency",
+      "rate",
+      "rate_date",
+      "source",
+      "fetched_at"
+    ]
+  },
+  {
+    "table": "fx_rate_history",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "security_master",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "data_quality_events",
+    "exists": true,
+    "row_count": 507,
+    "columns": [
+      "event_id",
+      "company_id",
+      "scope",
+      "metric",
+      "severity",
+      "message",
+      "details",
+      "detected_at"
+    ]
+  },
+  {
+    "table": "data_conflicts",
+    "exists": true,
+    "row_count": 717,
+    "columns": [
+      "conflict_id",
+      "company_id",
+      "fiscal_year",
+      "fiscal_quarter",
+      "field_name",
+      "existing_value",
+      "existing_source",
+      "new_value",
+      "new_source",
+      "percent_diff",
+      "resolved",
+      "resolution_notes",
+      "resolution_choice",
+      "detected_at",
+      "resolved_at",
+      "created_at"
+    ]
+  },
+  {
+    "table": "derived_financial_metrics",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.derived_financial_metrics' in the schema cache\", 'code': 'PGRST205', 'hint': \"Perhaps you meant the table 'public._deprecated_derived_financial_metrics'\","
+  },
+  {
+    "table": "group_metric_stats",
+    "exists": true,
+    "row_count": 16,
+    "columns": [
+      "id",
+      "group_type",
+      "group_key",
+      "metric_id",
+      "p05",
+      "p25",
+      "p50",
+      "p75",
+      "p95",
+      "mean",
+      "sample_size",
+      "computed_at"
+    ]
+  },
+  {
+    "table": "aggregation_state",
+    "exists": true,
+    "row_count": 1,
+    "columns": [
+      "aggregation_id",
+      "is_running",
+      "last_started_at",
+      "last_completed_at",
+      "lock_owner",
+      "lock_expires_at"
+    ]
+  },
+  {
+    "table": "price_sources",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.price_sources' in the schema cache\", 'code': 'PGRST205', 'hint': \"Perhaps you meant the table 'public.price_history'\", 'details': None}"
+  },
+  {
+    "table": "price_source_preferences",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.price_source_preferences' in the schema cache\", 'code': 'PGRST205', 'hint': \"Perhaps you meant the table 'public.resource_locks'\", 'details': None}"
+  },
+  {
+    "table": "revenue_forecast",
+    "exists": true,
+    "row_count": 40,
+    "columns": [
+      "forecast_id",
+      "company_id",
+      "report_date",
+      "period_type",
+      "estimate_revenue_growth",
+      "number_of_analysts",
+      "estimate_avg_revenue",
+      "estimate_high_revenue",
+      "estimate_low_revenue",
+      "year_ago_estimate_avg_revenue",
+      "currency",
+      "provider",
+      "created_at"
+    ]
+  },
+  {
+    "table": "earnings_forecast",
+    "exists": true,
+    "row_count": 40,
+    "columns": [
+      "earnings_forecast_id",
+      "company_id",
+      "report_date",
+      "period_type",
+      "currency",
+      "estimate_eps_growth",
+      "estimate_avg_eps",
+      "estimate_high_eps",
+      "estimate_low_eps",
+      "number_of_analysts",
+      "thirty_days_ago_estimate_avg_eps",
+      "sixty_days_ago_estimate_avg_eps",
+      "ninety_days_ago_estimate_avg_eps",
+      "year_ago_estimate_avg_eps",
+      "provider",
+      "created_at"
+    ]
+  },
+  {
+    "table": "analyst_eps_estimates",
+    "exists": true,
+    "row_count": 0,
+    "columns": []
+  },
+  {
+    "table": "earnings",
+    "exists": true,
+    "row_count": 1069,
+    "columns": [
+      "earnings_id",
+      "company_id",
+      "fiscal_year",
+      "fiscal_quarter",
+      "period_end_date",
+      "announcement_date",
+      "eps_reported_basic",
+      "eps_reported_diluted",
+      "eps_estimate",
+      "eps_surprise_amount",
+      "eps_surprise_percent",
+      "revenue_reported",
+      "revenue_estimate",
+      "revenue_surprise_amount",
+      "revenue_surprise_percent",
+      "shares_outstanding_basic",
+      "shares_outstanding_diluted",
+      "currency",
+      "data_source",
+      "created_at",
+      "updated_at",
+      "confidence_score",
+      "last_validated_at",
+      "validation_notes"
+    ]
+  },
+  {
+    "table": "splits",
+    "exists": true,
+    "row_count": 346,
+    "columns": [
+      "split_id",
+      "company_id",
+      "report_date",
+      "split_factor",
+      "reverse_split",
+      "data_source",
+      "created_at",
+      "processed"
+    ]
+  },
+  {
+    "table": "risk_ai_narratives",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.risk_ai_narratives' in the schema cache\", 'code': 'PGRST205', 'hint': \"Perhaps you meant the table 'public.moat_ai_narratives'\", 'details': None}"
+  },
+  {
+    "table": "portfolio_cash_activity",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.portfolio_cash_activity' in the schema cache\", 'code': 'PGRST205', 'hint': \"Perhaps you meant the table 'public.portfolio_transactions'\", 'details': None}"
+  },
+  {
+    "table": "accounts",
+    "exists": true,
+    "row_count": "?",
+    "columns": [],
+    "error": "{'message': \"Could not find the table 'public.accounts' in the schema cache\", 'code': 'PGRST205', 'hint': \"Perhaps you meant the table 'public.portfolio_accounts'\", 'details': None}"
+  }
+]

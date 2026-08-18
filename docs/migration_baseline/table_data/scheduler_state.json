@@ -1,0 +1,62 @@
+[
+  {
+    "scheduler_name": "earnings",
+    "enabled": true,
+    "interval_hours": 2,
+    "last_planned_at": "2026-07-27T19:17:58.740517+00:00",
+    "last_status": "succeeded",
+    "last_error": null,
+    "next_due_at": "2026-07-27T21:17:58.740517+00:00",
+    "updated_at": "2026-07-27T19:18:02.30944+00:00"
+  },
+  {
+    "scheduler_name": "price_ingestion",
+    "enabled": true,
+    "interval_hours": 0.016666666666666666,
+    "last_planned_at": "2026-07-27T20:25:11.436378+00:00",
+    "last_status": "succeeded",
+    "last_error": null,
+    "next_due_at": "2026-07-27T20:26:11.436378+00:00",
+    "updated_at": "2026-07-27T20:25:12.172694+00:00"
+  },
+  {
+    "scheduler_name": "super_investors",
+    "enabled": true,
+    "interval_hours": 24,
+    "last_planned_at": "2026-07-27T12:25:21.929991+00:00",
+    "last_status": "succeeded",
+    "last_error": null,
+    "next_due_at": "2026-07-28T12:25:21.929991+00:00",
+    "updated_at": "2026-07-27T12:25:22.58154+00:00"
+  },
+  {
+    "scheduler_name": "market_data",
+    "enabled": true,
+    "interval_hours": 24,
+    "last_planned_at": "2026-07-27T12:25:21.929991+00:00",
+    "last_status": "succeeded",
+    "last_error": null,
+    "next_due_at": "2026-07-28T12:25:21.929991+00:00",
+    "updated_at": "2026-07-27T12:25:55.883974+00:00"
+  },
+  {
+    "scheduler_name": "portfolio_snapshot",
+    "enabled": true,
+    "interval_hours": 24,
+    "last_planned_at": "2026-07-27T12:25:21.929991+00:00",
+    "last_status": "succeeded",
+    "last_error": null,
+    "next_due_at": "2026-07-28T12:25:21.929991+00:00",
+    "updated_at": "2026-07-27T12:26:14.131249+00:00"
+  },
+  {
+    "scheduler_name": "aggregation",
+    "enabled": true,
+    "interval_hours": 24,
+    "last_planned_at": "2026-07-27T12:25:21.929991+00:00",
+    "last_status": "succeeded",
+    "last_error": null,
+    "next_due_at": "2026-07-28T12:25:21.929991+00:00",
+    "updated_at": "2026-07-27T12:26:14.609032+00:00"
+  }
+]

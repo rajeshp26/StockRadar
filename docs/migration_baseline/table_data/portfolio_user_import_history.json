@@ -1,0 +1,18 @@
+[
+  {
+    "import_id": 8,
+    "user_id": 1,
+    "import_batch_id": "fc49eec2-cf46-4884-b180-907143eb1f3c",
+    "csv_filename": null,
+    "csv_size_bytes": 270236,
+    "total_rows": 2798,
+    "imported_rows": 2724,
+    "duplicate_rows": 0,
+    "status": "completed",
+    "started_at": "2026-05-18T21:19:16.130161+00:00",
+    "completed_at": "2026-05-18T21:20:03.096982+00:00",
+    "brokerage_name": "Wealthsimple",
+    "brokerage_code": "wealthsimple",
+    "accounts_affected": 3
+  }
+]

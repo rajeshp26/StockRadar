@@ -1,0 +1,42 @@
+[
+  {
+    "account_id": 7,
+    "fiscal_year": 2026,
+    "fiscal_month": 5,
+    "payment_count": 3,
+    "total_amount": 79.68,
+    "paying_companies": 2
+  },
+  {
+    "account_id": 7,
+    "fiscal_year": 2026,
+    "fiscal_month": 4,
+    "payment_count": 17,
+    "total_amount": 39.98,
+    "paying_companies": 12
+  },
+  {
+    "account_id": 7,
+    "fiscal_year": 2026,
+    "fiscal_month": 3,
+    "payment_count": 9,
+    "total_amount": 23.83,
+    "paying_companies": 7
+  },
+  {
+    "account_id": 7,
+    "fiscal_year": 2026,
+    "fiscal_month": 2,
+    "payment_count": 8,
+    "total_amount": 18.58,
+    "paying_companies": 6
+  },
+  {
+    "account_id": 7,
+    "fiscal_year": 2026,
+    "fiscal_month": 1,
+    "payment_count": 13,
+    "total_amount": 37.18,
+    "paying_companies": 10
+  }
+]

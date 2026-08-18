@@ -1,0 +1,2981 @@
+{
+  "companies": [
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "ticker_symbol",
+      "type": "text"
+    },
+    {
+      "name": "company_name",
+      "type": "text"
+    },
+    {
+      "name": "exchange",
+      "type": "text"
+    },
+    {
+      "name": "sector",
+      "type": "text"
+    },
+    {
+      "name": "industry",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "fiscal_year_end_month",
+      "type": "text"
+    },
+    {
+      "name": "description",
+      "type": "text"
+    },
+    {
+      "name": "website",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "next_earnings_date",
+      "type": "text"
+    },
+    {
+      "name": "first_financial_data_loaded_at",
+      "type": "text"
+    },
+    {
+      "name": "last_financial_refresh_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_refreshed_fiscal_year",
+      "type": "text"
+    },
+    {
+      "name": "last_refreshed_fiscal_quarter",
+      "type": "text"
+    },
+    {
+      "name": "data_completeness_status",
+      "type": "text"
+    },
+    {
+      "name": "security_type",
+      "type": "text"
+    },
+    {
+      "name": "last_price_refresh_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_price_attempt_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_price_success_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "consecutive_price_failures",
+      "type": "integer"
+    },
+    {
+      "name": "cdr_ratio",
+      "type": "text"
+    },
+    {
+      "name": "cdr_ratio_date",
+      "type": "text"
+    }
+  ],
+  "users": [
+    {
+      "name": "user_id",
+      "type": "integer"
+    },
+    {
+      "name": "email",
+      "type": "text"
+    },
+    {
+      "name": "username",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_signed_in",
+      "type": "timestamptz"
+    },
+    {
+      "name": "preferred_currency",
+      "type": "text"
+    },
+    {
+      "name": "auth_id",
+      "type": "text"
+    },
+    {
+      "name": "timezone",
+      "type": "text"
+    },
+    {
+      "name": "first_name",
+      "type": "text"
+    },
+    {
+      "name": "last_name",
+      "type": "text"
+    },
+    {
+      "name": "avatar_url",
+      "type": "text"
+    }
+  ],
+  "currencies": [
+    {
+      "name": "code",
+      "type": "text"
+    },
+    {
+      "name": "name",
+      "type": "text"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    }
+  ],
+  "current_market_data": [
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "current_price",
+      "type": "numeric"
+    },
+    {
+      "name": "open_price",
+      "type": "numeric"
+    },
+    {
+      "name": "high_price",
+      "type": "numeric"
+    },
+    {
+      "name": "low_price",
+      "type": "numeric"
+    },
+    {
+      "name": "close_price",
+      "type": "numeric"
+    },
+    {
+      "name": "volume",
+      "type": "integer"
+    },
+    {
+      "name": "market_state",
+      "type": "text"
+    },
+    {
+      "name": "last_updated",
+      "type": "timestamptz"
+    }
+  ],
+  "price_history": [
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "price_date",
+      "type": "date"
+    },
+    {
+      "name": "open_price",
+      "type": "numeric"
+    },
+    {
+      "name": "close_price",
+      "type": "numeric"
+    },
+    {
+      "name": "high_price",
+      "type": "numeric"
+    },
+    {
+      "name": "low_price",
+      "type": "numeric"
+    },
+    {
+      "name": "volume",
+      "type": "integer"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "income_statements": [
+    {
+      "name": "is_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_quarter",
+      "type": "integer"
+    },
+    {
+      "name": "period_end_date",
+      "type": "date"
+    },
+    {
+      "name": "revenue",
+      "type": "numeric"
+    },
+    {
+      "name": "cost_of_goods_sold",
+      "type": "numeric"
+    },
+    {
+      "name": "gross_profit",
+      "type": "numeric"
+    },
+    {
+      "name": "operating_expenses",
+      "type": "numeric"
+    },
+    {
+      "name": "rd_expenses",
+      "type": "numeric"
+    },
+    {
+      "name": "sga_expenses",
+      "type": "numeric"
+    },
+    {
+      "name": "operating_income",
+      "type": "numeric"
+    },
+    {
+      "name": "interest_expense",
+      "type": "numeric"
+    },
+    {
+      "name": "tax_expense",
+      "type": "numeric"
+    },
+    {
+      "name": "net_income",
+      "type": "numeric"
+    },
+    {
+      "name": "ebitda",
+      "type": "numeric"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "non_operating_income_expense",
+      "type": "numeric"
+    },
+    {
+      "name": "pretax_income",
+      "type": "numeric"
+    },
+    {
+      "name": "equity_in_earnings",
+      "type": "text"
+    },
+    {
+      "name": "minority_interest",
+      "type": "text"
+    },
+    {
+      "name": "income_from_continuing_operations",
+      "type": "numeric"
+    },
+    {
+      "name": "discontinued_operations",
+      "type": "text"
+    },
+    {
+      "name": "net_income_to_common",
+      "type": "numeric"
+    },
+    {
+      "name": "preferred_dividends",
+      "type": "text"
+    },
+    {
+      "name": "ebit",
+      "type": "numeric"
+    },
+    {
+      "name": "confidence_score",
+      "type": "integer"
+    },
+    {
+      "name": "last_validated_at",
+      "type": "text"
+    },
+    {
+      "name": "validation_notes",
+      "type": "text"
+    },
+    {
+      "name": "eps_basic",
+      "type": "numeric"
+    },
+    {
+      "name": "eps_diluted",
+      "type": "numeric"
+    },
+    {
+      "name": "shares_outstanding_basic",
+      "type": "integer"
+    },
+    {
+      "name": "shares_outstanding_diluted",
+      "type": "integer"
+    },
+    {
+      "name": "interest_income",
+      "type": "numeric"
+    },
+    {
+      "name": "effective_tax_rate",
+      "type": "numeric"
+    },
+    {
+      "name": "total_unusual_items",
+      "type": "numeric"
+    },
+    {
+      "name": "special_charges",
+      "type": "numeric"
+    }
+  ],
+  "balance_sheets": [
+    {
+      "name": "bs_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_quarter",
+      "type": "integer"
+    },
+    {
+      "name": "period_end_date",
+      "type": "date"
+    },
+    {
+      "name": "total_assets",
+      "type": "numeric"
+    },
+    {
+      "name": "current_assets",
+      "type": "text"
+    },
+    {
+      "name": "cash_and_cash_equivalents",
+      "type": "numeric"
+    },
+    {
+      "name": "accounts_receivable",
+      "type": "numeric"
+    },
+    {
+      "name": "inventory",
+      "type": "text"
+    },
+    {
+      "name": "property_plant_equipment_net",
+      "type": "text"
+    },
+    {
+      "name": "intangible_assets",
+      "type": "text"
+    },
+    {
+      "name": "goodwill",
+      "type": "text"
+    },
+    {
+      "name": "total_liabilities",
+      "type": "text"
+    },
+    {
+      "name": "current_liabilities",
+      "type": "text"
+    },
+    {
+      "name": "accounts_payable",
+      "type": "numeric"
+    },
+    {
+      "name": "short_term_debt",
+      "type": "text"
+    },
+    {
+      "name": "long_term_debt",
+      "type": "numeric"
+    },
+    {
+      "name": "total_debt",
+      "type": "numeric"
+    },
+    {
+      "name": "shareholders_equity",
+      "type": "text"
+    },
+    {
+      "name": "retained_earnings",
+      "type": "numeric"
+    },
+    {
+      "name": "common_stock",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "long_term_investments",
+      "type": "text"
+    },
+    {
+      "name": "other_non_current_assets",
+      "type": "text"
+    },
+    {
+      "name": "other_current_liabilities",
+      "type": "text"
+    },
+    {
+      "name": "minority_interest",
+      "type": "text"
+    },
+    {
+      "name": "total_liabilities_and_equity",
+      "type": "text"
+    },
+    {
+      "name": "confidence_score",
+      "type": "numeric"
+    },
+    {
+      "name": "last_validated_at",
+      "type": "text"
+    },
+    {
+      "name": "validation_notes",
+      "type": "text"
+    },
+    {
+      "name": "shares_outstanding",
+      "type": "text"
+    },
+    {
+      "name": "invested_capital",
+      "type": "text"
+    },
+    {
+      "name": "capital_lease_obligations",
+      "type": "text"
+    },
+    {
+      "name": "total_non_current_liabilities",
+      "type": "text"
+    },
+    {
+      "name": "total_non_current_assets",
+      "type": "text"
+    },
+    {
+      "name": "tangible_book_value",
+      "type": "text"
+    },
+    {
+      "name": "deferred_revenue_current",
+      "type": "text"
+    },
+    {
+      "name": "deferred_revenue_non_current",
+      "type": "text"
+    },
+    {
+      "name": "other_current_assets",
+      "type": "text"
+    }
+  ],
+  "cash_flow_statements": [
+    {
+      "name": "cf_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_quarter",
+      "type": "integer"
+    },
+    {
+      "name": "period_end_date",
+      "type": "date"
+    },
+    {
+      "name": "cash_from_operating_activities",
+      "type": "numeric"
+    },
+    {
+      "name": "net_income",
+      "type": "numeric"
+    },
+    {
+      "name": "depreciation_amortization",
+      "type": "numeric"
+    },
+    {
+      "name": "change_in_working_capital",
+      "type": "numeric"
+    },
+    {
+      "name": "deferred_taxes",
+      "type": "text"
+    },
+    {
+      "name": "stock_based_compensation",
+      "type": "numeric"
+    },
+    {
+      "name": "capital_expenditures",
+      "type": "numeric"
+    },
+    {
+      "name": "acquisitions",
+      "type": "text"
+    },
+    {
+      "name": "asset_sales",
+      "type": "text"
+    },
+    {
+      "name": "investment_purchases",
+      "type": "text"
+    },
+    {
+      "name": "debt_issued",
+      "type": "text"
+    },
+    {
+      "name": "debt_repayment",
+      "type": "text"
+    },
+    {
+      "name": "dividends_paid",
+      "type": "text"
+    },
+    {
+      "name": "share_repurchases",
+      "type": "text"
+    },
+    {
+      "name": "share_issuance",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "cash_from_investing_activities",
+      "type": "numeric"
+    },
+    {
+      "name": "cash_from_financing_activities",
+      "type": "numeric"
+    },
+    {
+      "name": "confidence_score",
+      "type": "numeric"
+    },
+    {
+      "name": "last_validated_at",
+      "type": "text"
+    },
+    {
+      "name": "validation_notes",
+      "type": "text"
+    },
+    {
+      "name": "net_change_in_cash",
+      "type": "text"
+    },
+    {
+      "name": "effect_of_fx_on_cash",
+      "type": "text"
+    },
+    {
+      "name": "beginning_cash",
+      "type": "text"
+    },
+    {
+      "name": "ending_cash",
+      "type": "text"
+    },
+    {
+      "name": "short_term_debt_net_change",
+      "type": "text"
+    },
+    {
+      "name": "asset_impairment_charge",
+      "type": "text"
+    },
+    {
+      "name": "free_cash_flow",
+      "type": "text"
+    }
+  ],
+  "financial_ratios": [
+    {
+      "name": "ratio_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "period_end_date",
+      "type": "date"
+    },
+    {
+      "name": "roic",
+      "type": "numeric"
+    },
+    {
+      "name": "roe",
+      "type": "numeric"
+    },
+    {
+      "name": "roa",
+      "type": "numeric"
+    },
+    {
+      "name": "gross_margin",
+      "type": "numeric"
+    },
+    {
+      "name": "operating_margin",
+      "type": "numeric"
+    },
+    {
+      "name": "ebitda_margin",
+      "type": "numeric"
+    },
+    {
+      "name": "net_margin",
+      "type": "numeric"
+    },
+    {
+      "name": "fcf_margin",
+      "type": "numeric"
+    },
+    {
+      "name": "free_cash_flow",
+      "type": "numeric"
+    },
+    {
+      "name": "fcf_conversion",
+      "type": "numeric"
+    },
+    {
+      "name": "dividend_payout_ratio",
+      "type": "text"
+    },
+    {
+      "name": "fcf_dividend_payout_ratio",
+      "type": "text"
+    },
+    {
+      "name": "dividend_coverage_fcf",
+      "type": "text"
+    },
+    {
+      "name": "debt_to_equity",
+      "type": "numeric"
+    },
+    {
+      "name": "debt_to_assets",
+      "type": "numeric"
+    },
+    {
+      "name": "long_term_debt_to_equity",
+      "type": "numeric"
+    },
+    {
+      "name": "long_term_debt_to_assets",
+      "type": "numeric"
+    },
+    {
+      "name": "interest_coverage",
+      "type": "numeric"
+    },
+    {
+      "name": "current_ratio",
+      "type": "numeric"
+    },
+    {
+      "name": "quick_ratio",
+      "type": "numeric"
+    },
+    {
+      "name": "asset_turnover",
+      "type": "numeric"
+    },
+    {
+      "name": "inventory_turnover",
+      "type": "text"
+    },
+    {
+      "name": "revenue_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "ocf_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "fcf_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "ebit_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "ebitda_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "book_value_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "tangible_book_value_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "cash_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "total_debt_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "working_capital_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "capex_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "computed_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "source_version_tag",
+      "type": "text"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "confidence_score",
+      "type": "integer"
+    },
+    {
+      "name": "validation_notes",
+      "type": "text"
+    },
+    {
+      "name": "fiscal_quarter",
+      "type": "text"
+    },
+    {
+      "name": "piotroski_score",
+      "type": "text"
+    },
+    {
+      "name": "altman_z_score",
+      "type": "text"
+    },
+    {
+      "name": "trailing_pe",
+      "type": "text"
+    },
+    {
+      "name": "quarter_end_price",
+      "type": "text"
+    },
+    {
+      "name": "market_cap",
+      "type": "text"
+    },
+    {
+      "name": "enterprise_value",
+      "type": "text"
+    },
+    {
+      "name": "ev_ebitda",
+      "type": "text"
+    },
+    {
+      "name": "price_to_fcf",
+      "type": "text"
+    }
+  ],
+  "earnings": [
+    {
+      "name": "earnings_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_quarter",
+      "type": "integer"
+    },
+    {
+      "name": "period_end_date",
+      "type": "date"
+    },
+    {
+      "name": "announcement_date",
+      "type": "date"
+    },
+    {
+      "name": "eps_reported_basic",
+      "type": "text"
+    },
+    {
+      "name": "eps_reported_diluted",
+      "type": "numeric"
+    },
+    {
+      "name": "eps_estimate",
+      "type": "numeric"
+    },
+    {
+      "name": "eps_surprise_amount",
+      "type": "numeric"
+    },
+    {
+      "name": "eps_surprise_percent",
+      "type": "numeric"
+    },
+    {
+      "name": "revenue_reported",
+      "type": "text"
+    },
+    {
+      "name": "revenue_estimate",
+      "type": "text"
+    },
+    {
+      "name": "revenue_surprise_amount",
+      "type": "text"
+    },
+    {
+      "name": "revenue_surprise_percent",
+      "type": "text"
+    },
+    {
+      "name": "shares_outstanding_basic",
+      "type": "text"
+    },
+    {
+      "name": "shares_outstanding_diluted",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "confidence_score",
+      "type": "numeric"
+    },
+    {
+      "name": "last_validated_at",
+      "type": "text"
+    },
+    {
+      "name": "validation_notes",
+      "type": "text"
+    }
+  ],
+  "splits": [
+    {
+      "name": "split_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "report_date",
+      "type": "date"
+    },
+    {
+      "name": "split_factor",
+      "type": "text"
+    },
+    {
+      "name": "reverse_split",
+      "type": "boolean"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "processed",
+      "type": "boolean"
+    }
+  ],
+  "analyst_eps_estimates": [],
+  "dividend_history": [
+    {
+      "name": "dividend_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "ex_dividend_date",
+      "type": "date"
+    },
+    {
+      "name": "payment_date",
+      "type": "text"
+    },
+    {
+      "name": "record_date",
+      "type": "text"
+    },
+    {
+      "name": "dividend_amount",
+      "type": "numeric"
+    },
+    {
+      "name": "dividend_type",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "frequency",
+      "type": "text"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "confidence_score",
+      "type": "integer"
+    },
+    {
+      "name": "last_validated_at",
+      "type": "text"
+    },
+    {
+      "name": "validation_notes",
+      "type": "text"
+    }
+  ],
+  "dividend_metrics": [
+    {
+      "name": "metric_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "annual_dps",
+      "type": "numeric"
+    },
+    {
+      "name": "dividend_yield",
+      "type": "text"
+    },
+    {
+      "name": "dividend_growth_rate_3yr",
+      "type": "numeric"
+    },
+    {
+      "name": "dividend_growth_rate_5yr",
+      "type": "numeric"
+    },
+    {
+      "name": "dividend_growth_rate_10yr",
+      "type": "text"
+    },
+    {
+      "name": "consecutive_years_paid",
+      "type": "integer"
+    },
+    {
+      "name": "fcfe_coverage_ratio",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "cash_dividend_payout_ratio",
+      "type": "text"
+    },
+    {
+      "name": "ebitda_dividend_coverage",
+      "type": "text"
+    },
+    {
+      "name": "retention_ratio",
+      "type": "text"
+    }
+  ],
+  "upcoming_dividend_events": [
+    {
+      "name": "id",
+      "type": "text"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "ex_dividend_date",
+      "type": "date"
+    },
+    {
+      "name": "trust_score",
+      "type": "numeric"
+    },
+    {
+      "name": "status",
+      "type": "text"
+    },
+    {
+      "name": "source_observed_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    }
+  ],
+  "portfolio_accounts": [
+    {
+      "name": "account_id",
+      "type": "integer"
+    },
+    {
+      "name": "user_id",
+      "type": "integer"
+    },
+    {
+      "name": "brokerage_id",
+      "type": "integer"
+    },
+    {
+      "name": "account_external_id",
+      "type": "text"
+    },
+    {
+      "name": "account_name",
+      "type": "text"
+    },
+    {
+      "name": "account_type",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "is_active",
+      "type": "boolean"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_import_at",
+      "type": "timestamptz"
+    }
+  ],
+  "portfolio_holdings": [
+    {
+      "name": "holding_id",
+      "type": "integer"
+    },
+    {
+      "name": "account_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    },
+    {
+      "name": "quantity",
+      "type": "numeric"
+    },
+    {
+      "name": "average_cost",
+      "type": "numeric"
+    },
+    {
+      "name": "total_cost",
+      "type": "numeric"
+    },
+    {
+      "name": "realized_gain_loss",
+      "type": "numeric"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "first_purchase_date",
+      "type": "text"
+    },
+    {
+      "name": "last_transaction_date",
+      "type": "date"
+    },
+    {
+      "name": "computed_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "exchange_override",
+      "type": "text"
+    }
+  ],
+  "portfolio_transactions": [
+    {
+      "name": "transaction_id",
+      "type": "integer"
+    },
+    {
+      "name": "account_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "text"
+    },
+    {
+      "name": "transaction_date",
+      "type": "date"
+    },
+    {
+      "name": "settlement_date",
+      "type": "text"
+    },
+    {
+      "name": "activity_type",
+      "type": "text"
+    },
+    {
+      "name": "activity_sub_type",
+      "type": "text"
+    },
+    {
+      "name": "direction",
+      "type": "text"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    },
+    {
+      "name": "security_name",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "quantity",
+      "type": "numeric"
+    },
+    {
+      "name": "unit_price",
+      "type": "text"
+    },
+    {
+      "name": "commission",
+      "type": "numeric"
+    },
+    {
+      "name": "net_cash_amount",
+      "type": "numeric"
+    },
+    {
+      "name": "import_batch_id",
+      "type": "text"
+    },
+    {
+      "name": "raw_data",
+      "type": "jsonb"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "entry_source",
+      "type": "text"
+    },
+    {
+      "name": "created_by_user_id",
+      "type": "text"
+    }
+  ],
+  "portfolio_dividends": [
+    {
+      "name": "dividend_id",
+      "type": "integer"
+    },
+    {
+      "name": "account_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "transaction_id",
+      "type": "integer"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    },
+    {
+      "name": "payment_date",
+      "type": "date"
+    },
+    {
+      "name": "amount",
+      "type": "numeric"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_month",
+      "type": "integer"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "portfolio_events": [
+    {
+      "name": "id",
+      "type": "text"
+    },
+    {
+      "name": "event_type",
+      "type": "text"
+    },
+    {
+      "name": "event_version",
+      "type": "integer"
+    },
+    {
+      "name": "aggregate_id",
+      "type": "text"
+    },
+    {
+      "name": "aggregate_type",
+      "type": "text"
+    },
+    {
+      "name": "data",
+      "type": "jsonb"
+    },
+    {
+      "name": "metadata",
+      "type": "jsonb"
+    },
+    {
+      "name": "idempotency_key",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "portfolio_snapshots": [
+    {
+      "name": "id",
+      "type": "integer"
+    },
+    {
+      "name": "account_id",
+      "type": "integer"
+    },
+    {
+      "name": "snapshot_date",
+      "type": "date"
+    },
+    {
+      "name": "total_value",
+      "type": "numeric"
+    },
+    {
+      "name": "holdings_market_value",
+      "type": "numeric"
+    },
+    {
+      "name": "cost_basis",
+      "type": "numeric"
+    },
+    {
+      "name": "cash_balance",
+      "type": "numeric"
+    },
+    {
+      "name": "net_deposits",
+      "type": "numeric"
+    },
+    {
+      "name": "holdings_json",
+      "type": "jsonb"
+    },
+    {
+      "name": "data_quality_flag",
+      "type": "text"
+    },
+    {
+      "name": "job_id",
+      "type": "text"
+    },
+    {
+      "name": "computed_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "portfolio_performance": [],
+  "portfolio_brokerages": [
+    {
+      "name": "brokerage_id",
+      "type": "integer"
+    },
+    {
+      "name": "brokerage_code",
+      "type": "text"
+    },
+    {
+      "name": "brokerage_name",
+      "type": "text"
+    },
+    {
+      "name": "country_code",
+      "type": "text"
+    },
+    {
+      "name": "is_active",
+      "type": "boolean"
+    },
+    {
+      "name": "parser_class",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "portfolio_import_history": [
+    {
+      "name": "import_id",
+      "type": "integer"
+    },
+    {
+      "name": "user_id",
+      "type": "integer"
+    },
+    {
+      "name": "brokerage_id",
+      "type": "integer"
+    },
+    {
+      "name": "import_batch_id",
+      "type": "text"
+    },
+    {
+      "name": "csv_hash",
+      "type": "text"
+    },
+    {
+      "name": "csv_filename",
+      "type": "text"
+    },
+    {
+      "name": "csv_size_bytes",
+      "type": "integer"
+    },
+    {
+      "name": "total_rows",
+      "type": "integer"
+    },
+    {
+      "name": "imported_rows",
+      "type": "integer"
+    },
+    {
+      "name": "duplicate_rows",
+      "type": "integer"
+    },
+    {
+      "name": "error_rows",
+      "type": "integer"
+    },
+    {
+      "name": "account_filter",
+      "type": "text"
+    },
+    {
+      "name": "accounts_created",
+      "type": "integer"
+    },
+    {
+      "name": "accounts_updated",
+      "type": "integer"
+    },
+    {
+      "name": "symbols_created",
+      "type": "integer"
+    },
+    {
+      "name": "status",
+      "type": "text"
+    },
+    {
+      "name": "error_message",
+      "type": "text"
+    },
+    {
+      "name": "started_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "completed_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "rows_parsed",
+      "type": "integer"
+    }
+  ],
+  "portfolio_user_import_history": [
+    {
+      "name": "import_id",
+      "type": "integer"
+    },
+    {
+      "name": "user_id",
+      "type": "integer"
+    },
+    {
+      "name": "import_batch_id",
+      "type": "text"
+    },
+    {
+      "name": "csv_filename",
+      "type": "text"
+    },
+    {
+      "name": "csv_size_bytes",
+      "type": "integer"
+    },
+    {
+      "name": "total_rows",
+      "type": "integer"
+    },
+    {
+      "name": "imported_rows",
+      "type": "integer"
+    },
+    {
+      "name": "duplicate_rows",
+      "type": "integer"
+    },
+    {
+      "name": "status",
+      "type": "text"
+    },
+    {
+      "name": "started_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "completed_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "brokerage_name",
+      "type": "text"
+    },
+    {
+      "name": "brokerage_code",
+      "type": "text"
+    },
+    {
+      "name": "accounts_affected",
+      "type": "integer"
+    }
+  ],
+  "watchlists": [
+    {
+      "name": "id",
+      "type": "integer"
+    },
+    {
+      "name": "user_id",
+      "type": "integer"
+    },
+    {
+      "name": "watchlist_name",
+      "type": "text"
+    },
+    {
+      "name": "description",
+      "type": "text"
+    },
+    {
+      "name": "is_default",
+      "type": "boolean"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    }
+  ],
+  "watchlist_items": [
+    {
+      "name": "watchlist_item_id",
+      "type": "integer"
+    },
+    {
+      "name": "watchlist_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "target_buy",
+      "type": "numeric"
+    },
+    {
+      "name": "target_sell",
+      "type": "numeric"
+    },
+    {
+      "name": "notes",
+      "type": "text"
+    },
+    {
+      "name": "position",
+      "type": "integer"
+    },
+    {
+      "name": "added_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    }
+  ],
+  "valuation_runs": [
+    {
+      "name": "valuation_run_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "method",
+      "type": "text"
+    },
+    {
+      "name": "run_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "run_by_user_id",
+      "type": "text"
+    },
+    {
+      "name": "input_snapshot",
+      "type": "jsonb"
+    },
+    {
+      "name": "assumption_snapshot",
+      "type": "jsonb"
+    },
+    {
+      "name": "output_snapshot",
+      "type": "jsonb"
+    },
+    {
+      "name": "data_version_tag",
+      "type": "text"
+    },
+    {
+      "name": "notes",
+      "type": "text"
+    }
+  ],
+  "valuation_method_defaults": [
+    {
+      "name": "method",
+      "type": "text"
+    },
+    {
+      "name": "params",
+      "type": "jsonb"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    }
+  ],
+  "company_valuation_overrides": [],
+  "intrinsic_value_analysis": [
+    {
+      "name": "analysis_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "growth_rate",
+      "type": "numeric"
+    },
+    {
+      "name": "current_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "future_pe",
+      "type": "numeric"
+    },
+    {
+      "name": "future_price",
+      "type": "numeric"
+    },
+    {
+      "name": "sticker_price",
+      "type": "numeric"
+    },
+    {
+      "name": "mos_price",
+      "type": "numeric"
+    },
+    {
+      "name": "last_updated",
+      "type": "timestamptz"
+    }
+  ],
+  "dcf_valuations": [
+    {
+      "name": "dcf_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "analysis_date",
+      "type": "date"
+    },
+    {
+      "name": "forecast_years",
+      "type": "integer"
+    },
+    {
+      "name": "revenue_growth_rate",
+      "type": "text"
+    },
+    {
+      "name": "terminal_growth_rate",
+      "type": "numeric"
+    },
+    {
+      "name": "wacc_used",
+      "type": "numeric"
+    },
+    {
+      "name": "fcf_margin_assumption",
+      "type": "text"
+    },
+    {
+      "name": "total_pv_fcf",
+      "type": "numeric"
+    },
+    {
+      "name": "terminal_value",
+      "type": "numeric"
+    },
+    {
+      "name": "pv_terminal_value",
+      "type": "numeric"
+    },
+    {
+      "name": "enterprise_value_dcf",
+      "type": "numeric"
+    },
+    {
+      "name": "less_net_debt",
+      "type": "numeric"
+    },
+    {
+      "name": "equity_value",
+      "type": "numeric"
+    },
+    {
+      "name": "shares_outstanding",
+      "type": "integer"
+    },
+    {
+      "name": "intrinsic_value_per_share",
+      "type": "numeric"
+    },
+    {
+      "name": "current_stock_price",
+      "type": "numeric"
+    },
+    {
+      "name": "upside_downside_pct",
+      "type": "text"
+    },
+    {
+      "name": "analyst_name",
+      "type": "text"
+    },
+    {
+      "name": "sensitivity_scenarios",
+      "type": "jsonb"
+    },
+    {
+      "name": "notes",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "ddm_valuations": [
+    {
+      "name": "ddm_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "analysis_date",
+      "type": "date"
+    },
+    {
+      "name": "current_dps",
+      "type": "numeric"
+    },
+    {
+      "name": "next_year_dps",
+      "type": "numeric"
+    },
+    {
+      "name": "dividend_growth_rate",
+      "type": "numeric"
+    },
+    {
+      "name": "required_return",
+      "type": "numeric"
+    },
+    {
+      "name": "intrinsic_value_gordon",
+      "type": "numeric"
+    },
+    {
+      "name": "high_growth_years",
+      "type": "text"
+    },
+    {
+      "name": "high_growth_rate",
+      "type": "text"
+    },
+    {
+      "name": "stable_growth_rate",
+      "type": "text"
+    },
+    {
+      "name": "intrinsic_value_multistage",
+      "type": "text"
+    },
+    {
+      "name": "current_stock_price",
+      "type": "numeric"
+    },
+    {
+      "name": "upside_downside_pct",
+      "type": "numeric"
+    },
+    {
+      "name": "analyst_name",
+      "type": "text"
+    },
+    {
+      "name": "notes",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "industry_multiples": [],
+  "company_summary": [
+    {
+      "name": "summary_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "snapshot_date",
+      "type": "date"
+    },
+    {
+      "name": "market_cap",
+      "type": "numeric"
+    },
+    {
+      "name": "enterprise_value",
+      "type": "numeric"
+    },
+    {
+      "name": "shares_outstanding",
+      "type": "numeric"
+    },
+    {
+      "name": "implied_shares_outstanding",
+      "type": "numeric"
+    },
+    {
+      "name": "beta",
+      "type": "numeric"
+    },
+    {
+      "name": "trailing_pe",
+      "type": "text"
+    },
+    {
+      "name": "forward_pe",
+      "type": "numeric"
+    },
+    {
+      "name": "trailing_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "forward_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "enterprise_to_ebitda",
+      "type": "numeric"
+    },
+    {
+      "name": "enterprise_to_revenue",
+      "type": "numeric"
+    },
+    {
+      "name": "peg_ratio",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "provider",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "benchmark_config": [
+    {
+      "name": "role",
+      "type": "text"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    },
+    {
+      "name": "market",
+      "type": "text"
+    },
+    {
+      "name": "description",
+      "type": "text"
+    },
+    {
+      "name": "is_active",
+      "type": "boolean"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    }
+  ],
+  "moat_analysis": [
+    {
+      "name": "id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    },
+    {
+      "name": "roic",
+      "type": "numeric"
+    },
+    {
+      "name": "wacc",
+      "type": "numeric"
+    },
+    {
+      "name": "roic_minus_wacc",
+      "type": "numeric"
+    },
+    {
+      "name": "gross_margin_pct",
+      "type": "numeric"
+    },
+    {
+      "name": "operating_margin_pct",
+      "type": "numeric"
+    },
+    {
+      "name": "net_margin_pct",
+      "type": "integer"
+    },
+    {
+      "name": "roic_5y_avg",
+      "type": "numeric"
+    },
+    {
+      "name": "roic_5y_std",
+      "type": "text"
+    },
+    {
+      "name": "roic_stability_score",
+      "type": "text"
+    },
+    {
+      "name": "asset_turnover",
+      "type": "numeric"
+    },
+    {
+      "name": "capital_efficiency_score",
+      "type": "integer"
+    },
+    {
+      "name": "moat_score",
+      "type": "numeric"
+    },
+    {
+      "name": "moat_category",
+      "type": "text"
+    },
+    {
+      "name": "text_analysis_available",
+      "type": "boolean"
+    },
+    {
+      "name": "keyword_matches_count",
+      "type": "integer"
+    },
+    {
+      "name": "sector",
+      "type": "text"
+    },
+    {
+      "name": "sector_adjustment",
+      "type": "integer"
+    },
+    {
+      "name": "ai_narrative_available",
+      "type": "boolean"
+    },
+    {
+      "name": "fiscal_years_used",
+      "type": "integer"
+    },
+    {
+      "name": "data_sources",
+      "type": "text"
+    },
+    {
+      "name": "quarters_used",
+      "type": "integer"
+    },
+    {
+      "name": "fallbacks_used",
+      "type": "boolean"
+    },
+    {
+      "name": "computed_at",
+      "type": "timestamptz"
+    }
+  ],
+  "moat_keyword_evidence": [
+    {
+      "name": "id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    },
+    {
+      "name": "filing_type",
+      "type": "text"
+    },
+    {
+      "name": "filing_date",
+      "type": "date"
+    },
+    {
+      "name": "accession_number",
+      "type": "text"
+    },
+    {
+      "name": "section",
+      "type": "text"
+    },
+    {
+      "name": "keyword",
+      "type": "text"
+    },
+    {
+      "name": "keyword_group",
+      "type": "text"
+    },
+    {
+      "name": "snippet",
+      "type": "text"
+    },
+    {
+      "name": "relevance_score",
+      "type": "numeric"
+    },
+    {
+      "name": "matched_at",
+      "type": "timestamptz"
+    }
+  ],
+  "moat_ai_narratives": [
+    {
+      "name": "id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "symbol",
+      "type": "text"
+    },
+    {
+      "name": "model",
+      "type": "text"
+    },
+    {
+      "name": "narrative",
+      "type": "text"
+    },
+    {
+      "name": "summary",
+      "type": "text"
+    },
+    {
+      "name": "quant_snapshot",
+      "type": "jsonb"
+    },
+    {
+      "name": "evidence_count",
+      "type": "integer"
+    },
+    {
+      "name": "generated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "generation_time_ms",
+      "type": "integer"
+    }
+  ],
+  "institutional_investors": [
+    {
+      "name": "investor_id",
+      "type": "integer"
+    },
+    {
+      "name": "cik",
+      "type": "text"
+    },
+    {
+      "name": "investor_name",
+      "type": "text"
+    },
+    {
+      "name": "firm_name",
+      "type": "text"
+    },
+    {
+      "name": "is_super_investor",
+      "type": "boolean"
+    },
+    {
+      "name": "investor_tag",
+      "type": "text"
+    },
+    {
+      "name": "investment_style",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_filed_period",
+      "type": "date"
+    },
+    {
+      "name": "last_filed_date",
+      "type": "date"
+    },
+    {
+      "name": "is_active",
+      "type": "boolean"
+    }
+  ],
+  "institutional_holdings": [
+    {
+      "name": "holding_id",
+      "type": "integer"
+    },
+    {
+      "name": "investor_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "quarter_end_date",
+      "type": "date"
+    },
+    {
+      "name": "filing_date",
+      "type": "date"
+    },
+    {
+      "name": "shares_held",
+      "type": "integer"
+    },
+    {
+      "name": "position_value",
+      "type": "numeric"
+    },
+    {
+      "name": "portfolio_weight",
+      "type": "numeric"
+    },
+    {
+      "name": "shares_change",
+      "type": "integer"
+    },
+    {
+      "name": "shares_change_pct",
+      "type": "numeric"
+    },
+    {
+      "name": "change_type",
+      "type": "text"
+    },
+    {
+      "name": "data_source",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "jobs": [
+    {
+      "name": "id",
+      "type": "text"
+    },
+    {
+      "name": "job_type",
+      "type": "text"
+    },
+    {
+      "name": "resource_type",
+      "type": "text"
+    },
+    {
+      "name": "resource_id",
+      "type": "text"
+    },
+    {
+      "name": "dedupe_key",
+      "type": "timestamptz"
+    },
+    {
+      "name": "priority",
+      "type": "integer"
+    },
+    {
+      "name": "status",
+      "type": "text"
+    },
+    {
+      "name": "payload",
+      "type": "jsonb"
+    },
+    {
+      "name": "not_before",
+      "type": "text"
+    },
+    {
+      "name": "available_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "lease_owner",
+      "type": "text"
+    },
+    {
+      "name": "lease_token",
+      "type": "text"
+    },
+    {
+      "name": "leased_until",
+      "type": "text"
+    },
+    {
+      "name": "attempts",
+      "type": "integer"
+    },
+    {
+      "name": "max_attempts",
+      "type": "integer"
+    },
+    {
+      "name": "last_error",
+      "type": "text"
+    },
+    {
+      "name": "last_error_at",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    }
+  ],
+  "job_attempts": [
+    {
+      "name": "id",
+      "type": "text"
+    },
+    {
+      "name": "job_id",
+      "type": "text"
+    },
+    {
+      "name": "attempt",
+      "type": "integer"
+    },
+    {
+      "name": "status",
+      "type": "text"
+    },
+    {
+      "name": "started_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "finished_at",
+      "type": "text"
+    },
+    {
+      "name": "error",
+      "type": "text"
+    },
+    {
+      "name": "duration_ms",
+      "type": "text"
+    }
+  ],
+  "scheduler_state": [
+    {
+      "name": "scheduler_name",
+      "type": "text"
+    },
+    {
+      "name": "enabled",
+      "type": "boolean"
+    },
+    {
+      "name": "interval_hours",
+      "type": "integer"
+    },
+    {
+      "name": "last_planned_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_status",
+      "type": "text"
+    },
+    {
+      "name": "last_error",
+      "type": "text"
+    },
+    {
+      "name": "next_due_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamptz"
+    }
+  ],
+  "scheduler_run_history": [
+    {
+      "name": "id",
+      "type": "text"
+    },
+    {
+      "name": "scheduler_name",
+      "type": "text"
+    },
+    {
+      "name": "planned_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "jobs_enqueued",
+      "type": "integer"
+    },
+    {
+      "name": "status",
+      "type": "text"
+    },
+    {
+      "name": "error",
+      "type": "text"
+    },
+    {
+      "name": "duration_ms",
+      "type": "integer"
+    }
+  ],
+  "worker_heartbeats": [
+    {
+      "name": "worker_id",
+      "type": "text"
+    },
+    {
+      "name": "hostname",
+      "type": "text"
+    },
+    {
+      "name": "pid",
+      "type": "integer"
+    },
+    {
+      "name": "started_at",
+      "type": "text"
+    },
+    {
+      "name": "last_hb_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "active_jobs",
+      "type": "integer"
+    }
+  ],
+  "resource_locks": [],
+  "company_refresh_requests": [],
+  "scheduler_locks": [],
+  "exchange_rates": [
+    {
+      "name": "id",
+      "type": "integer"
+    },
+    {
+      "name": "base_currency",
+      "type": "text"
+    },
+    {
+      "name": "target_currency",
+      "type": "text"
+    },
+    {
+      "name": "rate",
+      "type": "numeric"
+    },
+    {
+      "name": "rate_date",
+      "type": "date"
+    },
+    {
+      "name": "source",
+      "type": "text"
+    },
+    {
+      "name": "fetched_at",
+      "type": "timestamptz"
+    }
+  ],
+  "fx_rate_history": [],
+  "security_master": [],
+  "data_quality_events": [
+    {
+      "name": "event_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "scope",
+      "type": "text"
+    },
+    {
+      "name": "metric",
+      "type": "text"
+    },
+    {
+      "name": "severity",
+      "type": "text"
+    },
+    {
+      "name": "message",
+      "type": "text"
+    },
+    {
+      "name": "details",
+      "type": "jsonb"
+    },
+    {
+      "name": "detected_at",
+      "type": "timestamptz"
+    }
+  ],
+  "data_conflicts": [
+    {
+      "name": "conflict_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_year",
+      "type": "integer"
+    },
+    {
+      "name": "fiscal_quarter",
+      "type": "text"
+    },
+    {
+      "name": "field_name",
+      "type": "text"
+    },
+    {
+      "name": "existing_value",
+      "type": "numeric"
+    },
+    {
+      "name": "existing_source",
+      "type": "text"
+    },
+    {
+      "name": "new_value",
+      "type": "integer"
+    },
+    {
+      "name": "new_source",
+      "type": "text"
+    },
+    {
+      "name": "percent_diff",
+      "type": "numeric"
+    },
+    {
+      "name": "resolved",
+      "type": "boolean"
+    },
+    {
+      "name": "resolution_notes",
+      "type": "text"
+    },
+    {
+      "name": "resolution_choice",
+      "type": "text"
+    },
+    {
+      "name": "detected_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "resolved_at",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "group_metric_stats": [
+    {
+      "name": "id",
+      "type": "integer"
+    },
+    {
+      "name": "group_type",
+      "type": "text"
+    },
+    {
+      "name": "group_key",
+      "type": "text"
+    },
+    {
+      "name": "metric_id",
+      "type": "text"
+    },
+    {
+      "name": "p05",
+      "type": "numeric"
+    },
+    {
+      "name": "p25",
+      "type": "numeric"
+    },
+    {
+      "name": "p50",
+      "type": "numeric"
+    },
+    {
+      "name": "p75",
+      "type": "numeric"
+    },
+    {
+      "name": "p95",
+      "type": "numeric"
+    },
+    {
+      "name": "mean",
+      "type": "numeric"
+    },
+    {
+      "name": "sample_size",
+      "type": "integer"
+    },
+    {
+      "name": "computed_at",
+      "type": "timestamptz"
+    }
+  ],
+  "aggregation_state": [
+    {
+      "name": "aggregation_id",
+      "type": "text"
+    },
+    {
+      "name": "is_running",
+      "type": "boolean"
+    },
+    {
+      "name": "last_started_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "last_completed_at",
+      "type": "timestamptz"
+    },
+    {
+      "name": "lock_owner",
+      "type": "text"
+    },
+    {
+      "name": "lock_expires_at",
+      "type": "text"
+    }
+  ],
+  "revenue_forecast": [
+    {
+      "name": "forecast_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "report_date",
+      "type": "date"
+    },
+    {
+      "name": "period_type",
+      "type": "text"
+    },
+    {
+      "name": "estimate_revenue_growth",
+      "type": "numeric"
+    },
+    {
+      "name": "number_of_analysts",
+      "type": "integer"
+    },
+    {
+      "name": "estimate_avg_revenue",
+      "type": "numeric"
+    },
+    {
+      "name": "estimate_high_revenue",
+      "type": "numeric"
+    },
+    {
+      "name": "estimate_low_revenue",
+      "type": "numeric"
+    },
+    {
+      "name": "year_ago_estimate_avg_revenue",
+      "type": "numeric"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "provider",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ],
+  "earnings_forecast": [
+    {
+      "name": "earnings_forecast_id",
+      "type": "integer"
+    },
+    {
+      "name": "company_id",
+      "type": "integer"
+    },
+    {
+      "name": "report_date",
+      "type": "date"
+    },
+    {
+      "name": "period_type",
+      "type": "text"
+    },
+    {
+      "name": "currency",
+      "type": "text"
+    },
+    {
+      "name": "estimate_eps_growth",
+      "type": "numeric"
+    },
+    {
+      "name": "estimate_avg_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "estimate_high_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "estimate_low_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "number_of_analysts",
+      "type": "integer"
+    },
+    {
+      "name": "thirty_days_ago_estimate_avg_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "sixty_days_ago_estimate_avg_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "ninety_days_ago_estimate_avg_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "year_ago_estimate_avg_eps",
+      "type": "numeric"
+    },
+    {
+      "name": "provider",
+      "type": "text"
+    },
+    {
+      "name": "created_at",
+      "type": "timestamptz"
+    }
+  ]
+}
