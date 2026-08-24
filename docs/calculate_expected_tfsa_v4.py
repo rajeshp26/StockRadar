@@ -5,8 +5,6 @@ Optimized version - fetches all prices at once instead of per-date/symbol.
 import csv
 import sys
 import os
-from datetime import datetime, date
-from collections import defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 

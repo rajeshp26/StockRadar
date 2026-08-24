@@ -13,13 +13,11 @@ No reimplementation. No approximation. Direct code reuse.
 import sys
 import os
 import asyncio
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 
 from database import get_supabase
-from config import settings
 
 
 def main():

@@ -1,6 +1,6 @@
 import csv
 from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from collections import defaultdict
 
 csv_path = r"C:\Project\StockerPro\StockerPro\docs\activities-export-2026-05-10.csv"
