@@ -1,0 +1,12 @@
+# Declared architecture boundaries, checked by G3. Edit to match your repository.
+forbidden_imports:
+  - from: src/frontend/
+    must_not_import: ["src/backend/", "prisma/", "sqlalchemy"]
+  - from: src/backend/
+    must_not_import: ["src/frontend/components/"]
+  - from: src/domain/
+    must_not_import: ["axios", "fetch", "requests", "psycopg"]
+
+layer_order: [domain, application, infrastructure, interface]
+notes: >
+  Boundaries are declared, never inferred. A rule that is not written here is not enforced.

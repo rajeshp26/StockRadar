@@ -1,0 +1,126 @@
+# Architecture design checklist.
+#
+# WHY THIS FILE EXISTS AND WHY IT IS THE ONLY ONE.
+#
+# Every gate in this framework tests an artefact: a diff, a schema, a build, a rendered page.
+# The Architect's output is a DECISION. No code exists yet, so there is nothing to execute a
+# check against. That is the single gap a checklist fills, and it is why implementation,
+# review, and testing do NOT get checklists — their lessons reduce to conditions a gate can
+# assert, and routing them here would replace an exit code with an unverifiable claim.
+#
+# ADMISSION TEST. An item may live here only if ALL FOUR hold:
+#   1. It is a QUESTION requiring judgement, not a condition a gate could assert.
+#   2. It applies at design time, before code exists.
+#   3. It traces to a retro id — a real escape, not a plausible worry.
+#   4. No fix target in framework/retro/containment_map.yaml ranked above `agent_instruction`
+#      can express it. Checklist is the WEAKEST destination; it is used last, not first.
+#
+# LIFECYCLE. Items are not permanent. Each carries `cycles_without_effect`. An item that has
+# been dispositioned N times without ever changing a design is DECORATION and gets retired.
+# An item whose condition becomes machine-checkable GRADUATES to a gate and is removed.
+# Unbounded growth does not make a checklist stricter — it dilutes the items that matter,
+# because an agent distributes attention across all items rather than skimming selectively.
+#
+# DISPOSITION. Loading this file is not compliance. The Architect returns a per-item verdict.
+# "reviewed" is rejected. Allowed: applied | not_applicable | accepted_risk.
+
+version: 1
+scope: architect            # loaded ONLY when the Architect runs (progressive disclosure)
+max_items: 12               # hard ceiling; adding a 13th requires retiring one
+expiry_cycles: 6            # dispositioned this many times with no effect -> retire
+
+dispositions:
+  applied:
+    meaning: This item changed the design. Name what changed.
+    requires: [changed]
+  not_applicable:
+    meaning: The item's precondition does not hold for this design. Name why.
+    requires: [reason]
+  accepted_risk:
+    meaning: The item applies, the design does not satisfy it, and that is deliberate.
+    requires: [reason, approved_by]
+
+# ── ITEMS ──────────────────────────────────────────────────────────────────────
+# Seeded from gaps this framework actually produced during its own construction.
+# Each is a judgement question. None could be a gate.
+
+items:
+  - id: ACD-001
+    question: >
+      Does any component in this design report a tool's absence, a stale index, or an
+      unavailable driver as a successful outcome?
+    why: >
+      Six defects during framework construction shared exactly this shape — missing pyyaml
+      read as "boundaries respected", npx failing offline read as "schema invalid", absent
+      pytest read as "zero checks needed". Unavailability is a third state, not a pass.
+    judgement_because: >
+      Whether a specific new component HAS such a path cannot be grepped; it depends on the
+      design's own error semantics, which do not exist yet.
+    retro_id: seed-construction
+    cycles_without_effect: 0
+
+  - id: ACD-002
+    question: >
+      For each cross-component boundary in this design, is there an executable contract, or
+      is correctness left to matching implementations on both sides?
+    why: >
+      Narrow-context parallel work is only safe where a boundary is machine-enforced. An
+      informational schema is a document, not a gate.
+    judgement_because: >
+      Which seams in a NEW design are genuine cross-component boundaries is a design call.
+      G1 enforces contracts that exist; nothing can detect a boundary that was never declared.
+    retro_id: seed-construction
+    cycles_without_effect: 0
+
+  - id: ACD-003
+    question: >
+      Does this design introduce a boundary that framework/architecture_rules.yaml does not
+      declare? If so, has the rule been added in the same change?
+    why: >
+      G3 enforces declared boundaries and states plainly that a rule not in the file is not
+      enforced. A boundary designed but never declared is enforced by nobody.
+    judgement_because: >
+      Detecting an UNDECLARED intended boundary requires knowing the intent. Once declared,
+      G3 enforces it mechanically — which is precisely why this item is about declaring it.
+    retro_id: seed-construction
+    cycles_without_effect: 0
+
+  - id: ACD-004
+    question: >
+      Does any state, cache, or manifest in this design store an absolute path, or any value
+      that becomes wrong when the tree is copied, cloned, or relocated?
+    why: >
+      The GSD manifest cached an absolute state root and trusted it unconditionally. A
+      relocated tree read and wrote to the packager's path while returning exit 0.
+    judgement_because: >
+      Whether a design's cached values survive relocation depends on what it chooses to
+      cache and when it revalidates — decisions made before any code exists.
+    retro_id: seed-construction
+    cycles_without_effect: 0
+
+  - id: ACD-005
+    question: >
+      Which requirement shapes does this design introduce, and does profiles.yaml already
+      route each to a gate capable of catching its failures?
+    why: >
+      The most common escape is a routing gap: a capable gate exists but never activates
+      because the requirement carried no shape. Cheaper to route than to strengthen.
+    judgement_because: >
+      Shapes a NEW design introduces are a design output. Nothing can infer them before
+      the design is written.
+    retro_id: seed-construction
+    cycles_without_effect: 0
+
+  - id: ACD-006
+    question: >
+      Does this design depend on a capability of an external tool, host, or provider whose
+      behaviour has not been verified in this repository?
+    why: >
+      DeepSeek Harness offers a pre-step hook that would let Context Builder be enforced
+      rather than offered. Designing on an unverified capability makes the enforcement a
+      convention.
+    judgement_because: >
+      Which dependencies are load-bearing versus incidental is a design judgement, and the
+      verification status of an external capability is not in this repo.
+    retro_id: seed-construction
+    cycles_without_effect: 0
