@@ -1,124 +1,63 @@
-# StockerPro Engineering Constitution
+# Agent framework rules
 
-## Codebase Understanding
+Stable global rules only. Requirements, architecture, research, plans, and task history are
+retrieved dynamically through the GSD state adapter. Never inline them here.
 
-You have two knowledge tools. Use them correctly.
+## Rule zero — non-duplication
 
-### CodeGraph (code structure)
-- **Use for:** symbols, call graphs, blast radius, dependencies, "what calls X", "what breaks if I change Y"
-- **Tool:** `codegraph_explore`
-- **This is your primary tool for code questions**
+Do not duplicate capabilities already provided by OpenCode, GSD, the code intelligence provider,
+Git, or the host. Extend them through adapters and gates.
 
-### Graphify (docs + architecture)
-- **Use for:** design docs, architecture decisions, PDFs, diagrams, "how does authentication work", "what was the migration plan"
-- **Tool:** `graphify query "question"` or `graphify explain "concept"`
-- **Fallback when CodeGraph returns nothing useful**
+## Rule one — do not invoke agents gratuitously
 
-### Simple Rule
-1. Try CodeGraph first
-2. If no useful answer → try Graphify
-3. Still nothing → read files directly
+An agent must not be invoked merely because it exists. Name the specific information or execution
+need that cannot be satisfied by the active agent, an existing skill, GSD, the code intelligence
+provider, or an executable gate. Record the need in the task record before delegating.
 
-### Quick Reference
-```
-# Code questions
-codegraph_explore "authentication flow"
+## Delegation
 
-# Doc/architecture questions  
-graphify query "how does auth migration work"
-graphify explain "background scheduler"
+Only `team-lead` delegates. All subagents have `task` denied. Communicate through structured
+handoffs written to GSD state. Never pass raw reasoning between agents.
 
-# Check what's indexed
-graphify status
-codegraph_status (via MCP)
-```
+## Evidence
 
----
+Use the strongest **applicable** executable evidence for the requirement. Reasoning cannot
+substitute for applicable executable evidence. An applicable evidence class that was available
+but skipped is a verification failure, not a pass with a caveat.
 
-## Non-Negotiable Rules
+Cite in-repo discrete values as `[VERIFIED: path:line-start-line-end]`, and only after opening
+the file in this run.
 
-### ROOT CAUSE INTEGRITY
+## Context
 
-Never present a hypothesis as a root cause.
+Prefer pointers over copied content. Retrieve what you need; do not read broadly. Before acting,
+confirm the plan, referenced requirements, touched contracts, and relevant tests are readable.
+If something critical is missing, do not guess — return `CONTEXT_INSUFFICIENT` naming the item.
 
-The following classifications MUST remain distinct:
+## Gate evidence persistence
 
-**OBSERVED** — Directly observed behavior.
-**VERIFIED** — Confirmed by reliable evidence.
-**HYPOTHESIS** — A possible explanation that has not been proven.
-**ROOT CAUSE** — An explanation supported by evidence and surviving reasonable attempts to disprove it.
-**UNRESOLVED** — Evidence is insufficient to determine the cause.
+OpenCode prunes old tool outputs and auto-compacts. Write gate and test results to the
+verification artifact immediately. Never rely on them remaining in context.
 
-If the evidence is insufficient: STOP and report UNRESOLVED.
+## Safety
 
-Never guess.
-Never infer certainty from plausibility.
-Never call something a root cause merely because it is the most likely explanation.
+Never expose secrets, disable or delete tests to reach green, bypass a gate, change a contract
+silently, or modify production without an approved release gate. Credentials live outside the
+workspace in environment variables.
 
-### NO FIX-FORWARD DEBUGGING
 
-Do not modify production code to determine whether a suspected root cause is correct.
+## Frontend stack is a contract
 
-Debugging changes must not be used as experiments unless explicitly approved by the user.
+The mandated stack (shadcn/ui, Tailwind, Lucide, Motion, Playwright) is enforced executably by
+`framework/gates/g5_frontend_stack.sh` on files the current task changes. Pre-existing
+violations elsewhere are baseline debt: reported, never blocking, and not to be fixed
+opportunistically inside an unrelated task.
 
-First establish:
-1. Reproduction
-2. Evidence
-3. Execution flow
-4. Expected behavior
-5. Observed behavior
-6. Hypotheses
-7. Falsification
-8. Root cause
+Magic UI, Aceternity, GSAP, and React Three Fiber are conditional. They require an entry in
+`framework/frontend/effect_justifications.yaml` naming a requirement ID, a file scope, and an
+approver. GSAP additionally requires a measured reason Motion is insufficient. An empty ledger
+means conditional tools are not permitted — permission is granted per requirement, not once
+per repository.
 
-Only after RCA approval may corrective implementation begin.
-
-### CODEGRAPH MANDATORY
-
-For non-trivial changes and debugging, CodeGraph MUST be consulted before impact analysis is considered complete.
-
-```
-Simple:
-Change button text → CodeGraph probably unnecessary
-
-Non-trivial:
-Change authentication flow → CodeGraph mandatory
-
-Bug:
-API returns stale data → CodeGraph mandatory
-
-Refactor:
-Change service architecture → CodeGraph mandatory
-```
-
-### HUMAN GATES ARE REQUIRED
-
-Two decisions require explicit human approval:
-
-1. **RCA Approval** — Do you agree this is the root cause?
-2. **Design Approval** — Do you agree this is the right way to fix it?
-
-The AI is never allowed to move from diagnosis → implementation automatically.
-
-### MINIMAL CHANGES ONLY
-
-- Fix the bug. Do not refactor unrelated code.
-- Add the feature. Do not redesign the system.
-- One concern per change.
-- Never suppress type errors (`as any`, `@ts-ignore`).
-- Never leave code in a broken state.
-
-### TESTING IS MANDATORY
-
-- Every feature must have tests
-- Every bugfix must have a regression test
-- Tests must pass before completion
-- Never delete or weaken tests to pass
-- Never skip the regression test
-
-### EVIDENCE OVER ASSUMPTION
-
-- Never guess at call chains — use CodeGraph
-- Never assume behavior — verify with tests/logs
-- Never claim completion without evidence
-- If uncertain, say so and ask
+Visible-behaviour requirements need browser evidence. `g6_browser.sh` exit 3 means
+unverifiable, and unverifiable is never a pass.

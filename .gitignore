@@ -93,3 +93,9 @@ docs/migration_baseline/view_*.json
 
 # Generated tool output
 docs/graphify-out/
+
+framework/.manifest/
+framework/telemetry/browser/
+
+# Local agent planning/session state (never publish)
+.planning/

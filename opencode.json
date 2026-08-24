@@ -1,17 +1,248 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "{env:OC_MODEL_DEFAULT}",
+  "small_model": "{env:OC_MODEL_SMALL}",
+  "instructions": [
+    "AGENTS.md",
+    ".opencode/rules/*.md"
+  ],
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "lsp": "allow",
+    "edit": "deny",
+    "webfetch": "deny",
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "rm -rf*": "deny",
+      "git push*": "deny",
+      "git reset --hard*": "deny"
+    }
+  },
+  "agent": {
+    "team-lead": {
+      "description": "Orchestrator. Classifies complexity and impact, delegates, enforces gates and completion.",
+      "mode": "primary",
+      "permission": {
+        "edit": "deny",
+        "task": {
+          "*": "allow"
+        },
+        "bash": {
+          "*": "ask",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "./framework/gates/*": "allow",
+          "./framework/adapters/gsd_state.py*": "allow",
+          "python3 framework/adapters/gsd_state.py*": "allow",
+          "./framework/frontend/*": "allow",
+          "python3 framework/retro/ledger.py analyse*": "allow",
+          "python3 framework/retro/escape_path.py*": "allow",
+          "mkdir -p*retro/triggers*": "allow"
+        }
+      },
+      "tools": {
+        "playwright*": false
+      },
+      "model": "{env:OC_MODEL_LEAD}",
+      "temperature": 0.1,
+      "_model_rationale": "Routing + classification against fixed tables. Structured, low-variance."
+    },
+    "researcher": {
+      "description": "Investigates unknowns before design. Produces structured findings with evidence.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "webfetch": "allow",
+        "task": {
+          "*": "deny"
+        },
+        "bash": {
+          "python3 framework/adapters/gsd_state.py*": "allow"
+        }
+      },
+      "tools": {
+        "playwright*": false
+      },
+      "model": "{env:OC_MODEL_RESEARCH}",
+      "temperature": 0.3,
+      "_model_rationale": "Breadth over depth. Findings are re-checked downstream by the Architect."
+    },
+    "architect": {
+      "description": "Owns system design, component boundaries, and contract versions.",
+      "mode": "subagent",
+      "permission": {
+        "edit": {
+          "*": "deny",
+          ".planning/contracts/**": "ask"
+        },
+        "task": {
+          "*": "deny"
+        },
+        "bash": {
+          "python3 framework/adapters/gsd_state.py*": "allow",
+          "python3 framework/architecture/checklist_check.py*": "allow"
+        }
+      },
+      "tools": {
+        "playwright*": false
+      },
+      "model": "{env:OC_MODEL_ARCHITECT}",
+      "temperature": 0.2,
+      "_model_rationale": "Highest-consequence reasoning. A wrong boundary is expensive to unwind."
+    },
+    "planner": {
+      "description": "Decomposes approved architecture into atomic tasks with acceptance criteria.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "task": {
+          "*": "deny"
+        },
+        "bash": {
+          "python3 framework/adapters/gsd_state.py*": "allow"
+        }
+      },
+      "tools": {
+        "playwright*": false
+      },
+      "model": "{env:OC_MODEL_PLANNER}",
+      "temperature": 0.1,
+      "_model_rationale": "Decomposition of an already-approved design into atomic tasks."
+    },
+    "implementer": {
+      "description": "Writes and modifies code. Loads domain skills per task. Also runs debug mode.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "allow",
+        "task": {
+          "*": "deny"
+        },
+        "bash": {
+          "*": "ask",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "npm test*": "allow",
+          "npm run build*": "allow",
+          "pytest*": "allow",
+          "ruff*": "allow",
+          "eslint*": "allow",
+          "tsc*": "allow",
+          "mypy*": "allow",
+          "npx shadcn@latest add*": "ask",
+          "npm run lint*": "allow",
+          "node_modules/.bin/playwright*": "allow",
+          "python3 framework/retro/*": "allow",
+          "python3 framework/adapters/gsd_state.py*": "allow"
+        }
+      },
+      "tools": {
+        "playwright*": true
+      },
+      "model": "{env:OC_MODEL_IMPLEMENT}",
+      "temperature": 0.1,
+      "_model_rationale": "Writes all code and does root-cause debugging. Do not economise here first."
+    },
+    "reviewer": {
+      "description": "Independent design and correctness judgement over the diff. Never edits.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "task": {
+          "*": "deny"
+        },
+        "bash": {
+          "*": "deny",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "git show*": "allow",
+          "grep *": "allow"
+        }
+      },
+      "tools": {
+        "playwright*": false
+      },
+      "model": "{env:OC_MODEL_REVIEW}",
+      "temperature": 0.1,
+      "_model_rationale": "Independent judgement on a diff. A missed finding costs more than the tokens saved."
+    },
+    "verifier": {
+      "description": "Proves requirements are satisfied by executing tests, builds, gates and browser checks.",
+      "mode": "subagent",
+      "permission": {
+        "edit": {
+          "*": "deny",
+          ".planning/**/VERIFICATION.md": "allow",
+          "tests/**": "ask"
+        },
+        "task": {
+          "*": "deny"
+        },
+        "bash": {
+          "*": "ask",
+          "pytest*": "allow",
+          "npm test*": "allow",
+          "npm run build*": "allow",
+          "tsc*": "allow",
+          "mypy*": "allow",
+          "ruff*": "allow",
+          "eslint*": "allow",
+          "git diff*": "allow",
+          "git status*": "allow",
+          "./framework/gates/*": "allow",
+          "npm audit*": "allow",
+          "pip-audit*": "allow",
+          "./framework/frontend/stack_check.py*": "allow",
+          "node_modules/.bin/playwright*": "allow",
+          "npm run test:e2e*": "allow",
+          "npm ci*": "ask",
+          "./framework/gates/g7_retro.sh*": "allow",
+          "python3 framework/retro/*": "allow",
+          "python3 framework/adapters/gsd_state.py*": "allow"
+        }
+      },
+      "tools": {
+        "playwright*": true
+      },
+      "model": "{env:OC_MODEL_VERIFY}",
+      "temperature": 0.0,
+      "_model_rationale": "Runs gates and transcribes exit codes. Least reasoning-intensive role."
+    }
+  },
   "mcp": {
     "memory": {
       "type": "local",
-      "command": ["mcp-server-memory"]
+      "command": [
+        "mcp-server-memory"
+      ]
     },
     "context7": {
       "type": "local",
-      "command": ["context7-mcp"]
+      "command": [
+        "context7-mcp"
+      ]
     },
     "playwright": {
       "type": "local",
-      "command": ["playwright-mcp"]
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated",
+        "--caps=testing",
+        "--output-dir=./framework/telemetry/browser/mcp"
+      ],
+      "enabled": true
     }
   },
   "references": {
@@ -20,11 +251,17 @@
       "description": "Full project documentation: architecture, design, testing, security, migration guides"
     }
   },
-  "instructions": [
-    ".ai/architecture.md",
-    ".ai/coding-rules.md",
-    ".ai/testing.md",
-    ".ai/design-and-implementation.md",
-    ".ai/testing-guidelines.md"
-  ]
+  "skills": {
+    "paths": [
+      ".opencode/skills"
+    ]
+  },
+  "plugin": [
+    "file://.opencode/plugin/telemetry.ts"
+  ],
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 12000
+  }
 }
