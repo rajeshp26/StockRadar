@@ -19,9 +19,9 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -48,7 +48,7 @@ logger = logging.getLogger("backfill_holdings")
 # Static helpers
 # ---------------------------------------------------------------------------
 
-def _safe_num(v: Any) -> Optional[float]:
+def _safe_num(v: Any) -> float | None:
     if v is None:
         return None
     try:
@@ -58,7 +58,7 @@ def _safe_num(v: Any) -> Optional[float]:
         return None
 
 
-def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not daily_rows:
         return []
     df = pd.DataFrame(daily_rows)
@@ -72,7 +72,7 @@ def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dic
     df["month"] = df["price_date"].dt.month
     idx = df.groupby(["year", "month"])["price_date"].idxmax()
     last_trading_rows = df.loc[idx].copy()
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for _, r in last_trading_rows.iterrows():
         out.append({
             "company_id":  int(r.get("company_id")),
@@ -92,7 +92,7 @@ def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dic
 # Core backfill logic
 # ---------------------------------------------------------------------------
 
-def _get_all_holding_symbols() -> List[str]:
+def _get_all_holding_symbols() -> list[str]:
     """Return all distinct ticker symbols across all portfolio_holdings."""
     resp = (
         supabase.table("portfolio_holdings")
@@ -137,11 +137,11 @@ async def _has_price_history(repo: SupabaseFinancialRepository, company_id: int)
         return False
 
 
-def _yfinance_daily_to_rows(df: pd.DataFrame, company_id: int) -> List[Dict[str, Any]]:
+def _yfinance_daily_to_rows(df: pd.DataFrame, company_id: int) -> list[dict[str, Any]]:
     """Convert a yfinance price_history_df to a list of row dicts."""
     if df is None or df.empty:
         return []
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for _, r in df.iterrows():
         pdate = r.get("price_date")
         if pdate is None:
@@ -161,7 +161,7 @@ def _yfinance_daily_to_rows(df: pd.DataFrame, company_id: int) -> List[Dict[str,
     return rows
 
 
-def _strip_split_artifacts(rows: List[Dict[str, Any]], symbol: str) -> List[Dict[str, Any]]:
+def _strip_split_artifacts(rows: list[dict[str, Any]], symbol: str) -> list[dict[str, Any]]:
     """Strip reverse-split price artifacts where old prices dwarf recent ones.
 
     Stocks with multiple reverse splits (e.g. XELA) produce raw price_history
@@ -288,7 +288,7 @@ async def backfill_symbol(
 
 
 async def run_backfill(
-    symbols: Optional[List[str]] = None,
+    symbols: list[str] | None = None,
     dry_run: bool = False,
 ) -> None:
     """Resolve symbols, then backfill price data for each."""

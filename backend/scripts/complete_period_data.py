@@ -1,12 +1,14 @@
 """Complete period data: replay engine output for all dates + all accounts + grand total."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import supabase
-from shared.replay_engine import ReplayEngine
-from infrastructure.repositories.event_store import EventStore
 from datetime import date
+
+from database import supabase
+from infrastructure.repositories.event_store import EventStore
+from shared.replay_engine import ReplayEngine
 
 event_store = EventStore()
 engine = ReplayEngine(event_store)

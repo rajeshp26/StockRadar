@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 One-time migration: backfill shares_change and shares_change_pct
 for all existing institutional_holdings rows.
@@ -15,8 +14,8 @@ Run once:
 Safe to re-run: only updates rows where shares_change IS NULL.
 """
 import logging
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

@@ -1,14 +1,14 @@
 """End-to-end verification: replay engine vs portfolio_holdings vs snapshots for every account & date."""
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
 from database import supabase
-from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
-from infrastructure.repositories.portfolio_repository import PortfolioRepository
-import json
+from shared.replay_engine import ReplayEngine
 
 rows = lambda r: r.data or []
 

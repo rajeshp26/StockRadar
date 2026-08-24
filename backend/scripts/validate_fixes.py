@@ -10,7 +10,6 @@ import logging
 import os
 import sys
 from datetime import date
-from typing import Any, Dict, Optional
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -92,8 +91,9 @@ def test_postgrest_single_vs_limit():
     """Fix 1: Validate .single() 406 vs .limit(1) behavior."""
     log.info("\n=== Test: .single() vs .limit(1) for company_summary ===")
 
-    from database import supabase
     from postgrest.exceptions import APIError
+
+    from database import supabase
 
     # Use a non-existent company_id to ensure zero rows
     test_cid = -999999

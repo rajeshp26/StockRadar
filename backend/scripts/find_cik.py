@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Find correct CIKs for investors"""
 import sys
+
 sys.path.insert(0, '.')
 
-from edgar import set_identity, Company, find
-from datetime import datetime
+from edgar import find, set_identity
 
 set_identity("StockerPro backfill script rajeshp01@gmail.com")
 

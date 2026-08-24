@@ -7,10 +7,9 @@ Steps:
 3. CREATE TABLE fx_rate_history + index
 """
 
-import sys
 import logging
+import sys
 from pathlib import Path
-from typing import List
 
 _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
@@ -22,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("migrate")
 
 # Each statement should be self-contained (no dependencies on prior statements in the same call)
-STATEMENTS: List[str] = [
+STATEMENTS: list[str] = [
     # portfolio_events table
     """CREATE TABLE IF NOT EXISTS public.portfolio_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -1,8 +1,12 @@
-import sys, os, json, subprocess
-from pathlib import Path
+import json
+import subprocess
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import dotenv, jwt
+import dotenv
+import jwt
 
 env = dotenv.dotenv_values(Path(__file__).resolve().parent.parent / ".env")
 JWT_SECRET = env["SUPABASE_JWT_SECRET"]

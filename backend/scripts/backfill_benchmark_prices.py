@@ -24,7 +24,7 @@ import logging
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -32,11 +32,11 @@ _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
+from config import settings
 from database import supabase
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 from providers.defeat_beta_provider import DefeatBetaProvider
 from providers.yfinance_provider import YFinanceProvider
-from config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,7 +57,7 @@ DEFAULT_LOOKBACK_DAYS = int(getattr(settings, "MARKET_DATA_PRICE_LOOKBACK_DAYS",
 # Static helpers — identical to MarketDataRefreshScheduler
 # ---------------------------------------------------------------------------
 
-def _safe_num(v: Any) -> Optional[float]:
+def _safe_num(v: Any) -> float | None:
     """Safely convert a value to float, handling None / NaN / bad types."""
     if v is None:
         return None
@@ -77,7 +77,7 @@ def _years_ago(from_date: date, years: int) -> date:
         return date(target_year, 3, 1) - timedelta(days=1)
 
 
-def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Convert daily OHLCV rows to monthly EOM rows:
       - Group by (year, month)
@@ -97,7 +97,7 @@ def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dic
     df["month"] = df["price_date"].dt.month
     idx = df.groupby(["year", "month"])["price_date"].idxmax()
     last_trading_rows = df.loc[idx].copy()
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for _, r in last_trading_rows.iterrows():
         out.append({
             "company_id":  int(r.get("company_id")),
@@ -239,7 +239,7 @@ async def backfill_symbol(
 
 
 async def run_backfill(
-    symbols: List[str],
+    symbols: list[str],
     retention_years: int,
     lookback_days: int,
     concurrency: int,
@@ -248,8 +248,8 @@ async def run_backfill(
     """Resolve symbols to company_ids, then backfill concurrently."""
     repo = SupabaseFinancialRepository(supabase)
     yf = YFinanceProvider()
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
     from providers.edgar_provider import EdgarToolsProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
     sd = StockdexMacrotrendsProvider()
     ed = EdgarToolsProvider()
     provider = DefeatBetaProvider(
@@ -257,7 +257,7 @@ async def run_backfill(
     )
 
     # ── Resolve symbols → company records ──
-    companies: List[Dict[str, Any]] = []
+    companies: list[dict[str, Any]] = []
     for sym in symbols:
         upper = sym.upper()
         resp = (

@@ -1,13 +1,14 @@
 """Seed portfolio data for the e2e test user."""
-import os, sys, uuid
-from datetime import date, timedelta, datetime
+import os
+import sys
+from datetime import date, datetime, timedelta
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("ENV", "development")
 
-from supabase import create_client, Client
 from config import settings
+from supabase import Client, create_client
 
 supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -276,7 +277,8 @@ def update_current_prices(companies):
 
 def create_price_history(companies):
     """Create 90 days of price history for each company."""
-    from random import uniform, seed as random_seed
+    from random import seed as random_seed
+    from random import uniform
     random_seed(42)
     prices = {
         "AAPL": 175.00,

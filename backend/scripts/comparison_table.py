@@ -1,14 +1,16 @@
 """Comparison table: UI (portfolio_holdings) vs Replay (events) vs DB (snapshots) for all dates."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import supabase
-from infrastructure.repositories.price_repository import PriceRepository
-from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from shared.replay_engine import ReplayEngine
-from infrastructure.repositories.event_store import EventStore
 from datetime import date
+
+from database import supabase
+from infrastructure.repositories.event_store import EventStore
+from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from infrastructure.repositories.price_repository import PriceRepository
+from shared.replay_engine import ReplayEngine
 
 # Get user's accounts
 users = supabase.table("users").select("user_id").eq("email", "rajeshp01@gmail.com").execute()

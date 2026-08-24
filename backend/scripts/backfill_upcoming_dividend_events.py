@@ -14,17 +14,19 @@ Safe to re-run: upserts via UNIQUE(company_id, data_source).
 Run once:
     python scripts/backfill_upcoming_dividend_events.py
 """
-import sys
 import logging
+import sys
 from pathlib import Path
 
 _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
-from database import supabase
 from datetime import date, timedelta
+
 from dateutil.relativedelta import relativedelta
+
+from database import supabase
 
 logging.basicConfig(
     level=logging.INFO,

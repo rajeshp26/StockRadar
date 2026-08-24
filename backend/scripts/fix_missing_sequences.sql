@@ -11,7 +11,7 @@ DO $$
 BEGIN
   -- Only add the DEFAULT if the column currently has none (i.e. was created
   -- as plain integer NOT NULL without SERIAL / GENERATED AS IDENTITY).
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1
     FROM   pg_attribute a
     JOIN   pg_class c ON c.oid = a.attrelid
@@ -48,7 +48,7 @@ END $$;
 -- ── company_summary.summary_id ───────────────────────────────────────────────
 DO $$
 BEGIN
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1
     FROM   pg_attribute a
     JOIN   pg_class c ON c.oid = a.attrelid

@@ -31,14 +31,16 @@ _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
+from application.jobs.derived_financial_metrics_job import (
+    compute_and_upsert_derived_financial_metrics,
+)
+from application.services.recompute_guard import RecomputeGuard
+from application.services.valuation_service import ValuationService
 from database import supabase
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from providers.defeat_beta_provider import DefeatBetaProvider
 from providers.yfinance_provider import YFinanceProvider
-from application.services.valuation_service import ValuationService
-from application.services.recompute_guard import RecomputeGuard
-from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
 
 # ── logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -118,7 +120,7 @@ async def backfill_company(
             "✅ %s (id=%s): %d total rows upserted %s",
             symbol, company_id, total_rows, counts,
         )
-        
+
         # 5. Trigger valuation
         logger.info("Triggering RI valuation for %s (id=%s)", symbol, company_id)
         await valuation_service.compute_residual_income_if_stale(
@@ -153,12 +155,12 @@ async def run_backfill(
 ) -> None:
     repo = SupabaseFinancialRepository(supabase)
     yf = YFinanceProvider()
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
     from providers.edgar_provider import EdgarToolsProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
     sd = StockdexMacrotrendsProvider()
     ed = EdgarToolsProvider()
     provider = DefeatBetaProvider(yfinance_provider=yf, stockdex_provider=sd, edgar_provider=ed)
-    
+
     # Instantiate valuation services
     valuation_repo = ValuationRepository()
     recompute_guard = RecomputeGuard(valuation_repo)

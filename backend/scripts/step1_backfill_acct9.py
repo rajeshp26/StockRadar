@@ -1,11 +1,13 @@
 """Step 1: Backfill account 9 events with proper pagination."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import logging
 
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
-import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stderr)
 log = logging.getLogger("backfill_acct9")
@@ -96,21 +98,21 @@ def build_events(txns):
 def main():
     txns = get_txns()
     existing = get_existing_keys()
-    
+
     new_txns = [t for t in txns if f"backfill_{ACCOUNT_ID}_{t.get('transaction_id', txns.index(t))}_{txns.index(t)}" not in existing]
     log.info(f"{len(new_txns)} new transactions to backfill")
-    
+
     if not new_txns:
         log.info("Nothing to backfill")
         return
-    
+
     events = build_events(new_txns)
     BATCH = 500
     for i in range(0, len(events), BATCH):
         batch = events[i:i+BATCH]
         event_store.append_events_batch(batch)
         log.info(f"Wrote batch {i//BATCH + 1}: {len(batch)} events")
-    
+
     log.info(f"Done: {len(events)} events created")
 
 # Rename to avoid shadowing

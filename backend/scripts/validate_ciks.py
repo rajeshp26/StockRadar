@@ -4,8 +4,8 @@
 2. Company name matches expected investor
 3. Verify all parameters are correct
 """
+
 from edgar import Company, get_filings, set_identity
-from typing import Dict, List, Tuple
 
 set_identity("stockerpro@example.com")
 
@@ -38,7 +38,7 @@ INVESTORS = {
 }
 
 
-def validate_cik(cik: str, expected_name: str, expected_firm: str, form_types: List[str]) -> Dict:
+def validate_cik(cik: str, expected_name: str, expected_firm: str, form_types: list[str]) -> dict:
     """Validate CIK against SEC EDGAR - check company name and filings match."""
     result = {
         "cik": cik,
@@ -49,20 +49,20 @@ def validate_cik(cik: str, expected_name: str, expected_firm: str, form_types: L
         "last_filing": None,
         "form_breakdown": {},
     }
-    
+
     try:
         # Get company info from SEC
         company = Company(cik)
         company_name = company.name if company else "UNKNOWN"
         result["sec_name"] = company_name
-        
+
         # Check for recent filings of ALL specified form types
         all_filings = []
         form_counts = {}
-        
+
         # Always check 13F-HR as baseline (even if not in form_types)
         check_forms = list(set(form_types + ["13F-HR"]))
-        
+
         for form_type in check_forms:
             form_counts[form_type] = 0
             for year in [2023, 2024, 2025, 2026]:
@@ -74,14 +74,14 @@ def validate_cik(cik: str, expected_name: str, expected_firm: str, form_types: L
                         all_filings.extend(filings_list)
                 except:
                     pass
-        
+
         result["form_breakdown"] = {k: v for k, v in form_counts.items() if v > 0}
         result["filings"] = sum(form_counts.values())
-        
+
         if all_filings:
             all_filings.sort(key=lambda x: x.filing_date, reverse=True)
             result["last_filing"] = str(all_filings[0].filing_date)
-        
+
         # Determine status
         if not company_name or company_name == "UNKNOWN":
             result["status"] = "CIK_NOT_FOUND"
@@ -92,18 +92,18 @@ def validate_cik(cik: str, expected_name: str, expected_firm: str, form_types: L
             # Also check firm name
             all_search_terms = expected_name.split() + expected_firm.split()
             name_match = any(
-                term.upper() in company_name.upper() 
-                for term in all_search_terms 
+                term.upper() in company_name.upper()
+                for term in all_search_terms
                 if len(term) > 3
             )
             if name_match:
                 result["status"] = "VALID"
             else:
                 result["status"] = f"NAME_MISMATCH ({company_name[:40]})"
-                
+
     except Exception as e:
         result["status"] = f"ERROR: {str(e)[:50]}"
-    
+
     return result
 
 
@@ -111,7 +111,7 @@ def main():
     print("=" * 70)
     print("SEC EDGAR CIK VALIDATION (Updated May 2026)")
     print("=" * 70)
-    
+
     results = []
     for cik, (name, firm, forms) in INVESTORS.items():
         print(f"Validating {cik} {name}...", end=" ", flush=True)
@@ -122,11 +122,11 @@ def main():
         if r.get('form_breakdown'):
             breakdown = ", ".join(f"{k}:{v}" for k, v in r['form_breakdown'].items())
             print(f"    Forms: {breakdown}")
-    
+
     print("\n" + "=" * 70)
     print("VALIDATION RESULTS")
     print("=" * 70)
-    
+
     valid = [r for r in results if r["status"] == "VALID"]
     name_mismatch = [r for r in results if "NAME_MISMATCH" in r["status"]]
     no_filings = [r for r in results if r["status"] == "NO_FILINGS"]

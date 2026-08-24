@@ -1,6 +1,9 @@
-import os, sys
+import os
+import sys
+
 sys.path.insert(0, '.')
 from dotenv import load_dotenv
+
 load_dotenv('.env')
 from supabase import create_client
 

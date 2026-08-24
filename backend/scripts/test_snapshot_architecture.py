@@ -2,11 +2,12 @@
 
 Run: python -m scripts.test_snapshot_architecture
 """
-import os, sys
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from datetime import date, timedelta
-from decimal import Decimal
 
 from shared.snapshot_builder import check_snapshot_spike
 
@@ -131,7 +132,6 @@ def test_gap_detection():
     print("TEST 3: Gap Detection Logic")
     print("=" * 70)
 
-    from datetime import date, timedelta
 
     # Simulate: last snapshot was June 30, today is July 10
     last_snapshot_date = date(2026, 6, 30)
@@ -183,7 +183,7 @@ def test_config_defaults():
     # We can't import config directly without supabase connection,
     # so just verify the files have the right content
     config_path = os.path.join(os.path.dirname(__file__), '..', 'config.py')
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, encoding='utf-8') as f:
         config_content = f.read()
 
     assert 'SNAPSHOT_SPIKE_THRESHOLD' in config_content
@@ -207,7 +207,7 @@ def test_migration_script():
     migration_path = os.path.join(os.path.dirname(__file__), 'migration_job_id_not_null.sql')
     assert os.path.exists(migration_path), f"Migration not found at {migration_path}"
 
-    with open(migration_path, 'r', encoding='utf-8') as f:
+    with open(migration_path, encoding='utf-8') as f:
         migration_content = f.read()
 
     assert "UPDATE portfolio_snapshots SET job_id = 'unknown' WHERE job_id IS NULL" in migration_content
@@ -240,7 +240,7 @@ def test_manual_script_gates():
             print(f"  SKIP: {script_name} not found")
             continue
 
-        with open(script_path, 'r', encoding='utf-8') as f:
+        with open(script_path, encoding='utf-8') as f:
             content = f.read()
 
         has_env_check = 'ENVIRONMENT' in content and 'production' in content.lower()
@@ -265,7 +265,7 @@ def test_schema_and_types():
 
     # Backend schema
     schema_path = os.path.join(os.path.dirname(__file__), '..', 'schemas_portfolio.py')
-    with open(schema_path, 'r', encoding='utf-8') as f:
+    with open(schema_path, encoding='utf-8') as f:
         schema_content = f.read()
 
     assert 'spike_detected: bool = False' in schema_content
@@ -274,7 +274,7 @@ def test_schema_and_types():
 
     # Frontend types
     types_path = os.path.join(os.path.dirname(__file__), '..', '..', 'web', 'src', 'features', 'portfolio', 'types', 'portfolio.types.ts')
-    with open(types_path, 'r', encoding='utf-8') as f:
+    with open(types_path, encoding='utf-8') as f:
         types_content = f.read()
 
     assert 'spike_detected?: boolean' in types_content
@@ -284,7 +284,7 @@ def test_schema_and_types():
 
     # Chart component
     chart_path = os.path.join(os.path.dirname(__file__), '..', '..', 'web', 'src', 'features', 'portfolio', 'components', 'PortfolioPerformanceChart.tsx')
-    with open(chart_path, 'r', encoding='utf-8') as f:
+    with open(chart_path, encoding='utf-8') as f:
         chart_content = f.read()
 
     assert 'spike_detected' in chart_content

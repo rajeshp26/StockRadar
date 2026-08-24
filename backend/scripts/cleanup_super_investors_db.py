@@ -6,6 +6,7 @@ Deletes all institutional holdings and investors records.
 Run before backfill to ensure clean slate.
 """
 import sys
+
 sys.path.insert(0, ".")
 
 from database import supabase

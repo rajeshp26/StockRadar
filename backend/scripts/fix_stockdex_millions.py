@@ -11,15 +11,20 @@ Strategy:
      is between $0 and $1M (the contaminated range)
   3. Multiply all numeric columns in those rows by 1,000,000
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import logging
 import ssl
+
 ssl._create_default_https_context = ssl._create_unverified_context
 import urllib3
+
 urllib3.disable_warnings()
 import httpx
+
 _orig_init = httpx.Client.__init__
 def _patched_init(self, *args, **kwargs):
     kwargs["verify"] = False

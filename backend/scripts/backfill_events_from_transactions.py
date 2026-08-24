@@ -8,9 +8,8 @@ import argparse
 import logging
 import sys
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from database import supabase
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 
@@ -18,10 +17,10 @@ logger = logging.getLogger("stockerpro.scripts.backfill_events")
 
 
 def get_transactions_for_backfill(
-    account_id: Optional[int] = None,
-    limit: Optional[int] = None,
+    account_id: int | None = None,
+    limit: int | None = None,
     offset: int = 0,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     repo = PortfolioRepository()
     accounts = [account_id] if account_id else [a["account_id"] for a in repo.get_user_accounts_all()]
 
@@ -38,7 +37,7 @@ def get_transactions_for_backfill(
     return all_txns
 
 
-def build_event_from_transaction(tx: dict, idx: int) -> Dict[str, Any]:
+def build_event_from_transaction(tx: dict, idx: int) -> dict[str, Any]:
     """Convert a portfolio_transaction row to a portfolio_event."""
     account_id = tx.get("account_id")
     return {
@@ -68,10 +67,10 @@ def build_event_from_transaction(tx: dict, idx: int) -> Dict[str, Any]:
 
 
 def backfill_events(
-    account_id: Optional[int] = None,
+    account_id: int | None = None,
     dry_run: bool = False,
     batch_size: int = 500,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     event_store = EventStore()
     transactions = get_transactions_for_backfill(account_id)
     logger.info(f"Found {len(transactions)} transactions to backfill")

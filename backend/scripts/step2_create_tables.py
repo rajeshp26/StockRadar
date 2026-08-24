@@ -1,11 +1,14 @@
 """Step 2: Create event_sequence and projection_checkpoint tables via Supabase management API."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import httpx
-from config import settings
 import logging
+
+import httpx
+
+from config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stderr)
 log = logging.getLogger("step2")
@@ -14,6 +17,7 @@ SUPABASE_URL = settings.SUPABASE_URL
 SERVICE_KEY = settings.SUPABASE_SERVICE_ROLE_KEY
 
 from urllib.parse import urlparse
+
 parsed = urlparse(SUPABASE_URL)
 project_ref = parsed.netloc.split(".")[0]
 log.info(f"Project ref: {project_ref}")
@@ -118,6 +122,7 @@ except Exception as e:
 # Verify
 log.info("Verifying tables...")
 from database import supabase
+
 for tbl in ["event_sequence", "projection_checkpoint"]:
     try:
         q = supabase.table(tbl).select("*", count="exact").limit(1).execute()

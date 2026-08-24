@@ -15,7 +15,6 @@ _src = Path(__file__).resolve().parent.parent
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
-from database import supabase
 
 
 SQL = Path(__file__).with_suffix(".sql").read_text()

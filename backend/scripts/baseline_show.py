@@ -2,13 +2,14 @@
 """Show what the UI would display with correct pricing."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import supabase
 from datetime import date
-from shared.replay_engine import ReplayEngine
+
+from database import supabase
 from infrastructure.repositories.event_store import EventStore
-import json
+from shared.replay_engine import ReplayEngine
 
 engine = ReplayEngine(EventStore())
 

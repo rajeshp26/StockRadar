@@ -7,12 +7,11 @@ Reports exact inputs, outputs, and any findings/discrepancies.
 Run: python -m backend.scripts.validate_pypfopt
 """
 
+import os
+import sys
+
 import numpy as np
 import pandas as pd
-import sys
-import os
-from datetime import datetime, timedelta
-from typing import Any, Dict, List
 
 # Configure stdout for Unicode support on Windows
 if sys.platform == "win32":
@@ -33,13 +32,11 @@ print("=" * 70)
 
 from pypfopt import (
     EfficientFrontier,
-    expected_returns,
-    risk_models,
-    objective_functions,
-    plotting,
-    black_litterman,
     HRPOpt,
-    CLA,
+    black_litterman,
+    expected_returns,
+    objective_functions,
+    risk_models,
 )
 from pypfopt.discrete_allocation import DiscreteAllocation, get_latest_prices
 
@@ -934,12 +931,12 @@ print(f"  Failed: {failed}")
 print(f"  Success rate: {passed/len(results)*100:.1f}%")
 
 if failed > 0:
-    print(f"\n  FAILURES:")
+    print("\n  FAILURES:")
     for r in results:
         if not r["passed"]:
             print(f"    [FAIL] {r['name']}: {r['detail']}")
 
-print(f"\n  BREAKDOWN BY CATEGORY:")
+print("\n  BREAKDOWN BY CATEGORY:")
 categories = {
     "Expected Returns": ["mean_historical_return", "capm_return", "ema_historical_return", "returns_from_prices"],
     "Risk Models": ["sample_cov", "CovarianceShrinkage", "oracle_approximating", "Correlation"],
@@ -961,7 +958,6 @@ for cat, keywords in categories.items():
         print(f"    {cat}: {cat_pass}/{cat_total}")
 
 # Save results to JSON for documentation
-import json
 results_df = pd.DataFrame(results)
 results_df.to_json("pypfopt_validation_results.json", orient="records", indent=2)
-print(f"\n  Detailed results saved to pypfopt_validation_results.json")
+print("\n  Detailed results saved to pypfopt_validation_results.json")

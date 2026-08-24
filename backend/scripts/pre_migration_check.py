@@ -3,14 +3,16 @@
 Uses project's config pattern (no hardcoded credentials).
 """
 import sys
+
 sys.path.insert(0, '.')
 
 from database import supabase
 
+
 def main():
     print("=== CHECKING OLD CIKs ===")
     old_ciks = ['0001173334', '0001325920', '0000872323']
-    
+
     for cik in old_ciks:
         r = supabase.table('institutional_investors').select('*').eq('cik', cik).execute()
         if r.data:
@@ -23,7 +25,7 @@ def main():
 
     print("\n=== CHECKING NEW CIKs ===")
     new_ciks = ['0001549575', '0001418814', '0001406950']
-    
+
     for cik in new_ciks:
         r = supabase.table('institutional_investors').select('*').eq('cik', cik).execute()
         if r.data:

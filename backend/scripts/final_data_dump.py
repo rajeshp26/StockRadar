@@ -1,12 +1,14 @@
 """Final data dump: net deposits + portfolio value for every account and date."""
-import sys, json
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import supabase
-from shared.replay_engine import ReplayEngine
-from infrastructure.repositories.event_store import EventStore
 from datetime import date
+
+from database import supabase
+from infrastructure.repositories.event_store import EventStore
+from shared.replay_engine import ReplayEngine
 
 event_store = EventStore()
 engine = ReplayEngine(event_store)
@@ -41,7 +43,7 @@ for aid in accounts:
     stored = supabase.table("portfolio_snapshots").select(
         "snapshot_date, total_value, holdings_market_value, cash_balance, cost_basis, net_deposits"
     ).eq("account_id", aid).gte("snapshot_date", "2026-06-23").lte("snapshot_date", "2026-07-07").order("snapshot_date").execute()
-    print(f"\n  Stored (DB):")
+    print("\n  Stored (DB):")
     print(f"  {'Date':<14} {'Net Deposits':>16} {'Cash':>12} {'Market':>12} {'Cost':>12} {'Total':>12}")
     print(f"  {'-'*14} {'-'*16} {'-'*12} {'-'*12} {'-'*12} {'-'*12}")
     for s in stored.data or []:
@@ -51,7 +53,7 @@ for aid in accounts:
 
 # Final summary
 print(f"\n{'='*70}")
-print(f"SUMMARY: All accounts flat across June 23 - July 7")
+print("SUMMARY: All accounts flat across June 23 - July 7")
 print(f"{'='*70}")
 print(f"{'Account':<10} {'Net Deposits':>16} {'Cash':>12} {'Market':>12} {'Cost':>12} {'Total':>12}")
 print(f"{'-'*10} {'-'*16} {'-'*12} {'-'*12} {'-'*12} {'-'*12}")

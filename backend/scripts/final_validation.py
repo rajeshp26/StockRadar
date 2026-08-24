@@ -1,13 +1,15 @@
 """Final validation: compare replay vs stored for all historical snapshots."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from datetime import date
+
 from database import supabase
-from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from datetime import date
+from shared.replay_engine import ReplayEngine
 
 repo = PortfolioRepository()
 accounts = [a["account_id"] for a in repo.get_user_accounts_all()]

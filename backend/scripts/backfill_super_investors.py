@@ -6,10 +6,10 @@ Fetches up to 20 quarters of 13F filings for all super investors and saves to DB
 Includes resume logic to skip investors who already have complete data.
 Run: cd backend && source venv/bin/activate && python scripts/backfill_super_investors.py
 """
-import sys
 import logging
+import sys
 import time
-from typing import Dict, Any, Set, List, Tuple
+from typing import Any
 
 sys.path.insert(0, ".")
 
@@ -23,7 +23,7 @@ from application.services.super_investors_service import SUPER_INVESTORS
 from providers.yfinance_provider import YFinanceProvider
 
 
-def get_or_create_investor(supabase, cik: str, info: Dict[str, str]) -> int:
+def get_or_create_investor(supabase, cik: str, info: dict[str, str]) -> int:
     """Get or create investor record, return investor_id."""
     result = supabase.table("institutional_investors").select(
         "investor_id"
@@ -52,20 +52,20 @@ def get_or_create_company(supabase, ticker: str, stock_provider: YFinanceProvide
     """Get existing company_id or create new one using Yahoo Finance."""
     if not ticker or not isinstance(ticker, str):
         return None
-    
+
     ticker_upper = ticker.upper().strip()
     if not ticker_upper:
         return None
-    
+
     result = supabase.table("companies").select("company_id").eq("ticker_symbol", ticker_upper).execute()
-    
+
     if result.data and len(result.data) > 0:
         return result.data[0]["company_id"]
-    
+
     if stock_provider is None:
         logger.warning(f"No stock provider for {ticker_upper}, skipping")
         return None
-    
+
     try:
         sd = stock_provider.get_stock_details(ticker_upper)
     except Exception as e:
@@ -74,11 +74,11 @@ def get_or_create_company(supabase, ticker: str, stock_provider: YFinanceProvide
             return None
         logger.warning(f"YF API failed for {ticker_upper}: {e}")
         return None
-    
+
     if not sd:
         logger.warning(f"Skipping {ticker_upper}: No YF data")
         return None
-    
+
     payload = {
         "ticker_symbol": ticker_upper,
         "company_name": sd.long_name,
@@ -89,13 +89,13 @@ def get_or_create_company(supabase, ticker: str, stock_provider: YFinanceProvide
         "description": sd.description,
         "website": sd.website,
     }
-    
+
     insert_result = supabase.table("companies").insert(payload).execute()
     if insert_result.data and len(insert_result.data) > 0:
         logger.info(f"Created company: {ticker_upper}")
         time.sleep(0.1)
         return insert_result.data[0]["company_id"]
-    
+
     logger.error(f"Failed to create company for {ticker_upper}")
     return None
 
@@ -111,7 +111,7 @@ def save_holdings_to_db(supabase, investor_id: int, holdings_df, period: str, fi
 
     saved_count = 0
     holdings_df = holdings_df[holdings_df["Ticker"].notna()]
-    
+
     for _, row in holdings_df.iterrows():
         ticker = row.get("Ticker")
         if not ticker:
@@ -188,7 +188,7 @@ def update_investor_tracking(supabase, cik: str, period: str, filing_date: str):
     supabase.table("institutional_investors").update(update_data).eq("cik", cik).execute()
 
 
-def get_investor_status(supabase, cik: str) -> Dict[str, Any]:
+def get_investor_status(supabase, cik: str) -> dict[str, Any]:
     """
     Check investor's current state in DB.
     
@@ -205,7 +205,7 @@ def get_investor_status(supabase, cik: str) -> Dict[str, Any]:
     result = supabase.table("institutional_investors").select(
         "investor_id, last_filed_period, last_filed_date"
     ).eq("cik", cik).execute()
-    
+
     if not result.data or len(result.data) == 0:
         return {
             "exists": False,
@@ -215,16 +215,16 @@ def get_investor_status(supabase, cik: str) -> Dict[str, Any]:
             "existing_quarters": set(),
             "quarter_count": 0,
         }
-    
+
     investor = result.data[0]
     investor_id = investor["investor_id"]
-    
+
     holdings_result = supabase.table("institutional_holdings").select(
         "quarter_end_date"
     ).eq("investor_id", investor_id).execute()
-    
+
     existing_quarters = set(h.get("quarter_end_date") for h in (holdings_result.data or []) if h.get("quarter_end_date"))
-    
+
     return {
         "exists": True,
         "investor_id": investor_id,
@@ -236,10 +236,10 @@ def get_investor_status(supabase, cik: str) -> Dict[str, Any]:
 
 
 def get_missing_filings(
-    all_filings: List,
-    existing_quarters: Set[str],
+    all_filings: list,
+    existing_quarters: set[str],
     max_quarters: int
-) -> List[Tuple]:
+) -> list[tuple]:
     """
     Filter filings to only those for quarters not already in DB.
     
@@ -252,42 +252,43 @@ def get_missing_filings(
         List of (filing, thirteenf) tuples for missing quarters
     """
     missing_filings = []
-    
+
     for filing in all_filings:
         try:
             thirteenf = filing.obj()
             if not thirteenf:
                 continue
-            
+
             period = str(thirteenf.report_period)
-            
+
             if period in existing_quarters:
                 continue
-            
+
             missing_filings.append((filing, thirteenf))
-            
+
             if len(missing_filings) >= max_quarters:
                 break
-                
+
         except Exception as e:
             logger.debug(f"Error parsing filing: {e}")
             continue
-    
+
     return missing_filings
 
 
 def backfill_all_investors():
     """Main function to backfill all super investors with resume logic."""
-    from edgar import set_identity, get_filings
+    from edgar import get_filings, set_identity
+
     from database import supabase
 
     set_identity("StockerPro backfill script rajeshp01@gmail.com")
     stock_provider = YFinanceProvider()
     YEARS_TO_FETCH = list(range(2021, 2027))  # Now includes 2026 for Q1 filings
-    
+
     total_investors = len(SUPER_INVESTORS)
     logger.info(f"Starting backfill for {total_investors} investors")
-    
+
     stats = {"complete": 0, "incomplete": 0, "new": 0, "error": 0}
     completed_ciks = []
 
@@ -295,10 +296,10 @@ def backfill_all_investors():
         investor_name = info["name"]
         tag = info.get("tag", "UNKNOWN")
         target_quarters = info.get("quarters", 20)
-        
+
         try:
             status = get_investor_status(supabase, cik)
-            
+
             if status["exists"]:
                 if status["quarter_count"] >= target_quarters:
                     logger.info(f"[{idx}/{total_investors}] {investor_name} ({tag}) - COMPLETE ({status['quarter_count']}/{target_quarters} quarters, skipping)")
@@ -311,10 +312,10 @@ def backfill_all_investors():
             else:
                 logger.info(f"[{idx}/{total_investors}] {investor_name} ({tag}) - NEW investor, fetching {target_quarters} quarters")
                 stats["new"] += 1
-            
+
             investor_id = get_or_create_investor(supabase, cik, info)
             existing_quarters = status["existing_quarters"] if status["exists"] else set()
-            
+
             all_filings = []
             for year in YEARS_TO_FETCH:
                 try:
@@ -324,20 +325,20 @@ def backfill_all_investors():
                 except Exception as e:
                     logger.debug(f"  No filings for {year}: {e}")
                     continue
-            
+
             if not all_filings:
                 logger.warning(f"  No filings found for {investor_name}")
                 continue
 
             all_filings.sort(key=lambda x: x.filing_date, reverse=True)
-            
+
             missing_filings = get_missing_filings(all_filings, existing_quarters, target_quarters)
             logger.info(f"  Found {len(all_filings)} total filings, {len(missing_filings)} missing quarters to fetch")
-            
+
             if not missing_filings:
                 logger.info(f"  {investor_name}: No missing quarters")
                 continue
-            
+
             total_holdings_saved = 0
 
             for filing_idx, (filing, thirteenf) in enumerate(missing_filings):

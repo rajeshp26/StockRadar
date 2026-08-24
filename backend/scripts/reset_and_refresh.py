@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reset all holdings and tracking fields for complete fresh backfill."""
 import sys
+
 sys.path.insert(0, ".")
 
 from database import supabase

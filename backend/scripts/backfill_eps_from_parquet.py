@@ -5,15 +5,20 @@ The DefeatBeta Parquet has correct EPS and shares data for the same periods
 where revenue/net_income fields were NULL. This script re-fetches those
 values directly from the Parquet and updates the DB.
 """
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import logging
 import ssl
+
 ssl._create_default_https_context = ssl._create_unverified_context
 import urllib3
+
 urllib3.disable_warnings()
 import httpx
+
 _orig_init = httpx.Client.__init__
 def _patched_init(self, *args, **kwargs):
     kwargs["verify"] = False
@@ -21,10 +26,12 @@ def _patched_init(self, *args, **kwargs):
 httpx.Client.__init__ = _patched_init
 
 logging.disable(logging.CRITICAL)
-from database import supabase
+import tempfile
+
 import duckdb
 import requests
-import tempfile
+
+from database import supabase
 
 PARQUET_URL = "https://huggingface.co/datasets/defeatbeta/yahoo-finance-data/resolve/main/data/stock_statement.parquet"
 

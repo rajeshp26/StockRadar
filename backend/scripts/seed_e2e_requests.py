@@ -1,6 +1,8 @@
 """Seed e2e test data using direct HTTP requests to Supabase REST API."""
-import os, sys, json, math
-from datetime import date, timedelta, datetime
+import json
+import os
+import sys
+from datetime import date, timedelta
 from random import Random
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -23,7 +25,7 @@ except ImportError:
 
 def request(method, table, body=None, query=""):
     url = f"{SUPABASE_URL}/rest/v1/{table}{query}"
-    
+
     if HAVE_REQUESTS:
         try:
             r = requests.request(method, url, headers=HEADERS, json=body, timeout=30, verify=False)
@@ -38,11 +40,13 @@ def request(method, table, body=None, query=""):
             return None
     else:
         # Fallback to urllib
-        import urllib.request, urllib.error, ssl
+        import ssl
+        import urllib.error
+        import urllib.request
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        
+
         data = json.dumps(body).encode() if body else None
         req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
         try:

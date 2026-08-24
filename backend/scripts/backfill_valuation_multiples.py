@@ -14,14 +14,12 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime
 
 sys.path.insert(0, ".")
-from database import supabase
-from config import settings
 from application.jobs.derived_financial_metrics_job import (
     compute_and_upsert_quarterly_valuation_metrics,
 )
+from database import supabase
 
 logging.basicConfig(
     level=logging.INFO,

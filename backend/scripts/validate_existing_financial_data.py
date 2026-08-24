@@ -14,13 +14,13 @@ Features:
 Run: cd backend && source venv/bin/activate && python scripts/validate_existing_financial_data.py
 """
 
-import sys
 import json
 import logging
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Set, Tuple
-from datetime import datetime, date
+import sys
 from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -30,15 +30,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from database import supabase
 from application.validators.financial_data_validator import (
-    FinancialDataValidator,
-    ValidationResult,
-    Severity,
-    INCOME_REQUIRED,
     BALANCE_REQUIRED,
     CASHFLOW_REQUIRED,
+    INCOME_REQUIRED,
+    FinancialDataValidator,
+    Severity,
+    ValidationResult,
 )
+from database import supabase
 
 CHECKPOINT_PATH = Path("logs") / "validation_checkpoint.json"
 
@@ -54,7 +54,7 @@ class CheckpointManager:
         self.checkpoint_path = CHECKPOINT_PATH
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def load(self) -> Optional[int]:
+    def load(self) -> int | None:
         """Load last validated company_id from checkpoint."""
         try:
             if self.checkpoint_path.exists():
@@ -97,12 +97,12 @@ class GapDetector:
     - Missing fields (required fields NULL)
     - Stale data (no update in 6+ months)
     """
-    
+
     @staticmethod
     def detect_missing_periods(
-        rows: List[Dict[str, Any]], 
+        rows: list[dict[str, Any]],
         is_quarterly: bool
-    ) -> List[Tuple[int, Optional[int]]]:
+    ) -> list[tuple[int, int | None]]:
         """
         Detect missing fiscal periods.
         
@@ -110,7 +110,7 @@ class GapDetector:
         """
         if not rows:
             return []
-        
+
         # Build set of existing periods
         existing = set()
         for r in rows:
@@ -118,14 +118,14 @@ class GapDetector:
             fq = r.get("fiscal_quarter")
             if fy is not None:
                 existing.add((fy, fq))
-        
+
         # Determine range
         years = sorted(set(fy for fy, _ in existing))
         if not years:
             return []
-        
+
         min_year, max_year = min(years), max(years)
-        
+
         # Expected periods
         missing = []
         for year in range(min_year, max_year + 1):
@@ -136,14 +136,14 @@ class GapDetector:
             else:
                 if (year, None) not in existing:
                     missing.append((year, None))
-        
+
         return missing
-    
+
     @staticmethod
     def detect_field_gaps(
-        row: Dict[str, Any],
-        required_fields: Set[str]
-    ) -> List[str]:
+        row: dict[str, Any],
+        required_fields: set[str]
+    ) -> list[str]:
         """Detect which required fields are missing."""
         missing = []
         for field in required_fields:
@@ -152,13 +152,13 @@ class GapDetector:
             if row.get(field) is None:
                 missing.append(field)
         return missing
-    
+
     @staticmethod
-    def detect_stale_data(updated_at: Optional[str], threshold_days: int = 180) -> bool:
+    def detect_stale_data(updated_at: str | None, threshold_days: int = 180) -> bool:
         """Check if data hasn't been updated in threshold_days."""
         if not updated_at:
             return True
-        
+
         try:
             updated = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
             age_days = (datetime.utcnow().replace(tzinfo=updated.tzinfo) - updated).days
@@ -173,7 +173,7 @@ class GapDetector:
 
 class QualityReport:
     """Generates detailed validation report."""
-    
+
     def __init__(self):
         self.companies_validated = 0
         self.total_rows_validated = 0
@@ -186,16 +186,16 @@ class QualityReport:
             "missing_fields": defaultdict(int),
             "stale_data": []
         }
-    
+
     def add_validation_result(
-        self, 
-        symbol: str, 
+        self,
+        symbol: str,
         company_id: int,
         result: ValidationResult
     ):
         """Record validation result."""
         self.total_rows_validated += 1
-        
+
         for issue in result.issues:
             if issue.severity == Severity.CRITICAL:
                 self.critical_issues += 1
@@ -203,7 +203,7 @@ class QualityReport:
                 self.errors += 1
             elif issue.severity == Severity.WARNING:
                 self.warnings += 1
-        
+
         if result.has_errors():
             self.companies_with_issues.append({
                 "symbol": symbol,
@@ -213,12 +213,12 @@ class QualityReport:
                 "quality_score": result.quality_score,
                 "issues": len(result.issues)
             })
-    
+
     def add_gaps(
         self,
         symbol: str,
-        missing_periods: List[Tuple[int, Optional[int]]],
-        missing_fields: Dict[str, List[str]],
+        missing_periods: list[tuple[int, int | None]],
+        missing_fields: dict[str, list[str]],
         stale: bool
     ):
         """Record detected gaps."""
@@ -227,13 +227,13 @@ class QualityReport:
                 "symbol": symbol,
                 "periods": missing_periods
             })
-        
+
         for field in missing_fields:
             self.gap_summary["missing_fields"][field] += 1
-        
+
         if stale:
             self.gap_summary["stale_data"].append(symbol)
-    
+
     def generate(self) -> str:
         """Generate human-readable report."""
         lines = []
@@ -241,7 +241,7 @@ class QualityReport:
         lines.append("FINANCIAL DATA VALIDATION REPORT")
         lines.append("=" * 80)
         lines.append("")
-        
+
         # Summary
         lines.append(f"Companies Validated: {self.companies_validated}")
         lines.append(f"Total Rows Validated: {self.total_rows_validated}")
@@ -249,7 +249,7 @@ class QualityReport:
         lines.append(f"Errors: {self.errors}")
         lines.append(f"Warnings: {self.warnings}")
         lines.append("")
-        
+
         # Companies with issues
         if self.companies_with_issues:
             lines.append("Companies with Quality Issues (score < 100):")
@@ -260,7 +260,7 @@ class QualityReport:
                     f"Score: {c['quality_score']}/100  Issues: {c['issues']}"
                 )
             lines.append("")
-        
+
         # Missing periods
         if self.gap_summary["missing_periods"]:
             lines.append("Missing Fiscal Periods:")
@@ -273,7 +273,7 @@ class QualityReport:
             if len(self.gap_summary["missing_periods"]) > 10:
                 lines.append(f"  ... and {len(self.gap_summary['missing_periods']) - 10} more")
             lines.append("")
-        
+
         # Missing fields
         if self.gap_summary["missing_fields"]:
             lines.append("Most Commonly Missing Fields:")
@@ -286,7 +286,7 @@ class QualityReport:
             for field, count in sorted_fields[:10]:
                 lines.append(f"  {field:<40} {count} companies")
             lines.append("")
-        
+
         # Stale data
         if self.gap_summary["stale_data"]:
             lines.append(f"Companies with Stale Data (>180 days): {len(self.gap_summary['stale_data'])}")
@@ -294,7 +294,7 @@ class QualityReport:
             if len(self.gap_summary["stale_data"]) > 20:
                 lines.append(f"  ... and {len(self.gap_summary['stale_data']) - 20} more")
             lines.append("")
-        
+
         lines.append("=" * 80)
         return "\n".join(lines)
 
@@ -304,8 +304,8 @@ class QualityReport:
 # ============================================================================
 
 def _detect_table_gaps(
-    rows: List[Dict[str, Any]],
-    collector: List[Tuple[int, Optional[int]]],
+    rows: list[dict[str, Any]],
+    collector: list[tuple[int, int | None]],
 ):
     """Detect missing quarterly and annual periods, appending to collector."""
     quarterly = [r for r in rows if r.get("fiscal_quarter") is not None]
@@ -324,14 +324,14 @@ def validate_company_financial_data(
     company_id: int,
     symbol: str,
     report: QualityReport,
-    last_financial_refresh_at: Optional[str] = None,
-) -> Dict[str, Any]:
+    last_financial_refresh_at: str | None = None,
+) -> dict[str, Any]:
     """
     Validate all financial data for a single company.
     Returns summary with issues and gaps.
     """
     logger.info(f"[VALIDATE] {symbol} (company_id={company_id})")
-    
+
     results = {
         "symbol": symbol,
         "company_id": company_id,
@@ -344,12 +344,12 @@ def validate_company_financial_data(
             "stale": False,
         }
     }
-    
-    company_missing_fields: Set[str] = set()
-    is_rows: List[Dict[str, Any]] = []
-    bs_rows: List[Dict[str, Any]] = []
-    cf_rows: List[Dict[str, Any]] = []
-    
+
+    company_missing_fields: set[str] = set()
+    is_rows: list[dict[str, Any]] = []
+    bs_rows: list[dict[str, Any]] = []
+    cf_rows: list[dict[str, Any]] = []
+
     # ========================================================================
     # VALIDATE INCOME STATEMENTS
     # ========================================================================
@@ -361,10 +361,10 @@ def validate_company_financial_data(
             .order("fiscal_year", desc=False)
             .execute()
         ).data or []
-        
+
         if not is_rows:
             logger.warning(f"{symbol}: No income_statements rows found")
-        
+
         for row in is_rows:
             validation_result = FinancialDataValidator.validate_income_statement(
                 row=row,
@@ -374,17 +374,17 @@ def validate_company_financial_data(
             results["income_statements"]["validated"] += 1
             if validation_result.has_errors():
                 results["income_statements"]["issues"] += 1
-            
+
             company_missing_fields.update(
                 GapDetector.detect_field_gaps(row, INCOME_REQUIRED)
             )
-        
+
         # Detect missing periods
         _detect_table_gaps(is_rows, results["gaps"]["missing_periods"])
-        
+
     except Exception as e:
         logger.error(f"[VALIDATE] {symbol} income statements failed: {e}")
-    
+
     # ========================================================================
     # VALIDATE BALANCE SHEETS
     # ========================================================================
@@ -396,10 +396,10 @@ def validate_company_financial_data(
             .order("fiscal_year", desc=False)
             .execute()
         ).data or []
-        
+
         if not bs_rows:
             logger.warning(f"{symbol}: No balance_sheets rows found")
-        
+
         for row in bs_rows:
             validation_result = FinancialDataValidator.validate_balance_sheet(
                 row=row,
@@ -409,17 +409,17 @@ def validate_company_financial_data(
             results["balance_sheets"]["validated"] += 1
             if validation_result.has_errors():
                 results["balance_sheets"]["issues"] += 1
-            
+
             company_missing_fields.update(
                 GapDetector.detect_field_gaps(row, BALANCE_REQUIRED)
             )
-        
+
         # Detect missing periods
         _detect_table_gaps(bs_rows, results["gaps"]["missing_periods"])
-        
+
     except Exception as e:
         logger.error(f"[VALIDATE] {symbol} balance sheets failed: {e}")
-    
+
     # ========================================================================
     # VALIDATE CASH FLOWS
     # ========================================================================
@@ -431,10 +431,10 @@ def validate_company_financial_data(
             .order("fiscal_year", desc=False)
             .execute()
         ).data or []
-        
+
         if not cf_rows:
             logger.warning(f"{symbol}: No cash_flow_statements rows found")
-        
+
         for row in cf_rows:
             validation_result = FinancialDataValidator.validate_cash_flow(
                 row=row,
@@ -444,17 +444,17 @@ def validate_company_financial_data(
             results["cash_flows"]["validated"] += 1
             if validation_result.has_errors():
                 results["cash_flows"]["issues"] += 1
-            
+
             company_missing_fields.update(
                 GapDetector.detect_field_gaps(row, CASHFLOW_REQUIRED)
             )
-        
+
         # Detect missing periods
         _detect_table_gaps(cf_rows, results["gaps"]["missing_periods"])
-        
+
     except Exception as e:
         logger.error(f"[VALIDATE] {symbol} cash flows failed: {e}")
-    
+
     # Check staleness — prefer company-level, fall back to row-level
     if last_financial_refresh_at:
         results["gaps"]["stale"] = GapDetector.detect_stale_data(
@@ -469,10 +469,10 @@ def validate_company_financial_data(
             )
         else:
             results["gaps"]["stale"] = True
-    
+
     # Build missing_fields dict for report
     results["gaps"]["missing_fields"] = dict.fromkeys(company_missing_fields, [])
-    
+
     # Add gaps to report
     report.add_gaps(
         symbol=symbol,
@@ -480,7 +480,7 @@ def validate_company_financial_data(
         missing_fields=results["gaps"]["missing_fields"],
         stale=results["gaps"]["stale"]
     )
-    
+
     return results
 
 
@@ -489,8 +489,8 @@ def validate_company_financial_data(
 # ============================================================================
 
 def validate_all_companies(
-    resume_from: Optional[int] = None,
-    limit: Optional[int] = None,
+    resume_from: int | None = None,
+    limit: int | None = None,
 ):
     """
     Validate all companies with resume support.
@@ -502,7 +502,7 @@ def validate_all_companies(
     logger.info("=" * 80)
     logger.info("Starting Financial Data Validation")
     logger.info("=" * 80)
-    
+
     # Get all companies
     try:
         query = (
@@ -511,59 +511,59 @@ def validate_all_companies(
             .in_("data_completeness_status", ["COMPLETE", "CURRENT", "PARTIAL"])
             .order("company_id", desc=False)
         )
-        
+
         if resume_from is not None:
             query = query.gte("company_id", resume_from)
-        
+
         companies = query.execute().data or []
-        
+
     except Exception as e:
         logger.error(f"Failed to fetch companies: {e}")
         return
-    
+
     total = len(companies)
     logger.info(f"Found {total} companies to validate")
     if resume_from:
         logger.info(f"Resuming from company_id={resume_from}")
-    
+
     if limit is not None:
         companies = companies[:limit]
         logger.info(f"Limited to {limit} companies")
-    
+
     # Initialize report and checkpoint
     report = QualityReport()
     checkpoint = CheckpointManager()
-    
+
     # Validate each company
     for idx, company in enumerate(companies, 1):
         company_id = company["company_id"]
         symbol = company["ticker_symbol"]
         last_refresh = company.get("last_financial_refresh_at")
-        
+
         try:
             logger.info(f"[{idx}/{total}] Validating {symbol} (company_id={company_id})")
-            
+
             validate_company_financial_data(
                 company_id, symbol, report,
                 last_financial_refresh_at=last_refresh,
             )
             report.companies_validated += 1
-            
+
             # Save checkpoint
             checkpoint.save(company_id)
-            
+
         except Exception as e:
             logger.error(f"[{idx}/{total}] Failed to validate {symbol}: {e}")
             checkpoint.save(company_id, "failed")
             continue
-    
+
     # Clear checkpoint on successful completion
     checkpoint.clear()
-    
+
     # Generate and display report
     logger.info("")
     logger.info(report.generate())
-    
+
     # Write report to file
     report_path = f"validation_report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(report_path, "w") as f:
@@ -573,7 +573,7 @@ def validate_all_companies(
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Validate existing financial data")
     parser.add_argument(
         "--resume-from",
@@ -590,15 +590,15 @@ if __name__ == "__main__":
         type=int,
         help="Limit number of companies to validate (for testing)"
     )
-    
+
     args = parser.parse_args()
-    
+
     resume_from = args.resume_from
-    
+
     if args.resume and resume_from is None:
         checkpoint = CheckpointManager()
         resume_from = checkpoint.load()
         if resume_from is None:
             logger.info("No checkpoint found, starting from beginning")
-    
+
     validate_all_companies(resume_from=resume_from, limit=args.limit)

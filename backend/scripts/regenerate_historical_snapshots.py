@@ -2,8 +2,11 @@
 
 WARNING: This script overwrites historical snapshots. Use only in development/staging.
 """
-import os, sys, logging
+import logging
+import os
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _env = os.environ.get("ENVIRONMENT", "development").lower()
@@ -12,11 +15,12 @@ if _env == "production":
     print("Use the daily snapshot job (compute_daily_snapshots) instead.")
     sys.exit(1)
 
+from datetime import date
+
 from database import supabase
-from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
-from datetime import date
+from shared.replay_engine import ReplayEngine
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s", stream=sys.stderr)
 logger = logging.getLogger("stockerpro.scripts.regenerate")

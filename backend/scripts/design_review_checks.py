@@ -1,12 +1,12 @@
 """Check specific edge cases raised during design review."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import supabase
-from datetime import date, datetime
-from decimal import Decimal
 from collections import Counter
+
+from database import supabase
 
 rows = lambda r: (r or {}).data or []
 

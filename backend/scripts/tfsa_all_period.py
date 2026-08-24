@@ -1,9 +1,13 @@
-import os, sys
+import os
+import sys
+
 sys.path.insert(0, '.')
 from dotenv import load_dotenv
+
 load_dotenv('.env')
-from supabase import create_client
 from datetime import date
+
+from supabase import create_client
 
 client = create_client(os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_SERVICE_ROLE_KEY'))
 

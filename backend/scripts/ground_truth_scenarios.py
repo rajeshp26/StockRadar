@@ -1,11 +1,12 @@
 """Ground-truth audit: examine every table, every account, every edge case before writing the cutover plan."""
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
 from database import supabase
-from collections import defaultdict
 
 rows = lambda r: (r or {}).data or []
 
@@ -54,8 +55,9 @@ print()
 print("=" * 90)
 print("HOLDINGS ANALYSIS (what would replay produce vs portfolio_holdings)")
 print("=" * 90)
-from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
+from shared.replay_engine import ReplayEngine
+
 event_store = EventStore()
 engine = ReplayEngine(event_store)
 cmr = supabase.table("current_market_data").select("company_id, current_price").execute()
@@ -141,7 +143,7 @@ try:
     ps = supabase.table("price_sources").select("*", count="exact").execute()
     print(f"  price_sources: {ps.count} rows")
 except Exception:
-    print(f"  price_sources: TABLE DOES NOT EXIST")
+    print("  price_sources: TABLE DOES NOT EXIST")
 phist = supabase.table("price_history").select("company_id", count="exact").execute()
 print(f"  price_history: {phist.count} rows")
 
@@ -179,6 +181,7 @@ print("CONCURRENT IMPORT RISK: any active imports running?")
 print("=" * 90)
 # Check if there's a scheduler running
 from config import settings
+
 print(f"  Environment: {settings.ENVIRONMENT}")
 print(f"  Replay enabled: {getattr(settings, 'ENABLE_EVENT_REPLAY_SNAPSHOTS', False)}")
 print(f"  Comparison mode: {getattr(settings, 'EVENT_REPLAY_COMPARISON_MODE', False)}")

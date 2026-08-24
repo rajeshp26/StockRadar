@@ -1,6 +1,8 @@
 """Test API output by hitting the running server with a mock auth override.
 Starts a test client with dependency override to bypass real JWT."""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from fastapi.testclient import TestClient
@@ -15,6 +17,7 @@ def _mock_current_user():
 
 # Import app after override
 import main
+
 main.app.dependency_overrides[get_current_user_dep] = _mock_current_user
 
 client = TestClient(main.app)
@@ -73,11 +76,11 @@ for aid in [7, 8, 9, 10, 11, 12]:
     total_cost = sum(float(x.get("total_cost", 0)) for x in holdings)
     n = len(holdings)
     exp = EXPECTED[aid]
-    
+
     m_chk = check("market_val", total_val, exp["market"])
     c_chk = check("total_cost", total_cost, exp["cost"])
     h_chk = check("holdings_count", n, exp["holdings"])
-    
+
     ok = "MATCH" in m_chk and "MATCH" in c_chk and "MATCH" in h_chk
     if not ok: all_ok = False
     print(f"  Acct {aid} ({ACCT_NAMES[aid]}): {'OK' if ok else 'FAIL'}")

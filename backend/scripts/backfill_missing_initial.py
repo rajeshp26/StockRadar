@@ -1,6 +1,7 @@
 """Create initial_holding_set events for accounts 10 and 11 only."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import supabase

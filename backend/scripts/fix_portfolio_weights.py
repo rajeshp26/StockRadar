@@ -4,10 +4,12 @@ Recalculates weights based on actual position_values and total portfolio value p
 Also fixes any position_values that are still in thousands (too small).
 """
 import sys
+
 sys.path.insert(0, ".")
 
-from database import supabase
 from collections import defaultdict
+
+from database import supabase
 
 print("=" * 80)
 print("FIXING PORTFOLIO WEIGHTS AND POSITION VALUES")
@@ -22,7 +24,7 @@ result = supabase.table('institutional_holdings').select(
 if result.data:
     print(f"Found {len(result.data)} holdings with value < $1M")
     print("These are likely still in THOUSANDS - fixing by multiplying by 1000...")
-    
+
     # Fix: multiply by 1000 to convert thousands to dollars
     fixed_count = 0
     for r in result.data:
@@ -31,7 +33,7 @@ if result.data:
             'position_value': new_value
         }).eq('holding_id', r['holding_id']).execute()
         fixed_count += 1
-    
+
     print(f"✅ Fixed {fixed_count} holdings (multiplied by 1000)")
 else:
     print("✅ No holdings with value < $1M found")
@@ -44,7 +46,6 @@ result = supabase.table('institutional_holdings').select(
     'investor_id, quarter_end_date, holding_id'
 ).execute()
 
-from collections import defaultdict
 portfolios = defaultdict(list)
 for r in result.data:
     key = (r['investor_id'], r['quarter_end_date'])
@@ -59,27 +60,27 @@ for idx, ((investor_id, quarter), _) in enumerate(portfolios.items(), 1):
     holdings_result = supabase.table('institutional_holdings').select(
         'holding_id, position_value'
     ).eq('investor_id', investor_id).eq('quarter_end_date', quarter).execute()
-    
+
     if not holdings_result.data:
         continue
-    
+
     # Calculate total portfolio value
     total_value = sum(float(h['position_value']) for h in holdings_result.data)
-    
+
     if total_value == 0:
         continue
-    
+
     # Update each holding's portfolio_weight
     for h in holdings_result.data:
         holding_id = h['holding_id']
         position_value = float(h['position_value'])
         new_weight = position_value / total_value
-        
+
         supabase.table('institutional_holdings').update({
             'portfolio_weight': float(new_weight)
         }).eq('holding_id', holding_id).execute()
         fixed_weights += 1
-    
+
     if idx % 100 == 0:
         print(f"  Processed {idx}/{len(portfolios)} portfolios...")
 

@@ -1,15 +1,16 @@
 """Query TFSA (5ZHK5CAD) portfolio data for ALL period analysis."""
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
+
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 
-from supabase import create_client
-from datetime import date, datetime
 from decimal import Decimal
-import json
+
+from supabase import create_client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -25,7 +26,7 @@ result = client.table("portfolio_accounts").select("*").eq("account_external_id"
 if not result.data:
     # Try by account_type
     result = client.table("portfolio_accounts").select("*").eq("account_type", "TFSA").execute()
-    
+
 if result.data:
     for acct in result.data:
         print(f"  account_id: {acct['account_id']}")
@@ -86,13 +87,13 @@ if all_txns.data:
     print(f"  Total transactions: {len(all_txns.data)}")
     print()
     for t in all_txns.data:
-        print(f"  {t['transaction_date']} | type={t.get('activity_type','?'):<15} sub={t.get('activity_sub_type','?'):<15} symbol={str(t.get('symbol','N/A')):<10} qty={str(t.get('quantity','N/A')):<10} price={str(t.get('unit_price','N/A')):<10} cash={t.get('net_cash_amount',0)}")
-    
+        print(f"  {t['transaction_date']} | type={t.get('activity_type','?'):<15} sub={t.get('activity_sub_type','?'):<15} symbol={t.get('symbol','N/A')!s:<10} qty={t.get('quantity','N/A')!s:<10} price={t.get('unit_price','N/A')!s:<10} cash={t.get('net_cash_amount',0)}")
+
     # Calculate cumulative net deposits
     print("\n" + "=" * 80)
     print("5. CUMULATIVE NET DEPOSITS (MoneyMovement + BonusPayment)")
     print("=" * 80)
-    
+
     money_txns = [t for t in all_txns.data if t.get('activity_type') in ('MoneyMovement', 'BonusPayment')]
     if money_txns:
         cumulative = Decimal("0.00")

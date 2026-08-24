@@ -2,12 +2,14 @@
 Shows only snapshot dates (what the UI would display) plus key event dates."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
+
 from database import supabase
-from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
+from shared.replay_engine import ReplayEngine
 
 engine = ReplayEngine(EventStore())
 
@@ -32,30 +34,30 @@ ACCOUNT_NAMES = {7: "Non-registered", 8: "RRSP", 9: "TFSA", 10: "TFSA-2", 11: "R
 
 print("=" * 120)
 print("FINAL VERIFICATION: PORTFOLIO VALUES AT SNAPSHOT DATES")
-print(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+print(f"Generated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
 print(f"Prices from current_market_data: {len(prices_by_company)} of {len(cids)} companies")
 print("=" * 120)
 
 for aid in [7, 8, 9, 10, 11, 12]:
     label = ACCOUNT_NAMES[aid]
-    
+
     # Get snapshot dates from DB
     s = supabase.table("portfolio_snapshots").select("snapshot_date, total_value").eq("account_id", aid).order("snapshot_date").execute()
     snap_dates = sorted(set(d["snapshot_date"][:10] for d in (s.data or [])))
     snap_by_date = {d["snapshot_date"][:10]: float(d["total_value"]) for d in (s.data or [])}
-    
+
     print(f"\n{'=' * 120}")
     print(f"Account {aid} ({label}) — {len(snap_dates)} snapshot dates")
     print(f"{'=' * 120}")
     print(f"  {'Date':<14} {'Replay Total':>14} {'Replay Market':>14} {'Replay Cost':>14} {'Replay Cash':>12} {'Snap Total':>14} {'Diff':>10} {'Quality':<20}")
     print(f"  {'-'*13:>14} {'-'*13:>14} {'-'*13:>14} {'-'*13:>14} {'-'*11:>12} {'-'*13:>14} {'-'*7:>8} {'-'*19:>20}")
-    
+
     for dt_str in snap_dates:
         try:
             dt = date.fromisoformat(dt_str)
         except (ValueError, TypeError):
             continue
-        
+
         snap_val = snap_by_date[dt_str]
         r = engine.build_snapshot_from_replay(aid, dt, prices_by_company)
         rv = float(r["total_value"])
@@ -64,11 +66,11 @@ for aid in [7, 8, 9, 10, 11, 12]:
         ca = float(r["cash_balance"])
         qf = r["data_quality_flag"]
         diff = rv - snap_val
-        
+
         status = "OK" if abs(diff) < 0.01 else "MISMATCH"
-        
+
         print(f"  {dt_str:<14} ${rv:>11,.2f} ${mv:>11,.2f} ${cb:>11,.2f} ${ca:>9,.2f} ${snap_val:>11,.2f} {diff:>+7,.2f} {qf:<20} {status:<8}")
-    
+
     # Today's latest
     today = date.today()
     r = engine.build_snapshot_from_replay(aid, today, prices_by_company)
@@ -87,15 +89,15 @@ for aid in [7, 8, 9, 10, 11, 12]:
         cid = h.get("company_id")
         if cid:
             ph_map[cid] = {"qty": float(h["quantity"]), "cost": float(h["total_cost"])}
-    
+
     replay_cids = set(cid for cid in snap["holdings"].keys())
     ph_cids = set(ph_map.keys())
-    
+
     if replay_cids != ph_cids:
         print(f"  ACCOUNT {aid}: HOLDING SET MISMATCH — extra in replay: {replay_cids - ph_cids}, extra in db: {ph_cids - replay_cids}")
         all_ok = False
         continue
-    
+
     mismatches = 0
     for cid in replay_cids:
         rq = float(snap["holdings"][cid].quantity)
@@ -104,7 +106,7 @@ for aid in [7, 8, 9, 10, 11, 12]:
             print(f"  ACCOUNT {aid} CID {cid}: replay qty={rq} ph qty={pq} MISMATCH")
             mismatches += 1
             all_ok = False
-    
+
     if mismatches == 0:
         print(f"  Account {aid}: {len(replay_cids)} holdings — ALL QUANTITIES MATCH ✓")
 

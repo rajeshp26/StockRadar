@@ -1,10 +1,14 @@
-import os, sys, time, json
+import os
+import sys
+import time
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from pathlib import Path
-import dotenv
-import jwt
 from datetime import datetime, timedelta
+from pathlib import Path
+
+import dotenv
 import httpx
+import jwt
 
 env = dotenv.dotenv_values(Path(__file__).resolve().parent.parent / ".env")
 JWT_SECRET = env["SUPABASE_JWT_SECRET"]
@@ -62,6 +66,6 @@ print()
 total = sum(r["ms"] for r in results)
 print(f"  TOTAL API TIME: {total:.0f}ms ({total/1000:.1f}s)")
 print()
-print(f"  Slowest endpoints:")
+print("  Slowest endpoints:")
 for r in sorted(results, key=lambda x: x["ms"], reverse=True)[:5]:
     print(f"    {r['ms']:>8.0f}ms  {r['status']}  {r['size_kb']:>6.1f}KB  {r['label']}")

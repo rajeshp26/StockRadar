@@ -16,10 +16,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from database import supabase
 from application.jobs.derived_financial_metrics_job import (
     compute_and_upsert_quarterly_health_scores,
 )
+from database import supabase
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

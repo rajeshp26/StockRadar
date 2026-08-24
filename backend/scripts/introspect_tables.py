@@ -1,6 +1,7 @@
 """Introspect all Supabase tables relevant to portfolio events migration."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import supabase
@@ -37,12 +38,12 @@ for table in TABLES:
             print(f"\n{'='*80}")
             print(f"TABLE: {table}")
             print(f"{'='*80}")
-            print(f"  Table exists but has 0 rows")
+            print("  Table exists but has 0 rows")
         else:
             print(f"\n{'='*80}")
             print(f"TABLE: {table}")
             print(f"{'='*80}")
-            print(f"  ERROR: No data returned")
+            print("  ERROR: No data returned")
     except Exception as e:
         print(f"\n{'='*80}")
         print(f"TABLE: {table}")

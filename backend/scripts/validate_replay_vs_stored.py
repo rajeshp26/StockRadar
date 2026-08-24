@@ -1,14 +1,16 @@
 """Validate replay engine vs stored snapshots across all accounts."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import logging
+from datetime import date
+
 from database import supabase
-from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from datetime import date
-import logging
+from shared.replay_engine import ReplayEngine
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 

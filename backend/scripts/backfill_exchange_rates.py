@@ -14,11 +14,11 @@ Usage:
 """
 
 import argparse
+import logging
+import math
 import sys
 from datetime import date
 from decimal import Decimal
-import math
-import logging
 
 sys.path.insert(0, ".")
 

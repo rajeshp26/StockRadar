@@ -1,14 +1,16 @@
 """Test the UI endpoint values vs replay engine values."""
-import sys, json
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import supabase
-from infrastructure.repositories.price_repository import PriceRepository
-from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from shared.replay_engine import ReplayEngine
-from infrastructure.repositories.event_store import EventStore
 from datetime import date
+
+from database import supabase
+from infrastructure.repositories.event_store import EventStore
+from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from infrastructure.repositories.price_repository import PriceRepository
+from shared.replay_engine import ReplayEngine
 
 # Get account IDs for user rajeshp01@gmail.com
 repo = PortfolioRepository()
@@ -31,7 +33,7 @@ price_repo = PriceRepository()
 prices = price_repo.get_prices_for_holdings(company_exchange_pairs)
 price_details = price_repo.get_price_details_for_holdings(company_exchange_pairs)
 
-print(f"\nPriceRepository results:")
+print("\nPriceRepository results:")
 print(f"  get_prices_for_holdings: {len(prices)} prices")
 print(f"  get_price_details_for_holdings: {len(price_details)} details")
 
@@ -68,7 +70,7 @@ for row in cmr.data or []:
     if cid and px:
         replay_prices[int(cid)] = {"price": float(px), "price_date": date(2026, 7, 7)}
 
-print(f"\n  Replay Engine comparison (Jul 7):")
+print("\n  Replay Engine comparison (Jul 7):")
 for acc in accounts:
     aid = acc["account_id"]
     snap = engine.build_snapshot_from_replay(aid, date(2026, 7, 7), replay_prices)

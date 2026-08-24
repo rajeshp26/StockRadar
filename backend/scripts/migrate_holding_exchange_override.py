@@ -10,11 +10,10 @@ Steps:
 CDR symbols (US mega-caps held as CDRs on TSX):
   AAPL, AMZN, DIS, GOOG, INTC, META, MSFT, NFLX, PYPL, TSLA
 """
-import sys
 import logging
 import re as re_module
+import sys
 from pathlib import Path
-from typing import List, Dict, Any
 
 _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
@@ -43,7 +42,7 @@ def step1_add_column():
         sql = 'ALTER TABLE portfolio_holdings ADD COLUMN exchange_override TEXT'
         supabase.rpc("exec_sql", {"sql": sql}).execute()
         logger.info("✓ exchange_override column added")
-    except Exception as e:
+    except Exception:
         logger.warning("RPC failed, trying raw SQL...")
         try:
             supabase.table("portfolio_holdings").update({"exchange_override": None}).eq("exchange_override", "__test__").execute()

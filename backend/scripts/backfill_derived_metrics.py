@@ -1,8 +1,14 @@
-import asyncio, logging, sys
+import asyncio
+import logging
+import sys
+
 sys.path.insert(0, '.')
 logging.basicConfig(level=logging.INFO)
+from application.jobs.derived_financial_metrics_job import (
+    compute_and_upsert_derived_financial_metrics,
+)
 from database import supabase
-from application.jobs.derived_financial_metrics_job import compute_and_upsert_derived_financial_metrics
+
 
 async def backfill():
     is_resp = supabase.table('income_statements').select('company_id').is_('fiscal_quarter', None).execute()

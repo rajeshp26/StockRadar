@@ -9,9 +9,10 @@ Usage:
 import json
 import os
 import sys
+
 import psycopg2
 import psycopg2.extensions
-from psycopg2.extras import execute_values, Json
+from psycopg2.extras import Json, execute_values
 
 LOCAL_DB = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 BACKUP_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "migration_baseline")
@@ -173,7 +174,7 @@ END $$;
         if result.returncode == 0:
             print("  All objects dropped")
         else:
-            print(f"  Drop completed with warnings")
+            print("  Drop completed with warnings")
     finally:
         os.unlink(tmp_path)
 
@@ -183,33 +184,33 @@ def phase2_create_schema(conn):
     print("\n--- Phase 2: Creating schema from restore_all_constraints.sql ---")
     import subprocess
     docker = r"C:\Program Files\Docker\Docker\resources\bin\docker.exe"
-    
+
     # Copy SQL file to container
     sql_in_container = "/tmp/restore_all_constraints.sql"
     subprocess.run([docker, "cp", SCHEMA_SQL, f"supabase_db_StockerPro:{sql_in_container}"], check=True)
-    
+
     # Execute via psql
     result = subprocess.run(
         [docker, "exec", "supabase_db_StockerPro", "psql", "-U", "postgres", "-d", "postgres", "-f", sql_in_container],
         capture_output=True, text=True, timeout=120
     )
-    
+
     errors = [line for line in result.stderr.split('\n') if line.strip() and 'ERROR' in line]
     notices = [line for line in result.stderr.split('\n') if line.strip() and 'NOTICE' in line]
-    
+
     if errors:
         print(f"  Schema created with {len(errors)} errors:")
         for e in errors[:10]:
             print(f"    {e[:120]}")
     else:
         print(f"  Schema created successfully ({len(notices)} notices)")
-    
+
     # Verify table count
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public'")
     table_count = cur.fetchone()[0]
     print(f"  Tables created: {table_count}")
-    
+
     if table_count < 40:
         print(f"  WARNING: Expected ~60 tables, only {table_count} found!")
 
@@ -274,7 +275,7 @@ def phase3_import_data(conn):
                 insert_sql = f"INSERT INTO {quote_ident(table_name)} ({col_names}) OVERRIDING SYSTEM VALUE VALUES %s ON CONFLICT DO NOTHING"
             else:
                 insert_sql = f"INSERT INTO {quote_ident(table_name)} ({col_names}) VALUES %s ON CONFLICT DO NOTHING"
-            
+
             try:
                 execute_values(cur, insert_sql, values, page_size=1000)
             except psycopg2.errors.ForeignKeyViolation:
@@ -386,7 +387,7 @@ def phase4_recreate_views(conn):
         if result.returncode == 0:
             print("  All 7 views created")
         else:
-            print(f"  Views created with warnings")
+            print("  Views created with warnings")
     finally:
         os.unlink(tmp_path)
 
@@ -438,7 +439,7 @@ END $$;
         if result.returncode == 0:
             print("  Permissions granted to all roles")
         else:
-            print(f"  Permissions granted with warnings")
+            print("  Permissions granted with warnings")
     finally:
         os.unlink(tmp_path)
 

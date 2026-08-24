@@ -1,12 +1,13 @@
 """Create initial_holding_set events for accounts that have holdings but no transactions (9-12)."""
-import sys
 import logging
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
-from datetime import date
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s", stream=sys.stderr)
 logger = logging.getLogger("stockerpro.scripts.backfill_initial_holdings")

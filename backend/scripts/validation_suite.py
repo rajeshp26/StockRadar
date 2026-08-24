@@ -12,17 +12,19 @@ Run AFTER making changes to verify they work:
 Each test is independent and self-contained.
 """
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
+
 logging.basicConfig(level=logging.WARNING)
 
-from datetime import date, datetime, timedelta
-from shared.time_utils import now_utc, parse_db_timestamp
-from database import supabase
-from typing import List, Optional
 import argparse
+
+from database import supabase
+from shared.time_utils import now_utc, parse_db_timestamp
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -49,7 +51,7 @@ def run_baseline():
     print("\n--- Test 1: Scheduler States ---")
     ss = supabase.table("scheduler_state").select("scheduler_name, enabled, last_planned_at, last_status").execute()
     state_names = [s["scheduler_name"] for s in (ss.data or [])]
-    
+
     for sched in ["super_investors", "market_data", "earnings", "aggregation"]:
         exists = sched in state_names
         results[f"scheduler_state_{sched}"] = exists
@@ -63,14 +65,14 @@ def run_baseline():
     print("\n--- Test 2: Companies Without Financial Data ---")
     test_results = _get_companies_without_financials()
     results["missing_financials_count"] = len(test_results)
-    test(f"Active companies without financials", len(test_results) > 0, f"Count: {len(test_results)}")
+    test("Active companies without financials", len(test_results) > 0, f"Count: {len(test_results)}")
     for c in test_results[:10]:
         print(f"         {c['ticker_symbol']:10s} ({c.get('security_type','?')})")
 
     # --- 3. Companies Missing Earnings Dates ---
     print("\n--- Test 3: Companies Missing Earnings Dates ---")
     results["missing_earnings_dates"] = _get_missing_earnings_dates()
-    test(f"Active companies missing earnings dates", len(results["missing_earnings_dates"]) > 0, f"Count: {len(results['missing_earnings_dates'])}")
+    test("Active companies missing earnings dates", len(results["missing_earnings_dates"]) > 0, f"Count: {len(results['missing_earnings_dates'])}")
     for c in results["missing_earnings_dates"][:10]:
         print(f"         {c['ticker_symbol']:10s} ({c.get('security_type','?')})")
 
@@ -84,7 +86,7 @@ def run_baseline():
             if lp < "2024-01-01":
                 stale_investors.append(inv["investor_name"])
     results["stale_investors"] = len(stale_investors)
-    test(f"Super investors with pre-2024 data", len(stale_investors) > 0, f"Count: {len(stale_investors)}")
+    test("Super investors with pre-2024 data", len(stale_investors) > 0, f"Count: {len(stale_investors)}")
     for name in stale_investors:
         print(f"         {name}")
 
@@ -100,20 +102,20 @@ def run_baseline():
             if exp_dt < now:
                 stale_lock_count += 1
     results["stale_locks"] = stale_lock_count
-    test(f"Stale scheduler locks detected", stale_lock_count > 0, f"Count: {stale_lock_count}")
+    test("Stale scheduler locks detected", stale_lock_count > 0, f"Count: {stale_lock_count}")
 
     # --- 6. Zombie Heartbeats ---
     print("\n--- Test 6: Zombie Worker Heartbeats ---")
     hb = supabase.table("worker_heartbeats").select("worker_id, hostname, last_hb_at, active_jobs").execute()
     zombie_count = sum(1 for w in (hb.data or []) if w.get("hostname") == "shutdown")
     results["zombie_heartbeats"] = zombie_count
-    test(f"Zombie worker heartbeats (hostname=shutdown)", zombie_count > 0, f"Count: {zombie_count}")
+    test("Zombie worker heartbeats (hostname=shutdown)", zombie_count > 0, f"Count: {zombie_count}")
 
     # --- 7. Dead Letter Jobs ---
     print("\n--- Test 7: Dead Letter Jobs ---")
     dl = supabase.table("jobs").select("id, job_type, resource_id, last_error").eq("status", "dead_letter").execute()
     results["dead_letter_count"] = len(dl.data or [])
-    test(f"Dead letter jobs", len(dl.data or []) > 0, f"Count: {len(dl.data or [])}")
+    test("Dead letter jobs", len(dl.data or []) > 0, f"Count: {len(dl.data or [])}")
     for j in (dl.data or []):
         print(f"         type={j['job_type']} resource={j.get('resource_id')} error={str(j.get('last_error',''))[:80]}")
 
@@ -152,7 +154,7 @@ def run_verify():
         s = ss.data[0]
         all_pass &= test("super_investors has state row", True, f"enabled={s.get('enabled')} last_status={s.get('last_status','?')} next_due={str(s.get('next_due_at',''))[:19]}")
         all_pass &= test("super_investors is enabled", s.get("enabled", False) == True)
-        
+
         # Check jobs were enqueued
         jc = supabase.table("jobs").select("id", count="exact").eq("job_type", "investor_refresh").gte("created_at", "2026-06-21").execute()
         all_pass &= test("investor_refresh jobs created", (jc.count or 0) > 0, f"Count: {jc.count}")
@@ -164,11 +166,11 @@ def run_verify():
     print("\n--- Verify 2: Backlog Processing ---")
     backlog = _get_companies_without_financials(limit=50)
     print(f"  Companies needing bootstrap: {len(backlog)}")
-    
+
     # If we have ETF entries without financials, that's expected -- they should be filtered
     etfs_in_backlog = [c for c in backlog if c.get("security_type") in ("etf", "index", "mutual_fund")]
     test("ETFs are filtered from financial backlog", len(etfs_in_backlog) == 0, f"ETFs in backlog: {len(etfs_in_backlog)}")
-    
+
     # The real test: verify that the market_data scheduler includes 'financials' scope for backlog companies
     print("  Manual check: Verify market_data scheduler plan() adds 'financials' scope for backlog companies")
 
@@ -176,19 +178,19 @@ def run_verify():
     print("\n--- Verify 3: Earnings Date Sync ---")
     missing_dates = _get_missing_earnings_dates()
     total_missing = len(missing_dates)
-    
+
     # Count how many are stocks (vs ETFs)
     stock_missing = [c for c in missing_dates if c.get("security_type") in ("stock", None)]
     etf_missing = [c for c in missing_dates if c.get("security_type") not in ("stock", None)]
-    
+
     all_pass &= test("Earnings sync prioritizes NULL dates", len(missing_dates) == len(etf_missing) + len(stock_missing))
-    
+
     if etf_missing:
-        all_pass &= test("ETFs can be excluded from earnings date fetch", False, 
+        all_pass &= test("ETFs can be excluded from earnings date fetch", False,
                         f"{len(etf_missing)} ETFs/indexes should not need earnings dates")
         for c in etf_missing:
             print(f"  ETF w/out earnings date: {c['ticker_symbol']}")
-    
+
     if stock_missing:
         print(f"  {len(stock_missing)} stock(s) still missing earnings dates -- these will be picked up by sync")
         for c in stock_missing[:5]:
@@ -206,7 +208,7 @@ def run_verify():
             exp_dt = parse_db_timestamp(exp) if isinstance(exp, str) else exp
             if exp_dt < now:
                 stale_count += 1
-                
+
     all_pass &= test("No stale scheduler locks remain", stale_count == 0, f"Stale locks remaining: {stale_count}")
     if stale_count > 0:
         for lk in (locks.data or []):
@@ -229,9 +231,9 @@ def run_verify():
         # Check if any have been re-queued (available_at in future)
         now = now_utc()
         requeued = [j for j in dl.data if j.get("available_at") and parse_db_timestamp(j["available_at"]) > now]
-        test("Dead letter jobs have re-queue schedule", len(requeued) > 0 or len(dl.data) < 5, 
+        test("Dead letter jobs have re-queue schedule", len(requeued) > 0 or len(dl.data) < 5,
              f"Dead letters: {len(dl.data)}, Re-queued: {len(requeued)}")
-        
+
         # Check for increased max_attempts
         adjusted = [j for j in dl.data if j.get("max_attempts", 0) > 3]
         if adjusted:
@@ -255,7 +257,7 @@ def run_verify():
     return all_pass
 
 
-def _get_companies_without_financials(limit: int = 50) -> List[dict]:
+def _get_companies_without_financials(limit: int = 50) -> list[dict]:
     """Simulate the proposed get_companies_without_financials() query."""
     try:
         # Get active company IDs
@@ -281,7 +283,7 @@ def _get_companies_without_financials(limit: int = 50) -> List[dict]:
         ).in_("company_id", list(active_ids)).execute()
 
         result.data.sort(key=lambda x: x.get("security_type", "") == "stock", reverse=True)
-        
+
         without_financials = []
         for c in result.data:
             cid = c["company_id"]
@@ -297,7 +299,7 @@ def _get_companies_without_financials(limit: int = 50) -> List[dict]:
         return []
 
 
-def _get_missing_earnings_dates() -> List[dict]:
+def _get_missing_earnings_dates() -> list[dict]:
     """Get all active companies with NULL next_earnings_date."""
     try:
         active_ids = set()

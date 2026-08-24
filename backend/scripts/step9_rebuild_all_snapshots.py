@@ -5,7 +5,7 @@ Optimized: single incremental pass per account, batched writes.
 WARNING: This script deletes ALL existing snapshots and rebuilds from scratch.
 It should ONLY be run in development/staging environments.
 """
-import os, sys; sys.path.insert(0, '.'); sys.path.insert(0, 'backend')
+import os; import sys; sys.path.insert(0, '.'); sys.path.insert(0, 'backend')
 
 _env = os.environ.get("ENVIRONMENT", "development").lower()
 if _env == "production":
@@ -13,17 +13,17 @@ if _env == "production":
     print("Use the daily snapshot job (compute_daily_snapshots) instead.")
     sys.exit(1)
 
-import json, logging, time
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+import logging
+import time
 from collections import defaultdict
-from typing import Dict, Optional
+from datetime import date, datetime
+
 from database import supabase
 
 logger = logging.getLogger("rebuild")
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from shared.replay_engine import ReplayEngine, AccountState
+from shared.replay_engine import AccountState, ReplayEngine
 from shared.snapshot_builder import build_snapshot_row
 
 event_store = EventStore()
@@ -77,6 +77,7 @@ for aid in AIDS:
 
 # Add month-end anchors
 import calendar
+
 for d_str in list(all_dates_set):
     dt = date.fromisoformat(d_str)
     all_dates_set.add(dt.replace(day=1).isoformat())
@@ -135,7 +136,7 @@ if cids:
 print()
 
 # ── Load exchange_override for CDR holdings (from portfolio_holdings) ──
-exchange_overrides: Dict[int, Dict[int, Optional[str]]] = {}
+exchange_overrides: dict[int, dict[int, str | None]] = {}
 for aid in AIDS:
     try:
         rows = supabase.table('portfolio_holdings').select('company_id, exchange_override').eq('account_id', aid).execute()
@@ -160,10 +161,10 @@ print("Old snapshots deleted.\n")
 for aid in AIDS:
     t0 = time.time()
     print(f"Processing account {aid}...")
-    
+
     state = AccountState(account_id=aid)
     snap_batch = []
-    
+
     # Group events by their effective date
     events_by_date = defaultdict(list)
     for ev in all_events_by_acct[aid]:
@@ -173,21 +174,21 @@ for aid in AIDS:
         else:
             created = ev.get("created_at", "")
             events_by_date[str(created)[:10] if created else "2000-01-01"].append(ev)
-    
+
     for sd in all_dates:
         target_date = date.fromisoformat(sd)
-        
+
         # Apply all events with this date
         for ev in events_by_date.get(sd, []):
             handler_name = f"_handle_{ev.get('event_type', '')}"
             handler = getattr(replay_engine, handler_name, None)
             if handler:
                 handler(state, ev)
-        
+
         # Skip if no activity
         if not state.holdings and float(state.cash_balance) == 0 and float(state.net_deposits) == 0:
             continue
-        
+
         # Build holdings list (include exchange_override for CDR pricing)
         acct_overrides = exchange_overrides.get(aid, {})
         holdings_state = []
@@ -205,7 +206,7 @@ for aid in AIDS:
                            'date': l['date'].isoformat() if hasattr(l.get('date'), 'isoformat') else str(l.get('date', '')) if l.get('date') else None}
                           for l in h.lots] if h.lots else None,
             })
-        
+
         try:
             # Pass empty prices_by_company so Tier 1 (current prices) never fires.
             # All snapshots use Tier 2 forward-fill from price_history, falling to
@@ -227,7 +228,7 @@ for aid in AIDS:
         except Exception as e:
             print(f"  ERROR building snapshot {aid} {sd}: {e}")
             continue
-        
+
         db_row = {
             'account_id': aid,
             'snapshot_date': sd,
@@ -242,7 +243,7 @@ for aid in AIDS:
         }
         snap_batch.append(db_row)
         total_acct_rows[aid] += 1
-        
+
         if len(snap_batch) >= MAX_BATCH:
             try:
                 supabase.table('portfolio_snapshots').insert(snap_batch).execute()
@@ -253,7 +254,7 @@ for aid in AIDS:
                     except: pass
             total_written += len(snap_batch)
             snap_batch = []
-    
+
     # Flush remaining
     if snap_batch:
         try:
@@ -261,7 +262,7 @@ for aid in AIDS:
         except Exception as e:
             print(f"  ERROR writing final batch: {e}")
         total_written += len(snap_batch)
-    
+
     elapsed = time.time() - t0
     print(f"  Account {aid}: {total_acct_rows[aid]} snapshots in {elapsed:.1f}s")
 
@@ -303,6 +304,7 @@ for aid in AIDS:
 
 # Period definitions
 from datetime import datetime as dt_mod
+
 periods = {
     'ALL': dt_mod(2020,1,1), 'YTD': dt_mod(2026,1,1), '1Y': dt_mod(2025,7,7),
     '3M': dt_mod(2026,4,7), '1M': dt_mod(2026,6,7), '1W': dt_mod(2026,6,30),

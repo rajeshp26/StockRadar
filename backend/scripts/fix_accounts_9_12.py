@@ -1,6 +1,7 @@
 """Replace partial transaction_imported events with initial_holding_set for accounts 9-12."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import supabase

@@ -26,13 +26,13 @@ _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
-from database import supabase
-from config import settings
-from shared.time_utils import now_utc
-from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
 from application.jobs.portfolio_snapshot_job import _fill_snapshot_gaps
+from config import settings
+from database import supabase
+from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from shared.time_utils import now_utc
 
 logging.basicConfig(
     level=logging.INFO,

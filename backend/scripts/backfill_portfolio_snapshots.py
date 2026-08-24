@@ -11,9 +11,9 @@ WARNING: In production, the daily snapshot job handles gap-filling automatically
 This script should only be used for initial setup or one-time repairs in dev/staging.
 """
 
-import os
 import argparse
 import logging
+import os
 
 _env = os.environ.get("ENVIRONMENT", "development").lower()
 if _env == "production":
@@ -26,25 +26,27 @@ import sys
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from shared.time_utils import now_utc
-from shared.snapshot_builder import (
-    build_snapshot_row, _classify_lot_action, resolve_price_forward_filled
-)
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from shared.snapshot_builder import (
+    _classify_lot_action,
+    build_snapshot_row,
+    resolve_price_forward_filled,
+)
+from shared.time_utils import now_utc
 
 logger = logging.getLogger("stockerpro.portfolio.backfill")
 
 
 def reconstruct_holdings_at_date(
-    account_ids: List[int],
+    account_ids: list[int],
     target_date: date,
-    all_txns: List[Dict[str, Any]],
-    price_map: Dict[int, List[tuple]],
-) -> List[Dict[str, Any]]:
-    lots: Dict[tuple, list] = defaultdict(list)
+    all_txns: list[dict[str, Any]],
+    price_map: dict[int, list[tuple]],
+) -> list[dict[str, Any]]:
+    lots: dict[tuple, list] = defaultdict(list)
 
     relevant = [
         t for t in all_txns
@@ -114,7 +116,7 @@ def reconstruct_holdings_at_date(
     return holdings_state
 
 
-def find_corrupted_snapshots() -> List[Dict[str, Any]]:
+def find_corrupted_snapshots() -> list[dict[str, Any]]:
     """Detect snapshots where cost_basis=0 but holdings_json shows non-zero quantities.
     
     These were created by the snapshot job before the key-name fix
@@ -123,8 +125,8 @@ def find_corrupted_snapshots() -> List[Dict[str, Any]]:
     repo = PortfolioRepository()
     accounts = repo.get_user_accounts_all()
     snapshots_repo = PortfolioSnapshotsRepository()
-    corrupt: List[Dict[str, Any]] = []
-    
+    corrupt: list[dict[str, Any]] = []
+
     for acct in accounts:
         all_snaps = snapshots_repo.get_account_snapshots(acct["account_id"])
         for s in all_snaps:
@@ -139,7 +141,7 @@ def find_corrupted_snapshots() -> List[Dict[str, Any]]:
             )
             if has_nonzero_qty:
                 corrupt.append(s)
-    
+
     return corrupt
 
 
@@ -149,11 +151,11 @@ def repair_corrupted_snapshots(dry_run: bool = False) -> int:
     if not corrupt:
         logger.info("No corrupted snapshots found")
         return 0
-    
+
     logger.warning(f"Found {len(corrupt)} corrupted snapshots to repair")
     portfolio_repo = PortfolioRepository()
     snapshots_repo = PortfolioSnapshotsRepository()
-    
+
     repaired = 0
     for s in corrupt:
         account_id = s["account_id"]
@@ -162,15 +164,15 @@ def repair_corrupted_snapshots(dry_run: bool = False) -> int:
             sd = date.fromisoformat(snapshot_date)
         else:
             sd = snapshot_date
-        
+
         logger.info(f"Repairing account {account_id} snapshot on {sd}")
-        
+
         company_ids = [
             h["company_id"] for h in (s.get("holdings_json") or [])
             if h.get("company_id")
         ]
         price_map = portfolio_repo.get_all_prices_historical(company_ids, sd)
-        
+
         all_txns = portfolio_repo.get_accounts_transactions(
             [account_id], activity_types=["Trade"]
         )
@@ -180,22 +182,22 @@ def repair_corrupted_snapshots(dry_run: bool = False) -> int:
                 t["transaction_date"] = date.fromisoformat(d)
             elif isinstance(d, datetime):
                 t["transaction_date"] = d.date()
-        
+
         holdings_state = reconstruct_holdings_at_date(
             [account_id], sd, all_txns, price_map
         )
         cash_balance = portfolio_repo.get_cash_balance(account_id, sd)
         net_deposits = portfolio_repo.get_net_deposits(account_id, sd)
-        
-        prices_by_company: Dict[int, Dict] = {}
+
+        prices_by_company: dict[int, dict] = {}
         for cid in company_ids:
             result = resolve_price_forward_filled(cid, sd, price_map)
             if result:
                 prices_by_company[cid] = result
-        
+
         account_info = portfolio_repo.get_account_by_id(account_id)
         account_currency = (account_info or {}).get("currency", "CAD")
-        
+
         corrected = build_snapshot_row(
             account_id=account_id,
             snapshot_date=sd,
@@ -209,13 +211,13 @@ def repair_corrupted_snapshots(dry_run: bool = False) -> int:
         if not dry_run:
             snapshots_repo.upsert_snapshot(corrected)
         repaired += 1
-    
+
     logger.info(f"Repaired {repaired} corrupted snapshots" +
                 (" (dry run)" if dry_run else ""))
     return repaired
 
 
-def _compute_symbol_company_map(account_ids: List[int]) -> Tuple[set, List[int]]:
+def _compute_symbol_company_map(account_ids: list[int]) -> tuple[set, list[int]]:
     repo = PortfolioRepository()
     symbols_seen: set = set()
     company_ids: set = set()
@@ -271,7 +273,7 @@ def backfill_account(account_id: int, force: bool = False, validate_only: bool =
         cash_balance = portfolio_repo.get_cash_balance(account_id, d)
         net_deposits = portfolio_repo.get_net_deposits(account_id, d)
 
-        prices_by_company: Dict[int, Dict] = {}
+        prices_by_company: dict[int, dict] = {}
         for cid in company_ids:
             result = resolve_price_forward_filled(cid, d, price_map)
             if result:
@@ -328,9 +330,9 @@ def backfill_account(account_id: int, force: bool = False, validate_only: bool =
     logger.info(f"Backfilled account {account_id}: {written} snapshots from {earliest} to {today}")
 
 
-def _detect_bug_types(stored: dict, recomputed: dict) -> List[str]:
+def _detect_bug_types(stored: dict, recomputed: dict) -> list[str]:
     """Compare stored vs recomputed snapshot. Returns list of bug type labels."""
-    bugs: List[str] = []
+    bugs: list[str] = []
 
     # Type 1: cost_basis=0 with non-zero holdings
     if (stored.get("cost_basis", 0) == 0
@@ -359,8 +361,8 @@ def _detect_bug_types(stored: dict, recomputed: dict) -> List[str]:
 
 def repair_all_snapshots(
     dry_run: bool = False,
-    max_accounts: Optional[int] = None,
-) -> Dict[str, Any]:
+    max_accounts: int | None = None,
+) -> dict[str, Any]:
     """Scan ALL historical snapshots, recompute with fixed builder, classify bugs, repair.
 
     Returns summary dict with counts per bug type.
@@ -372,7 +374,7 @@ def repair_all_snapshots(
     if max_accounts is not None:
         accounts = accounts[:max_accounts]
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "accounts_scanned": 0,
         "snapshots_scanned": 0,
         "snapshots_repaired": 0,
@@ -396,7 +398,7 @@ def repair_all_snapshots(
             continue
 
         # Gather data needed for recompute
-        company_ids: List[int] = []
+        company_ids: list[int] = []
         for s in all_snaps:
             hj = s.get("holdings_json") or []
             for h in hj:
@@ -434,7 +436,7 @@ def repair_all_snapshots(
                 cash_balance = portfolio_repo.get_cash_balance(account_id, sd)
                 net_deposits = portfolio_repo.get_net_deposits(account_id, sd)
 
-                prices_by_company: Dict[int, Dict] = {}
+                prices_by_company: dict[int, dict] = {}
                 for cid in company_ids:
                     result = resolve_price_forward_filled(cid, sd, price_map)
                     if result:

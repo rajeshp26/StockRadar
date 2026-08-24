@@ -2,8 +2,10 @@
 
 WARNING: This script overwrites today's snapshots. Use only in development/staging.
 """
-import os, sys
+import os
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _env = os.environ.get("ENVIRONMENT", "development").lower()
@@ -13,10 +15,11 @@ if _env == "production":
     sys.exit(1)
 
 from datetime import date
+
 from database import supabase
-from shared.replay_engine import ReplayEngine
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.price_repository import PriceRepository
+from shared.replay_engine import ReplayEngine
 
 engine = ReplayEngine(EventStore())
 
@@ -40,7 +43,7 @@ for aid in [7, 8, 9, 10, 11, 12]:
     ca = snap["cash_balance"]
     qf = snap["data_quality_flag"]
     print(f"  Account {aid}: total=${sv:,.2f} market=${mv:,.2f} cost=${cb:,.2f} cash=${ca:,.2f} quality={qf}")
-    
+
     supabase.table("portfolio_snapshots").upsert({
         "account_id": aid,
         "snapshot_date": today.isoformat(),

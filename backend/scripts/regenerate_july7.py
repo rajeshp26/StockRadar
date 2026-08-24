@@ -1,12 +1,14 @@
 """Update July 7 snapshots with current_market_data prices (matching June 23-July 6)."""
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from shared.replay_engine import ReplayEngine
-from infrastructure.repositories.event_store import EventStore
-from database import supabase
 from datetime import date
+
+from database import supabase
+from infrastructure.repositories.event_store import EventStore
+from shared.replay_engine import ReplayEngine
 
 # Same price source as regenerate_historical_snapshots.py
 cmr = supabase.table("current_market_data").select("company_id, current_price").execute()

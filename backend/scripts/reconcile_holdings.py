@@ -11,12 +11,11 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import date, datetime
-from typing import List, Tuple
+from datetime import date
 
-from shared.time_utils import now_utc
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from shared.time_utils import now_utc
 
 logger = logging.getLogger("stockerpro.portfolio.reconciliation")
 
@@ -25,7 +24,7 @@ def reconcile_holdings(
     account_id: int,
     quantity_tolerance: float = 0.0001,
     pct_tolerance: float = 0.1,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     today = now_utc().date()
     snapshots_repo = PortfolioSnapshotsRepository()
     portfolio_repo = PortfolioRepository()
@@ -44,7 +43,7 @@ def reconcile_holdings(
     current = {h["company_id"]: h for h in portfolio_repo.get_holdings(account_id)}
 
     all_ids = set(corrected.keys()) | set(current.keys())
-    issues: List[str] = []
+    issues: list[str] = []
     passes = True
 
     for cid in all_ids:

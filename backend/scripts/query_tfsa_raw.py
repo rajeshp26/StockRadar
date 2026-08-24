@@ -1,11 +1,14 @@
 """Query TFSA (5ZHK5CAD) - raw snapshots + net deposits, no simulation."""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
+
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
-from supabase import create_client
 from decimal import Decimal
-import json
+
+from supabase import create_client
 
 client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
 
