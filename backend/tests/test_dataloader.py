@@ -1,6 +1,6 @@
 import asyncio
+
 import pytest
-from typing import Optional
 
 from utils.dataloader import DataLoader
 

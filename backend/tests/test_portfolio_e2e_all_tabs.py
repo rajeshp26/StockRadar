@@ -12,51 +12,106 @@ Run:
     pytest tests/test_portfolio_e2e_all_tabs.py -v -s
 """
 
-import asyncio
 import logging
-import sys
 import os
+import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-# Patch database AND settings BEFORE any app imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-db_patcher = patch('database.supabase')
-db_patcher.start()
-s_patcher = patch('config.settings')
-mock_settings = s_patcher.start()
-mock_settings.ENABLE_PORTFOLIO_DASHBOARD = True
-mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = False
-mock_settings.ENABLE_FX_CONVERSION = False
-mock_settings.ENABLE_PERFORMANCE_LOCF = True
-mock_settings.PORTFOLIO_SNAPSHOT_FALLBACK_ENABLED = True
-
-from application.services.portfolio_service import PortfolioService
-
-# Patch now_utc in all service modules that imported it
-now_patch = patch('application.services.portfolio_service.now_utc')
-mock_now = now_patch.start()
-mock_now.return_value = datetime(2026, 6, 24, 12, 0, 0)
-
-# Also patch in other service modules
-patch('application.services.dividend_dashboard_service.now_utc', return_value=datetime(2026, 6, 24, 12, 0, 0)).start()
-patch('application.services.portfolio_risk_service.now_utc', return_value=datetime(2026, 6, 24, 12, 0, 0)).start()
-from application.services.dividend_dashboard_service import DividendDashboardService
-from application.services.portfolio_risk_service import PortfolioRiskService
 from schemas_portfolio import (
-    PortfolioDashboardResponse, PortfolioOverviewResponse,
-    PerformanceResponse, PortfolioAllocationResponse,
-    RiskMetricsResponse, DrawdownResponse,
-    EfficientFrontierResponse, RiskContributionResponse, FactorExposureResponse,
     CovarianceResponse,
-    PortfolioDividendSummary, PortfolioDividendHoldingDetail,
-    DashboardAccount, DashboardOverview, DashboardHolding,
+    DashboardAccount,
+    DashboardHolding,
+    DashboardOverview,
+    DrawdownResponse,
+    EfficientFrontierResponse,
+    PerformanceResponse,
+    PortfolioAllocationResponse,
+    PortfolioDashboardResponse,
+    PortfolioDividendHoldingDetail,
+    PortfolioDividendSummary,
+    PortfolioOverviewResponse,
+    RiskContributionResponse,
+    RiskMetricsResponse,
 )
+
+# Static-analysis placeholders. Real classes are bound by _start_app_patches()
+# AFTER database/config patches are active; do not use these directly.
+DividendDashboardService = None
+PortfolioRiskService = None
+PortfolioService = None
+
+# ---------------------------------------------------------------------------
+# Patch database AND settings BEFORE app modules are imported. This used to run
+# at module scope and leaked MagicMock(config.settings) into every later test
+# module in the same pytest process (broke collection of anything importing
+# main). Now scoped: started by an autouse module fixture, stopped afterwards.
+# ---------------------------------------------------------------------------
+
+_ACTIVE_PATCHERS = []
+
+
+def _start_app_patches():
+    db_patcher = patch('database.supabase')
+    db_patcher.start()
+    s_patcher = patch('config.settings')
+    mock_settings = s_patcher.start()
+    mock_settings.ENABLE_PORTFOLIO_DASHBOARD = True
+    mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = False
+    mock_settings.ENABLE_FX_CONVERSION = False
+    mock_settings.ENABLE_PERFORMANCE_LOCF = True
+    mock_settings.PORTFOLIO_SNAPSHOT_FALLBACK_ENABLED = True
+
+    # Import AFTER the patches so these modules bind the mocked objects.
+    from application.services.dividend_dashboard_service import DividendDashboardService
+    from application.services.portfolio_risk_service import PortfolioRiskService
+    from application.services.portfolio_service import PortfolioService
+
+    now_patch = patch('application.services.portfolio_service.now_utc')
+    mock_now = now_patch.start()
+    mock_now.return_value = datetime(2026, 6, 24, 12, 0, 0)
+
+    dd_now_patch = patch('application.services.dividend_dashboard_service.now_utc',
+                         return_value=datetime(2026, 6, 24, 12, 0, 0))
+    dd_now_patch.start()
+    pr_now_patch = patch('application.services.portfolio_risk_service.now_utc',
+                         return_value=datetime(2026, 6, 24, 12, 0, 0))
+    pr_now_patch.start()
+
+    enrich_patcher = patch.object(PortfolioService, '_enrich_holdings', new=_mock_enrich)
+    enrich_patcher.start()
+
+    globals().update(
+        PortfolioService=PortfolioService,
+        DividendDashboardService=DividendDashboardService,
+        PortfolioRiskService=PortfolioRiskService,
+        CovarianceResponse=CovarianceResponse,
+        DashboardAccount=DashboardAccount,
+        DashboardHolding=DashboardHolding,
+        DashboardOverview=DashboardOverview,
+        DrawdownResponse=DrawdownResponse,
+        EfficientFrontierResponse=EfficientFrontierResponse,
+        PerformanceResponse=PerformanceResponse,
+        PortfolioAllocationResponse=PortfolioAllocationResponse,
+        PortfolioDashboardResponse=PortfolioDashboardResponse,
+        PortfolioDividendHoldingDetail=PortfolioDividendHoldingDetail,
+        PortfolioDividendSummary=PortfolioDividendSummary,
+        PortfolioOverviewResponse=PortfolioOverviewResponse,
+        RiskContributionResponse=RiskContributionResponse,
+        RiskMetricsResponse=RiskMetricsResponse,
+        mock_now=mock_now,
+    )
+    _ACTIVE_PATCHERS.extend([db_patcher, s_patcher, now_patch, dd_now_patch, pr_now_patch, enrich_patcher])
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _patched_app_env():
+    _start_app_patches()
+    yield
+    for _p in reversed(_ACTIVE_PATCHERS):
+        _p.stop()
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
@@ -353,7 +408,7 @@ PRICE_HISTORY = build_price_history()
 
 # ── Cash / Net deposits computations ──────────────────────────────────────
 
-def compute_cash_balance(at_date: date, account_ids: List[int]) -> Dict[int, float]:
+def compute_cash_balance(at_date: date, account_ids: list[int]) -> dict[int, float]:
     """Compute cash balance for each account at a given date."""
     cash = {aid: 0.0 for aid in account_ids}
     for t in ALL_TXNS:
@@ -367,7 +422,7 @@ def compute_cash_balance(at_date: date, account_ids: List[int]) -> Dict[int, flo
     return cash
 
 
-def compute_net_deposits(at_date: date, account_ids: List[int]) -> Dict[int, float]:
+def compute_net_deposits(at_date: date, account_ids: list[int]) -> dict[int, float]:
     """Compute net deposits for each account at a given date."""
     nd = {aid: 0.0 for aid in account_ids}
     for t in ALL_TXNS:
@@ -450,11 +505,7 @@ async def _mock_enrich(self, holdings):
         for h in holdings
     ]
 
-_enrich_patcher = patch.object(
-    PortfolioService, '_enrich_holdings',
-    new=_mock_enrich,
-)
-_enrich_patcher.start()
+
 
 
 def _dividend_row(symbol, pay_date, amount):
@@ -852,7 +903,7 @@ class TestTab3_Holdings:
         assert "TSLA" not in held
         assert "GOOGL" in held
         assert "XOM" in held
-        print(f"  [OK] Exists: AAPL=True, GOOGL=True, XOM=True, TSLA=False")
+        print("  [OK] Exists: AAPL=True, GOOGL=True, XOM=True, TSLA=False")
 
 
 # ============================================================================

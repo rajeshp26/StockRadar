@@ -13,10 +13,9 @@ No external API calls are made — all provider and repository calls are mocked.
 """
 
 import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import List, Optional
+from unittest.mock import AsyncMock
 
+import pytest
 
 # =============================================================================
 # 1. Core model & prompt integration
@@ -26,7 +25,7 @@ class TestCoreIntegration:
 
     def test_chat_message_to_provider_format(self):
         """ChatMessage model_dump() produces the dict the provider expects."""
-        from application.services.prompts.chat_prompt import ChatMessage, ChatRequest
+        from application.services.prompts.chat_prompt import ChatMessage
 
         msg = ChatMessage(role="user", content="What is the P/E?")
         dumped = msg.model_dump()
@@ -90,7 +89,7 @@ class TestCoreIntegration:
 class MockStreamReader:
     """Simulates a ReadableStreamDefaultReader for SSE data chunks."""
 
-    def __init__(self, chunks: List[bytes]):
+    def __init__(self, chunks: list[bytes]):
         self._chunks = list(chunks)
         self._idx = 0
 
@@ -102,7 +101,7 @@ class MockStreamReader:
         return {"done": False, "value": chunk}
 
 
-def parse_sse_stream(chunks: List[bytes]) -> dict:
+def parse_sse_stream(chunks: list[bytes]) -> dict:
     """
     Simulates the SSE parsing logic from the frontend use-chat.ts hook.
 
@@ -111,7 +110,7 @@ def parse_sse_stream(chunks: List[bytes]) -> dict:
         errors: list of error strings
     """
     accumulated = ""
-    errors: List[str] = []
+    errors: list[str] = []
     buffer = ""
     decoder = json.JSONDecoder()
 
@@ -218,7 +217,7 @@ class TestFrontendMessageFlow:
         should NOT append an assistant message to the conversation history.
         """
         accumulated = ""
-        messages: List[dict] = [{"role": "user", "content": "Hi"}]
+        messages: list[dict] = [{"role": "user", "content": "Hi"}]
 
         # Simulate SSE: only done, no tokens
         chunks = [b'data: {"done":true}\n\n']
@@ -236,7 +235,7 @@ class TestFrontendMessageFlow:
         Normal flow: tokens accumulated, then done → assistant message appended.
         """
         accumulated = ""
-        messages: List[dict] = [{"role": "user", "content": "Hi"}]
+        messages: list[dict] = [{"role": "user", "content": "Hi"}]
 
         chunks = [
             b'data: {"token":"Hello"}\n\n',
@@ -258,7 +257,7 @@ class TestFrontendMessageFlow:
         2. Second user message is sent without empty assistant in history
         3. Next AI response is processed correctly
         """
-        messages: List[dict] = []
+        messages: list[dict] = []
 
         # --- Turn 1: user sends "Hi" ---
         messages.append({"role": "user", "content": "Hi"})
@@ -287,7 +286,7 @@ class TestFrontendMessageFlow:
 
     def test_conversation_continues_after_error(self):
         """After an error event, subsequent messages still work."""
-        messages: List[dict] = []
+        messages: list[dict] = []
 
         # --- Turn 1: error ---
         messages.append({"role": "user", "content": "Hi"})
@@ -315,9 +314,11 @@ class TestEndpointIntegration:
     @pytest.mark.asyncio
     async def test_chat_endpoint_lifecycle(self):
         """Full lifecycle: validate → build context → stream → parse SSE."""
-        from fastapi.responses import StreamingResponse
-        from starlette.requests import Request
-        from application.services.prompts.chat_prompt import ChatRequest, ChatMessage, build_chat_system_prompt
+        from application.services.prompts.chat_prompt import (
+            ChatMessage,
+            ChatRequest,
+            build_chat_system_prompt,
+        )
 
         # 1. Build a valid request
         body = ChatRequest(messages=[

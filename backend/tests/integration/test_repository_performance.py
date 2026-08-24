@@ -1,7 +1,7 @@
 """Integration tests for repository batch performance."""
 
 from unittest import mock
-import pytest
+
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 
 

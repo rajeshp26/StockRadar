@@ -12,10 +12,9 @@ _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional
 
 
 @pytest.fixture
@@ -149,3 +148,9 @@ def sample_tenk_text():
     R&D spending increased as the company invests in proprietary technology.
     Customer retention rates remain above 90%.
     """
+
+# Merged from the former tests/backend/conftest.py during test-tree consolidation.
+os.environ.setdefault("FIREBASE_ADMIN_CLIENT_EMAIL", "test@test.iam.gserviceaccount.com")
+os.environ.setdefault("FIREBASE_ADMIN_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nMOCK\n-----END PRIVATE KEY-----")
+import warnings as _warnings
+_warnings.filterwarnings("ignore", category=DeprecationWarning)

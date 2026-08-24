@@ -26,9 +26,10 @@ REGRESSION TESTS ADDED:
   - test_gain_loss_partial_sell_varying_cost_basis: Same for sell scenario.
   - test_zero_cumulative_invested_dividend_pct: Asserts 0% when denominator is 0.
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import date
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from application.services.portfolio_service import PortfolioService
 
@@ -651,8 +652,9 @@ class TestFlattenJoins:
     objects to top-level fields, matching the real PostgREST wire format."""
 
     def test_flattens_nested_account_fields(self):
-        from infrastructure.repositories.portfolio_repository import PortfolioRepository
         from unittest.mock import MagicMock
+
+        from infrastructure.repositories.portfolio_repository import PortfolioRepository
 
         repo = PortfolioRepository(client=MagicMock())
         nested = [
@@ -685,8 +687,9 @@ class TestFlattenJoins:
 
     def test_skips_non_dict_join_values(self):
         """If the join value is None or a scalar, it should be skipped."""
-        from infrastructure.repositories.portfolio_repository import PortfolioRepository
         from unittest.mock import MagicMock
+
+        from infrastructure.repositories.portfolio_repository import PortfolioRepository
 
         repo = PortfolioRepository(client=MagicMock())
         nested = [
@@ -706,8 +709,9 @@ class TestFlattenJoins:
 
     def test_preserves_existing_top_level_fields(self):
         """Top-level fields should not be overwritten by nested join fields."""
-        from infrastructure.repositories.portfolio_repository import PortfolioRepository
         from unittest.mock import MagicMock
+
+        from infrastructure.repositories.portfolio_repository import PortfolioRepository
 
         repo = PortfolioRepository(client=MagicMock())
         nested = [
@@ -732,8 +736,9 @@ class TestGetUserAllHoldingsPipeline:
     to produce flat account_name/account_type on every holding."""
 
     async def test_account_fields_are_flat_after_full_pipeline(self):
-        from infrastructure.repositories.portfolio_repository import PortfolioRepository
         from unittest.mock import MagicMock
+
+        from infrastructure.repositories.portfolio_repository import PortfolioRepository
 
         mock_client = MagicMock()
         repo = PortfolioRepository(client=mock_client)

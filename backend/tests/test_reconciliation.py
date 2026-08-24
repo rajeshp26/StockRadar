@@ -4,12 +4,11 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from shared.alerting import SlackAlerter, AlertLevel
+from shared.alerting import AlertLevel, SlackAlerter
 from shared.reconciliation import (
-    BrokerStatementCSVAdapter, BrokerStatement,
-    ReconciliationEngine, ReconciliationResult,
+    BrokerStatement,
+    BrokerStatementCSVAdapter,
+    ReconciliationEngine,
 )
 
 

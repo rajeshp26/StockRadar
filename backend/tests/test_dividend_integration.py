@@ -22,19 +22,16 @@ API Flow (9 tests, with DividendDashboardService):
   - Holdings next_event with confidence
 """
 
-import asyncio
 from datetime import date, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fixtures_dividend_pipeline import build_quarterly_8
 
 from application.schedulers.market_data_scheduler import (
     refresh_upcoming_dividend,
-    estimate_next_ex_date,
 )
 from application.services.dividend_dashboard_service import DividendDashboardService
-from fixtures_dividend_pipeline import build_quarterly_8
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # SCHEDULER WIRING

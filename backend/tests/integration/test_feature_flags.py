@@ -1,8 +1,10 @@
 """Integration tests for feature flag behavior."""
 
 from unittest import mock
+
 import pytest
 from starlette.requests import Request
+
 from config import settings
 
 

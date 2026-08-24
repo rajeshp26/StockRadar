@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
 # Import the functions to test - they use module-level state
 # so we need to import and manipulate directly
@@ -117,7 +117,7 @@ class TestSSEHelpers:
     @pytest.mark.asyncio
     async def test_broadcast_with_retry_success(self, clean_state):
         """Test that broadcast_with_retry succeeds on first try."""
-        from api.watchlists import subscribe_symbol, broadcast_with_retry, broadcast_stock_update, user_queues
+        from api.watchlists import subscribe_symbol, broadcast_with_retry, user_queues
 
         # Arrange
         await subscribe_symbol("AAPL", "user_123")

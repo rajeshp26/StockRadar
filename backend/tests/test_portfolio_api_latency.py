@@ -26,10 +26,11 @@ if _env_file.exists():
     _SUPABASE_URL = _env_vars.get("SUPABASE_URL") or _SUPABASE_URL
     _SUPABASE_KEY = _env_vars.get("SUPABASE_SERVICE_ROLE_KEY") or _SUPABASE_KEY
 
-import pytest
+from datetime import datetime, timedelta
+
 import httpx
 import jwt as pyjwt
-from datetime import datetime, timedelta
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

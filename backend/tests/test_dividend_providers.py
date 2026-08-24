@@ -14,20 +14,19 @@ StockdexProvider:
   - Rate-limited → None
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
-from providers.yfinance_provider import YFinanceProvider
 from providers.stockdex_provider import StockdexMacrotrendsProvider
+from providers.yfinance_provider import YFinanceProvider
 
 
 def _future_timestamp(days_from_now: int = 30) -> float:
     """Unix timestamp for a future date."""
     target = date.today() + timedelta(days=days_from_now)
-    dt = datetime(target.year, target.month, target.day, tzinfo=timezone.utc)
+    dt = datetime(target.year, target.month, target.day, tzinfo=UTC)
     return dt.timestamp()
 
 

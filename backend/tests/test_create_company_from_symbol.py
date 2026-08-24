@@ -1,9 +1,9 @@
 """
 Tests for PortfolioService._create_company_from_symbol with exchange_override.
 """
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from decimal import Decimal
+
+import pytest
 
 from application.services.portfolio_service import PortfolioService
 from providers.base import StockDetails

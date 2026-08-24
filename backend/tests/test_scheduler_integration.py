@@ -12,7 +12,8 @@ They are skipped by default to avoid accidental production writes.
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 pytestmark = pytest.mark.skipif(
@@ -78,8 +79,8 @@ class TestJobsIntegration:
 
             import uuid as _uuid
             lease_token = str(_uuid.uuid4())
-            now = datetime.now(timezone.utc).isoformat()
-            leased_until = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+            now = datetime.now(UTC).isoformat()
+            leased_until = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
 
             update_result = supabase.table("jobs").update({
                 "status": "running",
@@ -98,7 +99,7 @@ class TestJobsIntegration:
                 "lease_owner": None,
                 "lease_token": None,
                 "leased_until": None,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             }).eq("id", job_id).eq("lease_owner", "int-test-runner").eq("lease_token", lease_token).execute()
 
             assert len(complete_result.data) == 1
@@ -130,7 +131,7 @@ class TestJobsIntegration:
 
             import uuid as _uuid
             lease_token = str(_uuid.uuid4())
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             supabase.table("jobs").update({
                 "status": "running", "lease_owner": "int-test-runner",
                 "lease_token": lease_token, "leased_until": now,

@@ -1,7 +1,6 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
 
 # We need to adjust the python path to import the main app
 import sys

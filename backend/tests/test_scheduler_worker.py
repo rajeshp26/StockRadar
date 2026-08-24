@@ -3,8 +3,8 @@ Tests for scheduler_worker.py — worker process lifecycle.
 """
 import asyncio
 import signal
-import sys
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 
@@ -132,7 +132,7 @@ class TestWorkerMain:
 
             try:
                 await asyncio.wait_for(sw.main(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("main() did not shutdown within timeout")
             except Exception:
                 pass
@@ -299,9 +299,8 @@ class TestHandlerFunctions:
             assert result["status"] == "skipped"
 
     async def test_handle_aggregation_refresh(self, mock_db_env):
-        from scheduler_worker import handle_aggregation_refresh
-
         import application.jobs.aggregation_jobs as agg
+        from scheduler_worker import handle_aggregation_refresh
         with patch.object(agg, "compute_and_upsert_group_metric_stats") as mock_agg:
             mock_agg.return_value = {"sectors_updated": 10}
 
@@ -315,9 +314,8 @@ class TestHandlerFunctions:
             assert result["sectors_updated"] == 10
 
     async def test_handle_aggregation_refresh_default_params(self, mock_db_env):
-        from scheduler_worker import handle_aggregation_refresh
-
         import application.jobs.aggregation_jobs as agg
+        from scheduler_worker import handle_aggregation_refresh
         with patch.object(agg, "compute_and_upsert_group_metric_stats") as mock_agg:
             mock_agg.return_value = {"sectors_updated": 5}
 
@@ -377,7 +375,7 @@ class TestHeartbeatLoop:
 
             try:
                 await asyncio.wait_for(sw.main(), timeout=5.0)
-            except (asyncio.TimeoutError, Exception):
+            except (TimeoutError, Exception):
                 pass
 
             assert mock_repo.record_heartbeat.call_count >= 1
@@ -392,6 +390,7 @@ class TestLoggingConfiguration:
     def test_module_has_logging_basicconfig(self):
         """Module-level logging.basicConfig ensures logger.info() produces output."""
         import inspect
+
         import scheduler_worker
         source = inspect.getsource(scheduler_worker)
         assert "logging.basicConfig" in source, (

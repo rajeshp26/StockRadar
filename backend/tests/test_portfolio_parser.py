@@ -1,11 +1,10 @@
 """
 Tests for portfolio CSV parser — CDR detection and exchange_override.
 """
-import pytest
-from datetime import date
-from decimal import Decimal
 
-from application.parsers.portfolio_parser import WealthsimpleParser, ParsedTransaction
+import pytest
+
+from application.parsers.portfolio_parser import ParsedTransaction, WealthsimpleParser
 
 
 @pytest.fixture

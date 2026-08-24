@@ -1,6 +1,7 @@
 import asyncio
-from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 
@@ -627,7 +628,7 @@ class TestConcurrentClaim:
 
     async def test_concurrent_claim_only_one_wins(self, repo, mock_supabase):
         """Two concurrent claim_job calls — first wins, second gets None."""
-        from asyncio import Event, gather, create_task
+        from asyncio import Event, create_task, gather
 
         call_count = 0
         barrier = Event()
@@ -666,7 +667,7 @@ class TestConcurrentClaim:
 
     async def test_claim_with_high_contention(self, repo, mock_supabase):
         """10 concurrent claimers, only one succeeds."""
-        from asyncio import Event, gather, create_task
+        from asyncio import Event, create_task, gather
 
         barrier = Event()
         results = []
@@ -726,7 +727,9 @@ class TestDbCallRetry:
 
     def test_db_call_retries_on_timeout(self, repo, mock_supabase):
         """_db_call retries up to MAX_DB_RETRIES times on transient error."""
-        from infrastructure.repositories.scheduler_repository import _RETRYABLE_ERR_SUBSTRINGS, MAX_DB_RETRIES
+        from infrastructure.repositories.scheduler_repository import (
+            MAX_DB_RETRIES,
+        )
 
         calls = []
         def failing_fn():

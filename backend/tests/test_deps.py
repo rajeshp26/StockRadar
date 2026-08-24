@@ -1,5 +1,5 @@
-import sys
 import importlib
+import sys
 
 packages = [
     "fastapi",

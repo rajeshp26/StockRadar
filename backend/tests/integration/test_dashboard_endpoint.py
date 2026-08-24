@@ -1,11 +1,11 @@
 """Integration tests for the /portfolio/dashboard bundle endpoint."""
 
 from unittest import mock
+
 import pytest
 from starlette.requests import Request
-from starlette.datastructures import URL, Headers, QueryParams
 
-from api.portfolio import get_portfolio_dashboard, _compute_overview_from_holdings
+from api.portfolio import _compute_overview_from_holdings, get_portfolio_dashboard
 from application.services.portfolio_service import PortfolioService
 
 _DISPLAY_CCY_PATCH = mock.patch("api.portfolio._get_user_preferred_currency", return_value="USD")
@@ -50,7 +50,6 @@ async def test_compute_overview_from_holdings():
 @pytest.mark.asyncio
 async def test_dashboard_single_enrichment_call():
     """Dashboard endpoint should call enrich_holdings_with_prices exactly once."""
-    from api.portfolio import _get_portfolio_service
     enrich_count = 0
     original_enrich = PortfolioService.enrich_holdings_with_prices
 

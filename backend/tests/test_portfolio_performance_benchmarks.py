@@ -12,7 +12,7 @@ Usage:
 import time
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pytest
@@ -34,10 +34,9 @@ from shared.portfolio_stats import (
     compute_value_at_risk,
 )
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _grade(elapsed_ms: float, thresholds: Dict[str, float]) -> str:
+def _grade(elapsed_ms: float, thresholds: dict[str, float]) -> str:
     if elapsed_ms < thresholds.get("fast", 5):
         return "PASS"
     if elapsed_ms < thresholds.get("ok", 50):
@@ -49,7 +48,7 @@ def _grade(elapsed_ms: float, thresholds: Dict[str, float]) -> str:
 
 def _print_result(
     label: str, elapsed_ms: float, detail: str = "",
-    thresholds: Dict[str, float] = None,
+    thresholds: dict[str, float] = None,
 ):
     if thresholds is None:
         thresholds = {"fast": 5, "ok": 50, "slow": 200}
@@ -63,8 +62,8 @@ def _make_snapshots(
     start_value: float = 100000.0,
     with_deposits: bool = True,
     noise_std: float = 0.02,
-) -> List[Dict[str, Any]]:
-    snapshots: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    snapshots: list[dict[str, Any]] = []
     value = start_value
     cum_deposits = 0.0
     for i in range(count):
@@ -87,11 +86,11 @@ def _make_price_data(
     num_companies: int,
     num_days: int,
     with_unit_mismatch: bool = False,
-) -> Dict[int, List]:
-    price_map: Dict[int, List] = {}
+) -> dict[int, list]:
+    price_map: dict[int, list] = {}
     base_price = 100.0
     for cid in range(1, num_companies + 1):
-        prices: List[tuple] = []
+        prices: list[tuple] = []
         price = base_price * (1 + cid * 0.1)
         for i in range(num_days):
             d = date(2024, 1, 1) + timedelta(days=i)
@@ -129,31 +128,31 @@ class TestTWRCaclulationPerformance:
     async def test_twr_small(self):
         snaps = _make_snapshots(10)
         elapsed = _benchmark(compute_portfolio_twr, snaps)
-        _print_result(f"TWR small (10 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
+        _print_result("TWR small (10 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
 
     @pytest.mark.anyio
     async def test_twr_medium(self):
         snaps = _make_snapshots(52)
         elapsed = _benchmark(compute_portfolio_twr, snaps)
-        _print_result(f"TWR medium (52 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
+        _print_result("TWR medium (52 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
 
     @pytest.mark.anyio
     async def test_twr_large(self):
         snaps = _make_snapshots(252)
         elapsed = _benchmark(compute_portfolio_twr, snaps)
-        _print_result(f"TWR large (252 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
+        _print_result("TWR large (252 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
 
     @pytest.mark.anyio
     async def test_twr_very_large(self):
         snaps = _make_snapshots(504)
         elapsed = _benchmark(compute_portfolio_twr, snaps)
-        _print_result(f"TWR very large (504 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
+        _print_result("TWR very large (504 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
 
     @pytest.mark.anyio
     async def test_twr_max(self):
         snaps = _make_snapshots(1000)
         elapsed = _benchmark(compute_portfolio_twr, snaps)
-        _print_result(f"TWR max (1000 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
+        _print_result("TWR max (1000 snapshots)", elapsed, f"result={compute_portfolio_twr(snaps):.4f}")
 
 
 class TestMWRCalculationPerformance:
@@ -163,25 +162,25 @@ class TestMWRCalculationPerformance:
     async def test_mwr_small(self):
         snaps = _make_snapshots(10, with_deposits=True)
         elapsed = _benchmark(compute_portfolio_mwr, snaps)
-        _print_result(f"MWR small (10 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
+        _print_result("MWR small (10 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
 
     @pytest.mark.anyio
     async def test_mwr_medium(self):
         snaps = _make_snapshots(52, with_deposits=True)
         elapsed = _benchmark(compute_portfolio_mwr, snaps)
-        _print_result(f"MWR medium (52 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
+        _print_result("MWR medium (52 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
 
     @pytest.mark.anyio
     async def test_mwr_large(self):
         snaps = _make_snapshots(252, with_deposits=True)
         elapsed = _benchmark(compute_portfolio_mwr, snaps)
-        _print_result(f"MWR large (252 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
+        _print_result("MWR large (252 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
 
     @pytest.mark.anyio
     async def test_mwr_very_large(self):
         snaps = _make_snapshots(504, with_deposits=True)
         elapsed = _benchmark(compute_portfolio_mwr, snaps)
-        _print_result(f"MWR very large (504 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
+        _print_result("MWR very large (504 snapshots)", elapsed, f"result={compute_portfolio_mwr(snaps):.4f}")
 
 
 class TestAnnualizedReturnPerformance:
@@ -350,7 +349,7 @@ class TestSnapshotMergePerformance:
     """Last-Observation-Carried-Forward merge used in portfolio_service.py."""
 
     @staticmethod
-    def _run_locf_merge(snapshots: List[Dict], num_accounts: int):
+    def _run_locf_merge(snapshots: list[dict], num_accounts: int):
         by_account = defaultdict(list)
         for s in snapshots:
             by_account[s["account_id"]].append(s)
@@ -458,7 +457,7 @@ class TestPriceNormalizationPerformance:
     """Benchmark the price unit mismatch detection/normalization."""
 
     @staticmethod
-    def _run_normalization(price_map: Dict[int, List], max_ratio: float = 5.0, min_days: int = 60):
+    def _run_normalization(price_map: dict[int, list], max_ratio: float = 5.0, min_days: int = 60):
         for cid, prices in price_map.items():
             if len(prices) < 2:
                 continue

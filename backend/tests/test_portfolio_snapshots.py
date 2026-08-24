@@ -4,19 +4,18 @@ Unit tests for portfolio snapshot builder, FIFO engine, and compression.
 Covers all unit test cases from Section 16.1 of the design document.
 """
 
-import pytest
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from shared.snapshot_builder import (
-    _should_process_for_lots,
     _classify_lot_action,
-    resolve_price_forward_filled,
+    _should_process_for_lots,
     build_snapshot_row,
+    resolve_price_forward_filled,
 )
-
 
 # ============================================================================
 # _should_process_for_lots
@@ -119,7 +118,7 @@ def _fx_identity(amount, from_currency, to_currency, as_of, holding_id=None):
     """Fake FX conversion that passes amounts through unchanged (1:1 rate)."""
     return (amount, False)
 
-def _make_minimal_kwargs(**overrides) -> Dict:
+def _make_minimal_kwargs(**overrides) -> dict:
     mock_fx = MagicMock()
     mock_fx.convert_or_warn.side_effect = _fx_identity
     kwargs = {
@@ -512,7 +511,7 @@ class TestNegativeTotalValueProducedSilently:
         )
         assert "validation_warnings" in row
         assert len(row["validation_warnings"]) > 0, (
-            f"Should have at least one validation warning."
+            "Should have at least one validation warning."
         )
 
 
@@ -615,7 +614,9 @@ class TestHoldingsStateFromDB:
 
 class TestSnapshotValueSanity:
     def test_absurd_value_raises_in_validation(self):
-        from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+        from infrastructure.repositories.portfolio_snapshots_repository import (
+            PortfolioSnapshotsRepository,
+        )
         repo = PortfolioSnapshotsRepository()
         rows = [{"total_value": 1_500_000_000, "holdings_market_value": 1_000_000_000, "cash_balance": 500_000_000, "snapshot_date": "2024-01-01"}]
         with patch.object(repo, 'get_account_snapshots', return_value=rows):
@@ -765,7 +766,6 @@ class TestNegativeTotalMustBeFlagged:
     def test_merged_account_still_shows_original_quality(self):
         """The data_quality_flag must survive merge — a snapshot stored with
         WARNING quality must not be reset to OK during aggregation."""
-        from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
         snapshots = [
             {"account_id": 1, "snapshot_date": "2026-06-23",
              "total_value": -4670.0, "holdings_market_value": 0.0,

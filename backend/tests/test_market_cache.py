@@ -1,7 +1,8 @@
 """Unit tests for market_cache.py — TTL cache for current_market_data."""
-import pytest
-from unittest.mock import MagicMock, patch
 import asyncio
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 def _mock_data(data):

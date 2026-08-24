@@ -15,21 +15,20 @@ Unit tests for the dividend prediction algorithm (§7.6.1).
 from datetime import date
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from application.schedulers.market_data_scheduler import estimate_next_ex_date
 from fixtures_dividend_pipeline import (
-    build_quarterly_8,
-    build_monthly_12,
-    build_semi_annual_6,
-    build_annual_5,
-    build_quarterly_4,
-    build_quarterly_with_special,
     build_all_special,
-    build_self_feed,
+    build_annual_5,
     build_insufficient_3,
+    build_monthly_12,
+    build_quarterly_4,
+    build_quarterly_8,
+    build_quarterly_with_special,
+    build_self_feed,
+    build_semi_annual_6,
     build_suspended,
 )
+
+from application.schedulers.market_data_scheduler import estimate_next_ex_date
 
 
 def mock_supabase_for(rows):

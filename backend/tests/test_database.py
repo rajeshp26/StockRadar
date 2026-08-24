@@ -2,7 +2,6 @@
 Tests for database.py — Supabase client lazy initialization with timeout.
 """
 from unittest.mock import MagicMock, patch
-import pytest
 
 
 class TestSupabaseClientInit:
@@ -14,6 +13,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
             self._trigger(database)
@@ -32,6 +32,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
             self._trigger(database)
@@ -46,6 +47,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
             self._trigger(database)
@@ -61,6 +63,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
             self._trigger(database)
@@ -75,6 +78,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
             self._trigger(database)
@@ -91,6 +95,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
 
@@ -103,6 +108,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
 
@@ -116,6 +122,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
 
@@ -133,6 +140,7 @@ class TestSupabaseClientInit:
             mock_create.return_value = mock_client
 
             import importlib
+
             import database
             importlib.reload(database)
 
@@ -144,6 +152,7 @@ class TestSupabaseClientInit:
     def test_supabase_proxy_identity(self):
         """The supabase module attribute is a proxy object, not the raw client."""
         import importlib
+
         import database
         importlib.reload(database)
 

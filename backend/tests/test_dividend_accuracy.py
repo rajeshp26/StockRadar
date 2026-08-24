@@ -25,16 +25,15 @@ import asyncio
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
+from fixtures_dividend_pipeline import (
+    build_insufficient_3,
+    build_monthly_12,
+    build_quarterly_8,
+    build_quarterly_with_special,
+)
 
 from application.schedulers.market_data_scheduler import estimate_next_ex_date
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from fixtures_dividend_pipeline import (
-    build_quarterly_8,
-    build_quarterly_with_special,
-    build_insufficient_3,
-    build_monthly_12,
-)
 
 
 class TestStructuralSafety:

@@ -1,20 +1,15 @@
-import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List, Optional
-from datetime import datetime, timedelta
 
-from application.services.caching.cache_manager import CacheManager
+import pytest
+
 from application.services.ai_service import (
-    generate_suitability_summary,
-    generate_overview_summary,
     configure_ai,
+    generate_overview_summary,
+    generate_suitability_summary,
 )
-from providers.ai_provider import AIProvider
+from application.services.caching.cache_manager import CacheManager
 from infrastructure.repositories.valuation_repository import ValuationRepository
-from application.services.valuation_service import ValuationService
-from application.services.recompute_guard import RecomputeGuard
-
+from providers.ai_provider import AIProvider
 
 # --- Unit Tests: CacheManager ---
 
@@ -44,7 +39,7 @@ class TestCacheManagerUnit:
         cm = CacheManager()
         key = "query:test:arg"
         cm.set_query_result(key, "data")
-        
+
         # In request scope
         assert key in cm._request_cache.get()
 

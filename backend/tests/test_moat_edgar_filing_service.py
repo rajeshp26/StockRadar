@@ -1,6 +1,7 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from datetime import date
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from application.services.edgar_filing_service import EdgarFilingService, FilingSection
 

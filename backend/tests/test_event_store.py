@@ -1,8 +1,7 @@
 """Tests for EventStore: idempotency, dual-write, and orphan detection."""
 
-import pytest
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 from infrastructure.repositories.event_store import EventStore
@@ -102,7 +101,7 @@ class TestDualWriteRollback:
             data=[{
                 "id": "evt-orphan",
                 "idempotency_key": f"import_{batch_id}_0",
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             }]
         )
 
@@ -120,7 +119,7 @@ class TestDualWriteRollback:
             data=[{
                 "id": "evt-ok",
                 "idempotency_key": f"import_{batch_id}_0",
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             }]
         )
 

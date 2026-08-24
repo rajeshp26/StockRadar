@@ -1,5 +1,6 @@
-from unittest.mock import MagicMock, AsyncMock, patch, call
 from datetime import date
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 
@@ -134,3 +135,45 @@ class TestUpsertSplitsCategoricalConflict:
             mock_log.assert_not_called()
 
         assert result == {"count": 1}
+
+
+class TestUpsertPriceHistoryNullCloseFilter:
+    """Regression: null-OHLC provider rows must never reach the DB
+    (close_price is NOT NULL; delisted/suspended days report null prices)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, mock_supabase_client, monkeypatch):
+        from config import settings
+        from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+        monkeypatch.setattr(settings, "ENABLE_CONFLICT_DETECTION", False)
+        self.repo = SupabaseFinancialRepository(client=mock_supabase_client)
+        self.client = mock_supabase_client
+
+    async def test_drops_rows_with_null_close_price(self):
+        rows = [
+            {"company_id": 1, "price_date": date(2026, 7, 31), "open_price": 10.0,
+             "close_price": 11.0, "high_price": 12.0, "low_price": 9.0,
+             "volume": 100, "data_source": "yfinance"},
+            {"company_id": 1, "price_date": date(2026, 8, 31), "open_price": None,
+             "close_price": None, "high_price": None, "low_price": None,
+             "volume": 0, "data_source": "yfinance"},
+        ]
+
+        result = await self.repo.upsert_price_history(rows)
+
+        assert result == {"count": 1}
+        payload = self.client.table.return_value.upsert.call_args[0][0]
+        assert len(payload) == 1
+        assert payload[0]["price_date"] == "2026-07-31"
+
+    async def test_all_null_close_prices_upserts_nothing(self):
+        rows = [
+            {"company_id": 1, "price_date": date(2026, 7, 31),
+             "open_price": None, "close_price": None, "high_price": None,
+             "low_price": None, "volume": 0, "data_source": "yfinance"},
+        ]
+
+        result = await self.repo.upsert_price_history(rows)
+
+        assert result == {"count": 0}
+        self.client.table.assert_not_called()

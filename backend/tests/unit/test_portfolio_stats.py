@@ -4,14 +4,13 @@ import numpy as np
 import pytest
 
 from shared.portfolio_stats import (
-    TRADING_DAYS,
     compute_alpha,
     compute_annualized_volatility,
     compute_beta,
     compute_conditional_var,
     compute_correlation_matrix,
-    compute_drawdown_series,
     compute_downside_deviation,
+    compute_drawdown_series,
     compute_historical_var,
     compute_information_ratio,
     compute_max_drawdown,

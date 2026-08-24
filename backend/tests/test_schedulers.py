@@ -1,6 +1,7 @@
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import date, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 

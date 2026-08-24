@@ -6,19 +6,17 @@ through all parsing stages for Canadian bank tickers.
 
 Uses mocked external API responses simulating realistic IFRS data gaps.
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import asyncio
+from unittest.mock import MagicMock
+
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from typing import Optional
 
 from providers.defeat_beta_provider import DefeatBetaProvider
-
 
 CANADIAN_TICKERS = ["TD.TO", "RY.TO", "CM.TO"]
 

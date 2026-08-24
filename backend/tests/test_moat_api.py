@@ -1,8 +1,8 @@
 import sys
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-from fastapi import HTTPException, status
+import pytest
+from fastapi import HTTPException
 
 # Mock defeatbeta_api before any api.analysis imports trigger it
 _fake_defeat = MagicMock()
@@ -42,7 +42,14 @@ class TestMoatAPI:
 
     @pytest.mark.asyncio
     async def test_moat_analysis_endpoint_pattern(self):
-        from domain.models.analysis_moat import MoatResponse, MoatValuation, MoatInputs, MoatIndustryContext, MoatApplicability, MoatDataQuality
+        from domain.models.analysis_moat import (
+            MoatApplicability,
+            MoatDataQuality,
+            MoatIndustryContext,
+            MoatInputs,
+            MoatResponse,
+            MoatValuation,
+        )
         response = MoatResponse(
             symbol="AAPL",
             company_id=1,
@@ -80,7 +87,7 @@ class TestMoatAPI:
 
     @pytest.mark.asyncio
     async def test_moat_ai_response_pattern(self):
-        from domain.models.analysis_moat import MoatAiResponse, MoatAiNarrative
+        from domain.models.analysis_moat import MoatAiNarrative, MoatAiResponse
         response = MoatAiResponse(
             symbol="AAPL",
             company_id=1,
@@ -115,8 +122,16 @@ class TestMoatAPI:
 
     @pytest.mark.asyncio
     async def test_moat_response_serialization(self):
-        from domain.models.analysis_moat import MoatResponse, MoatValuation, MoatInputs, MoatIndustryContext, MoatApplicability, MoatDataQuality
         import json
+
+        from domain.models.analysis_moat import (
+            MoatApplicability,
+            MoatDataQuality,
+            MoatIndustryContext,
+            MoatInputs,
+            MoatResponse,
+            MoatValuation,
+        )
         response = MoatResponse(
             symbol="AAPL",
             company_id=1,

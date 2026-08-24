@@ -1,7 +1,7 @@
 import sys
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 _fake_defeat = MagicMock()
 _fake_ticker = MagicMock()
@@ -43,8 +43,9 @@ def _mock_supabase_deps():
 @pytest.fixture
 def test_app():
     from fastapi import FastAPI
-    from dependencies import get_current_user_dep
+
     from api.portfolio import router as portfolio_router
+    from dependencies import get_current_user_dep
 
     app = FastAPI()
     app.include_router(portfolio_router)
@@ -316,6 +317,7 @@ class TestPortfolioRiskAPI:
 
     def test_all_endpoints_require_auth(self):
         from fastapi import FastAPI
+
         from api.portfolio import router as portfolio_router
         app = FastAPI()
         app.include_router(portfolio_router)

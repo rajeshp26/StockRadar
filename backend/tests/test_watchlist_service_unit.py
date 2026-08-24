@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from application.services.watchlist_service import WatchlistService
-from domain.entities.watchlist import WatchlistWithStocks, StockPriceInfo
+from domain.entities.watchlist import WatchlistWithStocks
 from shared.exceptions.base import NotFoundError
 
 class TestWatchlistService:

@@ -8,7 +8,6 @@ import ast
 import re
 from pathlib import Path
 
-
 REPO_PATH = Path("infrastructure/repositories/scheduler_repository.py")
 SCHEMA_PATH = Path("scripts/migrate_scheduler_v3_tables.sql")
 
@@ -136,7 +135,7 @@ class TestSchedulerSchema:
                         missing.append(f"  '{tbl_lower}.{col}' — not found in any schema table")
 
         assert not missing, (
-            f"Repository references columns not present in SQL schema:\n"
+            "Repository references columns not present in SQL schema:\n"
             + "\n".join(missing)
         )
 

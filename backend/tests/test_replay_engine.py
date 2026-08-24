@@ -1,15 +1,13 @@
 """Tests for the event-replay engine."""
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
-
-import pytest
+from unittest.mock import MagicMock
 
 from infrastructure.repositories.event_store import EventStore
 from shared.replay_engine import (
-    ReplayEngine, _parse_account_id, AccountState, HoldingState,
+    ReplayEngine,
+    _parse_account_id,
 )
 
 
@@ -43,7 +41,7 @@ class TestReplayState:
 
     def test_single_buy_event(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=[
             {
                 "event_type": "transaction_imported",
@@ -75,7 +73,7 @@ class TestReplayState:
 
     def test_sell_reduces_quantity(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         def mock_execute():
             return MagicMock
@@ -114,7 +112,7 @@ class TestReplayState:
 
     def test_deposit_updates_net_deposits(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=[
             {
                 "event_type": "transaction_imported",
@@ -136,7 +134,7 @@ class TestReplayState:
 
     def test_dividend_affects_cash_not_holdings(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=[
             {
                 "event_type": "transaction_imported",
@@ -158,7 +156,7 @@ class TestReplayState:
 
     def test_multi_account_filtering(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=[
             {
                 "event_type": "transaction_imported",
@@ -189,7 +187,7 @@ class TestReplayState:
 class TestReplayBuildSnapshot:
     def test_build_snapshot_from_replay(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=[
             {
                 "event_type": "transaction_imported",
@@ -219,7 +217,7 @@ class TestReplayBuildSnapshot:
 
     def test_compare_with_snapshot_match(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=[
             {
                 "event_type": "transaction_imported",
@@ -255,7 +253,7 @@ class TestReplayBuildSnapshot:
 
     def test_compare_with_snapshot_mismatch(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=[
             {
                 "event_type": "transaction_imported",
@@ -313,7 +311,7 @@ class TestFifoCommissionAndRoc:
                 "net_cash_amount": float(-(qty * price + commission)),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _sell_event(self, account_id, company_id, qty, price, symbol="AAPL"):
@@ -328,7 +326,7 @@ class TestFifoCommissionAndRoc:
                 "commission": 0, "net_cash_amount": float(abs(qty) * price),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _roc_event(self, account_id, company_id, amount):
@@ -343,7 +341,7 @@ class TestFifoCommissionAndRoc:
                 "commission": 0, "net_cash_amount": float(amount),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def test_buy_includes_commission_in_cost_basis(self, mock_supabase_client):
@@ -352,7 +350,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.average_cost == Decimal("10.5")
@@ -365,7 +363,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.average_cost == Decimal("10")
@@ -381,7 +379,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("5")
@@ -402,7 +400,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         # Cost: 10 * 100 + 5 * 200 = 2000
@@ -425,7 +423,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("7")
@@ -450,12 +448,12 @@ class TestFifoCommissionAndRoc:
                     "quantity": 10, "average_cost": 100, "total_cost": 1000,
                 }],
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }, self._sell_event(1, 10, -5, 150)]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("5")
@@ -471,7 +469,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         # After sell 8: FIFO removes 8 from lot1 (10 at $100)
@@ -493,7 +491,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.total_cost == Decimal("500")
@@ -511,7 +509,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         # total_cost was 3000, reduction 150, new total_cost 2850
@@ -530,7 +528,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.total_cost == Decimal("0")
@@ -543,7 +541,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         assert len(state.holdings) == 0
 
@@ -556,7 +554,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.total_cost == Decimal("1000")
@@ -573,7 +571,7 @@ class TestFifoCommissionAndRoc:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
         engine = ReplayEngine(EventStore(client=mock_supabase_client))
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         # After buy 10 at $100 + $10 commission: lot 1 = 10 at $10.10, total = 1010
@@ -616,7 +614,7 @@ class TestIstHandling:
                 "commission": None, "net_cash_amount": float(net_cash_amount),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _buy_event(self, account_id, company_id, qty, price, symbol="AAPL"):
@@ -631,7 +629,7 @@ class TestIstHandling:
                 "commission": 0, "net_cash_amount": float(-(qty * price)),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def test_inbound_ist_creates_lot_with_nca_cost(self, mock_supabase_client):
@@ -640,7 +638,7 @@ class TestIstHandling:
         events = [self._ist_event(1, 10, 2, 276.10)]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("2")
@@ -657,7 +655,7 @@ class TestIstHandling:
         events = [self._ist_event(1, 10, 5, 500.00)]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         assert state.cash_balance == Decimal("0")
 
@@ -670,7 +668,7 @@ class TestIstHandling:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("6")
@@ -688,7 +686,7 @@ class TestIstHandling:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("3")
@@ -701,7 +699,7 @@ class TestIstHandling:
         events = [self._ist_event(1, 42, 10, 1000.00, symbol="MSFT")]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         assert 42 in state.holdings
         h = state.holdings[42]
@@ -718,7 +716,7 @@ class TestIstHandling:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         # Should be fully sold (truncated to 5, all removed)
         assert len(state.holdings) == 0
@@ -747,7 +745,7 @@ class TestFifoSellFallback:
                 "commission": 0, "net_cash_amount": float(-(qty * price)),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _sell_event(self, account_id, company_id, qty, price, symbol="AAPL"):
@@ -762,7 +760,7 @@ class TestFifoSellFallback:
                 "commission": 0, "net_cash_amount": float(abs(qty) * price),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def test_fifo_partial_lot_exhaustion_uses_fallback(self, mock_supabase_client):
@@ -781,14 +779,14 @@ class TestFifoSellFallback:
                         "quantity": 10, "average_cost": 100, "total_cost": 1000,
                     }],
                 },
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             },
             self._buy_event(1, 10, 5, 120),  # adds lot with cost_per_share=120
             self._sell_event(1, 10, -12, 150),  # sells 12: FIFO removes buy lot (5@120), then needs fallback for 7 from initial
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("3")
@@ -809,7 +807,7 @@ class TestFifoSellFallback:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("5")
@@ -832,13 +830,13 @@ class TestFifoSellFallback:
                         "quantity": 8, "average_cost": 50, "total_cost": 400,
                     }],
                 },
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             },
             self._sell_event(1, 10, -8, 100),
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         # No lots → FIFO loop does nothing → cost_of_sold stays 0
         # Fallback: cost_of_sold == 0, so cost_of_sold = 8 * 50 = 400
@@ -870,7 +868,7 @@ class TestIstInteractions:
                 "commission": 0, "net_cash_amount": float(-(qty * price)),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _ist_event(self, account_id, company_id, qty, net_cash_amount, symbol="AAPL"):
@@ -885,7 +883,7 @@ class TestIstInteractions:
                 "commission": None, "net_cash_amount": float(net_cash_amount) if net_cash_amount is not None else None,
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _split_event(self, account_id, company_id, factor):
@@ -896,9 +894,9 @@ class TestIstInteractions:
             "data": {
                 "account_id": account_id, "company_id": company_id,
                 "split_factor": float(factor),
-                "effective_date": datetime.now(timezone.utc).date().isoformat(),
+                "effective_date": datetime.now(UTC).date().isoformat(),
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def _roc_event(self, account_id, company_id, amount):
@@ -913,7 +911,7 @@ class TestIstInteractions:
                 "commission": 0, "net_cash_amount": float(amount),
                 "currency": "USD",
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
     def test_ist_then_split(self, mock_supabase_client):
@@ -925,7 +923,7 @@ class TestIstInteractions:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         # After split: qty=20, avg_cost=50, lot: {qty:20, cost_per_share:50}
@@ -946,7 +944,7 @@ class TestIstInteractions:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("45")  # (10+5)*3
@@ -966,7 +964,7 @@ class TestIstInteractions:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         # After ROC: total_cost = 1000 - 200 = 800, avg_cost = 80
@@ -981,7 +979,7 @@ class TestIstInteractions:
         events = [self._ist_event(1, 10, -5, -500.00)]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         assert len(state.holdings) == 0
 
@@ -991,7 +989,7 @@ class TestIstInteractions:
         events = [self._ist_event(1, 10, 5, None)]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("5")
@@ -1008,7 +1006,7 @@ class TestIstInteractions:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("8")
@@ -1032,7 +1030,7 @@ class TestIstInteractions:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         # After outbound IST -8: FIFO removes 8 from lot1 (20@40)
@@ -1058,7 +1056,7 @@ class TestIstInteractions:
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(timezone.utc).date())
+        state = engine.replay_to_date(1, datetime.now(UTC).date())
 
         h = state.holdings[10]
         assert h.quantity == Decimal("5")

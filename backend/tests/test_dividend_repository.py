@@ -15,8 +15,8 @@ Tests:
 """
 
 import asyncio
-from datetime import date, datetime, timedelta
-from unittest.mock import ANY, MagicMock, PropertyMock, patch
+from datetime import date, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 

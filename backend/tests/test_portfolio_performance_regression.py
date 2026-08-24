@@ -7,22 +7,21 @@ COMPUTED expected values (simple arithmetic, not the code under test).
 
 To run:  pytest tests/test_portfolio_performance_regression.py -v
 """
-from dataclasses import dataclass, field
 from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional
+from decimal import Decimal
+from typing import Any
 from unittest.mock import MagicMock, patch
-import pytest
 
+import pytest
 
 # ──────────────────────────────────────────────────────────────────────
 # HELPER: Independent cash balance calculator (NOT using the code under test)
 # ──────────────────────────────────────────────────────────────────────
 
 def _independent_cash_balance(
-    transactions: List[Dict[str, Any]],
+    transactions: list[dict[str, Any]],
     target_date: date,
-    whitelist: Optional[List[str]] = None,
+    whitelist: list[str] | None = None,
 ) -> Decimal:
     """
     Compute cash balance independently (simple sum of net_cash_amount
@@ -48,9 +47,9 @@ def _independent_cash_balance(
 
 
 def _independent_total_value(
-    holdings: List[Dict[str, Any]],
+    holdings: list[dict[str, Any]],
     cash_balance: Decimal,
-    prices: Dict[int, float],
+    prices: dict[int, float],
     account_currency: str = "CAD",
 ) -> Decimal:
     """
@@ -70,8 +69,8 @@ def _independent_total_value(
 
 
 def _independent_portfolio_value(
-    account_snapshots: Dict[int, Dict[date, Dict[str, Any]]],
-) -> Dict[date, float]:
+    account_snapshots: dict[int, dict[date, dict[str, Any]]],
+) -> dict[date, float]:
     """
     Merge per-account snapshots into portfolio-level values.
     This is our reference implementation for the merge logic.
@@ -79,7 +78,7 @@ def _independent_portfolio_value(
     CRITICAL BUG: if an account is missing a snapshot on a date,
     its contribution is $0, not "whatever it was yesterday".
     """
-    portfolio: Dict[date, float] = {}
+    portfolio: dict[date, float] = {}
     all_dates: set = set()
     for aid, snapshots in account_snapshots.items():
         all_dates.update(snapshots.keys())
@@ -300,7 +299,7 @@ def test_case_3_missing_snapshot_date_zero_contribution():
     print(f"\n  D1 portfolio: ${d1_total:,.2f}  (A=${snapshots_a[D1]['total_value']:,.0f} + B=${snapshots_b[D1]['total_value']:,.0f})")
     print(f"  D2 portfolio: ${d2_total:,.2f}  (A=${snapshots_a[D2]['total_value']:,.0f} + B=$0 — MISSING!) ← ARTIFICIAL DIP")
     print(f"  D3 portfolio: ${d3_total:,.2f}  (A=${snapshots_a[D3]['total_value']:,.0f} + B=${snapshots_b[D3]['total_value']:,.0f})")
-    print(f"  Chart shows -23% drop D1→D2 then +70% jump D2→D3 (all fake!)")
+    print("  Chart shows -23% drop D1→D2 then +70% jump D2→D3 (all fake!)")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -468,7 +467,7 @@ async def test_case_6_snapshot_row_negative_cash():
     print(f"\n  Holdings market value: ${row['holdings_market_value']:,.2f}")
     print(f"  Cash balance:         ${row['cash_balance']:,.2f}")
     print(f"  Total value:          ${row['total_value']:,.2f}")
-    print(f"  → Negative total_value is the EXACT -2903 bug!")
+    print("  → Negative total_value is the EXACT -2903 bug!")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -571,7 +570,7 @@ def test_case_8_all_periods_merge_integrity():
         print(f"    {d}: B is missing → $0 contribution")
 
     # The fix: carry forward the last known value instead of $0
-    print(f"\n  FIX: Use last-known-value carry-forward instead of $0")
+    print("\n  FIX: Use last-known-value carry-forward instead of $0")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -673,8 +672,8 @@ def test_case_10_repair_negative_cash_balances():
     print(f"\n  Before repair: total_value = ${old_snapshot['total_value']:,.2f} (NEGATIVE!)")
     print(f"  After repair:  total_value = ${float(repaired_total):,.2f} (FIXED)")
     print(f"  Improvement:   +${improvement:,.2f}")
-    print(f"\n  → Run: python -m scripts.backfill_portfolio_snapshots --repair")
-    print(f"  → To fix all corrupted snapshots in the database")
+    print("\n  → Run: python -m scripts.backfill_portfolio_snapshots --repair")
+    print("  → To fix all corrupted snapshots in the database")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -721,7 +720,7 @@ def test_case_11_locf_carries_forward_last_known():
     ]
 
     # Simulate LOCF merge logic (same algorithm as portfolio_service.py)
-    by_account: Dict[int, List[Dict]] = defaultdict(list)
+    by_account: dict[int, list[dict]] = defaultdict(list)
     for s in raw_snapshots:
         by_account[s["account_id"]].append(s)
 
@@ -738,8 +737,8 @@ def test_case_11_locf_carries_forward_last_known():
         except StopIteration:
             current_snap[aid] = None
 
-    last_value: Dict[int, float] = {}
-    last_cost: Dict[int, float] = {}
+    last_value: dict[int, float] = {}
+    last_cost: dict[int, float] = {}
     locf_counts = 0
     merged = {}
 
@@ -814,7 +813,7 @@ def test_case_12_locf_disabled_falls_back_to_zero():
 
     use_locf = False  # disabled
 
-    by_account: Dict[int, List[Dict]] = defaultdict(list)
+    by_account: dict[int, list[dict]] = defaultdict(list)
     for s in raw_snapshots:
         by_account[s["account_id"]].append(s)
 
@@ -831,7 +830,7 @@ def test_case_12_locf_disabled_falls_back_to_zero():
         except StopIteration:
             current_snap[aid] = None
 
-    last_value: Dict[int, float] = {}
+    last_value: dict[int, float] = {}
     merged = {}
 
     for d in all_dates:
@@ -859,7 +858,7 @@ def test_case_12_locf_disabled_falls_back_to_zero():
     print(f"\n  D1: $100 + $50  = ${merged[D1]['value']:,.0f}")
     print(f"  D2: $110 + $0  (LOCF OFF) = ${merged[D2]['value']:,.0f} ← ARTIFICIAL DIP")
     print(f"  D3: $120 + $70  = ${merged[D3]['value']:,.0f}")
-    print(f"  LOCF disabled → old buggy $0 behavior confirmed")
+    print("  LOCF disabled → old buggy $0 behavior confirmed")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -886,7 +885,7 @@ def test_case_13_account_with_no_snapshots_still_zero():
     ]
     # Account 3 has NO snapshots at all
 
-    by_account: Dict[int, List[Dict]] = defaultdict(list)
+    by_account: dict[int, list[dict]] = defaultdict(list)
     for s in raw_snapshots:
         by_account[s["account_id"]].append(s)
 
@@ -906,7 +905,7 @@ def test_case_13_account_with_no_snapshots_still_zero():
         except StopIteration:
             current_snap[aid] = None
 
-    last_value: Dict[int, float] = {}
+    last_value: dict[int, float] = {}
     merged = {}
 
     for d in all_dates:
@@ -928,7 +927,7 @@ def test_case_13_account_with_no_snapshots_still_zero():
     assert merged[D2]["value"] == 110.0
     print(f"\n  D1: ${merged[D1]['value']:,.0f} (account 3 has no data → $0)")
     print(f"  D2: ${merged[D2]['value']:,.0f} (account 3 has no data → $0)")
-    print(f"  ✓ Account with zero snapshots correctly contributes $0")
+    print("  ✓ Account with zero snapshots correctly contributes $0")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -976,7 +975,7 @@ def test_case_14_locf_metadata_reported():
         except StopIteration:
             current_snap[aid] = None
 
-    last_value: Dict[int, float] = {}
+    last_value: dict[int, float] = {}
     locf_count = 0
 
     for d in all_dates:
@@ -1000,7 +999,7 @@ def test_case_14_locf_metadata_reported():
     # Account 2 has LOCF on D2, Account 1 has LOCF on D3 → 2 LOCF dates
     assert locf_count == 2, f"Expected locf_count=2 (D2 for A2, D3 for A1), got {locf_count}"
     print(f"\n  locf_count = {locf_count} (2 dates had LOCF applied)")
-    print(f"  → Frontend can use this to show a 'estimated' indicator")
+    print("  → Frontend can use this to show a 'estimated' indicator")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1070,7 +1069,7 @@ def test_case_15_three_accounts_fully_staggered():
         except StopIteration:
             current_snap[aid] = None
 
-    last_value: Dict[int, float] = {}
+    last_value: dict[int, float] = {}
     merged = {}
 
     for d in all_dates:
@@ -1097,7 +1096,7 @@ def test_case_15_three_accounts_fully_staggered():
     print(f"  D2: A=$100(LOCF) + B=$50 + C=nodata = ${merged[D2]['value']:,.0f}")
     print(f"  D3: A=$100(LOCF) + B=$50(LOCF) + C=$30 = ${merged[D3]['value']:,.0f}")
     print(f"  D4: A=$120 + B=$70 + C=$40 = ${merged[D4]['value']:,.0f}")
-    print(f"  All values monotonic increasing ✓ — no artificial dips")
+    print("  All values monotonic increasing ✓ — no artificial dips")
 
 
 # ══════════════════════════════════════════════════════════════════════

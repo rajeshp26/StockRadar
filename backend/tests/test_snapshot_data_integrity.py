@@ -13,7 +13,7 @@ These tests are READ-ONLY: they never write or delete rows.
 import os
 import sys
 from datetime import date, datetime
-from typing import Any, Dict, List
+from typing import Any
 
 # Ensure backend/ is on the path so database module can be found
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -52,9 +52,9 @@ def _parse_date(d) -> date:
     return date.fromisoformat(d)
 
 
-def _fetch_all_snapshots() -> List[Dict[str, Any]]:
+def _fetch_all_snapshots() -> list[dict[str, Any]]:
     PAGE_SIZE = 1000
-    all_data: List[Dict[str, Any]] = []
+    all_data: list[dict[str, Any]] = []
     offset = 0
     while True:
         res = (
@@ -80,7 +80,7 @@ def _fetch_all_snapshots() -> List[Dict[str, Any]]:
     return all_data
 
 
-def _fetch_active_accounts() -> List[Dict[str, Any]]:
+def _fetch_active_accounts() -> list[dict[str, Any]]:
     res = (
         supabase.table("portfolio_accounts")
         .select("account_id, account_name, is_active")
@@ -90,8 +90,8 @@ def _fetch_active_accounts() -> List[Dict[str, Any]]:
     return res.data or []
 
 
-def _group_by_account(snapshots: List[Dict]) -> Dict[int, List[Dict]]:
-    by_account: Dict[int, List[Dict]] = {}
+def _group_by_account(snapshots: list[dict]) -> dict[int, list[dict]]:
+    by_account: dict[int, list[dict]] = {}
     for s in snapshots:
         aid = s["account_id"]
         by_account.setdefault(aid, []).append(s)
@@ -129,7 +129,7 @@ class TestNoSpikesInGapFilledData:
             pytest.skip("No snapshots in database")
 
         by_account = _group_by_account(snapshots)
-        all_spikes: List[Dict] = []
+        all_spikes: list[dict] = []
 
         for aid, snaps in by_account.items():
             if len(snaps) < 2:
@@ -225,7 +225,7 @@ class TestDateContinuity:
             pytest.skip("No snapshots in database")
 
         by_account = _group_by_account(snapshots)
-        gap_violations: List[Dict] = []
+        gap_violations: list[dict] = []
 
         for aid, snaps in by_account.items():
             if len(snaps) <= 10:
@@ -320,7 +320,7 @@ class TestCostBasisConsistency:
         if not snapshots:
             pytest.skip("No snapshots in database")
 
-        violations: List[Dict] = []
+        violations: list[dict] = []
         for s in snapshots:
             hmv = float(s.get("holdings_market_value") or 0)
             cb = float(s.get("cost_basis") or 0)

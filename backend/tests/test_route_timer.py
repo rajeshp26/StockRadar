@@ -1,7 +1,7 @@
 """Unit tests for RouteTimer instrumentation."""
 
-import io
 import logging
+
 from shared.metrics import RouteTimer
 
 

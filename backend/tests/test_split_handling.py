@@ -1,15 +1,14 @@
 """Tests for split handling — replay engine handler, event producer, and integration."""
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from infrastructure.repositories.event_store import EventStore
-from shared.replay_engine import ReplayEngine, AccountState, HoldingState
-from shared.split_utils import parse_split_factor, parse_split_date, get_split_factors_from_rows
-
+from shared.replay_engine import AccountState, HoldingState, ReplayEngine
+from shared.split_utils import get_split_factors_from_rows, parse_split_date, parse_split_factor
 
 # ---------------------------------------------------------------------------
 # split_utils unit tests
@@ -265,7 +264,7 @@ class TestHandleSplit:
 class TestReplayWithSplit:
     def test_buy_then_split(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         buy_event = {
             "event_type": "transaction_imported",
@@ -313,7 +312,7 @@ class TestReplayWithSplit:
 
     def test_buy_split_sell_fifo(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         buy_event = {
             "event_type": "transaction_imported",

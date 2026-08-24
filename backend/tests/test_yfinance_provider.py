@@ -2,7 +2,9 @@
 
 import asyncio
 from unittest import mock
+
 import pytest
+
 from providers.yfinance_provider import YFinanceProvider
 
 
@@ -53,3 +55,19 @@ async def test_get_stock_details_fallback_on_failure():
             override_cache[cache_key] = None
 
         assert override_cache[cache_key] is None
+
+
+class TestResolveSymbolSuffixIdempotency:
+    """Regression: stored symbols like "BCE.TO" must not become "BCE.TO.TO"."""
+
+    def test_appends_suffix_when_missing(self):
+        assert YFinanceProvider()._resolve_symbol("BCE", "TOR") == "BCE.TO"
+
+    def test_no_double_suffix_when_already_suffixed(self):
+        assert YFinanceProvider()._resolve_symbol("BCE.TO", "TOR") == "BCE.TO"
+
+    def test_venture_suffix_idempotent(self):
+        assert YFinanceProvider()._resolve_symbol("ABC.V", "TSXV") == "ABC.V"
+
+    def test_unknown_exchange_returns_uppercase(self):
+        assert YFinanceProvider()._resolve_symbol("aapl") == "AAPL"

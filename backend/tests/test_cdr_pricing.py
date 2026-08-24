@@ -15,11 +15,9 @@ Bug 11: Stock price endpoint missing CDR adjustment
 Bug 12: get_holding_performance() missing CDR adjustment
 Bug 13: _fill_snapshot_gaps_incremental price_currency wrong for CDR
 """
-import pytest
 from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-
 
 # ============================================================================
 # Bug 1: Per-company CDR ratio (not hardcoded)
@@ -29,7 +27,7 @@ class TestPerCompanyCDRRatio:
     """Bug 1: _resolve_holding_price should use per-company cdr_ratio, not hardcoded CDR_RATIO."""
 
     def test_per_company_ratio_used(self):
-        from shared.snapshot_builder import _resolve_holding_price, PriceTier
+        from shared.snapshot_builder import PriceTier, _resolve_holding_price
 
         prices = {1: {"price": 350.0, "price_date": date(2024, 6, 1)}}
         history = {}
@@ -46,7 +44,7 @@ class TestPerCompanyCDRRatio:
         assert price == Decimal("350") / Decimal("12")
 
     def test_fallback_to_default_ratio(self):
-        from shared.snapshot_builder import _resolve_holding_price, PriceTier, CDR_RATIO
+        from shared.snapshot_builder import CDR_RATIO, _resolve_holding_price
 
         prices = {1: {"price": 350.0, "price_date": date(2024, 6, 1)}}
         history = {}
@@ -61,7 +59,7 @@ class TestPerCompanyCDRRatio:
         assert price == Decimal("350") / CDR_RATIO
 
     def test_non_cdr_not_divided(self):
-        from shared.snapshot_builder import _resolve_holding_price, PriceTier
+        from shared.snapshot_builder import _resolve_holding_price
 
         prices = {1: {"price": 350.0, "price_date": date(2024, 6, 1)}}
         history = {}
@@ -85,7 +83,7 @@ class TestCDRPriceHistoryFX:
     """Bug 2: CDR prices from price_history (US USD) should be divided by ratio AND multiplied by FX."""
 
     def test_price_history_cdr_with_fx(self):
-        from shared.snapshot_builder import _resolve_holding_price, PriceTier
+        from shared.snapshot_builder import PriceTier, _resolve_holding_price
 
         mock_fx = MagicMock()
         mock_fx.get_rate.return_value = Decimal("1.35")
@@ -107,7 +105,7 @@ class TestCDRPriceHistoryFX:
         assert price == expected
 
     def test_price_history_cdr_fx_unavailable(self):
-        from shared.snapshot_builder import _resolve_holding_price, PriceTier
+        from shared.snapshot_builder import _resolve_holding_price
 
         mock_fx = MagicMock()
         mock_fx.get_rate.return_value = None  # FX rate unavailable
@@ -135,7 +133,7 @@ class TestCDRYFinanceTor:
     """Bug 3: CDR prices from yfinance_tor (TSX share in CAD) should be divided by ratio only."""
 
     def test_yfinance_tor_source(self):
-        from shared.snapshot_builder import _resolve_holding_price, PriceTier
+        from shared.snapshot_builder import _resolve_holding_price
 
         prices = {1: {"price": 350.0, "price_date": date(2024, 6, 1), "source": "yfinance_tor"}}
         history = {}
@@ -151,7 +149,7 @@ class TestCDRYFinanceTor:
         assert price == Decimal("350") / Decimal("10")
 
     def test_yfinance_tor_with_fx_ignored(self):
-        from shared.snapshot_builder import _resolve_holding_price, PriceTier
+        from shared.snapshot_builder import _resolve_holding_price
 
         mock_fx = MagicMock()
         mock_fx.get_rate.return_value = Decimal("1.35")
@@ -179,7 +177,7 @@ class TestCDRCostBasisCurrency:
     """Bug 4: CDR holdings should have price_currency='CAD' to prevent double FX conversion."""
 
     def test_cdr_price_currency_cad_in_snapshot(self):
-        from shared.snapshot_builder import build_snapshot_row, PriceTier
+        from shared.snapshot_builder import build_snapshot_row
 
         holdings = [{
             "company_id": 1,
@@ -270,7 +268,6 @@ class TestWatchlistCDR:
 
     def test_cdr_price_divided_in_watchlist(self):
         """Verify that if a company has exchange_override=TOR, the watchlist service divides by ratio."""
-        from shared.snapshot_builder import CDR_RATIO
         # The watchlist service divides current_price and previous_close by ratio
         # for CDR holdings. This is a logic test.
         tsx_price = 350.0

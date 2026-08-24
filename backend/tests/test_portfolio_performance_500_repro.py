@@ -16,25 +16,24 @@ Bugs identified and fixed:
 To run:
     pytest tests/test_portfolio_performance_500_repro.py -v -s
 """
-import asyncio
 import logging
-from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
-from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 logging.basicConfig(level=logging.DEBUG)
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from application.services.portfolio_service import PortfolioService
-from shared.snapshot_builder import build_snapshot_row, _classify_lot_action, resolve_price_forward_filled
-
+from shared.snapshot_builder import (
+    build_snapshot_row,
+)
 
 # MOCK SETUP
 
@@ -97,11 +96,11 @@ class MockClient:
 
 def make_txns_for_account(
     account_id: int,
-    buys: List[Tuple[str, date, float, float, float]],
-    sells: Optional[List[Tuple[str, date, float, float, float]]] = None,
-    other_cash: Optional[List[Tuple[str, date, float, float]]] = None,
-    company_ids: Optional[Dict[str, int]] = None,
-) -> List[Dict]:
+    buys: list[tuple[str, date, float, float, float]],
+    sells: list[tuple[str, date, float, float, float]] | None = None,
+    other_cash: list[tuple[str, date, float, float]] | None = None,
+    company_ids: dict[str, int] | None = None,
+) -> list[dict]:
     txns = []
     idx = [0]
     for sym, tx_date, qty, price, comm in buys:
@@ -473,7 +472,9 @@ async def test_3_get_portfolio_performance_via_snapshot_path():
     mock_financial_repo = MagicMock()
     mock_financial_repo.get_latest_prices = AsyncMock(return_value={})
 
-    from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+    from infrastructure.repositories.portfolio_snapshots_repository import (
+        PortfolioSnapshotsRepository,
+    )
 
     mock_snapshots_repo = MagicMock(spec=PortfolioSnapshotsRepository)
     mock_snapshots_repo.get_portfolio_snapshots.return_value = []

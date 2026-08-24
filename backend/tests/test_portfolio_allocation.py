@@ -1,9 +1,9 @@
 """
 Tests for portfolio allocation endpoint and service.
 """
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import date
+
+import pytest
 
 from application.services.portfolio_service import PortfolioService
 

@@ -3,8 +3,9 @@ Integration tests for GET /analysis/{symbol}/fundamentals.
 Verifies user_id is properly resolved from JWT dict → DB user_id.
 """
 import sys
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 _fake_defeat = MagicMock()
 _fake_ticker = MagicMock()
@@ -31,8 +32,9 @@ def _disable_rate_limiter():
 @pytest.fixture
 def test_app():
     from fastapi import FastAPI
-    from dependencies import get_current_user_dep
+
     from api.analysis import router as analysis_router
+    from dependencies import get_current_user_dep
 
     app = FastAPI()
     app.include_router(analysis_router)

@@ -1,11 +1,12 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
-from application.services.moat_analysis_service import MoatAnalysisService, _SECTOR_MOAT_ADJUSTMENTS
-from application.services.moat_wacc_service import MoatWaccService
+import pytest
+
 from application.services.edgar_filing_service import EdgarFilingService
+from application.services.moat_analysis_service import _SECTOR_MOAT_ADJUSTMENTS, MoatAnalysisService
 from application.services.moat_keyword_analyzer import MoatKeywordAnalyzer
+from application.services.moat_wacc_service import MoatWaccService
 
 
 class TestMoatAnalysisService:

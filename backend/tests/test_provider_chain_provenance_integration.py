@@ -7,8 +7,8 @@ parse_income_statement, parse_balance_sheet, parse_cash_flow.
 These are integration tests because they exercise real provider classes
 and real pandas parsing logic with mocked DataFrames, NOT mocked providers.
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -203,7 +203,9 @@ class TestCoverageEndpointContract:
 
     def test_response_model_structure(self):
         from api.stocks import (
-            FinancialCoverageResponse, StatementCoverage, FieldCoverage,
+            FieldCoverage,
+            FinancialCoverageResponse,
+            StatementCoverage,
         )
         fc = FieldCoverage(field="revenue", total_rows=5, present=4, missing=1,
                            providers={"defeat_beta": 3, "yfinance": 1})

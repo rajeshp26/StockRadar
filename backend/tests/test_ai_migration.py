@@ -1,12 +1,14 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List, Optional
 
-from application.services.prompts.suitability import (
-    build_suitability_prompt, _fmt, _critical_flags, _input_source_summary,
-)
-from application.services.prompts.overview import build_overview_prompt
+import pytest
+
 from application.services.prompts.company_snapshot import CompanySnapshotBuilder
+from application.services.prompts.overview import build_overview_prompt
+from application.services.prompts.suitability import (
+    _critical_flags,
+    _fmt,
+    build_suitability_prompt,
+)
 from providers.ai_provider import AIProvider, OpenRouterProvider
 
 

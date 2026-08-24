@@ -1,9 +1,10 @@
 """
 Tests for portfolio performance account filtering.
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import date
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from application.services.portfolio_service import PortfolioService
 

@@ -3,7 +3,6 @@ Tests for actual scheduler plan() methods — verifies job dict format
 and edge cases for each scheduler's v3 planner integration.
 """
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 
 
 class TestSuperInvestorsPlan:

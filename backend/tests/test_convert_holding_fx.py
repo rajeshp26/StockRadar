@@ -11,13 +11,11 @@ Verifies that FX conversion is consistent across all code paths:
 Run: pytest tests/test_convert_holding_fx.py -v
 """
 
-import pytest
 from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 from shared.snapshot_builder import convert_holding_fx
-
 
 # ═══════════════════════════════════════════════════════════════════
 # Helpers

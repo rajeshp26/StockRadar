@@ -6,11 +6,11 @@ date.today() so that predictions always fall in the future — no
 need to freeze time or patch date.
 """
 
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import date, timedelta
+from typing import Any
 
 
-def build_quarterly_8(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_quarterly_8(today: date | None = None) -> list[dict[str, Any]]:
     """8 quarterly payments with last ~90 days before today.
     avg_gap ≈ 91d → quarterly band (36-100).
     Expected: next ≈ last + 3 months via relativedelta.
@@ -28,7 +28,7 @@ def build_quarterly_8(today: Optional[date] = None) -> List[Dict[str, Any]]:
     return payments
 
 
-def build_monthly_12(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_monthly_12(today: date | None = None) -> list[dict[str, Any]]:
     """12 monthly payments with last ~20 days before today.
     avg_gap ≈ 30d → monthly band (≤35).
     Expected: next ≈ last + round(avg_gap) days.
@@ -46,7 +46,7 @@ def build_monthly_12(today: Optional[date] = None) -> List[Dict[str, Any]]:
     return payments
 
 
-def build_semi_annual_6(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_semi_annual_6(today: date | None = None) -> list[dict[str, Any]]:
     """6 semi-annual payments with last ~100 days before today.
     avg_gap ≈ 182d → semi-annual band (101-200).
     Expected: next ≈ last + 6 months via relativedelta.
@@ -65,7 +65,7 @@ def build_semi_annual_6(today: Optional[date] = None) -> List[Dict[str, Any]]:
     return payments
 
 
-def build_annual_5(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_annual_5(today: date | None = None) -> list[dict[str, Any]]:
     """5 annual payments with last ~200 days before today.
     avg_gap ≈ 365d → annual band (>200).
     Expected: next ≈ last + 1 year via relativedelta.
@@ -84,12 +84,12 @@ def build_annual_5(today: Optional[date] = None) -> List[Dict[str, Any]]:
     return payments
 
 
-def build_quarterly_4(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_quarterly_4(today: date | None = None) -> list[dict[str, Any]]:
     """Exactly 4 quarterly payments (boundary test)."""
     return build_quarterly_8(today)[:4]
 
 
-def build_quarterly_with_special(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_quarterly_with_special(today: date | None = None) -> list[dict[str, Any]]:
     """Quarterly-8 + one special dividend.
     Expected: same as quarterly-8 (special excluded).
     """
@@ -103,7 +103,7 @@ def build_quarterly_with_special(today: Optional[date] = None) -> List[Dict[str,
     }]
 
 
-def build_all_special(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_all_special(today: date | None = None) -> list[dict[str, Any]]:
     """4 all-special payments.
     Expected: falls back to raw rows (graceful degradation).
     """
@@ -116,14 +116,14 @@ def build_all_special(today: Optional[date] = None) -> List[Dict[str, Any]]:
     ]
 
 
-def build_insufficient_3(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_insufficient_3(today: date | None = None) -> list[dict[str, Any]]:
     """Only 3 payments — < 4 guard.
     Expected: None.
     """
     return build_quarterly_8(today)[:3]
 
 
-def build_self_feed(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_self_feed(today: date | None = None) -> list[dict[str, Any]]:
     """Quarterly-8 + 2 prediction rows (NULL amount).
     Expected: same as quarterly-8 (NULL rows excluded).
     """
@@ -137,7 +137,7 @@ def build_self_feed(today: Optional[date] = None) -> List[Dict[str, Any]]:
     ]
 
 
-def build_suspended(today: Optional[date] = None) -> List[Dict[str, Any]]:
+def build_suspended(today: date | None = None) -> list[dict[str, Any]]:
     """Payments ending 3+ years ago — suspended payer.
     Expected: None (next_date < today guard).
     """

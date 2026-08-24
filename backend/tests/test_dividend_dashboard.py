@@ -9,12 +9,11 @@ Covers:
 See docs/Dividends_Redesign_Feasibility.md §15 for the full test plan.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
-from datetime import datetime, timedelta
 
 from application.services.dividend_dashboard_service import DividendDashboardService
-
 
 # ============================================================================
 # FIXTURES

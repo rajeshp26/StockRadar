@@ -11,16 +11,15 @@ Covers:
 Run: pytest tests/test_fx_conversion.py -v
 """
 
-import pytest
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
-from unittest.mock import patch, MagicMock, AsyncMock
-import math
 import logging
+from datetime import date, timedelta
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
 
-from shared.fx_service import FXService, CACHE_TTL, NONE_CACHE_TTL
+import pytest
+
+from shared.fx_service import CACHE_TTL, NONE_CACHE_TTL, FXService
 from shared.time_utils import now_utc
-
 
 # ═══════════════════════════════════════════════════════════════════
 # Fixtures
@@ -51,6 +50,7 @@ class TestFXProvider:
     def test_returns_decimal(self, mock_download):
         """fetch_fx_rate returns Decimal, not float."""
         import pandas as pd
+
         from providers.fx_provider import fetch_fx_rate
 
         mock_df = pd.DataFrame({"Close": [1.3645]},
@@ -66,6 +66,7 @@ class TestFXProvider:
     def test_handles_multiindex_columns(self, mock_download):
         """Extracts scalar from DataFrame with MultiIndex columns."""
         import pandas as pd
+
         from providers.fx_provider import fetch_fx_rate
 
         arrays = [["Close"], ["CADUSD=X"]]
@@ -84,6 +85,7 @@ class TestFXProvider:
     def test_empty_dataframe_returns_none(self, mock_download):
         """Returns None when yfinance returns empty."""
         import pandas as pd
+
         from providers.fx_provider import fetch_fx_rate
 
         mock_download.return_value = pd.DataFrame()
@@ -102,9 +104,10 @@ class TestFXProvider:
     @patch("providers.fx_provider.yf.download")
     def test_nan_close_returns_none(self, mock_download):
         """Returns None when Close column is all NaN."""
-        import pandas as pd
-        from providers.fx_provider import fetch_fx_rate
         import numpy as np
+        import pandas as pd
+
+        from providers.fx_provider import fetch_fx_rate
 
         mock_df = pd.DataFrame({"Close": [np.nan]},
                                index=pd.DatetimeIndex(["2026-06-20"]))
@@ -562,7 +565,7 @@ class TestE2EFXConversion:
     def test_seed_data_shop_currency_fixed(self):
         """Verify seed_e2e_data.py has SHOP->USD."""
         import ast
-        with open("scripts/seed_e2e_data.py", "r") as f:
+        with open("scripts/seed_e2e_data.py") as f:
             content = f.read()
 
         # Check that SHOP is in the USD list
@@ -870,8 +873,8 @@ TestEnrichHoldingsFX.test_enrich_holdings_mixed_currencies = _test_enrich_holdin
 
 def _test_snapshot_builder_mixed_currency(self):
     """RY(CAD) + AAPL(USD) with account_currency=CAD and a rate in the DB."""
-    from shared.snapshot_builder import build_snapshot_row
     from shared.fx_service import FXService
+    from shared.snapshot_builder import build_snapshot_row
 
     fx = FXService(MagicMock())
     fx._cache_set(("USD", "CAD", "2026-06-20"), Decimal("1.36"))
@@ -907,8 +910,8 @@ TestSnapshotBuilderFX.test_snapshot_builder_mixed_currency = _test_snapshot_buil
 
 def _test_snapshot_builder_cost_basis_converted(self):
     """Verify cost_basis is also converted."""
-    from shared.snapshot_builder import build_snapshot_row
     from shared.fx_service import FXService
+    from shared.snapshot_builder import build_snapshot_row
 
     fx = FXService(MagicMock())
     fx._cache_set(("USD", "CAD", "2026-06-20"), Decimal("1.36"))

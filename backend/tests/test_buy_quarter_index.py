@@ -3,10 +3,9 @@ Test buy_quarter_index computation with realistic scenarios.
 Simulates Ford (purchased years ago → buy_quarter_index = 0)
 vs a recently purchased stock (buy_quarter_index > 0).
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import date, datetime
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 
 # ── Helper: build a FundamentalsService with a mocked repo ─────────────
 

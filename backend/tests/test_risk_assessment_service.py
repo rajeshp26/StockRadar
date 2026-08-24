@@ -1,23 +1,16 @@
 from __future__ import annotations
-import pytest
-from unittest.mock import AsyncMock, MagicMock
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from application.services.risk_assessment_service import RiskAssessmentService
 from domain.models.risk_assessment import (
     RiskAssessmentResponse,
-    CompositeScore,
-    ScenarioResult,
-    RiskMetric,
     RiskLayer,
-    BusinessFragility,
-    BalanceSheetRisk,
-    ValuationCompressionRisk,
-    EarningsStressRisk,
-    DrawdownRisk,
-    LayerName,
+    RiskMetric,
+    ScenarioResult,
 )
-from application.services.risk_assessment_service import RiskAssessmentService
 
 
 @pytest.fixture
@@ -772,9 +765,7 @@ class TestRiskAssessmentService:
         cash_flow = {"cash_from_operating_activities": 100, "capital_expenditures": -200, "net_income": 50}
         result = service._analyze_balance_sheet(ratios, cash_flow)
         for m in result.metrics:
-            if m.name == "FCF Stability":
-                pass
-            elif m.name != "Debt/EBITDA":
+            if m.name == "FCF Stability" or m.name != "Debt/EBITDA":
                 pass
         assert result.score < 5.0
 

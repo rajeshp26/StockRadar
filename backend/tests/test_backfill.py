@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 
@@ -32,8 +33,8 @@ class TestBackfillCompany:
         mock_valuation.compute_residual_income_if_stale.assert_not_called()
 
     async def test_triggers_derived_metrics_after_upsert(self):
-        from scripts.phase7_backfill import backfill_company
         import scripts.phase7_backfill as bp
+        from scripts.phase7_backfill import backfill_company
 
         mock_repo = AsyncMock()
         mock_provider = AsyncMock()
@@ -61,8 +62,8 @@ class TestBackfillCompany:
         assert result["status"] == "ok"
 
     async def test_triggers_valuation_with_force(self):
-        from scripts.phase7_backfill import backfill_company
         import scripts.phase7_backfill as bp
+        from scripts.phase7_backfill import backfill_company
 
         mock_repo = AsyncMock()
         mock_provider = AsyncMock()
@@ -92,8 +93,8 @@ class TestBackfillCompany:
         assert result["status"] == "ok"
 
     async def test_handles_provider_failure_gracefully(self):
-        from scripts.phase7_backfill import backfill_company
         import scripts.phase7_backfill as bp
+        from scripts.phase7_backfill import backfill_company
 
         mock_repo = AsyncMock()
         mock_provider = AsyncMock()

@@ -1,9 +1,8 @@
 import sys
-import pytest
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from datetime import date, datetime, timezone
-
+import pytest
 
 # Mock defeatbeta_api before any api.analysis imports trigger it
 _fake_defeat = MagicMock()
@@ -33,8 +32,9 @@ def _disable_rate_limiter():
 def test_app():
     """Build a minimal FastAPI app with the moat router and auth override."""
     from fastapi import FastAPI
-    from dependencies import get_current_user_dep
+
     from api.analysis import router as moat_router
+    from dependencies import get_current_user_dep
 
     app = FastAPI()
     app.include_router(moat_router)
@@ -52,9 +52,14 @@ def client(test_app):
 @pytest.fixture
 def mock_moat_response():
     """Standard successful MoatResponse dict."""
-    from domain.models.analysis_moat import (MoatResponse, MoatValuation, MoatInputs,
-                                              MoatIndustryContext, MoatApplicability,
-                                              MoatDataQuality)
+    from domain.models.analysis_moat import (
+        MoatApplicability,
+        MoatDataQuality,
+        MoatIndustryContext,
+        MoatInputs,
+        MoatResponse,
+        MoatValuation,
+    )
     resp = MoatResponse(
         symbol="AAPL",
         company_id=1,
@@ -76,7 +81,7 @@ def mock_moat_response():
 @pytest.fixture
 def mock_evidence_response():
     """Standard successful MoatEvidenceResponse dict."""
-    from domain.models.analysis_moat import (MoatEvidenceResponse, MoatKeywordEvidence)
+    from domain.models.analysis_moat import MoatEvidenceResponse, MoatKeywordEvidence
     resp = MoatEvidenceResponse(
         symbol="AAPL",
         company_id=1,
@@ -96,14 +101,14 @@ def mock_evidence_response():
 @pytest.fixture
 def mock_ai_response():
     """Standard successful MoatAiResponse dict."""
-    from domain.models.analysis_moat import MoatAiResponse, MoatAiNarrative
+    from domain.models.analysis_moat import MoatAiNarrative, MoatAiResponse
     resp = MoatAiResponse(
         symbol="AAPL",
         company_id=1,
         narrative=MoatAiNarrative(
             narrative="Strong economic moat based on brand power and ecosystem lock-in.",
             model="openrouter/default",
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            generated_at=datetime.now(UTC).isoformat(),
         ),
         available=True,
     )

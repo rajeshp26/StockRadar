@@ -12,13 +12,10 @@ WARNING: This test hits the real production database. Read-only queries only.
 """
 
 import os
-import time
 import sys
-from collections import defaultdict
+import time
 from datetime import date, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 # Read real Supabase credentials directly from .env (bypass conftest mocks)
 _env_file = Path(__file__).resolve().parent.parent / ".env"
@@ -51,7 +48,7 @@ def _grade(ms: float) -> str:
     return "FAIL"
 
 
-def _print_waterfall(results: List[dict]):
+def _print_waterfall(results: list[dict]):
     total_ms = sum(r["elapsed_ms"] for r in results)
     width = 50
     print()
@@ -106,9 +103,10 @@ def _parse_timestamp(ts) -> date:
 @pytest.fixture(scope="module")
 def db():
     """Real Supabase client via service role key (bypasses conftest mocks)."""
-    from supabase import create_client
     from supabase.lib.client_options import SyncClientOptions
     from supabase_auth import SyncMemoryStorage
+
+    from supabase import create_client
     client = create_client(
         _SUPABASE_URL,
         _SUPABASE_KEY,
@@ -383,8 +381,8 @@ class TestFullDashboardWaterfall:
         print()
         print("  Estimated total page load:")
         print(f"    DB queries:        {total_db:.0f}ms")
-        print(f"    Network overhead:  ~200ms (HTTP + proxy + JSON)")
-        print(f"    React render:      ~300ms (hydration + re-render)")
+        print("    Network overhead:  ~200ms (HTTP + proxy + JSON)")
+        print("    React render:      ~300ms (hydration + re-render)")
         total_est = total_db + 200 + 300
         print(f"    => TOTAL:          {total_est:.0f}ms ({total_est/1000:.1f}s)")
 
@@ -508,7 +506,7 @@ class TestTabSwitchSimulation:
         dashboard_db = sum(r["elapsed_ms"] for r in results if r["label"].startswith("[D"))
         perf_db = sum(r["elapsed_ms"] for r in results if r["label"].startswith("[P"))
 
-        print(f"  TAB SWITCH BREAKDOWN:")
+        print("  TAB SWITCH BREAKDOWN:")
         print(f"    Dashboard queries (8):  {dashboard_db:.0f}ms")
         print(f"    Performance queries (5): {perf_db:.0f}ms")
         print(f"    Total DB time:           {total_db:.0f}ms")

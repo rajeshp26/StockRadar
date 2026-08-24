@@ -1,6 +1,7 @@
 import asyncio
-from unittest.mock import MagicMock, patch, AsyncMock
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
+
 import pytest
 
 
@@ -88,7 +89,7 @@ class TestSchedulerPlannerCheckAndPlan:
         return SchedulerPlanner(scheduler_repo=mock_repo)
 
     async def test_due_scheduler_enqueues_jobs(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
 
         async def plan_fn():
             return [
@@ -112,7 +113,7 @@ class TestSchedulerPlannerCheckAndPlan:
         mock_repo.record_planner_run.assert_called_once()
 
     async def test_not_due_skips(self, planner, mock_repo):
-        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
         async def plan_fn():
             return [{"job_type": "test", "dedupe_key": "test:1"}]
@@ -170,7 +171,7 @@ class TestSchedulerPlannerCheckAndPlan:
 
     async def test_failure_records_error_and_retries(self, planner, mock_repo):
         mock_repo.get_scheduler_state.return_value = {
-            "next_due_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            "next_due_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         }
 
         async def failing_plan():
@@ -189,7 +190,7 @@ class TestSchedulerPlannerCheckAndPlan:
         )
 
     async def test_missed_intervals_no_catchup(self, planner, mock_repo):
-        old_next = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        old_next = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
 
         async def plan_fn():
             return [{"job_type": "test", "dedupe_key": "test:1"}]
@@ -204,7 +205,7 @@ class TestSchedulerPlannerCheckAndPlan:
 
         state_update = mock_repo.upsert_scheduler_state.call_args[0][0]
         next_due = datetime.fromisoformat(state_update["next_due_at"])
-        expected = datetime.now(timezone.utc) + timedelta(hours=6)
+        expected = datetime.now(UTC) + timedelta(hours=6)
         assert abs((next_due - expected).total_seconds()) < 10
 
     async def test_invalid_timestamp_treated_as_due(self, planner, mock_repo):
@@ -223,7 +224,7 @@ class TestSchedulerPlannerCheckAndPlan:
         mock_repo.upsert_scheduler_state.assert_called()
 
     async def test_multiple_schedulers_all_due(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
         async def plan_fn_a():
             return [{"job_type": "test", "dedupe_key": "test:a"}]
@@ -241,8 +242,8 @@ class TestSchedulerPlannerCheckAndPlan:
         assert mock_repo.record_planner_run.call_count == 2
 
     async def test_second_scheduler_not_due_first_runs(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
         async def plan_fn():
             return [{"job_type": "test", "dedupe_key": "test:due"}]
@@ -262,7 +263,7 @@ class TestSchedulerPlannerCheckAndPlan:
         assert mock_repo.record_planner_run.call_count == 1
 
     async def test_enqueue_failure_does_not_block_other_jobs(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
         async def plan_fn():
             return [
@@ -282,7 +283,7 @@ class TestSchedulerPlannerCheckAndPlan:
         assert state_update["last_status"] == "succeeded"
 
     async def test_state_upsert_failure_after_plan_still_records_run(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
         async def plan_fn():
             return [{"job_type": "test", "dedupe_key": "test:state_fail"}]
@@ -298,7 +299,7 @@ class TestSchedulerPlannerCheckAndPlan:
         mock_repo.update_scheduler_state.assert_called_once()
 
     async def test_multiple_schedulers_one_fails_other_runs(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
         async def good_plan():
             return [{"job_type": "test", "dedupe_key": "test:good"}]
@@ -316,7 +317,7 @@ class TestSchedulerPlannerCheckAndPlan:
         assert mock_repo.record_planner_run.call_count == 2
 
     async def test_empty_plan_does_not_enqueue(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
         async def plan_fn():
             return []
@@ -330,7 +331,7 @@ class TestSchedulerPlannerCheckAndPlan:
         mock_repo.record_planner_run.assert_called_once()
 
     async def test_plan_returns_none_handled_gracefully(self, planner, mock_repo):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
         async def plan_fn():
             return None
@@ -360,7 +361,7 @@ class TestPlannerLoopLifecycle:
         loop_task.cancel()
         try:
             await asyncio.wait_for(loop_task, timeout=2.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             pass
 
         assert loop_task.done()
@@ -378,7 +379,7 @@ class TestPlannerLoopLifecycle:
         planner.register("erratic_sched", plan_fn, interval_hours=0, enabled=True)
         mock_repo.get_scheduler_state.side_effect = [
             None,
-            {"next_due_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()},
+            {"next_due_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
         ]
 
         loop_task = asyncio.create_task(planner.run_planner_loop())
@@ -386,7 +387,7 @@ class TestPlannerLoopLifecycle:
         loop_task.cancel()
         try:
             await asyncio.wait_for(loop_task, timeout=2.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             pass
 
         assert call_count[0] >= 2
@@ -397,7 +398,7 @@ class TestPlannerLoopLifecycle:
         loop_task.cancel()
         try:
             await asyncio.wait_for(loop_task, timeout=2.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             pass
 
         assert loop_task.done()
@@ -409,7 +410,7 @@ class TestPlannerLoopLifecycle:
         loop_task.cancel()
         try:
             await asyncio.wait_for(loop_task, timeout=2.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             pass
 
         assert loop_task.done()

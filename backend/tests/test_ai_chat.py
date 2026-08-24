@@ -1,12 +1,15 @@
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from application.services.prompts.chat_prompt import (
-    build_chat_system_prompt, normalize_symbol, ChatMessage, ChatRequest,
+    ChatMessage,
+    ChatRequest,
+    build_chat_system_prompt,
+    normalize_symbol,
 )
 from providers.ai_provider import OpenRouterProvider
-
 
 # =============================================================================
 # Unit Tests: build_chat_system_prompt (pure function, no mocking needed)
@@ -415,9 +418,9 @@ class TestChatEndpointUnit:
         mock_repo = MagicMock()
         mock_get_repo.return_value = mock_repo
 
-        from api.chat import chat_with_digital_twin, ChatRequest, ChatMessage
-
         from starlette.requests import Request
+
+        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -452,9 +455,9 @@ class TestChatEndpointUnit:
         """Verify 503 when AI provider key is missing."""
         mock_get_provider.return_value = None
 
-        from api.chat import chat_with_digital_twin, ChatRequest, ChatMessage
-
         from starlette.requests import Request
+
+        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -495,9 +498,9 @@ class TestChatEndpointUnit:
         mock_repo = MagicMock()
         mock_get_repo.return_value = mock_repo
 
-        from api.chat import chat_with_digital_twin, ChatRequest, ChatMessage
-
         from starlette.requests import Request
+
+        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -544,9 +547,9 @@ class TestChatEndpointUnit:
         mock_repo = MagicMock()
         mock_get_repo.return_value = mock_repo
 
-        from api.chat import chat_with_digital_twin, ChatRequest, ChatMessage
-
         from starlette.requests import Request
+
+        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -604,9 +607,9 @@ class TestChatEndpointUnit:
         mock_repo = MagicMock()
         mock_get_repo.return_value = mock_repo
 
-        from api.chat import chat_with_digital_twin, ChatRequest, ChatMessage
-
         from starlette.requests import Request
+
+        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -660,9 +663,9 @@ class TestChatEndpointUnit:
         mock_repo = MagicMock()
         mock_get_repo.return_value = mock_repo
 
-        from api.chat import chat_with_digital_twin, ChatRequest, ChatMessage
-
         from starlette.requests import Request
+
+        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -715,9 +718,9 @@ class TestChatEndpointUnit:
         mock_repo = MagicMock()
         mock_get_repo.return_value = mock_repo
 
-        from api.chat import chat_with_digital_twin, ChatRequest, ChatMessage
-
         from starlette.requests import Request
+
+        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",

@@ -8,16 +8,20 @@ Covers:
   - Backward compatibility when field_sources is None
 """
 import sys
+
 sys.path.insert(0, '.')
 
 from decimal import Decimal
-from domain.model_types import (
-    IncomeStatementRow, BalanceSheetRow, CashFlowRow,
-)
-from application.validators.financial_data_validator import (
-    FinancialDataValidator, ValidationResult, Severity,
-)
 
+from application.validators.financial_data_validator import (
+    FinancialDataValidator,
+    ValidationResult,
+)
+from domain.model_types import (
+    BalanceSheetRow,
+    CashFlowRow,
+    IncomeStatementRow,
+)
 
 # ============================================================================
 # _build_field_sources tests

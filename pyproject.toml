@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Canonical suites: framework contract tests + consolidated backend tests.
+# Diagnostic scripts live outside these paths and are never collected.
+testpaths = ["tests", "backend/tests"]
+norecursedirs = [".*", "node_modules", "dist", "build", "backend/scripts", "docs"]

@@ -15,12 +15,11 @@ Usage:
 
 The waterfall simulates the EXACT request order the dashboard makes.
 """
-import os
-import time
 import asyncio
+import os
 import sys
+import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 
 import pytest
 
@@ -51,7 +50,7 @@ THRESHOLDS = {
 # -- HELPERS -------------------------------------------------------------------
 
 
-def _headers() -> Dict[str, str]:
+def _headers() -> dict[str, str]:
     h = {"Content-Type": "application/json", "Accept": "application/json"}
     if AUTH_TOKEN:
         h["Authorization"] = f"Bearer {AUTH_TOKEN}"
@@ -105,7 +104,7 @@ async def _time_request(method: str, path: str, label: str) -> dict:
     }
 
 
-def _grade(ms: int) -> Tuple[str, str]:
+def _grade(ms: int) -> tuple[str, str]:
     if ms < THRESHOLDS["fast"]:
         return "PASS", "green"
     elif ms < THRESHOLDS["ok"]:
@@ -116,7 +115,7 @@ def _grade(ms: int) -> Tuple[str, str]:
         return "CRITICAL", "red"
 
 
-def _print_waterfall(results: List[dict]):
+def _print_waterfall(results: list[dict]):
     """Print a waterfall chart of all requests in order."""
     print()
     print("=" * 100)
@@ -161,7 +160,7 @@ def _print_waterfall(results: List[dict]):
         print()
 
 
-def _print_diagnosis(results: List[dict]):
+def _print_diagnosis(results: list[dict]):
     """Print root-cause diagnosis based on observed timings."""
     print()
     print("=" * 100)
@@ -241,7 +240,6 @@ def _print_diagnosis(results: List[dict]):
 @pytest.mark.skipif(not AUTH_TOKEN, reason="Set PERF_AUTH_TOKEN env var")
 async def test_performance_waterfall_live():
     """Hit ALL portfolio endpoints against the LIVE backend and report timing."""
-    import httpx
 
     all_results = []
 
@@ -284,7 +282,6 @@ async def test_performance_snapshot_path_timing():
     should be MUCH faster than the fallback because it reads pre-computed
     data from the DB rather than computing on the fly.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
     from collections import defaultdict
     from datetime import date, timedelta
 
@@ -346,7 +343,7 @@ async def test_performance_snapshot_path_timing():
     elapsed = time.perf_counter() - start
     elapsed_ms = round(elapsed * 1000)
 
-    print(f"\n  Snapshot path timing (mock):")
+    print("\n  Snapshot path timing (mock):")
     print(f"    Accounts:   {num_accounts}")
     print(f"    Dates:      {num_dates}")
     print(f"    Snapshots:  {len(mock_snapshots)}")
@@ -355,9 +352,9 @@ async def test_performance_snapshot_path_timing():
     assert elapsed_ms < 100, (
         f"Snapshot merge took {elapsed_ms}ms - should be <100ms in-memory"
     )
-    print(f"    [OK] In-memory merge is fast (<100ms)")
+    print("    [OK] In-memory merge is fast (<100ms)")
     print()
-    print(f"  -> With DB query time (~500ms for indexed query):")
+    print("  -> With DB query time (~500ms for indexed query):")
     print(f"    Estimated total snapshot path: ~{elapsed_ms + 500}ms")
 
 
@@ -399,7 +396,7 @@ async def test_performance_duplicate_request_analysis():
     path_counts = Counter(r["base_path"] for r in all_requests)
     duplicates = {p: c for p, c in path_counts.items() if c > 1}
 
-    print(f"\n  Duplicate request analysis:")
+    print("\n  Duplicate request analysis:")
     print(f"    Total requests:  {len(all_requests)}")
     print(f"    Unique endpoints: {len(path_counts)}")
     print(f"    Duplicates:       {len(duplicates)}")
@@ -468,15 +465,15 @@ async def test_performance_overview_response_size():
     size_bytes = len(json.dumps(mock_response).encode("utf-8"))
     size_kb = size_bytes / 1024
 
-    print(f"\n  Overview response size estimate:")
+    print("\n  Overview response size estimate:")
     print(f"    Size: {size_kb:.1f} KB")
-    print(f"    Accounts: 10")
-    print(f"    Holdings: 30")
+    print("    Accounts: 10")
+    print("    Holdings: 30")
 
     transfer_time_ms = size_bytes / (1 * 1024 * 1024 / 1000)
     print(f"    Estimated transfer time (1 MB/s): {transfer_time_ms:.1f}ms")
     print()
-    print(f"    [OK] Response size is not the bottleneck")
+    print("    [OK] Response size is not the bottleneck")
 
 
 @pytest.mark.asyncio
@@ -495,7 +492,6 @@ async def test_performance_before_vs_after():
 
     This test uses timing estimates to show the expected improvement.
     """
-    from unittest.mock import MagicMock, AsyncMock, patch
 
     # Simulate enrichment cost per call
     enrichment_cost_ms = 150  # ~150ms per enrich_holdings_with_prices call
@@ -531,12 +527,12 @@ async def test_performance_before_vs_after():
     print(f"  TTL cache additional saving: ~{ttl_cache_extra:.0f}ms")
     print(f"  TOTAL ESTIMATED IMPROVEMENT: ~{saving_ms + ttl_cache_extra:.0f}ms")
     print()
-    print(f"  Changes deployed:")
-    print(f"  1. OverviewTab uses dashboard data (no more redundant calls)")
-    print(f"  2. TTL cache for current_market_data (30s, reduces DB reads)")
-    print(f"  3. Snapshot builder: zero-cost invariant is warning, not error")
-    print(f"  4. DashboardAccount includes gain_loss/gain_loss_pct per account")
-    print(f"  5. DashboardHolding includes company_id")
+    print("  Changes deployed:")
+    print("  1. OverviewTab uses dashboard data (no more redundant calls)")
+    print("  2. TTL cache for current_market_data (30s, reduces DB reads)")
+    print("  3. Snapshot builder: zero-cost invariant is warning, not error")
+    print("  4. DashboardAccount includes gain_loss/gain_loss_pct per account")
+    print("  5. DashboardHolding includes company_id")
 
     assert after_calls < before_calls, "New code should make fewer calls"
     assert after_total < before_total, "New code should be faster"
@@ -564,7 +560,6 @@ if __name__ == "__main__":
         print()
         sys.exit(1)
 
-    import httpx
 
     async def main():
         results = []

@@ -1,6 +1,6 @@
 import pytest
 
-from application.services.moat_keyword_analyzer import MoatKeywordAnalyzer, KEYWORD_GROUPS
+from application.services.moat_keyword_analyzer import KEYWORD_GROUPS, MoatKeywordAnalyzer
 
 
 class TestMoatKeywordAnalyzer:

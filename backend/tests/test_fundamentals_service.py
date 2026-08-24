@@ -1,38 +1,38 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 
 from application.services.fundamentals_service import (
-    _compute_quality_metrics,
+    _align_ttm_components,
+    _build_quarter_series,
+    _compute_composite,
     _compute_growth_metrics,
     _compute_moat_metrics,
     _compute_narrative_metrics,
-    _compute_valuation_metrics,
+    _compute_quality_metrics,
     _compute_section_status,
-    _compute_composite,
+    _compute_valuation_metrics,
     _determine_trend,
-    _build_quarter_series,
-    _quarter_label,
     _f,
+    _quarter_label,
     _safe_div,
-    _align_ttm_components,
 )
 
 
 def make_qratio(
     fiscal_year: int,
     fiscal_quarter: int,
-    roic: Optional[float] = None,
-    roe: Optional[float] = None,
-    gross_margin: Optional[float] = None,
-    operating_margin: Optional[float] = None,
-    debt_to_equity: Optional[float] = None,
-    piotroski_score: Optional[float] = None,
-    altman_z_score: Optional[float] = None,
-    interest_coverage: Optional[float] = None,
-) -> Dict[str, Any]:
+    roic: float | None = None,
+    roe: float | None = None,
+    gross_margin: float | None = None,
+    operating_margin: float | None = None,
+    debt_to_equity: float | None = None,
+    piotroski_score: float | None = None,
+    altman_z_score: float | None = None,
+    interest_coverage: float | None = None,
+) -> dict[str, Any]:
     return {
         "fiscal_year": fiscal_year,
         "fiscal_quarter": fiscal_quarter,
@@ -53,7 +53,7 @@ def make_qincome(
     revenue: float,
     net_income: float,
     shares: float = 100_000_000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "fiscal_year": fiscal_year,
         "fiscal_quarter": fiscal_quarter,
@@ -69,7 +69,7 @@ def make_qcf(
     fiscal_quarter: int,
     cfo: float,
     capex: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "fiscal_year": fiscal_year,
         "fiscal_quarter": fiscal_quarter,
@@ -81,9 +81,9 @@ def make_qcf(
 def make_earnings(
     fiscal_year: int,
     fiscal_quarter: int,
-    eps_surprise: Optional[float],
-    rev_surprise: Optional[float],
-) -> Dict[str, Any]:
+    eps_surprise: float | None,
+    rev_surprise: float | None,
+) -> dict[str, Any]:
     return {
         "fiscal_year": fiscal_year,
         "fiscal_quarter": fiscal_quarter,

@@ -1,12 +1,14 @@
 """
 Integration tests for POST /portfolio/performance/batch endpoint.
 """
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 _fake_database = MagicMock()
 _fake_database.supabase = MagicMock()
 import sys
+
 sys.modules["database"] = _fake_database
 
 from api import portfolio as _portfolio_mod
@@ -39,8 +41,9 @@ def _mock_supabase_deps():
 @pytest.fixture
 def test_app():
     from fastapi import FastAPI
-    from dependencies import get_current_user_dep
+
     from api.portfolio import router as portfolio_router
+    from dependencies import get_current_user_dep
 
     app = FastAPI()
     app.include_router(portfolio_router)
@@ -159,6 +162,7 @@ class TestPerformanceBatchEndpoint:
 
     def test_batch_requires_auth(self):
         from fastapi import FastAPI
+
         from api.portfolio import router as portfolio_router
         app = FastAPI()
         app.include_router(portfolio_router)

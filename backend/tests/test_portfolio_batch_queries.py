@@ -1,7 +1,7 @@
 """Unit tests for batched repository methods — chunking, fallback, edge cases."""
 
 from unittest import mock
-import pytest
+
 from infrastructure.repositories.portfolio_repository import PortfolioRepository, _batch_execute
 
 
