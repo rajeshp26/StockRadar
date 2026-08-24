@@ -1,0 +1,160 @@
+# Containment map — data, not code, so it is inspectable and diffable.
+#
+# Maps (injection_phase, defect_class) to the checkpoints that SHOULD have contained the
+# defect, and to the closed list of framework changes that could close the gap.
+#
+# Purpose: stop retrospectives producing "be more careful". A recommendation must name a
+# target from `fix_targets` below. If none applies, the answer is `none_human_judgement`,
+# stated explicitly — not prose.
+
+# ── The framework's own pipeline, in order. Escape path is computed against this. ──
+checkpoints:
+  - id: requirements
+    owner: human
+    artefact: REQUIREMENTS.md
+    catches: [missing_requirement, ambiguous_requirement, wrong_requirement_shape]
+  - id: research
+    owner: researcher
+    active_when: {complexity: [L3, L4]}
+    catches: [wrong_interface_design, integration_mismatch]
+  - id: architecture
+    owner: architect
+    active_when: {complexity: [L3, L4], or_scope: [cross_component, system]}
+    artefact: decisions/
+    catches: [missing_boundary_declaration, wrong_interface_design, contract_mismatch]
+  - id: h1_architecture_approval
+    owner: human
+    active_when: {complexity: [L3, L4]}
+    catches: [wrong_interface_design, missing_boundary_declaration]
+  - id: planning
+    owner: planner
+    active_when: {complexity: [L2, L3, L4]}
+    artefact: PLAN.md
+    catches: [missing_acceptance_criterion, wrong_evidence_class, missing_test]
+  - id: context_build
+    owner: context_builder
+    catches: [contract_mismatch]
+  - id: implementation
+    owner: implementer
+    catches: [logic_error, unhandled_edge_case, stack_violation]
+  - id: review
+    owner: reviewer
+    active_when: {complexity: [L2, L3, L4]}
+    catches: [logic_error, weak_assertion, missing_boundary_declaration, contract_mismatch,
+              integration_mismatch, missing_test, stack_violation]
+  - id: gate_g1
+    owner: gate
+    active_when: {contract_change: true}
+    catches: [contract_mismatch]
+  - id: gate_g2
+    owner: gate
+    active_when: {always: true}
+    catches: [untested_path, missing_test]
+  - id: gate_g3
+    owner: gate
+    active_when: {scope: [cross_component, system]}
+    catches: [missing_boundary_declaration]
+  - id: gate_g4
+    owner: gate
+    active_when: {always: true}
+    catches: [logic_error, unhandled_edge_case, untested_path]
+  - id: gate_g5
+    owner: gate
+    active_when: {frontend_files_changed: true}
+    catches: [stack_violation]
+  - id: gate_g6
+    owner: gate
+    active_when: {requirement_shape: visible_behaviour}
+    catches: [visible_behaviour_defect, weak_assertion]
+  - id: verification
+    owner: verifier
+    active_when: {always: true}
+    catches: [missing_test, weak_assertion, wrong_evidence_class, untested_path]
+  - id: h3_release_approval
+    owner: human
+    active_when: {data_change: true}
+    catches: [integration_mismatch]
+  - id: production
+    owner: user
+    catches: []
+
+# ── Closed list of framework changes. A recommendation MUST name one of these. ──
+fix_targets:
+  gate_check:
+    files: [framework/gates/g1_contract.sh, framework/gates/g2_impact.sh,
+            framework/gates/g3_architecture.sh, framework/gates/g4_executable.sh,
+            framework/gates/g5_frontend_stack.sh, framework/gates/g6_browser.sh,
+            framework/frontend/stack_check.py]
+    closes: [containment_miss]
+  architecture_boundary:
+    files: [framework/architecture_rules.yaml]
+    closes: [containment_miss, routing_gap]
+  gate_routing:
+    files: [framework/verifier/profiles.yaml]
+    closes: [routing_gap]
+    note: impact_to_gates or shape_to_gates — the gate existed but was not activated
+  evidence_mapping:
+    files: [.opencode/rules/evidence.md]
+    closes: [containment_miss]
+    note: the requirement shape mapped to an evidence class too weak to catch this
+  requirement_shape:
+    files: [.planning/REQUIREMENTS.md]
+    closes: [routing_gap]
+    note: shape was absent or wrong, so the gate that would have caught it never activated
+  skill_rule:
+    files: [.opencode/skills/frontend-react/SKILL.md, .opencode/skills/backend-python/SKILL.md,
+            .opencode/skills/contract-authoring/SKILL.md,
+            .opencode/skills/browser-verification/SKILL.md]
+    closes: [containment_miss]
+  agent_instruction:
+    files: [.opencode/agents/]
+    closes: [containment_miss]
+    note: weakest target. Prefer an executable check. Use only when no check can express it.
+  validation_check:
+    files: [framework/validate.py]
+    closes: [containment_miss]
+    note: for defects in the framework itself
+  retry_policy:
+    files: [framework/retry_policy.yaml]
+    closes: [routing_gap]
+  contract_tightening:
+    files: [.planning/contracts/]
+    closes: [containment_miss]
+  none_human_judgement:
+    files: []
+    closes: [accepted]
+    note: >
+      No framework change would have caught this without unacceptable false positives.
+      Recording this is a valid outcome. Inventing a rule to look productive is not.
+
+# ── (injection_phase, defect_class) -> preferred fix targets, most executable first ──
+preferred_fix:
+  requirements:
+    missing_requirement:        [requirement_shape, none_human_judgement]
+    ambiguous_requirement:      [requirement_shape, agent_instruction]
+    wrong_requirement_shape:    [requirement_shape, gate_routing]
+  architecture:
+    missing_boundary_declaration: [architecture_boundary, gate_check]
+    wrong_interface_design:       [contract_tightening, agent_instruction]
+    contract_mismatch:            [contract_tightening, gate_check]
+  planning:
+    missing_acceptance_criterion: [agent_instruction, validation_check]
+    wrong_evidence_class:         [evidence_mapping, gate_routing]
+    missing_test:                 [gate_check, gate_routing]
+  implementation:
+    logic_error:                  [gate_check, skill_rule]
+    unhandled_edge_case:          [gate_check, skill_rule]
+    stack_violation:              [gate_check, skill_rule]
+    integration_mismatch:         [gate_check, gate_routing]
+    visible_behaviour_defect:     [requirement_shape, gate_routing, gate_check]
+    weak_assertion:               [gate_check, skill_rule]
+    untested_path:                [gate_check, gate_routing]
+    contract_mismatch:            [gate_routing, gate_check]
+    missing_boundary_declaration: [architecture_boundary, gate_routing]
+  test_design:
+    weak_assertion:               [gate_check, skill_rule]
+    untested_path:                [gate_check, gate_routing]
+    missing_test:                 [gate_check, evidence_mapping]
+    visible_behaviour_defect:     [gate_routing, requirement_shape]
+  framework:
+    framework_gap:                [validation_check, gate_check]
