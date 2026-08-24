@@ -1,0 +1,37 @@
+# Bounded retries with named escalation. Counts are per task and reset only on human intervention.
+retry_policy:
+  test_failure: 2
+  review_rejection: 2
+  integration_failure: 2
+  context_expansion: 2
+  contract_conflict: 0        # immediate escalation
+  architecture_conflict: 0    # immediate escalation
+  release_blocked: 0
+  retro_recurrence: 0         # a repeated gap signature escalates immediately
+on_exhaustion: escalate_to_human
+
+# A retrospective is owed whenever one of these signals fires against work already accepted.
+# Without this list, "escape" is a judgement call and the retro becomes optional.
+retro_triggers:
+  - TEST_FAILED_ON_PREVIOUSLY_GREEN
+  - REVIEW_REJECTED
+  - INTEGRATION_FAILED
+  - TASK_REOPENED
+  - PRODUCTION_DEFECT
+  - GATE_FAILED_AFTER_ACCEPTANCE
+
+routes:
+  CONTEXT_INSUFFICIENT:   {to: same_agent, action: retrieve_named_item}
+  GRAPH_STALE:            {to: code_intel_adapter, action: reindex}
+  UNKNOWN_IMPACT:         {to: same_agent, action: expand_to_system}
+  TEST_FAILED:            {to: implementer, mode: debug}
+  REVIEW_REJECTED:        {to: implementer, action: apply_findings}
+  INTEGRATION_FAILED:     {to: implementer, plus: affected_consumers}
+  CONTRACT_CONFLICT:      {to: architect, then: human_gate_h2}
+  ARCHITECTURE_CONFLICT:  {to: [architect, team_lead], then: human_gate_h1}
+  SECURITY_FAILURE:       {to: implementer, skill: security}
+  PERFORMANCE_FAILURE:    {to: implementer, skill: performance}
+  RELEASE_BLOCKED:        {to: human_gate_h3}
+  DEFECT_ESCAPED:         {to: team_lead, action: open_retro_trigger, then: gate_g7}
+  RETRO_RECURRENCE:       {to: human, action: previous_fix_failed_reassess_gap}
+  RETRO_INCOMPLETE:       {to: team_lead, action: complete_retro_before_completion}
