@@ -1,0 +1,68 @@
+# Verifier profiles. Activated by the change impact class, not by agent count.
+profiles:
+  functional:
+    always: true
+    evidence: [unit_test, integration_test]
+    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh"]
+
+  contract:
+    when: {contract_change: true}
+    evidence: [contract_test, generated_type_diff]
+    commands: ["./framework/gates/g1_contract.sh"]
+
+  browser:
+    when: {requirement_shape: visible_behaviour}
+    evidence: [screenshot, dom_inspection, console_output]
+    sequence: [build, start, navigate, interact, read_console, capture, assert]
+    on_missing_driver: report_unverifiable   # never report pass
+    # exit 0 pass | 1 fail | 3 UNVERIFIABLE. 3 is not 0: "could not look" != "looks right".
+    commands: ["./framework/gates/g6_browser.sh"]
+    mandatory_for: [visual_alignment, interaction_flow, responsive_behaviour]
+
+  frontend_stack:
+    when: {frontend_files_changed: true}
+    evidence: [stack_conformance_exit_code]
+    commands: ["./framework/gates/g5_frontend_stack.sh"]
+    enforcement: ratchet   # judges changed files only; baseline debt is reported, not blocking
+
+  security:
+    when: {security_sensitive: true}
+    evidence: [dependency_scan, authz_integration_test, secret_scan]
+    commands: ["npm audit --audit-level=high", "pip-audit"]
+
+  performance:
+    when: {scope: [cross_component, system], hot_path: true}
+    evidence: [measured_benchmark]
+    commands: []
+
+  retro:
+    when: {defect_escaped: true}
+    evidence: [escape_path_analysis, ledger_entry, fix_verification_exit_code]
+    commands: ["./framework/gates/g7_retro.sh"]
+    # Runs on escape, not on every task. An escape is a defect found after the change that
+    # introduced it was accepted: a previously-green test failing, a review rejection, a
+    # reopened task, a production defect.
+    on_recurrence: escalate_to_human   # 2nd occurrence of a signature means the fix failed
+
+  release:
+    when: {data_change: true, or_deployment_affected: true}
+    evidence: [build_artifact, migration_applied_and_rolled_back, config_validated]
+    commands: []
+    human_gate: H3
+
+# g5 = frontend stack conformance, g6 = browser verification.
+# g6 is appended by the Verifier whenever a requirement's shape is visible_behaviour,
+# regardless of impact class — a local CSS change can still break visible behaviour.
+impact_to_gates:
+  local:            [g2, g4]
+  component:        [g2, g4, g5]
+  cross_component:  [g1, g2, g3, g4, g5]
+  system:           [g1, g2, g3, g4, g5]
+
+shape_to_gates:
+  visible_behaviour: [g6]
+
+# g7 is triggered by an EVENT, not by impact class or requirement shape. A defect escape can
+# follow any classification, so it cannot be routed from impact_to_gates.
+event_to_gates:
+  defect_escaped: [g7]

@@ -1,0 +1,27 @@
+# Ledger for conditional frontend tools. G5 requires an entry here before Magic UI,
+# Aceternity, GSAP or React Three Fiber may appear in changed frontend files.
+#
+# Required fields per entry:
+#   tool, requirement, scope, justification, approved_by
+# GSAP additionally requires motion_insufficient_because — it is only permitted where
+# Motion genuinely cannot do the job, per framework/frontend_stack.yaml.
+#
+# An empty ledger means conditional tools are not permitted. That is the correct default:
+# permission is granted per requirement, not once per repository.
+#
+# Example of a complete entry (commented — uncomment and edit to grant permission):
+#
+# - tool: GSAP
+#   requirement: REQ-041
+#   scope: ["src/frontend/features/onboarding/*.tsx"]
+#   justification: >
+#     Seven-step scroll-scrubbed sequence with mid-flight reversal and per-step easing.
+#   motion_insufficient_because: >
+#     Motion's useScroll drives progress, but the sequence needs one reversible timeline
+#     with labels; composing it from Motion primitives measured 3x the code and dropped
+#     frames on mid-tier Android.
+#   approved_by: architect
+#   decision: DEC-018
+#   expires_review: 2026-12-01
+
+entries: []
