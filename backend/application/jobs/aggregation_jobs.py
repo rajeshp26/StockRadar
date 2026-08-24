@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # application/jobs/aggregation_jobs.py
 #
 # Group-level aggregation (sector/industry) for valuation metrics.
@@ -11,18 +10,17 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from database import supabase
-from config import settings
 
 logger = logging.getLogger(__name__)
 
 METRIC_IDS = ["pe", "ev_ebitda", "pfcf"]
 
 # Map our metric_id to the actual column name in financial_ratios
-COLUMN_MAP: Dict[str, str] = {
+COLUMN_MAP: dict[str, str] = {
     "pe": "trailing_pe",
     "ev_ebitda": "ev_ebitda",
     "pfcf": "price_to_fcf",
@@ -32,7 +30,7 @@ COLUMN_MAP: Dict[str, str] = {
 async def compute_and_upsert_group_metric_stats(
     group_type: str = "sector",
     min_sample_size: int = 5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Compute percentile stats for each metric per sector and upsert into
     `group_metric_stats`.
 
@@ -51,9 +49,9 @@ async def compute_and_upsert_group_metric_stats(
     # Step 1: Get the latest financial ratio for each company, joined with sector
     # Uses DISTINCT ON to get the most recent row per company.
     group_col = group_type  # 'sector' or 'industry'
-    now_ts = datetime.now(timezone.utc).isoformat()
+    now_ts = datetime.now(UTC).isoformat()
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "started_at": now_ts,
         "groups_found": 0,
         "rows_written": 0,
@@ -97,7 +95,7 @@ async def compute_and_upsert_group_metric_stats(
     return result
 
 
-async def _fetch_distinct_groups(group_col: str) -> List[str]:
+async def _fetch_distinct_groups(group_col: str) -> list[str]:
     """Fetch distinct non-null group values from companies table."""
     col = group_col if group_col in ("sector", "industry") else "sector"
     try:
@@ -109,7 +107,7 @@ async def _fetch_distinct_groups(group_col: str) -> List[str]:
         )
         raw = resp.data or []
         seen: set = set()
-        out: List[str] = []
+        out: list[str] = []
         for r in raw:
             v = r.get(col)
             if v and v not in seen:
@@ -121,7 +119,7 @@ async def _fetch_distinct_groups(group_col: str) -> List[str]:
         raise
 
 
-async def _fetch_companies_in_group(group_type: str, group_key: str) -> List[int]:
+async def _fetch_companies_in_group(group_type: str, group_key: str) -> list[int]:
     """Return list of company_ids belonging to a group."""
     try:
         resp = (
@@ -137,13 +135,13 @@ async def _fetch_companies_in_group(group_type: str, group_key: str) -> List[int
 
 
 async def _fetch_latest_ratio_values(
-    company_ids: List[int],
+    company_ids: list[int],
     column: str,
-) -> List[float]:
+) -> list[float]:
     """Fetch the latest positive value of a ratio column for given companies."""
     if not company_ids:
         return []
-    values: List[float] = []
+    values: list[float] = []
     try:
         batch_size = 50
         for i in range(0, len(company_ids), batch_size):
@@ -187,7 +185,7 @@ async def _compute_group_stats(
         )
         return
 
-    now_ts = datetime.now(timezone.utc).isoformat()
+    now_ts = datetime.now(UTC).isoformat()
 
     for metric_id in METRIC_IDS:
         column = COLUMN_MAP[metric_id]
@@ -203,7 +201,7 @@ async def _compute_group_stats(
         sorted_vals = sorted(values)
         n = len(sorted_vals)
 
-        def percentile(p: float) -> Optional[float]:
+        def percentile(p: float) -> float | None:
             if not sorted_vals:
                 return None
             idx = p / 100.0 * (n - 1)

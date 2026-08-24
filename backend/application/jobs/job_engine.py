@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Job Engine
 Core runtime for the DB-backed job queue:
@@ -13,20 +12,20 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, Callable, Coroutine, Dict, Optional, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from infrastructure.repositories.scheduler_repository import SchedulerRepository
 
 logger = logging.getLogger(__name__)
 
 # Type alias for a job handler — receives job dict, returns result dict
-JobHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
+JobHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 # ── Backoff classification ────────────────────────────────────────────────────
 
-BACKOFF_RULES: Dict[str, Dict[str, Any]] = {
+BACKOFF_RULES: dict[str, dict[str, Any]] = {
     "network_timeout": {"backoff_minutes": 5, "max_attempts": 3},
     "rate_limited": {"backoff_minutes": 15, "max_attempts": 3},
     "provider_5xx": {"backoff_minutes": 60, "max_attempts": 3},
@@ -37,7 +36,7 @@ BACKOFF_RULES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def classify_failure(error: str, status_code: Optional[int] = None) -> str:
+def classify_failure(error: str, status_code: int | None = None) -> str:
     """Classify a failure into a backoff category based on error message and status code."""
     import re
 
@@ -83,12 +82,12 @@ class JobEngine:
 
     def __init__(
         self,
-        scheduler_repo: Optional[SchedulerRepository] = None,
-        worker_id: Optional[str] = None,
+        scheduler_repo: SchedulerRepository | None = None,
+        worker_id: str | None = None,
     ):
         self._repo = scheduler_repo or SchedulerRepository()
         self._worker_id = worker_id or f"worker:{uuid.uuid4().hex[:8]}"
-        self._handlers: Dict[str, JobHandler] = {}
+        self._handlers: dict[str, JobHandler] = {}
         self._lease_renewal_interval = 60  # seconds
         self._claim_poll_interval = 5  # seconds between poll cycles when queue empty
 
@@ -103,7 +102,7 @@ class JobEngine:
     # Single Job Execution
     # ========================================================================
 
-    async def execute_job(self, job: Dict[str, Any]) -> None:
+    async def execute_job(self, job: dict[str, Any]) -> None:
         """
         Execute a single claimed job through its lifecycle:
         claim → execute (with lease renewal) → complete/fail
@@ -292,7 +291,7 @@ class JobEngine:
                         asyncio.sleep(self._lease_renewal_interval),
                         timeout=self._lease_renewal_interval + 5,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 if stop_event.is_set():
                     break

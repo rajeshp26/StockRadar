@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # application/jobs/derived_financial_metrics_job.py
 #
 # CHANGES vs previous version
@@ -22,13 +21,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta, timezone
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from database import supabase
 from config import settings
+from database import supabase
+from shared.time_utils import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +39,7 @@ logger = logging.getLogger(__name__)
 COMPUTATION_VERSION = 3
 
 
-def _f(x: Any) -> Optional[float]:
+def _f(x: Any) -> float | None:
     try:
         if x is None:
             return None
@@ -50,7 +48,7 @@ def _f(x: Any) -> Optional[float]:
         return None
 
 
-def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
+def _safe_div(a: float | None, b: float | None) -> float | None:
     if a is None or b is None or b == 0:
         return None
     try:
@@ -59,20 +57,20 @@ def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
         return None
 
 
-def _fcf(cfo: Optional[float], capex: Optional[float]) -> Optional[float]:
+def _fcf(cfo: float | None, capex: float | None) -> float | None:
     """Sign-aware FCF. capex stored as negative outflow → add; positive → subtract."""
     if cfo is None or capex is None:
         return None
     return (cfo + capex) if capex < 0 else (cfo - capex)
 
 
-def _version_tag(payload: Dict[str, Any]) -> str:
+def _version_tag(payload: dict[str, Any]) -> str:
     enriched = {"payload": payload, "v": COMPUTATION_VERSION}
     raw = json.dumps(enriched, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def _clamp_ratio(v: Optional[float]) -> Optional[float]:
+def _clamp_ratio(v: float | None) -> float | None:
     """Clamp a ratio value to fit numeric(10,6): [-9999.999999, 9999.999999].
     Returns None when v is None; rounds to 6 decimal places to avoid
     PostgreSQL numeric field overflow errors from extreme denominator values."""
@@ -85,7 +83,7 @@ def _clamp_ratio(v: Optional[float]) -> Optional[float]:
 
 # ─── Job ──────────────────────────────────────────────────────────────────────
 
-async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[str, Any]:
+async def compute_and_upsert_derived_financial_metrics(company_id: int) -> dict[str, Any]:
     """
     Computes annual financial ratios from canonical statement tables and writes
     to financial_ratios (Phase 2 consolidated table).
@@ -153,13 +151,13 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     bs_rows = bs_resp.data or []
     cf_rows = cf_resp.data or []
 
-    def _best_row(rows: List[Dict], score_fields: List[str], pk_field: str) -> Dict[int, Dict]:
+    def _best_row(rows: list[dict], score_fields: list[str], pk_field: str) -> dict[int, dict]:
        """
        Build a fiscal_year -> row dict by picking the most complete row per year.
        'Most complete' = most non-null values in score_fields.
        Tiebreaker: largest pk_field value (most recently written = likely defeatbeta path).
        """
-       by_year: Dict[int, Dict] = {}
+       by_year: dict[int, dict] = {}
        for r in rows:
            fy = r.get("fiscal_year")
            if fy is None:
@@ -193,7 +191,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     ], pk_field="cf_id")
 
     years = sorted(set(is_by_year) | set(bs_by_year) | set(cf_by_year))
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
 
     for y in years:
         isr = is_by_year.get(y) or {}
@@ -352,7 +350,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         if equity is not None:
             tangible_equity = equity - (intangibles or 0.0) - (goodwill or 0.0)
 
-        def _per_share(val: Optional[float]) -> Optional[float]:
+        def _per_share(val: float | None) -> float | None:
             return _safe_div(val, shares) if shares is not None and shares > 0 else None
 
         revenue_ps    = _per_share(revenue)
@@ -460,7 +458,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
     # If the pre-fetch itself fails (network/permission error), we fall back to
     # the full upsert so the job never silently drops an update.
 
-    existing_tags: Dict[int, str] = {}
+    existing_tags: dict[int, str] = {}
     try:
         fiscal_years = [row["fiscal_year"] for row in out]
         tags_resp = (
@@ -505,7 +503,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
         "[RATIOS] Upserted %d/%d changed rows into financial_ratios for company_id=%s",
         len(changed_rows), len(out), company_id,
     )
-    
+
     return {"count": len(out), "rows_changed": len(changed_rows), "upserted": True}
 
 
@@ -513,7 +511,7 @@ async def compute_and_upsert_derived_financial_metrics(company_id: int) -> Dict[
 # These are used by compute_and_upsert_quarterly_health_scores below.
 
 
-def _compute_piotroski_score(q: Dict[str, Any], prev_q: Dict[str, Any]) -> int:
+def _compute_piotroski_score(q: dict[str, Any], prev_q: dict[str, Any]) -> int:
     """Compute Piotroski F-Score (0–9) for a quarterly period.
 
     Nine binary criteria across three categories:
@@ -581,7 +579,7 @@ def _compute_piotroski_score(q: Dict[str, Any], prev_q: Dict[str, Any]) -> int:
     return score
 
 
-def _compute_altman_z_score(q: Dict[str, Any]) -> Optional[float]:
+def _compute_altman_z_score(q: dict[str, Any]) -> float | None:
     """Compute Altman Z-Score for a quarterly period.
 
     Z = 1.2*A + 1.4*B + 3.3*C + 0.6*D + 1.0*E
@@ -626,13 +624,13 @@ def _compute_altman_z_score(q: Dict[str, Any]) -> Optional[float]:
 
 def _fetch_quarterly_statements(
     company_id: int, fiscal_year: int
-) -> Dict[str, List[Dict]]:
+) -> dict[str, list[dict]]:
     """Fetch income_statement, balance_sheet, cash_flow rows for a given fiscal year, quarterly.
 
     Returns a dict with keys: is_rows, bs_rows, cf_rows.
     Each value is a list of rows, sorted by fiscal_quarter ascending.
     """
-    out: Dict[str, List[Dict]] = {"is_rows": [], "bs_rows": [], "cf_rows": []}
+    out: dict[str, list[dict]] = {"is_rows": [], "bs_rows": [], "cf_rows": []}
 
     for table, key in [
         ("income_statements", "is_rows"),
@@ -652,7 +650,7 @@ def _fetch_quarterly_statements(
     return out
 
 
-def _find_prior_year_row(lookup_rows: List[Dict], fy: int, q: int) -> Optional[Dict]:
+def _find_prior_year_row(lookup_rows: list[dict], fy: int, q: int) -> dict | None:
     """Find the same-quarter row from the previous fiscal year.
 
     Used to provide prior-period values for the 9 Piotroski criteria that
@@ -664,7 +662,7 @@ def _find_prior_year_row(lookup_rows: List[Dict], fy: int, q: int) -> Optional[D
     return None
 
 
-async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[str, Any]:
+async def compute_and_upsert_quarterly_health_scores(company_id: int) -> dict[str, Any]:
     """Compute and upsert quarterly Piotroski F-Score + Altman Z-Score for a company.
 
     Orchestration:
@@ -699,7 +697,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
     # Pre-fetch the *previous* year's annual ratios for prior-period lookups.
     # This avoids hitting the DB per-row in the innermost loop.
     min_year = min(fiscal_years)
-    prior_annual: List[Dict] = []
+    prior_annual: list[dict] = []
     if min_year > 2010:
         try:
             resp = (
@@ -714,13 +712,13 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
         except Exception:
             prior_annual = []
 
-    all_quarterly_ratios: List[Dict] = []
+    all_quarterly_ratios: list[dict] = []
 
     for fy in fiscal_years:
         stmts = _fetch_quarterly_statements(company_id, fy)
-        is_rows: List[Dict] = stmts["is_rows"]
-        bs_rows: List[Dict] = stmts["bs_rows"]
-        cf_rows: List[Dict] = stmts["cf_rows"]
+        is_rows: list[dict] = stmts["is_rows"]
+        bs_rows: list[dict] = stmts["bs_rows"]
+        cf_rows: list[dict] = stmts["cf_rows"]
 
         if not is_rows and not bs_rows and not cf_rows:
             continue
@@ -733,7 +731,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
         ))
 
         # Fetch the same-quarter prior-year data for Piotroski YoY deltas.
-        prior_ratios: List[Dict] = []
+        prior_ratios: list[dict] = []
         if fy > min_year or True:
             try:
                 prior_resp = (
@@ -749,10 +747,10 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
                 prior_ratios = prior_annual
 
         # Build lookup maps for fast access
-        is_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in is_rows if r.get("fiscal_quarter")}
-        bs_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in bs_rows if r.get("fiscal_quarter")}
-        cf_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in cf_rows if r.get("fiscal_quarter")}
-        prior_by_q: Dict[int, Dict] = {r.get("fiscal_quarter"): r for r in prior_ratios if r.get("fiscal_quarter")}
+        is_by_q: dict[int, dict] = {r.get("fiscal_quarter"): r for r in is_rows if r.get("fiscal_quarter")}
+        bs_by_q: dict[int, dict] = {r.get("fiscal_quarter"): r for r in bs_rows if r.get("fiscal_quarter")}
+        cf_by_q: dict[int, dict] = {r.get("fiscal_quarter"): r for r in cf_rows if r.get("fiscal_quarter")}
+        prior_by_q: dict[int, dict] = {r.get("fiscal_quarter"): r for r in prior_ratios if r.get("fiscal_quarter")}
 
         for q in quarters_set:
             isr = is_by_q.get(q) or {}
@@ -826,7 +824,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
 
             # ── Health scores ──────────────────────────────────────────
             # Build a flat dict for the _compute helpers to consume.
-            period_dict: Dict[str, Any] = {
+            period_dict: dict[str, Any] = {
                 "roa": roa,
                 "cash_from_operating_activities": cfo,
                 "total_assets": total_assets,
@@ -907,7 +905,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
         return {"count": 0, "rows_changed": 0, "upserted": False}
 
     # ── Step 4: version-gated upsert ────────────────────────────────────
-    existing_tags: Dict[tuple, str] = {}
+    existing_tags: dict[tuple, str] = {}
     try:
         fiscal_quarters_paris = [
             (row["fiscal_year"], row["fiscal_quarter"])
@@ -961,7 +959,7 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> Dict[st
 # ─── Quarterly Valuation Metrics ────────────────────────────────────────────────────
 
 
-async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dict[str, Any]:
+async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> dict[str, Any]:
     """
     Computes quarterly valuation metrics from income_statements + balance_sheets +
     cash_flow_statements + price_history and writes to financial_ratios.
@@ -995,7 +993,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
         return {"count": 0, "rows_changed": 0, "upserted": False}
 
     # Build a chronologically ordered list of (fy, fq, eps, ebitda, period_end)
-    quarters: List[Dict] = []
+    quarters: list[dict] = []
     for r in is_rows:
         fy = r.get("fiscal_year")
         fq = r.get("fiscal_quarter")
@@ -1046,7 +1044,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
         .not_.is_("fiscal_quarter", "null")
         .execute()
     )
-    bs_by_key: Dict[tuple, Dict] = {}
+    bs_by_key: dict[tuple, dict] = {}
     for r in bs_resp.data or []:
         fy = r.get("fiscal_year")
         fq = r.get("fiscal_quarter")
@@ -1061,7 +1059,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
         .not_.is_("fiscal_quarter", "null")
         .execute()
     )
-    cf_by_key: Dict[tuple, Dict] = {}
+    cf_by_key: dict[tuple, dict] = {}
     for r in cf_resp.data or []:
         fy = r.get("fiscal_year")
         fq = r.get("fiscal_quarter")
@@ -1078,7 +1076,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
     )
     ph_rows = ph_resp.data or []
 
-    price_by_date: Dict[str, float] = {}
+    price_by_date: dict[str, float] = {}
     for r in ph_rows:
         d = r.get("price_date")
         cp = _f(r.get("close_price"))
@@ -1093,14 +1091,14 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
             if not end or q["ttm_eps"] is None:
                 continue
             try:
-                end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
+                end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=UTC).date()
             except (ValueError, TypeError):
                 continue
             best_price = None
             best_diff = timedelta(days=46)
             for pd in price_dates_sorted:
                 try:
-                    pd_dt = datetime.strptime(pd, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
+                    pd_dt = datetime.strptime(pd, "%Y-%m-%d").replace(tzinfo=UTC).date()
                 except (ValueError, TypeError):
                     continue
                 diff = abs((pd_dt - end_dt).days)
@@ -1147,7 +1145,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
                             q["price_to_fcf"] = round(ev / fcf, 4)
 
     # ── 6. Assemble rows for upsert ───────────────────────────────────────
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for q in quarters:
         key = (q["fiscal_year"], q["fiscal_quarter"])
         bs_row = bs_by_key.get(key)
@@ -1201,7 +1199,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
         return {"count": 0, "rows_changed": 0, "upserted": False}
 
     # ── 7. Version-gated upsert ───────────────────────────────────────────
-    existing_tags: Dict[tuple, str] = {}
+    existing_tags: dict[tuple, str] = {}
     try:
         tags_resp = (
             supabase.table("financial_ratios")
@@ -1247,7 +1245,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> Dic
     return {"count": len(out), "rows_changed": len(changed_rows), "upserted": True}
 
 
-async def compute_and_upsert_dividend_metrics(company_id: int) -> Dict[str, Any]:
+async def compute_and_upsert_dividend_metrics(company_id: int) -> dict[str, Any]:
     """
     Computes dividend-specific metrics from raw statement tables and writes to
     dividend_metrics (on_conflict: company_id, fiscal_year).
@@ -1292,7 +1290,7 @@ async def compute_and_upsert_dividend_metrics(company_id: int) -> Dict[str, Any]
     # ── 2. Aggregate per-share DPS totals by calendar year ────────────────────
     # dividend_history.dividend_amount is already a per-share amount per payment.
     # Summing within a year gives annual DPS (per share) — no shares division needed.
-    annual_dps: Dict[int, float] = {}
+    annual_dps: dict[int, float] = {}
     for row in dh_rows:
         raw_date = row.get("ex_dividend_date", "")
         amt = _f(row.get("dividend_amount"))
@@ -1318,7 +1316,7 @@ async def compute_and_upsert_dividend_metrics(company_id: int) -> Dict[str, Any]
         .order("fiscal_year", desc=False)
         .execute()
     )
-    is_by_year: Dict[int, Dict] = {}
+    is_by_year: dict[int, dict] = {}
     for r in (is_resp.data or []):
         fy = r.get("fiscal_year")
         if fy is not None:
@@ -1333,14 +1331,14 @@ async def compute_and_upsert_dividend_metrics(company_id: int) -> Dict[str, Any]
         .order("fiscal_year", desc=False)
         .execute()
     )
-    cf_by_year: Dict[int, Dict] = {}
+    cf_by_year: dict[int, dict] = {}
     for r in (cf_resp.data or []):
         fy = r.get("fiscal_year")
         if fy is not None:
             cf_by_year[int(fy)] = r
 
     # ── 5. Helpers ────────────────────────────────────────────────────────────
-    def _cagr_between(start_year: int, end_year: int) -> Optional[float]:
+    def _cagr_between(start_year: int, end_year: int) -> float | None:
         """CAGR of annual_dps from start_year to end_year."""
         v0 = annual_dps.get(start_year)
         vn = annual_dps.get(end_year)
@@ -1369,7 +1367,7 @@ async def compute_and_upsert_dividend_metrics(company_id: int) -> Dict[str, Any]
     consec = _consecutive_increases()
 
     # ── 6. Compute one row per fiscal year ────────────────────────────────────
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
 
     for fiscal_year in years_sorted:
         dps = annual_dps[fiscal_year]

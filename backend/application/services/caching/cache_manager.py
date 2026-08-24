@@ -4,7 +4,8 @@ import hashlib
 import json
 import logging
 from contextvars import ContextVar
-from typing import Any, Dict, Optional
+from typing import Any
+
 from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ class CacheManager:
         maxsize_query: int = 512,
         maxsize_context: int = 64,
     ) -> None:
-        self._request_cache: ContextVar[Dict[str, Any]] = ContextVar("request_cache", default={})
+        self._request_cache: ContextVar[dict[str, Any]] = ContextVar("request_cache", default={})
         self._query_cache = TTLCache(maxsize=maxsize_query, ttl=query_ttl)
         self._ai_cache = TTLCache(maxsize=maxsize_ai, ttl=ai_ttl)
         self._context_cache = TTLCache(maxsize=maxsize_context, ttl=context_ttl)
@@ -31,7 +32,7 @@ class CacheManager:
         """Joins parts with ':' — e.g. 'query:get_company_context:RBLX'"""
         return ":".join(str(p) for p in parts)
 
-    def get_query_result(self, key: str) -> Optional[Any]:
+    def get_query_result(self, key: str) -> Any | None:
         """Check request cache, then TTL cache."""
         req_cache = self._request_cache.get()
         if key in req_cache:
@@ -60,7 +61,7 @@ class CacheManager:
         self._query_cache[key] = value
         logger.debug("[Cache] Query cache SET for key: %s", key)
 
-    def get_ai_response(self, symbol: str, method: str, context_hash: str) -> Optional[Any]:
+    def get_ai_response(self, symbol: str, method: str, context_hash: str) -> Any | None:
         """Check AI response cache; hash captures financial data version."""
         key = self.cache_key("ai", symbol, method, context_hash)
         if key in self._ai_cache:
@@ -75,7 +76,7 @@ class CacheManager:
         self._ai_cache[key] = value
         logger.info("[Cache] AI response cache SET for %s/%s | hash=%s", symbol, method, context_hash[:8])
 
-    def get_context(self, symbol: str) -> Optional[str]:
+    def get_context(self, symbol: str) -> str | None:
         """Get formatted company context string."""
         key = self.cache_key("context", symbol)
         if key in self._context_cache:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from database import supabase
 from infrastructure.repositories.valuation_repository import ValuationRepository
@@ -29,7 +29,7 @@ class AnalysisRepository:
 
     # ── Benchmark resolution ──────────────────────────────────────────────────
 
-    async def get_benchmark(self, role: str) -> Optional[Dict[str, Any]]:
+    async def get_benchmark(self, role: str) -> dict[str, Any] | None:
         """
         Returns the active benchmark for a given role.
         Callers use role names ('us_market', 'us_tech') — never hardcode 'SPY'.
@@ -51,7 +51,7 @@ class AnalysisRepository:
             logger.error("get_benchmark failed for role=%s: %s", role, e)
             return None
 
-    async def get_all_active_benchmarks(self, market: str = "US") -> List[Dict[str, Any]]:
+    async def get_all_active_benchmarks(self, market: str = "US") -> list[dict[str, Any]]:
         """Returns all active benchmarks for a market."""
         try:
             resp = (
@@ -66,7 +66,7 @@ class AnalysisRepository:
             logger.error("get_all_active_benchmarks failed for market=%s: %s", market, e)
             return []
 
-    async def get_benchmark_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+    async def get_benchmark_by_symbol(self, symbol: str) -> dict[str, Any] | None:
         """Looks up a benchmark config by symbol (e.g. 'SPY'). Returns None if not found."""
         try:
             resp = (
@@ -82,7 +82,7 @@ class AnalysisRepository:
             logger.error("get_benchmark_by_symbol failed for symbol=%s: %s", symbol, e)
             return None
 
-    async def list_active_benchmarks(self) -> List[Dict[str, Any]]:
+    async def list_active_benchmarks(self) -> list[dict[str, Any]]:
         """
         Returns ALL active benchmarks across all markets.
         Single source of truth for benchmark listing.
@@ -113,7 +113,7 @@ class AnalysisRepository:
 
     # ── Magic Formula ─────────────────────────────────────────────────────────
 
-    async def get_ttm_ebit(self, company_id: int) -> Optional[float]:
+    async def get_ttm_ebit(self, company_id: int) -> float | None:
         """
         Sums ebit from the 4 most recent quarterly income_statement rows.
         Falls back to the most recent annual row if fewer than 2 quarters available.
@@ -164,7 +164,7 @@ class AnalysisRepository:
             logger.error("get_ttm_ebit failed for company_id=%d: %s", company_id, e)
             return None
 
-    async def get_enterprise_value_latest(self, company_id: int) -> Optional[float]:
+    async def get_enterprise_value_latest(self, company_id: int) -> float | None:
         """Most recent enterprise_value from company_summary."""
         try:
             resp = (
@@ -182,7 +182,7 @@ class AnalysisRepository:
             logger.error("get_enterprise_value_latest failed for company_id=%d: %s", company_id, e)
             return None
 
-    async def get_balance_sheet_mf_inputs(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_balance_sheet_mf_inputs(self, company_id: int) -> dict[str, Any] | None:
         """
         Fetches all fields needed for Greenblatt NWC and NFA computation.
         Uses most recent annual balance sheet row.
@@ -215,7 +215,7 @@ class AnalysisRepository:
 
     async def get_industry_multiples_full(
         self, sector: str, industry: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Wider select than ValuationRepository.get_industry_multiples().
         Includes ev/ebitda and revenue multiples needed for MF industry context panel.
@@ -250,7 +250,7 @@ class AnalysisRepository:
 
     async def get_quarterly_eps_from_income_statements(
         self, company_id: int, limit: int = 12
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Returns quarterly EPS data for CANSLIM C criterion from income_statements table.
 
@@ -308,7 +308,7 @@ class AnalysisRepository:
     # Keep old function name for backward compatibility but mark as deprecated
     async def get_quarterly_earnings_series(
         self, company_id: int, limit: int = 12
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         DEPRECATED - Use get_quarterly_eps_from_income_statements() instead.
         This function now redirects to income_statements for EPS data.
@@ -317,7 +317,7 @@ class AnalysisRepository:
 
     async def get_quarterly_revenue_series(
         self, company_id: int, limit: int = 8
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Revenue acceleration check for CANSlim C and N.
         Quarterly revenue, newest-first.
@@ -343,7 +343,7 @@ class AnalysisRepository:
 
     async def get_price_history_monthly(
         self, company_id: int, months: int = 15
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Monthly price history for CANSlim proxies.
 
@@ -370,7 +370,7 @@ class AnalysisRepository:
             )
             return []
 
-    async def get_shares_outstanding_latest(self, company_id: int) -> Optional[float]:
+    async def get_shares_outstanding_latest(self, company_id: int) -> float | None:
         """
         Float size for CANSlim S — from most recent annual balance sheet.
         Falls back to company_summary if balance_sheets.shares_outstanding is NULL.
@@ -412,7 +412,7 @@ class AnalysisRepository:
 
     async def get_price_history_range(
         self, company_id: int, start_date: date, end_date: date
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get daily/monthly price history for a date range."""
         try:
             resp = (
@@ -433,7 +433,7 @@ class AnalysisRepository:
 
     async def get_revenue_and_eps_growth(
         self, company_id: int, years: int = 3
-    ) -> Dict[str, Optional[float]]:
+    ) -> dict[str, float | None]:
         """Calculate 3-year CAGR for revenue and EPS."""
         try:
             income_data = await self._repo.get_income_statements_annual(
@@ -479,4 +479,3 @@ class AnalysisRepository:
         except Exception as e:
             logger.error(f"get_revenue_and_eps_growth failed: {e}")
             return {"revenue_cagr": None, "eps_cagr": None}
-            

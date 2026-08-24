@@ -1,19 +1,19 @@
-from typing import Any, Optional
+from typing import Any
 
-from utils.dataloader import DataLoader
 from infrastructure.repositories.valuation_repository import ValuationRepository
+from utils.dataloader import DataLoader
 
 
 class ValuationDataLoader:
     def __init__(self, repo: ValuationRepository):
         self._repo = repo
-        self._snapshot_loader: Optional[DataLoader] = None
-        self._company_context_loader: Optional[DataLoader] = None
+        self._snapshot_loader: DataLoader | None = None
+        self._company_context_loader: DataLoader | None = None
 
     def get_snapshot_loader(self) -> DataLoader:
         if self._snapshot_loader is None:
-            def batch_snapshots(keys: list[str]) -> list[Optional[Any]]:
-                results: list[Optional[Any]] = []
+            def batch_snapshots(keys: list[str]) -> list[Any | None]:
+                results: list[Any | None] = []
                 for key in keys:
                     parts = key.split(":", 2)
                     if len(parts) != 2:
@@ -38,8 +38,8 @@ class ValuationDataLoader:
 
     def get_company_context_loader(self) -> DataLoader:
         if self._company_context_loader is None:
-            def batch_context(keys: list[str]) -> list[Optional[Any]]:
-                results: list[Optional[Any]] = []
+            def batch_context(keys: list[str]) -> list[Any | None]:
+                results: list[Any | None] = []
                 for symbol in keys:
                     ctx = self._repo.get_company_context(symbol)
                     results.append(ctx)
@@ -52,11 +52,11 @@ class ValuationDataLoader:
             )
         return self._company_context_loader
 
-    async def load_snapshot(self, company_id: int, method: str) -> Optional[Any]:
+    async def load_snapshot(self, company_id: int, method: str) -> Any | None:
         key = f"{company_id}:{method}"
         return await self.get_snapshot_loader().load(key)
 
-    async def load_company_context(self, symbol: str) -> Optional[Any]:
+    async def load_company_context(self, symbol: str) -> Any | None:
         return await self.get_company_context_loader().load(symbol)
 
     def clear_cache(self) -> None:

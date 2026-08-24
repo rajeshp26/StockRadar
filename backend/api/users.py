@@ -1,11 +1,12 @@
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+
 from database import supabase
 from dependencies import get_current_user_dep
 from shared.time_utils import now_iso
-import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -13,18 +14,18 @@ logger = logging.getLogger(__name__)
 class UserSync(BaseModel):
     email: str
     username: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    preferred_currency: Optional[str] = None
+    first_name: str | None = None
+    last_name: str | None = None
+    avatar_url: str | None = None
+    preferred_currency: str | None = None
 
 
 class UserProfileUpdate(BaseModel):
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    username: Optional[str] = None
-    preferred_currency: Optional[str] = None
+    first_name: str | None = None
+    last_name: str | None = None
+    avatar_url: str | None = None
+    username: str | None = None
+    preferred_currency: str | None = None
 
 @router.post("/users/sync", tags=["Users"])
 def sync_user(

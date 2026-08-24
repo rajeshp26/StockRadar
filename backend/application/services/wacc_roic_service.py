@@ -13,22 +13,20 @@ Follows existing conventions:
 from __future__ import annotations
 
 import logging
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+
+from domain.models.exceptions import WaccRoicError
 
 from application.services.ai_service import generate_wacc_roic_narrative
-from domain.models.exceptions import WaccRoicError
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from shared.finance_math import (
     clamp,
     compute_cost_of_equity,
-    compute_nopat,
-    compute_roic,
     compute_wacc,
     pct_or_frac_to_frac,
-    safe_div,
     safe_float,
 )
+from shared.time_utils import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +52,15 @@ class WaccRoicService:
     async def compute_wacc_analysis(
         self,
         symbol: str,
-        risk_free_rate: Optional[float] = None,
-        equity_risk_premium: Optional[float] = None,
-        beta: Optional[float] = None,
-        cost_of_debt: Optional[float] = None,
-        tax_rate: Optional[float] = None,
-        market_cap: Optional[float] = None,
-        total_debt: Optional[float] = None,
+        risk_free_rate: float | None = None,
+        equity_risk_premium: float | None = None,
+        beta: float | None = None,
+        cost_of_debt: float | None = None,
+        tax_rate: float | None = None,
+        market_cap: float | None = None,
+        total_debt: float | None = None,
         generate_narrative: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Compute WACC for a company using CAPM + debt weighting.
 
@@ -177,7 +175,7 @@ class WaccRoicService:
             "taxRateSource": t_source,
         }
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "symbol":       symbol.upper(),
             "companyId":    company_id,
             "currency":     currency,
@@ -224,7 +222,7 @@ class WaccRoicService:
         symbol: str,
         years: int = 5,
         generate_narrative: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Compute ROIC history and current ROIC for a company.
 
@@ -246,7 +244,7 @@ class WaccRoicService:
         rows = await self.repo.get_roic_history(company_id)
 
         # Filter to only rows with valid ROIC, sorted by fiscal_year
-        valid: List[Dict[str, Any]] = []
+        valid: list[dict[str, Any]] = []
         for r in rows:
             fy = r.get("fiscal_year")
             roic_val = safe_float(r.get("roic"))
@@ -284,7 +282,7 @@ class WaccRoicService:
                 else:
                     trend = "stable"
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "symbol":         symbol.upper(),
             "companyId":      company_id,
             "currency":       currency,
@@ -322,7 +320,7 @@ class WaccRoicService:
         symbol: str,
         generate_narrative: bool = True,
         **wacc_overrides,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Combined WACC + ROIC analysis.
         Returns both results plus a consolidated AI narrative.

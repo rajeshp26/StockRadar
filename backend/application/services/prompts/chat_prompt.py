@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import List
 
 from pydantic import BaseModel, Field
 
@@ -14,7 +13,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    messages: List[ChatMessage] = Field(..., min_length=1)
+    messages: list[ChatMessage] = Field(..., min_length=1)
 
 
 def normalize_symbol(symbol: str) -> str:

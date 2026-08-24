@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 _METHOD_LABELS = {
     "rule1":           "Rule #1 (Phil Town)",
@@ -41,10 +41,10 @@ def _fmt(val: Any, as_pct: bool = False, decimals: int = 1) -> str:
 
 def build_overview_prompt(
     symbol: str,
-    sector: Optional[str],
+    sector: str | None,
     currency: str,
-    current_price: Optional[float],
-    methods: Dict[str, Any],
+    current_price: float | None,
+    methods: dict[str, Any],
 ) -> str:
     sector_str = sector or "Unknown"
     price_str  = f"{currency}{current_price:,.2f}" if current_price else "N/A"

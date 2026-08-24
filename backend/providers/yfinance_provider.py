@@ -1,18 +1,21 @@
 
-from .base import StockDataProvider, TickerInfo, StockDetails
-from domain.interfaces.stock_provider import StockProvider
-from typing import Optional, List, Dict, Any
-from datetime import datetime, date, timezone
-from shared.time_utils import now_utc, parse_db_timestamp
 import logging
-import yfinance as yf
+from datetime import UTC, date, datetime
+from typing import Any
+
 import pandas as pd
+import yfinance as yf
+
+from domain.interfaces.stock_provider import StockProvider
+from shared.time_utils import now_utc, parse_db_timestamp
+
+from .base import StockDataProvider, StockDetails, TickerInfo
 
 logger = logging.getLogger(__name__)
 
 
 # Exchange codes known to be Canadian TSX/TSXV — yfinance requires .TO /.V suffix
-EXCHANGE_SUFFIX_MAP: Dict[str, str] = {
+EXCHANGE_SUFFIX_MAP: dict[str, str] = {
     "TOR": ".TO", "TSX": ".TO", "TO": ".TO",
     "VAN": ".V", "TSXV": ".V", "V": ".V",
     "CNQ": ".V", "NEO": ".V",
@@ -28,9 +31,9 @@ class YFinanceProvider(StockDataProvider, StockProvider):
       - NEW: price history (daily OHLCV), splits, summary snapshot
     """
     def __init__(self):
-        self._cache: Dict[str, StockDetails] = {}
+        self._cache: dict[str, StockDetails] = {}
 
-    def _resolve_symbol(self, ticker_symbol: str, exchange: Optional[str] = None) -> str:
+    def _resolve_symbol(self, ticker_symbol: str, exchange: str | None = None) -> str:
         """Resolve a ticker symbol to YFinance-compatible form.
 
         When exchange is known and maps to a Canadian exchange, append the
@@ -41,17 +44,19 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         symbol = ticker_symbol.upper()
         if exchange:
             suffix = EXCHANGE_SUFFIX_MAP.get(exchange.upper())
-            if suffix:
+            # Idempotent: skip suffix if the stored symbol already carries it
+            # (e.g. "BCE.TO" + ".TO" would produce the invalid "BCE.TO.TO").
+            if suffix and not symbol.endswith(suffix):
                 return symbol + suffix
         return symbol
 
-    def get_ticker_info(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional[TickerInfo]:
+    def get_ticker_info(self, ticker_symbol: str, exchange: str | None = None) -> TickerInfo | None:
         details = self.get_stock_details(ticker_symbol, exchange=exchange)
         if details:
             return TickerInfo(long_name=details.long_name, ticker_symbol=details.ticker_symbol)
         return None
 
-    def get_stock_details(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional[StockDetails]:
+    def get_stock_details(self, ticker_symbol: str, exchange: str | None = None) -> StockDetails | None:
         ticker_upper = self._resolve_symbol(ticker_symbol, exchange)
         if ticker_upper in self._cache:
             return self._cache[ticker_upper]
@@ -76,7 +81,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             ts = info.get('earningsTimestamp')
             if ts:
                 try:
-                    earnings_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+                    earnings_date = datetime.fromtimestamp(ts, tz=UTC).date()
                 except (ValueError, TypeError):
                     pass
 
@@ -112,7 +117,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             logger.warning(f"YFinance Error for {ticker_symbol}: {e}")
             return None
 
-    def get_tickers_data(self, ticker_symbols: List[str]) -> Dict[str, Any]:
+    def get_tickers_data(self, ticker_symbols: list[str]) -> dict[str, Any]:
         if not ticker_symbols:
             return {}
         tickers = yf.Tickers(ticker_symbols)
@@ -161,7 +166,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
     # ---------------------------
     # NEW: Price History (DataFrame)
     # ---------------------------
-    def get_price_history_df(self, symbol: str, exchange: Optional[str] = None) -> pd.DataFrame:
+    def get_price_history_df(self, symbol: str, exchange: str | None = None) -> pd.DataFrame:
         """
         Returns DataFrame with columns: price_date, open_price, high_price, low_price, close_price, volume
         """
@@ -205,7 +210,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             value_col = [c for c in df.columns if c != 'Date'][0]
             df.rename(columns={'Date': 'report_date', value_col: 'ratio'}, inplace=True)
 
-            def to_factor(x) -> Optional[str]:
+            def to_factor(x) -> str | None:
                 try:
                     if x and float(x) > 0:
                         # 3.0 => "3:1"; 0.5 => "1:2"
@@ -228,7 +233,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
     # ---------------------------
     # NEW: Company Summary (dict)
     # ---------------------------
-    def get_summary_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_summary_snapshot(self, symbol: str) -> dict[str, Any] | None:
         """
         Returns dict with summary metrics mapped to your company_summary schema.
         """
@@ -258,7 +263,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
     # ---------------------------
     # Earnings data (best-effort)
     # ---------------------------
-    def get_earnings_data(self, ticker_symbol: str) -> Optional[List[Dict[str, Any]]]:
+    def get_earnings_data(self, ticker_symbol: str) -> list[dict[str, Any]] | None:
         """
         Returns list of dicts with fiscal_year, fiscal_quarter,
         report_date, announcement_date, eps_estimate, revenue_estimate, (best-effort).
@@ -268,7 +273,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         """
         try:
             tkr = yf.Ticker(ticker_symbol.upper())
-            earnings_list: List[Dict[str, Any]] = []
+            earnings_list: list[dict[str, Any]] = []
 
             # Earnings history (actual reported EPS + estimates)
             # This is the correct API - provides epsActual, epsEstimate, epsDifference, surprisePercent
@@ -354,7 +359,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
     # ---------------------------
     # NEW: Upcoming ex-dividend date
     # ---------------------------
-    def get_upcoming_ex_date(self, symbol: str) -> Optional[date]:
+    def get_upcoming_ex_date(self, symbol: str) -> date | None:
         """Get the next ex-dividend date from yfinance info.
         
         Primary source: info.exDividendDate (Unix timestamp).
@@ -398,7 +403,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             return None
 
     @staticmethod
-    def _safe_float(val) -> Optional[float]:
+    def _safe_float(val) -> float | None:
         if val is None:
             return None
         try:

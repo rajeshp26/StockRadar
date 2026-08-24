@@ -1,25 +1,23 @@
 # main.py
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+
+import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from contextlib import asynccontextmanager
-import asyncio
-import logging
-from datetime import datetime, timezone
-import yfinance as yf
-from typing import Optional, Dict, Any
 
-from api import watchlists, watchlist_items, users, valuations
-from api import analysis
-from api import super_investors
+from api import analysis, super_investors, users, valuations, watchlist_items, watchlists
 from api.chat import router as chat_router
-from config import settings
-from database import supabase
-from auth import get_current_user
-from dependencies import get_current_user_dep, limiter
 from api.portfolio import router as portfolio_router
 from api.stocks import router as stocks_router
+from auth import get_current_user
+from config import settings
+from database import supabase
+from dependencies import get_current_user_dep, limiter
 
 # Canadian exchange suffixes for yfinance (matches yfinance_provider.EXCHANGE_SUFFIX_MAP)
 _YF_SUFFIXES = [".TO", ".V"]
@@ -27,7 +25,7 @@ _YF_SUFFIXES = [".TO", ".V"]
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
-logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, logging.INFO))
+logging.basicConfig(level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO))
 logger = logging.getLogger("stockerpro.main")
 
 # §4.8: correlation IDs — one ID per request, echoed on the response and
@@ -58,12 +56,12 @@ async def background_price_monitor():
     Uses yfinance every N seconds based on settings.SSE_UPDATE_INTERVAL_SECONDS.
     CDR adjustment is batch-fetched via shared utility (2 queries, not 2N).
     """
-    from shared.price_utils import get_cdr_maps_for_companies, apply_cdr_adjustment
+    from shared.price_utils import apply_cdr_adjustment, get_cdr_maps_for_companies
 
     interval = max(1, int(getattr(settings, "SSE_UPDATE_INTERVAL_SECONDS", 10)))
     while True:
         try:
-            from api.watchlists import symbol_subscribers, broadcast_stock_update
+            from api.watchlists import broadcast_stock_update, symbol_subscribers
             active_symbols = list(symbol_subscribers.keys())
             if not active_symbols:
                 logger.debug("[PRICE-MONITOR-DIAG] No active symbol subscribers — sleeping 5s")
@@ -73,7 +71,7 @@ async def background_price_monitor():
             logger.debug(f"[PRICE-MONITOR-DIAG] Fetching prices for {len(active_symbols)} symbols: {active_symbols}")
             # Resolve Canadian suffixes: try raw symbol first, fall back to .TO / .V
             resolved_symbols = []
-            symbol_suffix_map: Dict[str, str] = {}
+            symbol_suffix_map: dict[str, str] = {}
             for sym in active_symbols:
                 resolved_symbols.append(sym)
                 symbol_suffix_map[sym] = ""
@@ -91,8 +89,8 @@ async def background_price_monitor():
                 .in_("ticker_symbol", active_symbols)
                 .execute()
             )
-            sym_to_cid: Dict[str, int] = {}
-            cid_ratios: Dict[int, float] = {}
+            sym_to_cid: dict[str, int] = {}
+            cid_ratios: dict[int, float] = {}
             for row in (comp_res.data or []):
                 sym_to_cid[row["ticker_symbol"]] = row["company_id"]
                 if row.get("cdr_ratio") is not None:
@@ -181,7 +179,7 @@ async def background_price_monitor():
                                     "company_id":   cid,
                                     "current_price": raw_current_price,
                                     "close_price":  raw_prev_close,
-                                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                                    "last_updated": datetime.now(UTC).isoformat(),
                                 },
                                 on_conflict="company_id",
                             ).execute()
@@ -204,13 +202,13 @@ async def background_price_monitor():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"StockerPro Backend starting in {settings.ENVIRONMENT} mode.")
-    
+
     # Centralize state
-    app.state.tasks: Dict[str, asyncio.Task] = {}
-    
+    app.state.tasks: dict[str, asyncio.Task] = {}
+
     # STARTUP ---------------------------------------------------------------
     # No Firebase initialization — Supabase JWT verification uses lazy JWKS fetch
-    
+
     # SSE price monitor (stays in FastAPI - real-time user-facing)
     price_task = asyncio.create_task(background_price_monitor(), name="price_monitor")
     app.state.tasks["price_monitor"] = price_task
@@ -228,7 +226,7 @@ async def lifespan(app: FastAPI):
     provider = get_defeat_beta_provider()
     warm_task = asyncio.create_task(provider.warm_cache(), name="duckdb_warm")
     app.state.tasks["duckdb_warm"] = warm_task
-    
+
     # ──────────────────────────────────────────────────────────────────────
     # SCHEDULERS MOVED TO SEPARATE WORKER PROCESS
     # ──────────────────────────────────────────────────────────────────────
@@ -240,9 +238,9 @@ async def lifespan(app: FastAPI):
     #
     # See deployment docs for systemd/docker setup.
     # ──────────────────────────────────────────────────────────────────────
-    
+
     logger.info("ℹ️  Schedulers run in separate worker process (scheduler_worker.py)")
-    
+
     try:
         yield
     finally:
@@ -253,7 +251,7 @@ async def lifespan(app: FastAPI):
                 task.cancel()
             except Exception:
                 pass
-        
+
         for tname, task in list(app.state.tasks.items()):
             try:
                 await task
@@ -262,7 +260,7 @@ async def lifespan(app: FastAPI):
                 logger.info(f"⏹️  Task '{tname}' cancelled (normal)")
             except Exception as e:
                 logger.error(f"Task '{tname}' error during cancel: {e}", exc_info=True)
-        
+
         logger.info("🧹 Shutdown complete")
 
 # -----------------------------------------------------------------------------
@@ -295,8 +293,9 @@ async def correlation_id_middleware(request, call_next):
 
 @app.middleware("http")
 async def trace_request_middleware(request, call_next):
-    from tracing import tracer
     import time as _time
+
+    from tracing import tracer
     tracer.active_requests += 1
     t0 = _time.perf_counter()
     try:
@@ -358,7 +357,7 @@ async def schedulers_status():
     from infrastructure.repositories.scheduler_repository import SchedulerRepository
     repo = SchedulerRepository()
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     try:
         # Scheduler state from DB
@@ -377,10 +376,10 @@ async def schedulers_status():
                 }
 
         # Worker heartbeats
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         heartbeats = repo.get_worker_heartbeats(minutes=5)
         alive = any(
-            h.get("last_hb_at") and (now - datetime.fromisoformat(h["last_hb_at"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc)).total_seconds() < 120
+            h.get("last_hb_at") and (now - datetime.fromisoformat(h["last_hb_at"].replace("Z", "+00:00")).replace(tzinfo=UTC)).total_seconds() < 120
             for h in (heartbeats or [])
         )
 
@@ -388,7 +387,7 @@ async def schedulers_status():
         stale_heartbeats = sum(
             1 for h in (heartbeats or [])
             if h.get("last_hb_at")
-            and (now - datetime.fromisoformat(h["last_hb_at"].replace("Z", "+00:00")).replace(tzinfo=timezone.utc)).total_seconds() >= 120
+            and (now - datetime.fromisoformat(h["last_hb_at"].replace("Z", "+00:00")).replace(tzinfo=UTC)).total_seconds() >= 120
         )
 
         # Job queue counts

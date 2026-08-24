@@ -1,9 +1,9 @@
 """Shared price snapshot utilities. Single source of truth for CDR logic and price resolution."""
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Tuple
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 STALE_THRESHOLD_MIN = 5
 
@@ -11,7 +11,7 @@ STALE_THRESHOLD_MIN = 5
 def get_cdr_maps_for_companies(
     supabase_client,
     company_ids: Iterable[int],
-) -> Tuple[Dict[int, float], set]:
+) -> tuple[dict[int, float], set]:
     ids = list({int(c) for c in company_ids})
     if not ids:
         return {}, set()
@@ -22,7 +22,7 @@ def get_cdr_maps_for_companies(
         .in_("company_id", ids)
         .execute()
     )
-    ratios: Dict[int, float] = {}
+    ratios: dict[int, float] = {}
     for r in comp.data or []:
         if r.get("cdr_ratio") is not None:
             ratios[r["company_id"]] = float(r["cdr_ratio"])
@@ -45,10 +45,10 @@ def apply_cdr_adjustment(
     price: float,
     prev_close: float | None,
     company_id: int,
-    cdr_ratios: Dict[int, float],
+    cdr_ratios: dict[int, float],
     tor_cids: set,
     default_cdr: float = 10.0,
-) -> Tuple[float, float | None]:
+) -> tuple[float, float | None]:
     if company_id in tor_cids:
         ratio = cdr_ratios.get(company_id, default_cdr)
         if ratio and ratio > 0:
@@ -64,8 +64,8 @@ def _is_price_fresh(last_updated: Any) -> bool:
     try:
         dt = datetime.fromisoformat(str(last_updated))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        age_min = (datetime.now(timezone.utc) - dt).total_seconds() / 60
+            dt = dt.replace(tzinfo=UTC)
+        age_min = (datetime.now(UTC) - dt).total_seconds() / 60
         return age_min <= STALE_THRESHOLD_MIN
     except (ValueError, TypeError):
         return False
@@ -73,9 +73,9 @@ def _is_price_fresh(last_updated: Any) -> bool:
 
 def build_price_snapshot(
     supabase_client,
-    company_ids: List[int],
+    company_ids: list[int],
     source: str = "db_cached",
-) -> Dict[int, Dict[str, Any]]:
+) -> dict[int, dict[str, Any]]:
     if not company_ids:
         return {}
 
@@ -89,7 +89,7 @@ def build_price_snapshot(
 
     cdr_ratios, tor_cids = get_cdr_maps_for_companies(supabase_client, company_ids)
 
-    result: Dict[int, Dict[str, Any]] = {}
+    result: dict[int, dict[str, Any]] = {}
 
     for cid in company_ids:
         md = md_map.get(cid)

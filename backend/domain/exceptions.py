@@ -6,13 +6,13 @@ Organized by context: data fetching, validation, refresh, and provider-specific 
 
 class StockerProException(Exception):
     """Base exception for all StockerPro custom exceptions."""
-    
+
     def __init__(self, message: str, error_code: str = None, details: dict = None):
         self.message = message
         self.error_code = error_code
         self.details = details or {}
         super().__init__(self.message)
-    
+
     def __str__(self):
         if self.error_code:
             return f"[{self.error_code}] {self.message}"
@@ -39,7 +39,7 @@ class DefeatBetaException(DataFetchException):
 
 class FinancialsFetchTimeoutError(DefeatBetaException):
     """Raised when defeat-beta request times out."""
-    
+
     def __init__(self, symbol: str, statement_type: str, timeout_seconds: int):
         super().__init__(
             message=f"Defeat-beta {statement_type} fetch for {symbol} timed out after {timeout_seconds}s",
@@ -54,7 +54,7 @@ class FinancialsFetchTimeoutError(DefeatBetaException):
 
 class PartialDataError(DefeatBetaException):
     """Raised when some financial statements succeed but others fail."""
-    
+
     def __init__(self, symbol: str, succeeded: list[str], failed: list[str]):
         super().__init__(
             message=f"Partial data fetch for {symbol}: succeeded={len(succeeded)}, failed={len(failed)}",
@@ -70,7 +70,7 @@ class PartialDataError(DefeatBetaException):
 
 class NoDataError(DefeatBetaException):
     """Raised when all financial fetch attempts fail."""
-    
+
     def __init__(self, symbol: str, statement_types: list[str]):
         super().__init__(
             message=f"Failed to fetch any financial data for {symbol}. Attempted: {statement_types}",
@@ -81,10 +81,10 @@ class NoDataError(DefeatBetaException):
 
 class DefeatBetaNetworkError(DefeatBetaException):
     """Raised when defeat-beta encounters network/connection issues."""
-    
+
     def __init__(self, symbol: str, original_error: Exception):
         super().__init__(
-            message=f"Network error fetching financials for {symbol}: {str(original_error)}",
+            message=f"Network error fetching financials for {symbol}: {original_error!s}",
             error_code="DEFEAT_BETA_NETWORK_ERROR",
             details={"symbol": symbol, "original_error": str(original_error)}
         )
@@ -92,7 +92,7 @@ class DefeatBetaNetworkError(DefeatBetaException):
 
 class InvalidDefeatBetaResponse(DefeatBetaException):
     """Raised when defeat-beta returns unexpected data format."""
-    
+
     def __init__(self, symbol: str, statement_type: str, reason: str):
         super().__init__(
             message=f"Invalid {statement_type} response for {symbol}: {reason}",
@@ -107,7 +107,7 @@ class InvalidDefeatBetaResponse(DefeatBetaException):
 
 class NextEarningsDateNotFoundError(DefeatBetaException):
     """Raised when defeat-beta calendar is empty."""
-    
+
     def __init__(self, symbol: str):
         super().__init__(
             message=f"No next earnings date found for {symbol}",
@@ -127,10 +127,10 @@ class RefreshException(StockerProException):
 
 class SchedulerRefreshError(RefreshException):
     """Raised when scheduler fails to refresh a company."""
-    
+
     def __init__(self, company_id: int, symbol: str, original_error: Exception):
         super().__init__(
-            message=f"Scheduler refresh failed for {symbol} (ID: {company_id}): {str(original_error)}",
+            message=f"Scheduler refresh failed for {symbol} (ID: {company_id}): {original_error!s}",
             error_code="SCHEDULER_REFRESH_ERROR",
             details={
                 "company_id": company_id,
@@ -142,7 +142,7 @@ class SchedulerRefreshError(RefreshException):
 
 class CompanyNotFoundError(RefreshException):
     """Raised when attempting to refresh a company that doesn't exist."""
-    
+
     def __init__(self, company_id: int, symbol: str = None):
         msg = f"Company not found: {symbol or f'ID {company_id}'}"
         super().__init__(
@@ -154,10 +154,10 @@ class CompanyNotFoundError(RefreshException):
 
 class MaxRetriesExceededError(RefreshException):
     """Raised when max retry attempts exceeded."""
-    
+
     def __init__(self, company_id: int, symbol: str, attempts: int, last_error: Exception):
         super().__init__(
-            message=f"Max retries ({attempts}) exceeded for {symbol}: {str(last_error)}",
+            message=f"Max retries ({attempts}) exceeded for {symbol}: {last_error!s}",
             error_code="MAX_RETRIES_EXCEEDED",
             details={
                 "company_id": company_id,
@@ -179,7 +179,7 @@ class DataValidationException(StockerProException):
 
 class InvalidFiscalPeriodError(DataValidationException):
     """Raised when fiscal period data is invalid."""
-    
+
     def __init__(self, fiscal_year: int, fiscal_quarter: int = None):
         quarter_str = f"Q{fiscal_quarter}" if fiscal_quarter else "Annual"
         super().__init__(
@@ -191,7 +191,7 @@ class InvalidFiscalPeriodError(DataValidationException):
 
 class DuplicateDataError(DataValidationException):
     """Raised when attempting to store duplicate financial data."""
-    
+
     def __init__(self, company_id: int, fiscal_year: int, fiscal_quarter: int = None):
         quarter_str = f"Q{fiscal_quarter}" if fiscal_quarter else "Annual"
         super().__init__(

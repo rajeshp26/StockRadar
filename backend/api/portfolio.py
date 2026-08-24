@@ -9,65 +9,63 @@ Endpoints for portfolio management:
 - Query dividends
 """
 
-import asyncio
 import base64
-import json
 import logging
-import time
 import uuid
 from collections import defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+if TYPE_CHECKING:
+    from application.services.portfolio_risk_service import PortfolioRiskService
 
-from config import settings
-from dependencies import get_current_user_dep, limiter
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
 from application.services.portfolio_service import PortfolioService
+from config import settings
+from database import supabase
+from dependencies import get_current_user_dep, limiter
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.supabase_repository import SupabaseUserRepository
-from shared.fx_service import FXService
-from shared.snapshot_builder import convert_holding_fx
 from schemas_portfolio import (
-    ImportTransactionsRequest,
-    ImportTransactionsResponse,
-    ImportStatusResponse,
-    ListBrokeragesResponse,
-    ListAccountsResponse,
-    AccountHoldingsResponse,
-    PortfolioOverviewResponse,
-    AccountTransactionsResponse,
     AccountDividendsResponse,
-    DeleteAccountRequest,
-    ManualTransactionRequest,
-    ManualTransactionResponse,
-    PerformanceResponse,
-    PerformanceBatchResponse,
-    BenchmarkListResponse,
+    AccountHoldingsResponse,
+    AccountTransactionsResponse,
     BenchmarkCompareResponse,
-    PortfolioAllocationResponse,
+    BenchmarkListResponse,
+    CovarianceResponse,
+    DashboardAccount,
+    DashboardHolding,
+    DashboardOverview,
     DividendHistoryResponse,
+    DrawdownResponse,
+    EfficientFrontierResponse,
+    FactorExposureResponse,
+    HoldingAccountBreakdown,
     HoldingExistsResponse,
     HoldingPerformanceResponse,
     HoldingTransactionInfo,
-    HoldingAccountBreakdown,
-    RiskMetricsResponse,
-    DrawdownResponse,
-    CovarianceResponse,
-    EfficientFrontierResponse,
-    RollingSharpeResponse,
-    RiskContributionResponse,
-    FactorExposureResponse,
+    ImportStatusResponse,
+    ImportTransactionsRequest,
+    ImportTransactionsResponse,
+    ListAccountsResponse,
+    ListBrokeragesResponse,
+    ManualTransactionRequest,
+    ManualTransactionResponse,
+    PerformanceBatchResponse,
+    PerformanceResponse,
+    PortfolioAllocationResponse,
     PortfolioDashboardResponse,
-    DashboardAccount,
-    DashboardOverview,
-    DashboardHolding,
+    PortfolioOverviewResponse,
+    RiskContributionResponse,
+    RiskMetricsResponse,
+    RollingSharpeResponse,
 )
-from shared.time_utils import now_utc
 from shared.exceptions.base import AppException
+from shared.fx_service import FXService
 from shared.metrics import RouteTimer
-from database import supabase
+from shared.snapshot_builder import convert_holding_fx
+from shared.time_utils import now_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -107,7 +105,7 @@ def _get_portfolio_risk_service() -> "PortfolioRiskService":
 # FX CONVERSION HELPERS
 # ============================================================================
 
-def _get_company_currencies(company_ids: List[int]) -> Dict[int, str]:
+def _get_company_currencies(company_ids: list[int]) -> dict[int, str]:
     """Look up price currency for each company from the companies table."""
     if not company_ids:
         return {}
@@ -119,7 +117,7 @@ def _get_company_currencies(company_ids: List[int]) -> Dict[int, str]:
         return {}
 
 
-def _get_company_cdr_ratios(company_ids: List[int]) -> Dict[int, float]:
+def _get_company_cdr_ratios(company_ids: list[int]) -> dict[int, float]:
     """Look up per-company CDR ratio from the companies table."""
     if not company_ids:
         return {}
@@ -139,8 +137,8 @@ def _get_company_cdr_ratios(company_ids: List[int]) -> Dict[int, float]:
 def apply_cdr_adjustment(
     price: float,
     company_id: int,
-    cdr_ratios: Dict[int, float],
-    exchange_overrides: Optional[Dict[int, Optional[str]]] = None,
+    cdr_ratios: dict[int, float],
+    exchange_overrides: dict[int, str | None] | None = None,
 ) -> float:
     """Apply CDR ratio to a price if the company is a CDR holding.
 
@@ -166,9 +164,9 @@ def apply_cdr_adjustment(
 
 
 def _convert_holding_values(
-    holdings: List[Dict[str, Any]],
+    holdings: list[dict[str, Any]],
     account_currency: str,
-    fx_svc: Optional[FXService] = None,
+    fx_svc: FXService | None = None,
 ) -> None:
     """Convert holding current_value and total_cost from price_currency to account_currency (in-place).
 
@@ -208,7 +206,7 @@ def _resolve_user(user: dict) -> int:
     return db_user_id
 
 
-def _parse_account_ids(raw: Optional[str]) -> Optional[List[int]]:
+def _parse_account_ids(raw: str | None) -> list[int] | None:
     """Parse comma-separated account_ids query param."""
     if not raw:
         return None
@@ -380,8 +378,8 @@ def _get_user_preferred_currency(auth_id: str) -> str:
 
 
 def _compute_overview_from_holdings(
-    all_holdings: List[dict],
-    accounts: List[dict],
+    all_holdings: list[dict],
+    accounts: list[dict],
     db_user_id: int,
     ytd_dividends: float = 0.0,
 ) -> dict:
@@ -434,9 +432,9 @@ async def list_brokerages(
     try:
         repo = PortfolioRepository()
         brokerages = repo.list_active_brokerages()
-        
+
         return ListBrokeragesResponse(brokerages=brokerages)
-    
+
     except Exception as e:
         logger.error(f"List brokerages failed: {e}")
         raise HTTPException(
@@ -468,7 +466,7 @@ async def list_accounts(
             return ListAccountsResponse(accounts=[])
 
         all_holdings = repo.get_holdings_for_accounts(account_ids)
-        holdings_by_account: Dict[int, List] = defaultdict(list)
+        holdings_by_account: dict[int, list] = defaultdict(list)
         for h in all_holdings:
             holdings_by_account[h["account_id"]].append(h)
 
@@ -604,28 +602,28 @@ async def delete_account(
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         repo = PortfolioRepository()
         account = repo.get_account_by_id(account_id)
-        
+
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
-        
+
         # Verify ownership
         if account["user_id"] != db_user_id:
             raise HTTPException(
                 status_code=403,
                 detail="You do not own this account",
             )
-        
+
         # Delete account (cascades to transactions, holdings, etc.)
         supabase.table("portfolio_accounts").delete().eq(
             "account_id", account_id
         ).execute()
-        
+
         logger.info(f"Deleted account {account_id} for user {db_user_id}")
         return None
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -656,7 +654,7 @@ async def queue_import(
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         # Decode CSV content
         try:
             csv_bytes = base64.b64decode(body.csv_content)
@@ -664,9 +662,9 @@ async def queue_import(
         except Exception as e:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid CSV encoding: {str(e)}",
+                detail=f"Invalid CSV encoding: {e!s}",
             )
-        
+
         # Queue import for background processing
         service = _get_portfolio_service()
         result = await service.queue_import(
@@ -675,7 +673,7 @@ async def queue_import(
             csv_content=csv_content,
             account_filter=body.account_filter,
         )
-        
+
         if not result.get("success"):
             return ImportTransactionsResponse(
                 success=False,
@@ -686,9 +684,9 @@ async def queue_import(
                 previous_import_id=result.get("previous_import_id"),
                 warning=result.get("warning"),
             )
-        
+
         return ImportTransactionsResponse(**result)
-    
+
     except HTTPException:
         raise
     except AppException as e:
@@ -697,7 +695,7 @@ async def queue_import(
         logger.error(f"Queue import failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Queue import failed: {str(e)}",
+            detail=f"Queue import failed: {e!s}",
         )
 
 
@@ -720,28 +718,28 @@ async def get_import_status(
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         repo = PortfolioRepository()
         job = repo.get_import_job(uuid.UUID(import_batch_id))
-        
+
         if not job:
             raise HTTPException(
                 status_code=404,
                 detail="Import job not found",
             )
-        
+
         # Verify ownership
         if job.get("user_id") != db_user_id:
             raise HTTPException(
                 status_code=403,
                 detail="Access denied",
             )
-        
+
         status = job.get("status", "unknown")
         total_rows = job.get("total_rows", 0)
         rows_parsed = job.get("rows_parsed", 0)
         rows_inserted = job.get("imported_rows", 0)
-        
+
         response = ImportStatusResponse(
             success=status in ("completed", "processing", "pending"),
             import_batch_id=import_batch_id,
@@ -751,9 +749,9 @@ async def get_import_status(
             rows_inserted=rows_inserted,
             error=job.get("error_message"),
         )
-        
+
         return response
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -955,7 +953,7 @@ async def get_all_holdings(
 @limiter.limit("20/minute")
 async def get_portfolio_overview(
     request: Request,
-    account_id: Optional[int] = Query(None, description="Filter to a specific account"),
+    account_id: int | None = Query(None, description="Filter to a specific account"),
     user: dict = Depends(get_current_user_dep),
 ) -> PortfolioOverviewResponse:
     """
@@ -984,7 +982,7 @@ async def get_portfolio_overview(
         overview = await service.get_user_portfolio_overview(
             db_user_id, account_ids=ids_param, display_currency=preferred_currency,
         )
-        
+
         if not overview.get("success"):
             return PortfolioOverviewResponse(
                 success=False,
@@ -999,9 +997,9 @@ async def get_portfolio_overview(
                 top_holdings=[],
                 account_breakdown=[],
             )
-        
+
         return PortfolioOverviewResponse(**overview)
-    
+
     except HTTPException:
         raise
     except AppException as e:
@@ -1035,32 +1033,32 @@ async def get_account_transactions(
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         # Cap limit
         if limit > 1000:
             limit = 1000
-        
+
         repo = PortfolioRepository()
         account = repo.get_account_by_id(account_id)
-        
+
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
-        
+
         # Verify ownership
         if account["user_id"] != db_user_id:
             raise HTTPException(
                 status_code=403,
                 detail="You do not own this account",
             )
-        
+
         transactions = repo.get_account_transactions(account_id, limit=limit)
-        
+
         return AccountTransactionsResponse(
             account_id=account_id,
             transactions=transactions,
             total_count=len(transactions),
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1075,12 +1073,12 @@ async def get_account_transactions(
 @limiter.limit("30/minute")
 async def get_all_transactions(
     request: Request,
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     limit: int = 100,
-    activity_type: Optional[str] = Query(None, description="Filter by activity type (BUY, SELL, DIVIDEND, etc.)"),
-    search: Optional[str] = Query(None, description="Search symbol or security name"),
-    from_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    to_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    activity_type: str | None = Query(None, description="Filter by activity type (BUY, SELL, DIVIDEND, etc.)"),
+    search: str | None = Query(None, description="Search symbol or security name"),
+    from_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    to_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
     user: dict = Depends(get_current_user_dep),
 ) -> AccountTransactionsResponse:
     """
@@ -1151,34 +1149,34 @@ async def get_account_dividends(
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         repo = PortfolioRepository()
         account = repo.get_account_by_id(account_id)
-        
+
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
-        
+
         # Verify ownership
         if account["user_id"] != db_user_id:
             raise HTTPException(
                 status_code=403,
                 detail="You do not own this account",
             )
-        
+
         # Get current year total
         current_year = now_utc().year
         yearly_divs = repo.get_account_dividends_by_year(account_id, current_year)
         current_year_total = sum(d.get("amount", 0) for d in yearly_divs)
-        
+
         # Get monthly summaries
         monthly_summaries = repo.get_monthly_dividends(account_id, months=12)
-        
+
         return AccountDividendsResponse(
             account_id=account_id,
             current_year_total=float(current_year_total),
             monthly_summaries=monthly_summaries,
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1193,7 +1191,7 @@ async def get_account_dividends(
 @limiter.limit("30/minute")
 async def get_all_dividends(
     request: Request,
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> AccountDividendsResponse:
     """
@@ -1318,7 +1316,7 @@ async def add_manual_transaction(
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         service = _get_portfolio_service()
         result = await service.add_manual_transaction(
             user_id=db_user_id,
@@ -1331,15 +1329,15 @@ async def add_manual_transaction(
             commission=body.commission,
             notes=body.notes,
         )
-        
+
         if not result.get("success"):
             return ManualTransactionResponse(
                 success=False,
                 error=result.get("error", "Failed to create transaction"),
             )
-        
+
         return ManualTransactionResponse(**result)
-    
+
     except HTTPException:
         raise
     except AppException as e:
@@ -1348,10 +1346,10 @@ async def add_manual_transaction(
         logger.error(f"Manual transaction failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to create transaction: {str(e)}",
+            detail=f"Failed to create transaction: {e!s}",
         )
- 
- 
+
+
 @router.get("/portfolio/import-history", tags=["Portfolio"], status_code=200)
 @limiter.limit("20/minute")
 async def get_import_history(
@@ -1371,12 +1369,12 @@ async def get_import_history(
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
-        
+
         repo = PortfolioRepository()
         history = repo.get_import_history(db_user_id, limit=min(limit, 100))
-        
+
         return {"import_history": history}
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1385,7 +1383,7 @@ async def get_import_history(
             status_code=500,
             detail="Failed to get import history",
         )
- 
+
 @router.get("/companies/search", tags=["Companies"], status_code=200)
 @limiter.limit("60/minute")
 async def check_company_exists(
@@ -1411,7 +1409,7 @@ async def check_company_exists(
             .limit(1)
             .execute()
         )
-        
+
         if res.data and len(res.data) > 0:
             company = res.data[0]
             return {
@@ -1425,7 +1423,7 @@ async def check_company_exists(
                 "exists": False,
                 "ticker_symbol": symbol.upper(),
             }
-    
+
     except Exception as e:
         logger.error(f"Company check failed for {symbol}: {e}")
         # Return false on error so form still works
@@ -1441,9 +1439,9 @@ async def check_company_exists(
 
 from application.services.dividend_dashboard_service import DividendDashboardService
 from schemas_portfolio import (
-    PortfolioDividendSummary,
     PortfolioDividendHolding,
     PortfolioDividendHoldingDetail,
+    PortfolioDividendSummary,
     UpcomingExDate,
 )
 
@@ -1494,7 +1492,7 @@ async def get_dividend_dashboard_upcoming(
     request: Request,
     account_ids: str = Query(..., description="Comma-separated account IDs"),
     user: dict = Depends(get_current_user_dep),
-) -> List[UpcomingExDate]:
+) -> list[UpcomingExDate]:
     """
     Upcoming ex-dividend dates for held positions.
 
@@ -1527,7 +1525,7 @@ async def get_dividend_dashboard_holdings(
     request: Request,
     account_ids: str = Query(..., description="Comma-separated account IDs"),
     user: dict = Depends(get_current_user_dep),
-) -> List[PortfolioDividendHolding]:
+) -> list[PortfolioDividendHolding]:
     """
     Per-holding dividend data for the holdings table.
 
@@ -1748,7 +1746,7 @@ async def get_holding_performance_compare(
 async def get_portfolio_performance(
     request: Request,
     period: str = "1Y",
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> PerformanceResponse:
     """
@@ -1805,7 +1803,7 @@ async def get_performance_compare(
     request: Request,
     period: str = "1Y",
     benchmarks: str = "SPY",
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> BenchmarkCompareResponse:
     """
@@ -1843,7 +1841,7 @@ async def get_performance_compare(
 @limiter.limit("60/minute")
 async def get_portfolio_performance_batch(
     request: Request,
-    body: Dict[str, Any],
+    body: dict[str, Any],
     user: dict = Depends(get_current_user_dep),
 ) -> PerformanceBatchResponse:
     """
@@ -1862,14 +1860,14 @@ async def get_portfolio_performance_batch(
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
 
-        account_ids: Optional[List[int]] = body.get("account_ids")
-        periods: List[str] = body.get("periods", ["1Y"])
+        account_ids: list[int] | None = body.get("account_ids")
+        periods: list[str] = body.get("periods", ["1Y"])
 
         if account_ids is not None and not isinstance(account_ids, list):
             raise HTTPException(status_code=422, detail="account_ids must be a list of integers")
 
         service = _get_portfolio_service()
-        results: Dict[str, Any] = {}
+        results: dict[str, Any] = {}
 
         for period in periods:
             result = await service.get_portfolio_performance(db_user_id, period, account_ids)
@@ -1892,7 +1890,7 @@ async def get_portfolio_performance_batch(
 async def get_portfolio_allocation(
     request: Request,
     group_by: str = Query("sector", description="Group by: sector, geography, or account"),
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs"),
     user: dict = Depends(get_current_user_dep),
 ) -> PortfolioAllocationResponse:
     """
@@ -1968,7 +1966,7 @@ async def list_benchmarks(
 async def get_risk_metrics(
     request: Request,
     period: str = Query("1Y", description="Period: 1M, 3M, 6M, 1Y, 2Y, 3Y, 5Y, MAX"),
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> RiskMetricsResponse:
     try:
@@ -1989,7 +1987,7 @@ async def get_risk_metrics(
 async def get_drawdown(
     request: Request,
     period: str = Query("1Y", description="Period: 1M, 3M, 6M, 1Y, 2Y, 3Y, 5Y, MAX"),
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> DrawdownResponse:
     try:
@@ -2010,7 +2008,7 @@ async def get_drawdown(
 async def get_covariance(
     request: Request,
     period: str = Query("1Y", description="Period: 1M, 3M, 6M, 1Y, 2Y, 3Y, 5Y"),
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> CovarianceResponse:
     try:
@@ -2031,7 +2029,7 @@ async def get_covariance(
 async def get_efficient_frontier(
     request: Request,
     points: int = Query(50, description="Number of frontier points", ge=10, le=200),
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> EfficientFrontierResponse:
     try:
@@ -2052,7 +2050,7 @@ async def get_efficient_frontier(
 async def get_rolling_sharpe(
     request: Request,
     window: int = Query(252, description="Rolling window in trading days", ge=30, le=756),
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> RollingSharpeResponse:
     try:
@@ -2072,7 +2070,7 @@ async def get_rolling_sharpe(
 @limiter.limit("10/minute")
 async def get_risk_contribution(
     request: Request,
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> RiskContributionResponse:
     try:
@@ -2092,7 +2090,7 @@ async def get_risk_contribution(
 @limiter.limit("10/minute")
 async def get_market_exposure(
     request: Request,
-    account_ids: Optional[str] = Query(None, description="Comma-separated account IDs; empty = all"),
+    account_ids: str | None = Query(None, description="Comma-separated account IDs; empty = all"),
     user: dict = Depends(get_current_user_dep),
 ) -> FactorExposureResponse:
     try:

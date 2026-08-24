@@ -1,12 +1,14 @@
 """Check Supabase database for financial data gaps."""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 
-from database import supabase
-from datetime import datetime, timezone
 import json
+
+from database import supabase
 
 
 def q(query_label, table, select_str="*", filters=None, order_col=None, desc=True, limit_val=None):
@@ -68,15 +70,15 @@ print(f"{'='*70}")
 try:
     ra = supabase.table("income_statements").select("fiscal_year").is_("fiscal_quarter", "null").order("fiscal_year", desc=True).limit(5).execute()
     if ra.data:
-        print(f"[OK] Latest annual fiscal years:")
+        print("[OK] Latest annual fiscal years:")
         for row in ra.data:
             print(f"     FY{row['fiscal_year']}")
     else:
         print("[WARN] No annual data (null check)")
-    
+
     rq = supabase.table("income_statements").select("fiscal_year,fiscal_quarter").not_.is_("fiscal_quarter", "null").order("fiscal_year", desc=True).order("fiscal_quarter", desc=True).limit(5).execute()
     if rq.data:
-        print(f"[OK] Latest quarterly data:")
+        print("[OK] Latest quarterly data:")
         for row in rq.data:
             print(f"     FY{row['fiscal_year']} Q{row['fiscal_quarter']}")
     else:
@@ -91,15 +93,15 @@ print(f"{'='*70}")
 try:
     ra = supabase.table("balance_sheets").select("fiscal_year").is_("fiscal_quarter", "null").order("fiscal_year", desc=True).limit(5).execute()
     if ra.data:
-        print(f"[OK] Latest annual fiscal years:")
+        print("[OK] Latest annual fiscal years:")
         for row in ra.data:
             print(f"     FY{row['fiscal_year']}")
     else:
         print("[WARN] No annual data (null check)")
-    
+
     rq = supabase.table("balance_sheets").select("fiscal_year,fiscal_quarter").not_.is_("fiscal_quarter", "null").order("fiscal_year", desc=True).order("fiscal_quarter", desc=True).limit(5).execute()
     if rq.data:
-        print(f"[OK] Latest quarterly data:")
+        print("[OK] Latest quarterly data:")
         for row in rq.data:
             print(f"     FY{row['fiscal_year']} Q{row['fiscal_quarter']}")
     else:
@@ -114,15 +116,15 @@ print(f"{'='*70}")
 try:
     ra = supabase.table("cash_flow_statements").select("fiscal_year").is_("fiscal_quarter", "null").order("fiscal_year", desc=True).limit(5).execute()
     if ra.data:
-        print(f"[OK] Latest annual fiscal years:")
+        print("[OK] Latest annual fiscal years:")
         for row in ra.data:
             print(f"     FY{row['fiscal_year']}")
     else:
         print("[WARN] No annual data (null check)")
-    
+
     rq = supabase.table("cash_flow_statements").select("fiscal_year,fiscal_quarter").not_.is_("fiscal_quarter", "null").order("fiscal_year", desc=True).order("fiscal_quarter", desc=True).limit(5).execute()
     if rq.data:
-        print(f"[OK] Latest quarterly data:")
+        print("[OK] Latest quarterly data:")
         for row in rq.data:
             print(f"     FY{row['fiscal_year']} Q{row['fiscal_quarter']}")
     else:
@@ -141,7 +143,7 @@ try:
             print(f"     {row}")
     else:
         print("[WARN] No earnings data")
-    
+
     # Also check what columns exist with a limit 1
     r1 = supabase.table("earnings").select("*").limit(1).execute()
     if r1.data:
@@ -162,7 +164,7 @@ print(f"{'='*70}")
 try:
     r1 = supabase.table("current_market_data").select("*").limit(3).execute()
     if r1.data:
-        print(f"[OK] Sample rows:")
+        print("[OK] Sample rows:")
         for row in r1.data:
             print(f"     {row}")
         print(f"\n[OK] Columns: {list(r1.data[0].keys())}")
@@ -178,7 +180,7 @@ print(f"{'='*70}")
 try:
     r1 = supabase.table("data_quality_events").select("*").limit(20).execute()
     if r1.data:
-        print(f"[OK] Sample rows:")
+        print("[OK] Sample rows:")
         for row in r1.data:
             print(f"     {row}")
     else:
@@ -248,4 +250,4 @@ try:
 except Exception as e:
     print(f"[ERROR] in summary: {e}")
 
-print(f"\n[DONE] Check complete")
+print("\n[DONE] Check complete")

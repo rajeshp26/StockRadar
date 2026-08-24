@@ -6,13 +6,14 @@ Handles all portfolio database operations following the existing repository patt
 No business logic — pure data access layer that delegates to Supabase.
 """
 
-from typing import List, Dict, Any, Optional, Tuple, Callable
+from collections.abc import Callable
 from datetime import date, datetime
+from typing import Any
 
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
+from shared.time_utils import now_iso, now_utc
 
 # Exchange code → market group mapping for holdings enrichment
-EXCHANGE_MARKET_MAP: Dict[str, str] = {
+EXCHANGE_MARKET_MAP: dict[str, str] = {
     "NMS": "US", "NASDAQ": "US", "NYSE": "US", "NYSEARCA": "US",
     "NASDAQCM": "US", "BATS": "US", "IEX": "US", "AMEX": "US",
     "NYSEAMERICAN": "US", "NASDAQNM": "US", "NASDAQSC": "US",
@@ -30,15 +31,15 @@ EXCHANGE_MARKET_MAP: Dict[str, str] = {
 }
 
 
-def _exchange_to_market_group(exchange: Optional[str]) -> str:
+def _exchange_to_market_group(exchange: str | None) -> str:
     """Normalize exchange code to a broad market group."""
     if not exchange:
         return "OTHER"
     return EXCHANGE_MARKET_MAP.get(exchange.upper(), "OTHER")
-from decimal import Decimal
 import logging
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 
 from database import supabase
 from supabase import Client
@@ -49,11 +50,11 @@ logger = logging.getLogger(__name__)
 # ── Shared chunking helper for batch operations ────────────────────────────
 
 def _batch_execute(
-    account_ids: List[int],
-    batch_fn: Callable[[List[int]], List[Dict[str, Any]]],
-    single_fn: Callable[[int], List[Dict[str, Any]]],
+    account_ids: list[int],
+    batch_fn: Callable[[list[int]], list[dict[str, Any]]],
+    single_fn: Callable[[int], list[dict[str, Any]]],
     batch_size: int = 500,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Execute a batch query across account_ids with chunking + fallback.
 
     ``batch_fn`` is called with a chunk of account_ids (e.g. 500 at a time).
@@ -63,7 +64,7 @@ def _batch_execute(
     if not account_ids:
         return []
 
-    all_results: List[Dict[str, Any]] = []
+    all_results: list[dict[str, Any]] = []
     for i in range(0, len(account_ids), batch_size):
         chunk = account_ids[i:i + batch_size]
         try:
@@ -84,15 +85,15 @@ def _batch_execute(
 
 class PortfolioRepository:
     """Repository for portfolio-related database operations."""
-    
+
     def __init__(self, client: Client = supabase):
         self.client = client
-    
+
     # ========================================================================
     # BROKERAGE OPERATIONS
     # ========================================================================
-    
-    def get_brokerage_by_code(self, brokerage_code: str) -> Optional[Dict[str, Any]]:
+
+    def get_brokerage_by_code(self, brokerage_code: str) -> dict[str, Any] | None:
         """Get brokerage by code (e.g., 'wealthsimple')."""
         try:
             res = (
@@ -106,8 +107,8 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to get brokerage {brokerage_code}: {e}")
             return None
-    
-    def list_active_brokerages(self) -> List[Dict[str, Any]]:
+
+    def list_active_brokerages(self) -> list[dict[str, Any]]:
         """List all active brokerage types."""
         try:
             res = (
@@ -121,12 +122,12 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to list brokerages: {e}")
             return []
-    
+
     # ========================================================================
     # ACCOUNT OPERATIONS
     # ========================================================================
-    
-    def get_user_accounts(self, user_id: int, active_only: bool = True) -> List[Dict[str, Any]]:
+
+    def get_user_accounts(self, user_id: int, active_only: bool = True) -> list[dict[str, Any]]:
         """Get all accounts for a user."""
         try:
             query = (
@@ -139,14 +140,14 @@ class PortfolioRepository:
             )
             if active_only:
                 query = query.eq("is_active", True)
-            
+
             res = query.order("created_at", desc=True).execute()
             return res.data or []
         except Exception as e:
             logger.error(f"Failed to get user accounts for user_id={user_id}: {e}")
             return []
-    
-    def get_account_by_id(self, account_id: int) -> Optional[Dict[str, Any]]:
+
+    def get_account_by_id(self, account_id: int) -> dict[str, Any] | None:
         """Get account by ID."""
         try:
             res = (
@@ -163,7 +164,7 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to get account {account_id}: {e}")
             return None
-    
+
     def get_or_create_account(
         self,
         user_id: int,
@@ -172,7 +173,7 @@ class PortfolioRepository:
         account_name: str,
         account_type: str,
         currency: str = "CAD",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get existing account or create new one.
         Uses unique constraint on (user_id, brokerage_id, account_external_id).
@@ -188,11 +189,11 @@ class PortfolioRepository:
                 .limit(1)
                 .execute()
             )
-            
+
             if res.data:
                 logger.debug(f"Found existing account: {account_external_id}")
                 return res.data[0]
-            
+
             # Create new
             payload = {
                 "user_id": user_id,
@@ -203,18 +204,18 @@ class PortfolioRepository:
                 "currency": currency,
                 "is_active": True,
             }
-            
+
             create_res = self.client.table("portfolio_accounts").insert(payload).execute()
             if not create_res.data:
                 raise Exception("Account creation returned no data")
-            
+
             logger.info(f"Created new account: {account_external_id} (type: {account_type})")
             return create_res.data[0]
-        
+
         except Exception as e:
             logger.error(f"Failed to get/create account {account_external_id}: {e}")
             raise
-    
+
     def update_account_import_timestamp(self, account_id: int) -> None:
         """Update last_import_at timestamp for an account."""
         try:
@@ -223,13 +224,13 @@ class PortfolioRepository:
             ).eq("account_id", account_id).execute()
         except Exception as e:
             logger.error(f"Failed to update import timestamp for account {account_id}: {e}")
-    
+
     # ========================================================================
     # TRANSACTION OPERATIONS
     # ========================================================================
-    
+
     def insert_transactions(
-        self, transactions: List[Dict[str, Any]], import_batch_id: uuid.UUID
+        self, transactions: list[dict[str, Any]], import_batch_id: uuid.UUID
     ) -> int:
         """
         Bulk insert transactions.
@@ -243,27 +244,27 @@ class PortfolioRepository:
         """
         if not transactions:
             return 0
-        
+
         try:
             # Add import_batch_id to all transactions
             for tx in transactions:
                 tx["import_batch_id"] = str(import_batch_id)
-            
+
             res = self.client.table("portfolio_transactions").insert(transactions).execute()
             inserted = len(res.data) if res.data else 0
             logger.info(f"Inserted {inserted} transactions (batch {import_batch_id})")
             return inserted
-        
+
         except Exception as e:
             logger.error(f"Failed to insert transactions: {e}")
             raise
-    
+
     def get_account_transactions(
         self,
         account_id: int,
-        limit: Optional[int] = None,
-        activity_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        limit: int | None = None,
+        activity_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Get transactions for an account.
         
@@ -281,22 +282,22 @@ class PortfolioRepository:
                 .select("*")
                 .eq("account_id", account_id)
             )
-            
+
             if activity_types:
                 query = query.in_("activity_type", activity_types)
-            
+
             query = query.order("transaction_date", desc=True)
-            
+
             if limit:
                 query = query.limit(limit)
-            
+
             res = query.execute()
             return res.data or []
-        
+
         except Exception as e:
             logger.error(f"Failed to get transactions for account {account_id}: {e}")
             return []
-    
+
     def delete_account_transactions(self, account_id: int) -> int:
         """Delete all transactions for an account. Returns count deleted."""
         try:
@@ -312,16 +313,16 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to delete transactions for account {account_id}: {e}")
             return 0
-    
+
     # ========================================================================
     # HOLDINGS OPERATIONS
     # ========================================================================
-    
-    def get_account_holdings(self, account_id: int) -> List[Dict[str, Any]]:
+
+    def get_account_holdings(self, account_id: int) -> list[dict[str, Any]]:
         """Get all current holdings for an account, enriched with company data."""
         return self._get_holdings(account_id=account_id)
 
-    def get_user_all_holdings(self, user_id: int) -> List[Dict[str, Any]]:
+    def get_user_all_holdings(self, user_id: int) -> list[dict[str, Any]]:
         """Get all holdings across all user accounts (aggregated view)."""
         try:
             accounts = self.get_user_accounts(user_id, active_only=True)
@@ -336,9 +337,9 @@ class PortfolioRepository:
     def _get_holdings(
         self,
         *,
-        account_ids: Optional[List[int]] = None,
-        account_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        account_ids: list[int] | None = None,
+        account_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Base method: fetch holdings with account_name/account_type via join.
 
         Call with either ``account_ids`` (multi-account) or ``account_id`` (single).
@@ -364,8 +365,8 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to fetch holdings: {e}")
             return []
-    
-    def _flatten_joins(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+    def _flatten_joins(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Promote nested Supabase join objects to top-level fields.
 
         PostgREST returns joined columns as nested dicts keyed by the
@@ -386,10 +387,10 @@ class PortfolioRepository:
             result.append(flat)
         return result
 
-    def _enrich_holdings(self, holdings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _enrich_holdings(self, holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Add company info (name, sector, industry, exchange, market_group) to each holding."""
         company_ids = list(set(h.get("company_id") for h in holdings if h.get("company_id")))
-        companies: Dict[int, Dict[str, Any]] = {}
+        companies: dict[int, dict[str, Any]] = {}
         if company_ids:
             try:
                 res = (
@@ -428,8 +429,8 @@ class PortfolioRepository:
                     h["cost_currency"] = h["price_currency"]
 
         return holdings
-    
-    def upsert_holding(self, holding: Dict[str, Any]) -> Dict[str, Any]:
+
+    def upsert_holding(self, holding: dict[str, Any]) -> dict[str, Any]:
         """Insert or update a holding. Uses unique constraint on (account_id, company_id)."""
         try:
             res = (
@@ -443,7 +444,7 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to upsert holding: {e}")
             raise
-    
+
     def delete_account_holdings(self, account_id: int) -> int:
         """Delete all holdings for an account. Returns count deleted."""
         try:
@@ -459,14 +460,14 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to delete holdings for account {account_id}: {e}")
             return 0
-    
+
     # ========================================================================
     # PERFORMANCE OPERATIONS
     # ========================================================================
-    
+
     def get_earliest_transaction_date(
-        self, account_ids: List[int]
-    ) -> Optional[date]:
+        self, account_ids: list[int]
+    ) -> date | None:
         """Get the earliest transaction date across the given accounts."""
         if not account_ids:
             return None
@@ -493,7 +494,7 @@ class PortfolioRepository:
 
     def get_account_performance_history(
         self, account_id: int, days: int = 90
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get performance snapshots for last N days."""
         try:
             res = (
@@ -508,8 +509,8 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to get performance for account {account_id}: {e}")
             return []
-    
-    def upsert_performance_snapshot(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+
+    def upsert_performance_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         """Insert or update daily performance snapshot."""
         try:
             res = (
@@ -523,16 +524,16 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to upsert performance snapshot: {e}")
             raise
-    
+
     # ========================================================================
     # DIVIDEND OPERATIONS
     # ========================================================================
-    
-    def insert_dividends(self, dividends: List[Dict[str, Any]]) -> int:
+
+    def insert_dividends(self, dividends: list[dict[str, Any]]) -> int:
         """Bulk insert dividend records."""
         if not dividends:
             return 0
-        
+
         try:
             res = self.client.table("portfolio_dividends").insert(dividends).execute()
             inserted = len(res.data) if res.data else 0
@@ -541,10 +542,10 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to insert dividends: {e}")
             raise
-    
+
     def get_account_dividends_by_year(
-        self, account_id: int, fiscal_year: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
+        self, account_id: int, fiscal_year: int | None = None
+    ) -> list[dict[str, Any]]:
         """Get all dividend payments for an account in a specific year.
 
         When fiscal_year is None, returns ALL dividend records for the account.
@@ -563,12 +564,12 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to get dividends for account {account_id}: {e}")
             return []
-    
+
     # ── Batch dividend methods ─────────────────────────────────────────────
 
     def _batch_dividends(
-        self, account_ids: List[int], fiscal_year: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
+        self, account_ids: list[int], fiscal_year: int | None = None
+    ) -> list[dict[str, Any]]:
         query = (
             self.client.table("portfolio_dividends")
             .select("*")
@@ -581,9 +582,9 @@ class PortfolioRepository:
 
     def get_accounts_dividends_by_year(
         self,
-        account_ids: List[int],
-        fiscal_year: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        account_ids: list[int],
+        fiscal_year: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Batch query for dividends across multiple accounts with chunking + fallback."""
         return _batch_execute(
             account_ids,
@@ -596,10 +597,10 @@ class PortfolioRepository:
 
     def _batch_transactions(
         self,
-        account_ids: List[int],
-        limit: Optional[int] = None,
-        activity_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        account_ids: list[int],
+        limit: int | None = None,
+        activity_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         query = (
             self.client.table("portfolio_transactions")
             .select("*")
@@ -615,10 +616,10 @@ class PortfolioRepository:
 
     def get_accounts_transactions(
         self,
-        account_ids: List[int],
-        limit: Optional[int] = None,
-        activity_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        account_ids: list[int],
+        limit: int | None = None,
+        activity_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Batch query for transactions across multiple accounts with chunking + fallback."""
         return _batch_execute(
             account_ids,
@@ -629,7 +630,7 @@ class PortfolioRepository:
 
     def get_monthly_dividends(
         self, account_id: int, months: int = 12
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get monthly dividend summaries (last N months).
         Uses the portfolio_monthly_dividends view.
@@ -648,8 +649,8 @@ class PortfolioRepository:
             return []
 
     def get_accounts_monthly_dividends(
-        self, account_ids: List[int], months: int = 12
-    ) -> List[Dict[str, Any]]:
+        self, account_ids: list[int], months: int = 12
+    ) -> list[dict[str, Any]]:
         """Batch query for monthly dividend summaries across multiple accounts."""
         if not account_ids:
             return []
@@ -665,18 +666,18 @@ class PortfolioRepository:
         except Exception as e:
             logger.error(f"Failed to get monthly dividends for accounts {account_ids}: {e}")
             return []
-    
+
     # ========================================================================
     # DIVIDEND DASHBOARD OPERATIONS
     # ========================================================================
 
-    def get_holdings_with_companies(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_holdings_with_companies(self, account_ids: list[int]) -> list[dict[str, Any]]:
         """Get holdings enriched with company name/sector for the given accounts."""
         return self._get_holdings(account_ids=account_ids)
 
     def get_trailing_twelve_month_dividends(
-        self, account_ids: List[int]
-    ) -> List[Dict[str, Any]]:
+        self, account_ids: list[int]
+    ) -> list[dict[str, Any]]:
         """Get dividend payments within the last 365 days."""
         if not account_ids:
             return []
@@ -695,8 +696,8 @@ class PortfolioRepository:
             return []
 
     def get_latest_regular_dps(
-        self, company_ids: List[int]
-    ) -> List[Dict[str, Any]]:
+        self, company_ids: list[int]
+    ) -> list[dict[str, Any]]:
         """Get the latest regular dividend per share per company."""
         if not company_ids:
             return []
@@ -723,8 +724,8 @@ class PortfolioRepository:
             return []
 
     def get_dividend_metrics_for_companies(
-        self, company_ids: List[int]
-    ) -> List[Dict[str, Any]]:
+        self, company_ids: list[int]
+    ) -> list[dict[str, Any]]:
         """Get dividend metrics rows for the given companies."""
         if not company_ids:
             return []
@@ -741,8 +742,8 @@ class PortfolioRepository:
             return []
 
     def get_upcoming_ex_dates(
-        self, company_ids: List[int]
-    ) -> List[Dict[str, Any]]:
+        self, company_ids: list[int]
+    ) -> list[dict[str, Any]]:
         """Get upcoming ex-dividend dates for the given companies."""
         if not company_ids:
             return []
@@ -764,14 +765,14 @@ class PortfolioRepository:
 
     def get_next_upcoming_event(
         self, company_id: int
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get the best available upcoming event for a single company."""
         events = self.get_next_upcoming_events([company_id])
         return events[0] if events else None
 
     def get_next_upcoming_events(
-        self, company_ids: List[int]
-    ) -> List[Dict[str, Any]]:
+        self, company_ids: list[int]
+    ) -> list[dict[str, Any]]:
         """Batch-fetch best upcoming event per company.
 
         Single query using ``company_id=in.(…)``, deduplicated in Python
@@ -792,7 +793,7 @@ class PortfolioRepository:
                 .execute()
             )
             seen: set = set()
-            result: List[Dict[str, Any]] = []
+            result: list[dict[str, Any]] = []
             for row in (res.data or []):
                 cid = row.get("company_id")
                 if cid is not None and cid not in seen:
@@ -807,8 +808,8 @@ class PortfolioRepository:
             return []
 
     def get_portfolio_dividends_for_symbol(
-        self, account_ids: List[int], symbol: str
-    ) -> List[Dict[str, Any]]:
+        self, account_ids: list[int], symbol: str
+    ) -> list[dict[str, Any]]:
         """Get dividend payments for a symbol across the given accounts."""
         if not account_ids:
             return []
@@ -832,7 +833,7 @@ class PortfolioRepository:
 
     def get_transactions_for_symbol(
         self, user_id: int, symbol: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get all Trade transactions for a symbol across user's accounts."""
         accounts = self.get_user_accounts(user_id)
         account_ids = [a["account_id"] for a in accounts]
@@ -855,7 +856,7 @@ class PortfolioRepository:
 
     def get_dividends_for_symbol(
         self, user_id: int, symbol: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get ALL dividend payments for a symbol across user's accounts."""
         accounts = self.get_user_accounts(user_id)
         account_ids = [a["account_id"] for a in accounts]
@@ -885,10 +886,10 @@ class PortfolioRepository:
         user_id: int,
         brokerage_id: int,
         csv_hash: str,
-        csv_filename: Optional[str] = None,
-        csv_size_bytes: Optional[int] = None,
+        csv_filename: str | None = None,
+        csv_size_bytes: int | None = None,
         total_rows: int = 0,
-    ) -> Optional[int]:
+    ) -> int | None:
         """Create a pending import job record. Returns import_id."""
         try:
             payload = {
@@ -915,14 +916,14 @@ class PortfolioRepository:
     def update_import_progress(
         self,
         import_batch_id: uuid.UUID,
-        status: Optional[str] = None,
-        rows_parsed: Optional[int] = None,
-        rows_inserted: Optional[int] = None,
-        error_message: Optional[str] = None,
+        status: str | None = None,
+        rows_parsed: int | None = None,
+        rows_inserted: int | None = None,
+        error_message: str | None = None,
     ) -> bool:
         """Update import job status and progress. Returns True on success."""
         try:
-            payload: Dict[str, Any] = {}
+            payload: dict[str, Any] = {}
             if status is not None:
                 payload["status"] = status
             if rows_parsed is not None:
@@ -948,7 +949,7 @@ class PortfolioRepository:
             logger.error(f"Failed to update import progress for {import_batch_id}: {e}")
             return False
 
-    def get_import_job(self, import_batch_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+    def get_import_job(self, import_batch_id: uuid.UUID) -> dict[str, Any] | None:
         """Get current import job status and progress."""
         try:
             res = (
@@ -971,10 +972,10 @@ class PortfolioRepository:
 
     def insert_transactions_with_duplicates(
         self,
-        transactions: List[Dict[str, Any]],
+        transactions: list[dict[str, Any]],
         import_batch_id: uuid.UUID,
         skip_duplicates: bool = True,
-    ) -> Tuple[int, int]:
+    ) -> tuple[int, int]:
         """
         Bulk insert transactions with duplicate detection.
         
@@ -1029,7 +1030,7 @@ class PortfolioRepository:
 
     def get_import_history(
         self, user_id: int, limit: int = 20
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get import history for a user."""
         try:
             res = (
@@ -1065,8 +1066,8 @@ class PortfolioRepository:
         self,
         account_id: int,
         target_date: date,
-        account_currency: Optional[str] = None,
-        fx_service: Optional[Any] = None,
+        account_currency: str | None = None,
+        fx_service: Any | None = None,
     ) -> Decimal:
         """Sum net_cash_amount for an account up to target_date.
 
@@ -1114,19 +1115,19 @@ class PortfolioRepository:
             total += Decimal(str(row.get("net_cash_amount") or 0))
         return total
 
-    def get_cash_balance_for_accounts(self, account_ids: List[int], target_date: date) -> Decimal:
+    def get_cash_balance_for_accounts(self, account_ids: list[int], target_date: date) -> Decimal:
         total = Decimal("0.00")
         for aid in account_ids:
             total += self.get_cash_balance(aid, target_date)
         return total
 
-    def get_net_deposits_for_accounts(self, account_ids: List[int], target_date: date) -> Decimal:
+    def get_net_deposits_for_accounts(self, account_ids: list[int], target_date: date) -> Decimal:
         total = Decimal("0.00")
         for aid in account_ids:
             total += self.get_net_deposits(aid, target_date)
         return total
 
-    def get_user_accounts_all(self) -> List[Dict[str, Any]]:
+    def get_user_accounts_all(self) -> list[dict[str, Any]]:
         try:
             res = self.client.table("portfolio_accounts") \
                 .select("account_id, user_id, account_name") \
@@ -1135,7 +1136,7 @@ class PortfolioRepository:
         except Exception:
             return []
 
-    def get_holdings_for_accounts(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_holdings_for_accounts(self, account_ids: list[int]) -> list[dict[str, Any]]:
         if not account_ids:
             return []
         try:
@@ -1150,7 +1151,7 @@ class PortfolioRepository:
             logger.error(f"Failed to get holdings for accounts: {e}")
             return []
 
-    def get_holdings(self, account_id: int) -> List[Dict[str, Any]]:
+    def get_holdings(self, account_id: int) -> list[dict[str, Any]]:
         try:
             res = (
                 self.client.table("portfolio_holdings")
@@ -1163,7 +1164,7 @@ class PortfolioRepository:
             logger.error(f"Failed to get holdings for account {account_id}: {e}")
             return []
 
-    def get_company_names(self, company_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_company_names(self, company_ids: list[int]) -> list[dict[str, Any]]:
         if not company_ids:
             return []
         try:
@@ -1178,7 +1179,7 @@ class PortfolioRepository:
             logger.error(f"Failed to get company names: {e}")
             return []
 
-    def get_company_currencies(self, company_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_company_currencies(self, company_ids: list[int]) -> list[dict[str, Any]]:
         if not company_ids:
             return []
         try:
@@ -1193,7 +1194,7 @@ class PortfolioRepository:
             logger.error(f"Failed to get company currencies: {e}")
             return []
 
-    def get_companies_info(self, company_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_companies_info(self, company_ids: list[int]) -> list[dict[str, Any]]:
         """Fetch company info including cdr_ratio for CDR pricing."""
         if not company_ids:
             return []
@@ -1209,7 +1210,7 @@ class PortfolioRepository:
             logger.error(f"Failed to get companies info: {e}")
             return []
 
-    def get_symbol_company_mappings(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_symbol_company_mappings(self, account_ids: list[int]) -> list[dict[str, Any]]:
         try:
             res = self.client.table("portfolio_transactions") \
                 .select("symbol, company_id") \
@@ -1221,7 +1222,7 @@ class PortfolioRepository:
         except Exception:
             return []
 
-    def get_event_dates(self, account_id: int) -> List[date]:
+    def get_event_dates(self, account_id: int) -> list[date]:
         event_dates: set = set()
         try:
             res = self.client.table("portfolio_transactions") \
@@ -1258,8 +1259,8 @@ class PortfolioRepository:
         return sorted(event_dates)
 
     def _get_split_factors(
-        self, company_ids: List[int]
-    ) -> Dict[int, List[tuple]]:
+        self, company_ids: list[int]
+    ) -> dict[int, list[tuple]]:
         """
         Fetch reverse/forward split data for the given companies.
 
@@ -1284,8 +1285,8 @@ class PortfolioRepository:
             return {}
 
     def get_all_prices_historical(
-        self, company_ids: List[int], target_date: date
-    ) -> Dict[int, List[tuple]]:
+        self, company_ids: list[int], target_date: date
+    ) -> dict[int, list[tuple]]:
         """
         Fetch ALL prices <= target_date for the given companies,
         adjusted for stock splits.
@@ -1293,7 +1294,7 @@ class PortfolioRepository:
         Prices are adjusted so that historical prices reflect post-split equivalents.
         Returns {company_id: [(date, adjusted_price), ...]} sorted ascending.
         """
-        price_map: Dict[int, List[tuple]] = {}
+        price_map: dict[int, list[tuple]] = {}
         if not company_ids:
             return price_map
 

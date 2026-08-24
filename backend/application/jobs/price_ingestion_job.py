@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from config import settings
 from infrastructure.repositories.price_repository import PriceRepository
@@ -34,7 +34,7 @@ async def refresh_all_prices():
         logger.info("[PRICE-INGEST] no active symbols, skipping")
         return
 
-    yfinance_items_by_exchange: Dict[str, list] = {}
+    yfinance_items_by_exchange: dict[str, list] = {}
 
     for s in symbols:
         cid = s.get("company_id")
@@ -131,7 +131,7 @@ async def _update_cdr_ratios():
             .eq("exchange_override", "TOR")
             .execute()
         )
-        cost_data: Dict[int, Dict] = {}
+        cost_data: dict[int, dict] = {}
         for row in (hold_detail.data or []):
             cid = row["company_id"]
             avg = float(row.get("average_cost") or 0)
@@ -262,10 +262,10 @@ def _emit_split_events() -> None:
 
 
 async def _fetch_yfinance_batch(
-    symbols: List[str], exchange: str,
+    symbols: list[str], exchange: str,
     per_symbol_timeout: int = 10, max_concurrent: int = 5,
     max_retries: int = 2,
-) -> Dict[str, Dict]:
+) -> dict[str, dict]:
     sem = asyncio.Semaphore(max_concurrent)
 
     async def fetch_one(sym: str) -> tuple:
@@ -279,7 +279,7 @@ async def _fetch_yfinance_batch(
                         timeout=per_symbol_timeout,
                     )
                     return sym, {"price": sd.price if sd else None, "error": None}
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if attempt <= max_retries:
                         await asyncio.sleep(1)
                     else:
@@ -297,7 +297,7 @@ async def _fetch_yfinance_batch(
     return {sym: data for sym, data in results if not isinstance(data, Exception)}
 
 
-async def handle_price_ingestion(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_price_ingestion(job: dict[str, Any]) -> dict[str, Any]:
     """Handler registered with JobEngine."""
     await refresh_all_prices()
     return {"status": "completed"}

@@ -1,35 +1,36 @@
 from __future__ import annotations
+
 import logging
 import math
 from datetime import timedelta
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from domain.models.analysis_moat import (
-    MoatDiagnosticFlag,
-    MoatInputs,
-    MoatValuation,
-    MoatIndustryContext,
-    MoatApplicability,
-    MoatDataQuality,
-    MoatResponse,
-    MoatKeywordEvidence,
-    MoatEvidenceResponse,
-    MoatAiNarrative,
-    MoatAiResponse,
-)
-from infrastructure.repositories.moat_repository import MoatRepository
-from application.services.moat_wacc_service import MoatWaccService
 from application.services.edgar_filing_service import EdgarFilingService
 from application.services.moat_keyword_analyzer import MoatKeywordAnalyzer
+from application.services.moat_wacc_service import MoatWaccService
+from domain.models.analysis_moat import (
+    MoatAiNarrative,
+    MoatAiResponse,
+    MoatApplicability,
+    MoatDataQuality,
+    MoatDiagnosticFlag,
+    MoatEvidenceResponse,
+    MoatIndustryContext,
+    MoatInputs,
+    MoatKeywordEvidence,
+    MoatResponse,
+    MoatValuation,
+)
+from infrastructure.repositories.moat_repository import MoatRepository
 from shared.finance_math import safe_float
+from shared.time_utils import now_iso, now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
 _CACHE_MAX_AGE_HOURS = 24
 _TEXT_CACHE_MAX_AGE_DAYS = 365
 
-_SECTOR_MOAT_ADJUSTMENTS: Dict[str, float] = {
+_SECTOR_MOAT_ADJUSTMENTS: dict[str, float] = {
     "Technology": 0.0,
     "Healthcare": 0.0,
     "Consumer Cyclical": -0.02,
@@ -50,8 +51,8 @@ class MoatAnalysisService:
         self,
         repo: MoatRepository,
         wacc_service: MoatWaccService,
-        edgar_service: Optional[EdgarFilingService] = None,
-        keyword_analyzer: Optional[MoatKeywordAnalyzer] = None,
+        edgar_service: EdgarFilingService | None = None,
+        keyword_analyzer: MoatKeywordAnalyzer | None = None,
     ) -> None:
         self._repo = repo
         self._wacc_service = wacc_service
@@ -81,7 +82,7 @@ class MoatAnalysisService:
 
     async def _serve_cached(
         self, company_id: int, symbol: str, currency: str
-    ) -> Optional[MoatResponse]:
+    ) -> MoatResponse | None:
         row = await self._repo.get_moat_analysis(company_id)
         if not row:
             return None
@@ -100,8 +101,8 @@ class MoatAnalysisService:
 
     @staticmethod
     def _hydrate_response(
-        row: Dict[str, Any], symbol: str, currency: str
-    ) -> Optional[MoatResponse]:
+        row: dict[str, Any], symbol: str, currency: str
+    ) -> MoatResponse | None:
         try:
             return MoatResponse(
                 symbol=symbol.upper(),
@@ -384,13 +385,13 @@ class MoatAnalysisService:
 
     def compute_stage1_score(
         self,
-        latest_roic: Optional[float],
-        wacc: Optional[float],
-        roic_5y_avg: Optional[float],
-        roic_stability_score: Optional[float],
-        capital_efficiency_score: Optional[float],
-        latest_gross_margin: Optional[float] = None,
-        latest_net_margin: Optional[float] = None,
+        latest_roic: float | None,
+        wacc: float | None,
+        roic_5y_avg: float | None,
+        roic_stability_score: float | None,
+        capital_efficiency_score: float | None,
+        latest_gross_margin: float | None = None,
+        latest_net_margin: float | None = None,
     ) -> float:
         score = 0.0
         max_score = 0.0
@@ -458,7 +459,7 @@ class MoatAnalysisService:
         return (score / max_score * 100) if max_score > 0 else 0.0
 
     @staticmethod
-    def _compute_std(values: List[float]) -> float:
+    def _compute_std(values: list[float]) -> float:
         n = len(values)
         if n < 2:
             return 0.0
@@ -468,8 +469,8 @@ class MoatAnalysisService:
 
     @staticmethod
     def _compute_stability_score(
-        std: Optional[float], values: List[float]
-    ) -> Optional[float]:
+        std: float | None, values: list[float]
+    ) -> float | None:
         if std is None or not values:
             return None
         mean = sum(values) / len(values)
@@ -490,10 +491,10 @@ class MoatAnalysisService:
 
     @staticmethod
     def _compute_capital_efficiency_score(
-        asset_turnover: Optional[float],
-        roic: Optional[float],
-        wacc: Optional[float],
-    ) -> Optional[float]:
+        asset_turnover: float | None,
+        roic: float | None,
+        wacc: float | None,
+    ) -> float | None:
         score = 0.0
         if asset_turnover is not None:
             if asset_turnover > 1.0:
@@ -529,13 +530,13 @@ class MoatAnalysisService:
 
     @staticmethod
     def _generate_flags(
-        latest_roic: Optional[float],
-        wacc: Optional[float],
-        roic_5y_std: Optional[float],
-        asset_turnover: Optional[float],
+        latest_roic: float | None,
+        wacc: float | None,
+        roic_5y_std: float | None,
+        asset_turnover: float | None,
         sector: str,
-    ) -> List[MoatDiagnosticFlag]:
-        flags: List[MoatDiagnosticFlag] = []
+    ) -> list[MoatDiagnosticFlag]:
+        flags: list[MoatDiagnosticFlag] = []
 
         if latest_roic is not None and wacc is not None:
             if latest_roic < wacc:
@@ -599,7 +600,7 @@ class MoatAnalysisService:
 
         rows = await self._repo.get_moat_keyword_evidence(company_id)
 
-        evidence_by_group: Dict[str, List[MoatKeywordEvidence]] = {}
+        evidence_by_group: dict[str, list[MoatKeywordEvidence]] = {}
         for r in rows:
             group = r.get("keyword_group", "other")
             evidence_by_group.setdefault(group, []).append(
@@ -774,7 +775,7 @@ class MoatAnalysisService:
         )
 
     @staticmethod
-    def _build_quant_summary(moat_data: Optional[Dict[str, Any]]) -> str:
+    def _build_quant_summary(moat_data: dict[str, Any] | None) -> str:
         if not moat_data:
             return "No quantitative data available."
         return (
@@ -801,7 +802,7 @@ class MoatAnalysisService:
             "Keep the response to 2-3 paragraphs. Be specific and reference the data provided."
         )
 
-    async def _call_ai(self, prompt: str) -> Optional[str]:
+    async def _call_ai(self, prompt: str) -> str | None:
         try:
             from config import settings
             key = settings.OPEN_ROUTER_KEY or ""

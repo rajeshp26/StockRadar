@@ -1,9 +1,9 @@
 # domain/models/valuation_rule1.py
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Literal
 
+from pydantic import BaseModel, Field
 
 # -----------------------------
 # Request (overrides)
@@ -14,13 +14,13 @@ class Rule1RequestOverrides(BaseModel):
     Optional user/admin overrides for Rule #1 inputs.
     All values are optional; when omitted, defaults/DB-resolved inputs are used.
     """
-    discountRate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    horizonYears: Optional[int] = Field(default=None, ge=1, le=50)
-    marginOfSafety: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    discountRate: float | None = Field(default=None, ge=0.0, le=1.0)
+    horizonYears: int | None = Field(default=None, ge=1, le=50)
+    marginOfSafety: float | None = Field(default=None, ge=0.0, le=1.0)
 
     # Direct numeric overrides (advanced):
-    forceGrowth: Optional[float] = Field(default=None)        # decimal; e.g., 0.12 for 12%
-    forceFuturePE: Optional[float] = Field(default=None, ge=0)
+    forceGrowth: float | None = Field(default=None)        # decimal; e.g., 0.12 for 12%
+    forceFuturePE: float | None = Field(default=None, ge=0)
 
 
 # -----------------------------
@@ -37,8 +37,8 @@ class DiagnosticFlag(BaseModel):
     code: str
     severity: Severity
     message: str
-    evidence: Optional[Dict[str, Any]] = None
-    recommendation: Optional[str] = None
+    evidence: dict[str, Any] | None = None
+    recommendation: str | None = None
 
 
 class Applicability(BaseModel):
@@ -52,8 +52,8 @@ class Applicability(BaseModel):
     """
     score: int = Field(ge=0, le=100)
     category: Literal["Good", "Caution", "Poor"]
-    flags: List[DiagnosticFlag] = Field(default_factory=list)
-    suitabilitySummary:  Optional[str]          = None  # ← NEW
+    flags: list[DiagnosticFlag] = Field(default_factory=list)
+    suitabilitySummary:  str | None          = None  # ← NEW
 
 
 class DataQuality(BaseModel):
@@ -66,9 +66,9 @@ class DataQuality(BaseModel):
     - fallbacksUsed: True if any fallback data source/path was used
     - inputDecisions: traces how inputs were chosen (source, clamping, etc.)
     """
-    freshnessDays: Dict[str, Any] = Field(default_factory=dict)
+    freshnessDays: dict[str, Any] = Field(default_factory=dict)
     fallbacksUsed: bool = False
-    inputDecisions: Dict[str, Any] = Field(default_factory=dict)
+    inputDecisions: dict[str, Any] = Field(default_factory=dict)
 
 
 # -----------------------------

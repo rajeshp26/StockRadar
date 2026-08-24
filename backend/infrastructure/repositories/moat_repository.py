@@ -1,7 +1,7 @@
 from __future__ import annotations
+
 import logging
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from database import supabase
 from shared.finance_math import safe_float
@@ -9,7 +9,7 @@ from shared.finance_math import safe_float
 logger = logging.getLogger(__name__)
 
 
-def _first(data: Any) -> Optional[Dict[str, Any]]:
+def _first(data: Any) -> dict[str, Any] | None:
     if not data:
         return None
     if isinstance(data, list) and len(data) > 0:
@@ -18,7 +18,7 @@ def _first(data: Any) -> Optional[Dict[str, Any]]:
 
 
 class MoatRepository:
-    def get_company_context(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_company_context(self, symbol: str) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("companies")
@@ -34,7 +34,7 @@ class MoatRepository:
 
     async def get_financial_ratios_history(
         self, company_id: int, years: int = 6
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("financial_ratios")
@@ -55,7 +55,7 @@ class MoatRepository:
 
     async def get_income_statements_annual(
         self, company_id: int, years: int = 6
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("income_statements")
@@ -75,7 +75,7 @@ class MoatRepository:
             logger.error("get_income_statements_annual failed: %s", e)
             return []
 
-    async def get_balance_sheet_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_balance_sheet_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("balance_sheets")
@@ -96,7 +96,7 @@ class MoatRepository:
             logger.error("get_balance_sheet_latest failed: %s", e)
             return None
 
-    async def get_cash_flow_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_cash_flow_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("cash_flow_statements")
@@ -115,7 +115,7 @@ class MoatRepository:
             logger.error("get_cash_flow_latest failed: %s", e)
             return None
 
-    async def get_company_summary_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_company_summary_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("company_summary")
@@ -137,7 +137,7 @@ class MoatRepository:
 
     async def get_industry_multiples(
         self, sector: str, industry: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         if not sector or not industry:
             return None
         try:
@@ -160,7 +160,7 @@ class MoatRepository:
             logger.error("get_industry_multiples failed: %s", e)
             return None
 
-    async def upsert_moat_analysis(self, company_id: int, data: Dict[str, Any]) -> bool:
+    async def upsert_moat_analysis(self, company_id: int, data: dict[str, Any]) -> bool:
         try:
             record = {**data, "company_id": company_id, "computed_at": "now()"}
             # Remove id if present to avoid conflict — company_id has a unique constraint
@@ -173,7 +173,7 @@ class MoatRepository:
             logger.error("upsert_moat_analysis failed: %s", e)
             return False
 
-    async def get_moat_analysis(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_moat_analysis(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("moat_analysis")
@@ -198,7 +198,7 @@ class MoatRepository:
             return False
 
     async def insert_moat_keyword_evidence(
-        self, rows: List[Dict[str, Any]]
+        self, rows: list[dict[str, Any]]
     ) -> bool:
         if not rows:
             return True
@@ -211,7 +211,7 @@ class MoatRepository:
 
     async def get_moat_keyword_evidence(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("moat_keyword_evidence")
@@ -226,7 +226,7 @@ class MoatRepository:
             return []
 
     async def upsert_moat_ai_narrative(
-        self, company_id: int, data: Dict[str, Any]
+        self, company_id: int, data: dict[str, Any]
     ) -> bool:
         try:
             existing = (
@@ -250,7 +250,7 @@ class MoatRepository:
 
     async def get_moat_ai_narrative(
         self, company_id: int
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("moat_ai_narratives")
@@ -264,7 +264,7 @@ class MoatRepository:
             logger.error("get_moat_ai_narrative failed: %s", e)
             return None
 
-    async def get_current_market_price(self, company_id: int) -> Optional[float]:
+    async def get_current_market_price(self, company_id: int) -> float | None:
         try:
             resp = (
                 supabase.table("current_market_data")

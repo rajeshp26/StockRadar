@@ -1,11 +1,12 @@
 # application/services/residual_income_suitability.py
 from __future__ import annotations
+
 import math
 from dataclasses import dataclass
-from shared.time_utils import now_utc
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from domain.models.valuation_rule1 import DiagnosticFlag
+from shared.time_utils import now_utc
 
 
 @dataclass
@@ -14,12 +15,12 @@ class MetricResult:
     name: str
     status: str   # pass | caution | fail | na
     points: int   # 1 only if pass
-    flag: Optional[DiagnosticFlag] = None
+    flag: DiagnosticFlag | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _safe_float(x: Any) -> Optional[float]:
+def _safe_float(x: Any) -> float | None:
     try:
         if x is None:
             return None
@@ -31,11 +32,11 @@ def _safe_float(x: Any) -> Optional[float]:
     return None
 
 
-def _mean(vals: List[float]) -> Optional[float]:
+def _mean(vals: list[float]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
-def _stdev(vals: List[float]) -> Optional[float]:
+def _stdev(vals: list[float]) -> float | None:
     if len(vals) < 2:
         return None
     m = _mean(vals)
@@ -44,7 +45,7 @@ def _stdev(vals: List[float]) -> Optional[float]:
     return math.sqrt(sum((v - m) ** 2 for v in vals) / (len(vals) - 1))
 
 
-def _cagr(v0: float, vN: float, years: int) -> Optional[float]:
+def _cagr(v0: float, vN: float, years: int) -> float | None:
     if years <= 0 or v0 <= 0 or vN <= 0:
         return None
     try:
@@ -72,9 +73,9 @@ def _category_from_passes(passes: int) -> str:
 async def evaluate_residual_income_suitability(
     repo: Any,
     company_id: int,
-    sector: Optional[str],
-    cost_of_equity: Optional[float] = None,
-) -> Tuple[int, str, List[DiagnosticFlag], Dict[str, Any]]:
+    sector: str | None,
+    cost_of_equity: float | None = None,
+) -> tuple[int, str, list[DiagnosticFlag], dict[str, Any]]:
     """
     7-metric Residual Income suitability scorecard.
 
@@ -93,10 +94,10 @@ async def evaluate_residual_income_suitability(
     - Income statement:  repo.get_income_statement_latest
     - Cash flow:         repo.get_cash_flow_latest
     """
-    results: List[MetricResult] = []
-    flags: List[DiagnosticFlag] = []
-    evidence: Dict[str, Any] = {}
-    coverage: Dict[str, Any] = {}
+    results: list[MetricResult] = []
+    flags: list[DiagnosticFlag] = []
+    evidence: dict[str, Any] = {}
+    coverage: dict[str, Any] = {}
 
     def add(m: MetricResult) -> None:
         results.append(m)
@@ -105,30 +106,30 @@ async def evaluate_residual_income_suitability(
 
     # ── Fetch data ────────────────────────────────────────────────────────────
 
-    roe_rows: List[Dict[str, Any]] = []
+    roe_rows: list[dict[str, Any]] = []
     if hasattr(repo, "get_roe_history"):
         try:
             roe_rows = await repo.get_roe_history(company_id, years=5)
         except Exception:
             pass
 
-    eps_rows: List[Dict[str, Any]] = []
+    eps_rows: list[dict[str, Any]] = []
     try:
         eps_rows = await repo.get_eps_yearly_series(company_id)
     except Exception:
         pass
 
-    bv_rows: List[Dict[str, Any]] = []
+    bv_rows: list[dict[str, Any]] = []
     if hasattr(repo, "get_book_value_history"):
         try:
             bv_rows = await repo.get_book_value_history(company_id, years=6)
         except Exception:
             pass
 
-    bs_latest: Optional[Dict[str, Any]] = None
-    bs_ri: Optional[Dict[str, Any]] = None
-    is_latest: Optional[Dict[str, Any]] = None
-    cf_latest: Optional[Dict[str, Any]] = None
+    bs_latest: dict[str, Any] | None = None
+    bs_ri: dict[str, Any] | None = None
+    is_latest: dict[str, Any] | None = None
+    cf_latest: dict[str, Any] | None = None
 
     try:
         bs_latest = await repo.get_balance_sheet_latest(company_id)
@@ -152,7 +153,7 @@ async def evaluate_residual_income_suitability(
     # Core RI pre-requisite: RI > 0 requires ROE > k_e.
     # evidence uses the service-provided k_e (most accurate) or None.
 
-    roe_latest: Optional[float] = None
+    roe_latest: float | None = None
     derived = None
     if hasattr(repo, "get_derived_metrics_latest"):
         try:
@@ -258,8 +259,8 @@ async def evaluate_residual_income_suitability(
         key=lambda r: int(r.get("fiscal_year") or 0),
     )[-6:]
 
-    bv_cagr: Optional[float] = None
-    bv_span: Optional[int] = None
+    bv_cagr: float | None = None
+    bv_span: int | None = None
     if len(bv_sorted) >= 2:
         bv0 = _safe_float(bv_sorted[0].get("book_value"))
         bvN = _safe_float(bv_sorted[-1].get("book_value"))
@@ -366,7 +367,7 @@ async def evaluate_residual_income_suitability(
         goodwill = _safe_float(bs_ri.get("goodwill"))
         total_assets = _safe_float(bs_ri.get("total_assets"))
 
-    intangible_ratio: Optional[float] = None
+    intangible_ratio: float | None = None
     if total_assets is not None and total_assets > 0:
         ia = (intangibles or 0.0) + (goodwill or 0.0)
         intangible_ratio = ia / total_assets
@@ -413,7 +414,7 @@ async def evaluate_residual_income_suitability(
     total_debt = _safe_float(bs_latest.get("total_debt")) if bs_latest else None
     cash = _safe_float(bs_latest.get("cash_and_cash_equivalents")) if bs_latest else None
     equity = _safe_float(bs_latest.get("shareholders_equity")) if bs_latest else None
-    nd_to_equity: Optional[float] = None
+    nd_to_equity: float | None = None
     if total_debt is not None and cash is not None and equity is not None and equity > 0:
         nd_to_equity = (total_debt - cash) / equity
 
@@ -468,7 +469,7 @@ async def evaluate_residual_income_suitability(
     if ta_latest is None and bs_ri:
         ta_latest = _safe_float(bs_ri.get("total_assets"))
 
-    accruals_ratio: Optional[float] = None
+    accruals_ratio: float | None = None
     if ni_latest is not None and cfo_latest is not None and ta_latest is not None and ta_latest > 0:
         accruals_ratio = abs(ni_latest - cfo_latest) / ta_latest
 

@@ -1,15 +1,14 @@
+import bisect
+import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
-from collections import defaultdict
-import bisect
-import logging
+from typing import Any
 
 from shared.time_utils import now_utc
 
 
-def _normalise_trade_date(val: Any) -> Optional[date]:
+def _normalise_trade_date(val: Any) -> date | None:
     """Convert trade_date from string or date to date object."""
     if val is None:
         return None
@@ -26,14 +25,14 @@ def _normalise_trade_date(val: Any) -> Optional[date]:
 
 
 def convert_holding_fx(
-    holding: Dict,
+    holding: dict,
     raw_value: Decimal,
     total_cost: Decimal,
     account_currency: str,
     fx_service: Any,
     snapshot_date: date,
     enable_fx: bool = True,
-) -> Tuple[Decimal, Decimal]:
+) -> tuple[Decimal, Decimal]:
     """Convert holding values from price_currency to account_currency.
 
     Single source of truth for FX conversion at the holding level.
@@ -128,8 +127,8 @@ Applies when holding.exchange_override == "TOR" and the company's primary exchan
 
 def get_cdr_ratio_for_company(
     company_id: int,
-    companies_map: Optional[Dict[int, Dict]] = None,
-) -> Optional[Decimal]:
+    companies_map: dict[int, dict] | None = None,
+) -> Decimal | None:
     """Look up per-company CDR ratio from the companies table.
 
     Returns the ratio if found, None otherwise (callers should fall back to CDR_RATIO constant).
@@ -145,17 +144,17 @@ def get_cdr_ratio_for_company(
 def _resolve_holding_price(
     company_id: int,
     symbol: str,
-    avg_cost: Optional[Decimal],
-    latest_prices: Dict[int, Dict],
-    price_history: Dict[int, List[tuple]],
+    avg_cost: Decimal | None,
+    latest_prices: dict[int, dict],
+    price_history: dict[int, list[tuple]],
     snapshot_date: date,
     stale_threshold_days: int = 30,
-    exchange_override: Optional[str] = None,
-    cdr_ratio: Optional[Decimal] = None,
-    company_currency: Optional[str] = None,
-    price_source: Optional[str] = None,
-    fx_service: Optional[Any] = None,
-) -> Tuple[Optional[Decimal], PriceTier, Optional[date]]:
+    exchange_override: str | None = None,
+    cdr_ratio: Decimal | None = None,
+    company_currency: str | None = None,
+    price_source: str | None = None,
+    fx_service: Any | None = None,
+) -> tuple[Decimal | None, PriceTier, date | None]:
     """4-tier price cascade.
 
     Tier 1 (CURRENT) only used if price_date is recent enough (<= stale_threshold_days old).
@@ -177,7 +176,7 @@ def _resolve_holding_price(
     is_cdr = exchange_override == "TOR"
     effective_ratio = cdr_ratio if cdr_ratio is not None else CDR_RATIO
 
-    def _apply_cdr(price_val: Decimal, src: Optional[str] = None) -> Decimal:
+    def _apply_cdr(price_val: Decimal, src: str | None = None) -> Decimal:
         """Apply CDR ratio (and FX if needed) to convert market price to CDR price in CAD."""
         result = price_val / effective_ratio
         # For price_history source: price is US USD, need FX to convert to CAD
@@ -246,15 +245,15 @@ def _validate_snapshot(
     cash_balance: Decimal,
     cost_basis: Decimal,
     holdings_count: int,
-    used_tiers: List[PriceTier],
-) -> List[str]:
+    used_tiers: list[PriceTier],
+) -> list[str]:
     """Post-computation validation. Returns list of warning strings.
     
     W1: Zero market value with non-zero holdings
     W2: Negative total with positive holdings value
     W3: Cash too negative relative to cost basis (possible missing deposits)
     """
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     if holdings_count > 0 and holdings_market_value <= 0:
         warnings.append(
@@ -289,7 +288,7 @@ def _should_process_for_lots(txn: dict) -> bool:
     return True
 
 
-def _classify_lot_action(txn: dict) -> Optional[str]:
+def _classify_lot_action(txn: dict) -> str | None:
     if not _should_process_for_lots(txn):
         return None
     sub = (txn.get("activity_sub_type") or "").upper()
@@ -304,8 +303,8 @@ def _classify_lot_action(txn: dict) -> Optional[str]:
 def resolve_price_forward_filled(
     company_id: int,
     target_date: date,
-    price_map: Dict[int, List[tuple]],
-) -> Optional[Dict]:
+    price_map: dict[int, list[tuple]],
+) -> dict | None:
     prices = price_map.get(company_id, [])
     if not prices:
         return None
@@ -319,25 +318,25 @@ def resolve_price_forward_filled(
 def build_snapshot_row(
     account_id: int,
     snapshot_date: date,
-    holdings_state: List[Dict],
+    holdings_state: list[dict],
     cash_balance: Decimal,
     net_deposits: Decimal,
-    prices_by_company: Dict[int, Dict],
+    prices_by_company: dict[int, dict],
     job_id: str,
     stale_threshold_days: int = 30,
     account_currency: str = "CAD",
-    fx_service: Optional[Any] = None,
-    price_history: Optional[Dict[int, List[tuple]]] = None,
-    exchange_overrides: Optional[Dict[int, Optional[str]]] = None,
-    company_currencies: Optional[Dict[int, str]] = None,
-    companies_map: Optional[Dict[int, Dict]] = None,
-) -> Dict[str, Any]:
+    fx_service: Any | None = None,
+    price_history: dict[int, list[tuple]] | None = None,
+    exchange_overrides: dict[int, str | None] | None = None,
+    company_currencies: dict[int, str] | None = None,
+    companies_map: dict[int, dict] | None = None,
+) -> dict[str, Any]:
     from config import settings
     enable_fx = getattr(settings, "ENABLE_FX_CONVERSION", False)
     total_market_value = Decimal("0.00")
     total_cost = Decimal("0.00")
     holdings_detail = []
-    used_tiers: List[PriceTier] = []
+    used_tiers: list[PriceTier] = []
     non_zero_holdings_count = 0
 
     for h in holdings_state:
@@ -543,10 +542,10 @@ def build_snapshot_row(
 
 
 def check_snapshot_spike(
-    previous: Dict[str, Any],
-    current: Dict[str, Any],
+    previous: dict[str, Any],
+    current: dict[str, Any],
     threshold: float = 0.20,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Compare consecutive snapshots and detect suspicious value spikes.
 
     A spike is detected when total_value changes by more than `threshold`

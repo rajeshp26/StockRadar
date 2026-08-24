@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Aggregation Scheduler
 Runs every 24 hours to compute sector/industry percentile stats for
@@ -11,14 +10,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from shared.time_utils import parse_db_timestamp
-
+from application.jobs.aggregation_jobs import compute_and_upsert_group_metric_stats
 from config import settings
 from database import supabase
-from application.jobs.aggregation_jobs import compute_and_upsert_group_metric_stats
+from shared.time_utils import parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +34,7 @@ class AggregationScheduler:
             getattr(settings, "AGGREGATION_REFRESH_INTERVAL_HOURS", interval_hours)
         )
         self.is_running = False
-        self.task: Optional[asyncio.Task] = None
+        self.task: asyncio.Task | None = None
         self.lock_id: str = f"agg:{uuid.uuid4()}"
 
     async def plan(self) -> list:
@@ -104,7 +102,7 @@ class AggregationScheduler:
             except asyncio.CancelledError:
                 break
 
-    async def _try_acquire_and_run(self) -> Dict[str, Any]:
+    async def _try_acquire_and_run(self) -> dict[str, Any]:
         """Try to acquire the distributed lock; if successful, run aggregation.
 
         Lock logic:
@@ -113,7 +111,7 @@ class AggregationScheduler:
         - If lock has expired, take over.
         """
         agg_id = "sector_metric_agg"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         lock_ttl = timedelta(hours=2)
 
         try:
@@ -205,7 +203,7 @@ class AggregationScheduler:
         finally:
             # Release lock regardless
             try:
-                now_release = datetime.now(timezone.utc)
+                now_release = datetime.now(UTC)
                 supabase.table("aggregation_state").update(
                     {
                         "is_running": False,
@@ -218,7 +216,7 @@ class AggregationScheduler:
             except Exception as e:
                 logger.error("Failed to release aggregation lock: %s", e)
 
-    async def trigger_immediate_run(self) -> Dict[str, Any]:
+    async def trigger_immediate_run(self) -> dict[str, Any]:
         """Manual trigger for testing / admin."""
         logger.info("🔄 Manual trigger: immediate aggregation run")
         return await self._try_acquire_and_run()

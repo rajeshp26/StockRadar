@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -21,83 +21,83 @@ class DcfRequestOverrides(BaseModel):
     """
 
     # Forecast controls
-    forecastYears: Optional[int] = Field(default=None, ge=1, le=20)
-    forecastFcf: Optional[List[float]] = Field(
+    forecastYears: int | None = Field(default=None, ge=1, le=20)
+    forecastFcf: list[float] | None = Field(
         default=None,
         description="Explicit Free Cash Flow forecast series (absolute values).",
     )
 
     # If forecastFcf is not provided, service may derive forecast using:
     # fcfGrowthRate = growth applied directly to base FCF (NOT revenue).
-    fcfGrowthRate: Optional[float] = Field(
+    fcfGrowthRate: float | None = Field(
         default=None,
         description="FCF growth rate used to grow base FCF (accepts percent or fraction).",
     )
 
     # Backward-compatible alias (deprecated)
-    revenueGrowthRate: Optional[float] = Field(
+    revenueGrowthRate: float | None = Field(
         default=None,
         description="[DEPRECATED] Use fcfGrowthRate instead. If provided, will be treated as fcfGrowthRate.",
     )
 
-    fcfMarginAssumption: Optional[float] = Field(
+    fcfMarginAssumption: float | None = Field(
         default=None,
         description="FCF margin assumption (accepts percent or fraction).",
     )
 
     # Discount rate (WACC)
-    wacc: Optional[float] = Field(
+    wacc: float | None = Field(
         default=None,
         description="Discount rate (WACC). Accepts percent or fraction.",
     )
 
     # Terminal Value method
-    terminalMethod: Optional[TerminalMethod] = Field(
+    terminalMethod: TerminalMethod | None = Field(
         default=None,
         description="Terminal value method: perpetuity_growth | exit_multiple",
     )
 
     # Perpetuity Growth terminal inputs
-    terminalGrowthRate: Optional[float] = Field(
+    terminalGrowthRate: float | None = Field(
         default=None,
         description="Perpetual growth rate (g). Accepts percent or fraction.",
     )
 
     # Exit Multiple terminal inputs
-    exitMultiple: Optional[float] = Field(
+    exitMultiple: float | None = Field(
         default=None,
         gt=0,
         description="Exit multiple (e.g., EV/EBITDA multiple).",
     )
-    terminalMetric: Optional[TerminalMetric] = Field(
+    terminalMetric: TerminalMetric | None = Field(
         default=None,
         description="Metric used for exit multiple method (currently ebitda only).",
     )
-    ebitdaMarginAssumption: Optional[float] = Field(
+    ebitdaMarginAssumption: float | None = Field(
         default=None,
         description="EBITDA margin used if terminal EBITDA must be derived.",
     )
 
-    terminalEbitda: Optional[float] = Field(
+    terminalEbitda: float | None = Field(
         default=None,
         gt=0,
         description="Terminal EBITDA (absolute). Required for exit_multiple unless deterministic derivation exists.",
     )
 
     # Equity bridge (optional overrides)
-    sharesOutstanding: Optional[float] = Field(
+    sharesOutstanding: float | None = Field(
         default=None,
         gt=0,
         description="Shares outstanding. If omitted, service may resolve from financial tables.",
     )
-    netDebt: Optional[float] = Field(
+    netDebt: float | None = Field(
         default=None,
         description="Net debt (debt - cash). If omitted, service may compute when inputs exist.",
     )
 
     # Metadata
-    analystName: Optional[str] = None
-    notes: Optional[str] = None
+    analystName: str | None = None
+    notes: str | None = None
 
     # -------------------------------
     # Validators (Pydantic v2)
@@ -105,7 +105,7 @@ class DcfRequestOverrides(BaseModel):
 
     @field_validator("forecastFcf", mode="before")
     @classmethod
-    def _validate_forecast_fcf(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+    def _validate_forecast_fcf(cls, v: list[float] | None) -> list[float] | None:
         if v is None:
             return None
         if not isinstance(v, list) or len(v) == 0:
@@ -113,7 +113,7 @@ class DcfRequestOverrides(BaseModel):
         if len(v) > 20:
             raise ValueError("forecastFcf cannot exceed 20 years.")
 
-        out: List[float] = []
+        out: list[float] = []
         for i, x in enumerate(v):
             if x is None:
                 raise ValueError(f"forecastFcf[{i}] is null; all values must be numbers.")
@@ -150,7 +150,7 @@ class DcfRequestOverrides(BaseModel):
         return f
 
     @model_validator(mode="after")
-    def _backcompat_growth_alias(self) -> "DcfRequestOverrides":
+    def _backcompat_growth_alias(self) -> DcfRequestOverrides:
         """
         Backward compatibility:
         - If fcfGrowthRate is not set but revenueGrowthRate is set,
@@ -174,35 +174,35 @@ class DcfValuation(BaseModel):
     terminalMethod: TerminalMethod
 
     forecastYears: int
-    forecastFcf: List[float]
-    pvFcf: List[float]
+    forecastFcf: list[float]
+    pvFcf: list[float]
     totalPvFcf: float
 
     # Transparency
-    discountFactors: Optional[List[float]] = None
+    discountFactors: list[float] | None = None
 
     waccUsed: float
 
-    terminalValue: Optional[float] = None
-    pvTerminalValue: Optional[float] = None
+    terminalValue: float | None = None
+    pvTerminalValue: float | None = None
 
-    terminalGrowthRateUsed: Optional[float] = None
-    cashFlowNPlus1: Optional[float] = None
+    terminalGrowthRateUsed: float | None = None
+    cashFlowNPlus1: float | None = None
 
-    baseFcf: Optional[float] = None
-    baseFcfFiscalYear: Optional[int] = None
+    baseFcf: float | None = None
+    baseFcfFiscalYear: int | None = None
 
-    enterpriseValue: Optional[float] = None
-    netDebtUsed: Optional[float] = None
-    equityValue: Optional[float] = None
+    enterpriseValue: float | None = None
+    netDebtUsed: float | None = None
+    equityValue: float | None = None
 
-    sharesOutstanding: Optional[float] = None
-    intrinsicValuePerShare: Optional[float] = None
+    sharesOutstanding: float | None = None
+    intrinsicValuePerShare: float | None = None
 
-    currentPrice: Optional[float] = None
-    upsideDownsidePct: Optional[float] = None
+    currentPrice: float | None = None
+    upsideDownsidePct: float | None = None
 
-    sensitivityScenarios: Optional["DcfSensitivityGrid"] = None
+    sensitivityScenarios: DcfSensitivityGrid | None = None
 
 
 class DcfSensitivityGrid(BaseModel):
@@ -213,10 +213,10 @@ class DcfSensitivityGrid(BaseModel):
       - values = intrinsicValuePerShareMatrix[r_index][g_index]
     """
 
-    discountRates: List[float]
-    terminalGrowthRates: List[float]
-    intrinsicValuePerShareMatrix: List[List[Optional[float]]]
-    currency: Optional[str] = None
+    discountRates: list[float]
+    terminalGrowthRates: list[float]
+    intrinsicValuePerShareMatrix: list[list[float | None]]
+    currency: str | None = None
 
     model_config = {
         "extra": "ignore",

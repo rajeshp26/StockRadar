@@ -7,7 +7,7 @@ MarketDataRefresh cycle to validate coverage, freshness, and integrity.
 
 import logging
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from database import supabase
 from shared.time_utils import now_utc
@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 async def validate_dividend_pipeline(
     portfolio_repo: Any = None,
-    alert_slack: Optional[callable] = None,
-) -> Dict[str, Any]:
+    alert_slack: callable | None = None,
+) -> dict[str, Any]:
     """Daily health check for the dividend pipeline.
 
     Checks:
@@ -47,7 +47,7 @@ async def validate_dividend_pipeline(
     today = now_utc().date()
 
     # ── 1. Coverage: at least 15% of holdings have upcoming events ─────
-    company_ids: List[int] = []
+    company_ids: list[int] = []
     if portfolio_repo is not None:
         holdings = await portfolio_repo.get_holdings_with_companies([])
         company_ids = list({h["company_id"] for h in (holdings or []) if h.get("company_id")})
@@ -112,7 +112,7 @@ async def validate_dividend_pipeline(
             .select("data_source")
             .execute()
         )
-        src_counts: Dict[str, int] = {}
+        src_counts: dict[str, int] = {}
         for r in (sources_resp.data or []):
             s = r.get("data_source", "unknown")
             src_counts[s] = src_counts.get(s, 0) + 1

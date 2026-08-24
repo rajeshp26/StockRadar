@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 import logging
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from database import supabase
 from infrastructure.repositories.valuation_repository import ValuationRepository
@@ -14,15 +15,15 @@ class RiskRepository:
     def __init__(self, repo: ValuationRepository) -> None:
         self._repo = repo
 
-    async def get_company_context(self, symbol: str) -> Optional[Dict[str, Any]]:
+    async def get_company_context(self, symbol: str) -> dict[str, Any] | None:
         return await self._repo.get_company_context(symbol)
 
-    async def get_latest_financial_ratios(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_latest_financial_ratios(self, company_id: int) -> dict[str, Any] | None:
         return await self._repo.get_derived_metrics_latest(company_id)
 
     async def get_financial_ratios_history(
         self, company_id: int, years: int = 5
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         cutoff_year = now_utc().date().year - years
         resp = (
             supabase.table("financial_ratios")
@@ -36,7 +37,7 @@ class RiskRepository:
 
     async def get_company_summary_history(
         self, company_id: int, years: int = 5
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         cutoff = (now_utc().date() - timedelta(days=years * 365)).isoformat()
         resp = (
             supabase.table("company_summary")
@@ -51,15 +52,15 @@ class RiskRepository:
 
     async def get_income_statements_annual(
         self, company_id: int, years: int = 5
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         return await self._repo.get_income_statements_annual(company_id, limit=years)
 
-    async def get_cash_flow_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_cash_flow_latest(self, company_id: int) -> dict[str, Any] | None:
         return await self._repo.get_cash_flow_latest(company_id)
 
     async def get_price_history_range(
         self, company_id: int, years: int = 5
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         resp = (
             supabase.table("price_history")
             .select("close_price, price_date")
@@ -68,13 +69,13 @@ class RiskRepository:
             .execute()
         )
         rows = resp.data or []
-        cutoff_date = (datetime.now(tz=timezone.utc).date() - timedelta(days=years * 365)).isoformat()
+        cutoff_date = (datetime.now(tz=UTC).date() - timedelta(days=years * 365)).isoformat()
         return [r for r in rows if r.get("price_date", "") >= cutoff_date]
 
-    async def get_current_market_price(self, company_id: int) -> Optional[float]:
+    async def get_current_market_price(self, company_id: int) -> float | None:
         return await self._repo.get_current_market_price(company_id)
 
-    async def upsert_risk_ai_narrative(self, company_id: int, payload: Dict[str, Any]) -> None:
+    async def upsert_risk_ai_narrative(self, company_id: int, payload: dict[str, Any]) -> None:
         existing = (
             supabase.table("risk_ai_narratives")
             .select("id")
@@ -86,7 +87,7 @@ class RiskRepository:
         else:
             supabase.table("risk_ai_narratives").insert(payload).execute()
 
-    async def get_risk_ai_narrative(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_risk_ai_narrative(self, company_id: int) -> dict[str, Any] | None:
         resp = (
             supabase.table("risk_ai_narratives")
             .select("*")

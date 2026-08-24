@@ -1,54 +1,56 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
+
 from datetime import date
+from typing import Any
+
+from pydantic import BaseModel
 
 
 class MoatDiagnosticFlag(BaseModel):
     code: str
     severity: str
     message: str
-    recommendation: Optional[str] = None
-    evidence: Optional[Dict[str, Any]] = None
+    recommendation: str | None = None
+    evidence: dict[str, Any] | None = None
 
 
 class MoatInputs(BaseModel):
-    nopat: Optional[float] = None
-    invested_capital: Optional[float] = None
-    gross_margin: Optional[float] = None
-    operating_margin: Optional[float] = None
-    net_margin: Optional[float] = None
-    roic_5y_avg: Optional[float] = None
-    roic_volatility: Optional[float] = None
-    asset_turnover: Optional[float] = None
+    nopat: float | None = None
+    invested_capital: float | None = None
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    roic_5y_avg: float | None = None
+    roic_volatility: float | None = None
+    asset_turnover: float | None = None
     fiscal_years_used: int = 0
-    as_of_date: Optional[str] = None
+    as_of_date: str | None = None
 
 
 class MoatValuation(BaseModel):
-    roic: Optional[float] = None
-    wacc: Optional[float] = None
-    roic_minus_wacc: Optional[float] = None
-    gross_margin_pct: Optional[float] = None
-    operating_margin_pct: Optional[float] = None
-    net_margin_pct: Optional[float] = None
-    roic_5y_avg: Optional[float] = None
-    roic_5y_std: Optional[float] = None
-    roic_stability_score: Optional[float] = None
-    asset_turnover: Optional[float] = None
-    capital_efficiency_score: Optional[float] = None
-    moat_score: Optional[float] = None
+    roic: float | None = None
+    wacc: float | None = None
+    roic_minus_wacc: float | None = None
+    gross_margin_pct: float | None = None
+    operating_margin_pct: float | None = None
+    net_margin_pct: float | None = None
+    roic_5y_avg: float | None = None
+    roic_5y_std: float | None = None
+    roic_stability_score: float | None = None
+    asset_turnover: float | None = None
+    capital_efficiency_score: float | None = None
+    moat_score: float | None = None
     moat_category: str = "Unknown"
-    moat_summary: Optional[str] = None
+    moat_summary: str | None = None
 
 
 class MoatIndustryContext(BaseModel):
-    sector: Optional[str] = None
-    industry: Optional[str] = None
-    avg_roic: Optional[float] = None
-    roic_vs_industry: Optional[str] = None
-    avg_margin: Optional[float] = None
-    sample_size: Optional[int] = None
+    sector: str | None = None
+    industry: str | None = None
+    avg_roic: float | None = None
+    roic_vs_industry: str | None = None
+    avg_margin: float | None = None
+    sample_size: int | None = None
     context_note: str = (
         "Industry ROIC and margin averages are directional. "
         "Moat durability is assessed relative to sector peers."
@@ -59,16 +61,16 @@ class MoatApplicability(BaseModel):
     score: int = 0
     category: str = "Not Applicable"
     excluded: bool = False
-    exclusion_reason: Optional[str] = None
-    flags: List[MoatDiagnosticFlag] = []
-    suitability_summary: Optional[str] = None
+    exclusion_reason: str | None = None
+    flags: list[MoatDiagnosticFlag] = []
+    suitability_summary: str | None = None
 
 
 class MoatDataQuality(BaseModel):
     data_sources: str = "database"
-    fiscal_year_end: Optional[int] = None
+    fiscal_year_end: int | None = None
     quarters_used: int = 0
-    days_since_update: Optional[int] = None
+    days_since_update: int | None = None
     fallbacks_used: bool = False
     last_computed_at: str = ""
 
@@ -88,28 +90,28 @@ class MoatKeywordEvidence(BaseModel):
     keyword: str
     keyword_group: str
     section: str
-    snippet: Optional[str] = None
+    snippet: str | None = None
     relevance_score: float = 1.0
-    filing_date: Optional[date] = None
+    filing_date: date | None = None
 
 
 class MoatEvidenceResponse(BaseModel):
     symbol: str
     company_id: int
     text_analysis_available: bool = False
-    filing_type: Optional[str] = None
-    filing_date: Optional[date] = None
+    filing_type: str | None = None
+    filing_date: date | None = None
     total_keyword_matches: int = 0
-    evidence_by_group: Dict[str, List[MoatKeywordEvidence]] = {}
-    groups_found: List[str] = []
+    evidence_by_group: dict[str, list[MoatKeywordEvidence]] = {}
+    groups_found: list[str] = []
 
 
 class MoatAiNarrative(BaseModel):
     narrative: str
-    summary: Optional[str] = None
+    summary: str | None = None
     model: str = "openrouter/default"
     generated_at: str = ""
-    generation_time_ms: Optional[int] = None
+    generation_time_ms: int | None = None
 
 
 class MoatAiResponse(BaseModel):

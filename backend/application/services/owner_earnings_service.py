@@ -9,15 +9,7 @@ That dead-code block is removed; _build_empty_response handles early aborts corr
 from __future__ import annotations
 
 import logging
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional, Tuple
- 
-from shared.finance_math import (
-    build_fingerprint,
-    clamp,
-    pct_or_frac_to_frac,
-    safe_float,
-)
+from typing import Any
 
 from application.services.ai_service import generate_suitability_summary
 from application.services.owner_earnings_suitability import evaluate_owner_earnings_suitability
@@ -30,6 +22,13 @@ from domain.models.valuation_owner_earnings import (
 )
 from domain.models.valuation_rule1 import Applicability, DataQuality, DiagnosticFlag
 from infrastructure.repositories.valuation_repository import ValuationRepository
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+    pct_or_frac_to_frac,
+    safe_float,
+)
+from shared.time_utils import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +36,13 @@ logger = logging.getLogger(__name__)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _compute_oe(
-    net_income: Optional[float],
-    da: Optional[float],
-    capex_raw: Optional[float],
-    wc_change: Optional[float],
+    net_income: float | None,
+    da: float | None,
+    capex_raw: float | None,
+    wc_change: float | None,
     maintenance_capex_ratio: float,
     include_wc: bool,
-) -> Optional[float]:
+) -> float | None:
     if net_income is None:
         return None
     da_val = da if da is not None else 0.0
@@ -70,8 +69,8 @@ class OwnerEarningsService:
     async def compute_owner_earnings_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[OwnerEarningsRequestOverrides] = None,
+        user_id:   int | None,
+        overrides: OwnerEarningsRequestOverrides | None = None,
         force:     bool = False,
     ) -> OwnerEarningsResponse:
         overrides  = overrides or OwnerEarningsRequestOverrides()
@@ -174,7 +173,7 @@ class OwnerEarningsService:
             dependency_fingerprint=fingerprint,
         )
 
-    async def get_cached(self, symbol: str) -> Optional[OwnerEarningsResponse]:
+    async def get_cached(self, symbol: str) -> OwnerEarningsResponse | None:
         """
         Pure cache read — no gate logic, no recompute, no DB writes.
         Returns None if no prior Owner Earnings valuation exists.
@@ -184,13 +183,13 @@ class OwnerEarningsService:
         if not ctx:
             return None
         company_id = int(ctx["company_id"])
- 
+
         snap = await self.repo.get_last_output_snapshot(
             company_id=company_id, method="owner_earnings"
         )
         if not snap:
             return None
- 
+
         valuation_payload     = snap.get("valuation")     or {}
         applicability_payload = snap.get("applicability") or {}
         dq_payload            = snap.get("dataQuality")   or {}
@@ -198,7 +197,7 @@ class OwnerEarningsService:
             (dq_payload.get("freshnessDays") or {}).get("lastComputedAt")
             or snap.get("lastComputedAt")
         )
- 
+
         # Refresh currentPrice and upside at read time
         current_price = await self.repo.get_current_market_price(company_id)
         intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
@@ -208,7 +207,7 @@ class OwnerEarningsService:
             upside = (float(intrinsic_ps) - float(current_price)) / float(current_price)
         valuation_payload["currentPrice"]      = current_price
         valuation_payload["upsideDownsidePct"] = upside
- 
+
         if not applicability_payload:
             applicability_payload = {
                 "score": 0, "category": "Caution",
@@ -222,13 +221,13 @@ class OwnerEarningsService:
             dq_payload = {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
         if isinstance(dq_payload.get("freshnessDays"), dict) and last_computed:
             dq_payload["freshnessDays"]["lastComputedAt"] = last_computed
- 
+
         return OwnerEarningsResponse(
             valuation=OwnerEarningsValuation(**valuation_payload),
             applicability=Applicability(**applicability_payload),
             dataQuality=DataQuality(**dq_payload),
         )
- 
+
     # ── Cached path ────────────────────────────────────────────────────────────
 
     async def _serve_cached(
@@ -236,8 +235,8 @@ class OwnerEarningsService:
         symbol:     str,
         company_id: int,
         currency:   str,
-        sector:     Optional[str],
-        user_id:    Optional[int],
+        sector:     str | None,
+        user_id:    int | None,
         method:     str,
         overrides:  OwnerEarningsRequestOverrides,
     ) -> OwnerEarningsResponse:
@@ -307,8 +306,8 @@ class OwnerEarningsService:
         self,
         company_id: int,
         overrides:  OwnerEarningsRequestOverrides,
-        defaults:   Dict[str, Any],
-    ) -> Dict[str, Any]:
+        defaults:   dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Lightweight input resolution for Gate 3.
         Resolves base_oe, g_oe, discount_rate, terminal_g without computing intrinsic.
@@ -328,7 +327,7 @@ class OwnerEarningsService:
             g_oe_raw    = safe_float(defaults.get("oe_growth_rate"))
             g_oe_source = "defaults.oe_growth_rate"
 
-        g_oe: Optional[float] = None
+        g_oe: float | None = None
         if g_oe_raw is not None:
             g_oe = clamp(
                 pct_or_frac_to_frac(float(g_oe_raw)),
@@ -344,7 +343,7 @@ class OwnerEarningsService:
             r_raw    = safe_float(defaults.get("discount_rate_default"))
             r_source = "defaults.discount_rate_default"
 
-        r: Optional[float] = None
+        r: float | None = None
         if r_raw is not None:
             r = clamp(
                 pct_or_frac_to_frac(float(r_raw)),
@@ -353,7 +352,7 @@ class OwnerEarningsService:
             )
 
         # ── Terminal growth ────────────────────────────────────────────────
-        tg: Optional[float] = None
+        tg: float | None = None
         if overrides.terminalGrowthRate is not None:
             tg = pct_or_frac_to_frac(float(overrides.terminalGrowthRate))
         else:
@@ -362,7 +361,7 @@ class OwnerEarningsService:
                 tg = pct_or_frac_to_frac(float(tg_raw))
 
         # ── Net debt ──────────────────────────────────────────────────────
-        net_debt: Optional[float] = None
+        net_debt: float | None = None
         if overrides.netDebt is not None:
             net_debt = float(overrides.netDebt)
         else:
@@ -373,7 +372,7 @@ class OwnerEarningsService:
                 net_debt = float(debt) - float(cash)
 
         # ── Shares ────────────────────────────────────────────────────────
-        shares: Optional[float] = None
+        shares: float | None = None
         if overrides.sharesOutstanding is not None:
             shares = float(overrides.sharesOutstanding)
         else:
@@ -410,15 +409,15 @@ class OwnerEarningsService:
         symbol:                 str,
         company_id:             int,
         currency:               str,
-        sector:                 Optional[str],
-        user_id:                Optional[int],
+        sector:                 str | None,
+        user_id:                int | None,
         overrides:              OwnerEarningsRequestOverrides,
-        dependency_fingerprint: Optional[str] = None,
+        dependency_fingerprint: str | None = None,
     ) -> OwnerEarningsResponse:
 
         defaults = await self.repo.get_method_params(company_id, method="owner_earnings")
-        flags:           List[DiagnosticFlag] = []
-        input_decisions: Dict[str, Any]       = {"oe": {}}
+        flags:           list[DiagnosticFlag] = []
+        input_decisions: dict[str, Any]       = {"oe": {}}
         fallbacks_used                         = False
 
         current_price = await self.repo.get_current_market_price(company_id)
@@ -553,8 +552,8 @@ class OwnerEarningsService:
                 ))
 
         # ── Discount OE stream ─────────────────────────────────────────────
-        pv_oe:            List[float] = []
-        discount_factors: List[float] = []
+        pv_oe:            list[float] = []
+        discount_factors: list[float] = []
         total_pv_oe                   = 0.0
 
         if r > 0:
@@ -573,9 +572,9 @@ class OwnerEarningsService:
             ))
 
         # ── Terminal value (perpetuity growth) ─────────────────────────────
-        tv: Optional[float] = None; pv_tv: Optional[float] = None
-        oe_n_plus_1:   Optional[float] = None
-        terminal_g_used: Optional[float] = None
+        tv: float | None = None; pv_tv: float | None = None
+        oe_n_plus_1:   float | None = None
+        terminal_g_used: float | None = None
         tg                               = None
         tg_raw                           = None
 
@@ -618,13 +617,13 @@ class OwnerEarningsService:
                 }
 
         # ── Enterprise → Equity → Per-share bridge ─────────────────────────
-        enterprise_value: Optional[float] = None
+        enterprise_value: float | None = None
         if pv_tv is not None:
             enterprise_value = float(total_pv_oe) + float(pv_tv)
         else:
             enterprise_value = float(total_pv_oe) if total_pv_oe else None
 
-        net_debt: Optional[float] = None
+        net_debt: float | None = None
         net_debt_source = None
         if overrides.netDebt is not None:
             net_debt        = float(overrides.netDebt)
@@ -639,11 +638,11 @@ class OwnerEarningsService:
                 fallbacks_used  = True
         input_decisions["oe"]["netDebt"] = {"source": net_debt_source, "value": net_debt}
 
-        equity_value: Optional[float] = None
+        equity_value: float | None = None
         if enterprise_value is not None and net_debt is not None:
             equity_value = float(enterprise_value) - float(net_debt)
 
-        shares: Optional[float] = None
+        shares: float | None = None
         shares_source = None
         if overrides.sharesOutstanding is not None:
             shares        = float(overrides.sharesOutstanding)
@@ -666,16 +665,16 @@ class OwnerEarningsService:
                     fallbacks_used = True
         input_decisions["oe"]["sharesOutstanding"] = {"source": shares_source, "value": shares}
 
-        intrinsic_ps: Optional[float] = None
+        intrinsic_ps: float | None = None
         if equity_value is not None and shares is not None and float(shares) > 0:
             intrinsic_ps = float(equity_value) / float(shares)
 
-        upside: Optional[float] = None
+        upside: float | None = None
         if current_price is not None and float(current_price) > 0 and intrinsic_ps and intrinsic_ps > 0:
             upside = (intrinsic_ps - float(current_price)) / float(current_price)
 
         # ── Sensitivity grid ───────────────────────────────────────────────
-        sensitivity_grid: Optional[OeSensitivityGrid] = None
+        sensitivity_grid: OeSensitivityGrid | None = None
         if (r > 0 and terminal_g_used is not None and tg_raw is not None
                 and intrinsic_ps is not None and equity_value is not None
                 and shares is not None and float(shares) > 0):
@@ -701,9 +700,9 @@ class OwnerEarningsService:
                 g_list = [max(0.00, terminal_g_used - 0.01), terminal_g_used,
                           min(terminal_g_used + 0.01, r - 0.001)]
 
-            matrix: List[List[Optional[float]]] = []
+            matrix: list[list[float | None]] = []
             for r_s in r_list:
-                row: List[Optional[float]] = []
+                row: list[float | None] = []
                 for g_s in g_list:
                     if g_s >= r_s:
                         row.append(None)
@@ -790,7 +789,7 @@ class OwnerEarningsService:
         )
 
         # ── Build resolved inputs for Gate 3 ───────────────────────────────
-        resolved_inputs: Dict[str, Any] = {
+        resolved_inputs: dict[str, Any] = {
             "base_oe":             round(float(base_oe), 2)   if base_oe is not None else None,
             "g_oe_final":          round(float(g_oe), 4)      if g_oe    is not None else None,
             "g_oe_source":         g_oe_source,
@@ -898,7 +897,7 @@ class OwnerEarningsService:
         )
 
     async def _resolve_base_oe(self, company_id, maintenance_capex_ratio, include_wc):
-        cf: Optional[Dict[str, Any]] = None
+        cf: dict[str, Any] | None = None
         if hasattr(self.repo, "get_cash_flow_oe_inputs"):
             try:
                 cf = await self.repo.get_cash_flow_oe_inputs(company_id)

@@ -8,12 +8,12 @@ outputs — never duplicates company-level dividend analysis logic.
 """
 
 import logging
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional
 from collections import defaultdict
+from typing import Any
 
 from config import settings
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from shared.time_utils import now_iso, now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +27,13 @@ class DividendDashboardService:
 
     def __init__(
         self,
-        portfolio_repo: Optional[PortfolioRepository] = None,
+        portfolio_repo: PortfolioRepository | None = None,
     ):
         self.repo = portfolio_repo or PortfolioRepository()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def get_summary(self, account_ids: List[int]) -> Dict[str, Any]:
+    def get_summary(self, account_ids: list[int]) -> dict[str, Any]:
         """Compute portfolio-level dividend summary for the given accounts."""
         holdings = self.repo.get_holdings_with_companies(account_ids)
         if not holdings:
@@ -54,19 +54,19 @@ class DividendDashboardService:
             if r.get("currency"):
                 currency_set.add(r["currency"])
 
-        dps_by_cid: Dict[int, float] = {
+        dps_by_cid: dict[int, float] = {
             r["company_id"]: float(r["dividend_amount"])
             for r in dps_rows if r.get("dividend_amount")
         }
-        metrics_by_cid: Dict[int, Dict] = {
+        metrics_by_cid: dict[int, dict] = {
             r["company_id"]: r for r in metrics_rows
         }
 
         total_trailing = sum(trailing_by_symbol.values())
         total_forward = 0.0
         total_cost_dividend_payers = 0.0
-        growth_values: List[tuple] = []  # (weight, value)
-        safety_values: List[tuple] = []
+        growth_values: list[tuple] = []  # (weight, value)
+        safety_values: list[tuple] = []
         current_year = now_utc().year
 
         # Compute YTD from trailing rows filtered to current year
@@ -168,7 +168,7 @@ class DividendDashboardService:
         """Map any score (trust or confidence) to high/medium/low."""
         return "high" if score >= 0.7 else "medium" if score >= 0.4 else "low"
 
-    def get_upcoming(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_upcoming(self, account_ids: list[int]) -> list[dict[str, Any]]:
         """Get upcoming ex-dividend dates for held positions.
         
         Reads from upcoming_dividend_events (new table) — the dedicated
@@ -249,7 +249,7 @@ class DividendDashboardService:
 
         return result
 
-    def get_holdings(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_holdings(self, account_ids: list[int]) -> list[dict[str, Any]]:
         """Get per-holding dividend data for the holdings table."""
         holdings = self.repo.get_holdings_with_companies(account_ids)
         if not holdings:
@@ -290,7 +290,7 @@ class DividendDashboardService:
 
         # Upcoming events — batched single query to upcoming_dividend_events
         # with dividend_history as fallback for migration period
-        upcoming_by_cid: Dict[int, Dict[str, Any]] = {}
+        upcoming_by_cid: dict[int, dict[str, Any]] = {}
         upcoming_events = self.repo.get_next_upcoming_events(company_ids) if company_ids else []
         seen_upcoming = {e["company_id"] for e in upcoming_events if e.get("company_id")}
         for event in upcoming_events:
@@ -376,8 +376,8 @@ class DividendDashboardService:
         return result
 
     def get_holding_detail(
-        self, account_ids: List[int], symbol: str
-    ) -> Dict[str, Any]:
+        self, account_ids: list[int], symbol: str
+    ) -> dict[str, Any]:
         """Get detailed dividend data for a holding, merging across accounts."""
         holdings = self.repo.get_holdings_with_companies(account_ids)
         matching = [h for h in holdings if h["symbol"].upper() == symbol.upper()]
@@ -420,9 +420,10 @@ class DividendDashboardService:
         # Apply FX conversion to market value and cost basis (convert from price currency to account currency)
         if settings.ENABLE_FX_CONVERSION and (total_market_value > 0 or total_cost > 0):
             try:
+                from decimal import Decimal as D
+
                 from shared.fx_service import FXService
                 from shared.snapshot_builder import convert_holding_fx
-                from decimal import Decimal as D
                 from shared.time_utils import now_utc as _now
                 _fx = FXService(supabase)
                 # Determine price currency from company
@@ -492,7 +493,7 @@ class DividendDashboardService:
         dividend_history = []
         annual_dividends_per_share = []
         if dps_rows:
-            by_year: Dict[int, float] = {}
+            by_year: dict[int, float] = {}
             for d in dps_rows:
                 date_str = str(d.get("ex_dividend_date", ""))
                 amount = float(d.get("dividend_amount") or 0)
@@ -507,7 +508,7 @@ class DividendDashboardService:
                 {"year": y, "amount": round(a, 4)} for y, a in sorted(by_year.items())
             ]
 
-        cash_received_by_year: Dict[int, float] = {}
+        cash_received_by_year: dict[int, float] = {}
         for p in payments:
             date_str = str(p.get("payment_date", ""))
             year = int(date_str[:4]) if len(date_str) >= 4 else 0
@@ -543,7 +544,7 @@ class DividendDashboardService:
 
     # ── Private helpers ─────────────────────────────────────────────────────
 
-    def _empty_summary(self) -> Dict[str, Any]:
+    def _empty_summary(self) -> dict[str, Any]:
         return {
             "trailing_12m_income": 0.0,
             "forward_annual_estimate": 0.0,
@@ -564,7 +565,7 @@ class DividendDashboardService:
         }
 
     @staticmethod
-    def _weighted_avg(values: List[tuple]) -> Optional[float]:
+    def _weighted_avg(values: list[tuple]) -> float | None:
         """Compute weighted average from (weight, value) pairs."""
         if not values:
             return None

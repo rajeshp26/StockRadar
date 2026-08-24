@@ -4,19 +4,20 @@ Updated with financial data loading support while preserving existing functional
 """
 import logging
 import re
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from shared.time_utils import now_iso
-from typing import Optional
-from providers.yfinance_provider import YFinanceProvider
+
+from application.services.watchlist_service import WatchlistService
 from dependencies import (
     get_current_user_dep,
-    get_watchlist_service,
     get_watchlist_repository,
+    get_watchlist_service,
     limiter,
 )
-from application.services.watchlist_service import WatchlistService
 from infrastructure.repositories.supabase_repository import SupabaseWatchlistRepository
+from providers.yfinance_provider import YFinanceProvider
+from shared.time_utils import now_iso
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -174,7 +175,7 @@ async def add_item_to_watchlist(
         )
 
         # ── 2. Subscribe to SSE ──────────────────────────────────────────────
-        from api.watchlists import subscribe_symbol, broadcast_with_retry
+        from api.watchlists import broadcast_with_retry, subscribe_symbol
         subscribed = await subscribe_symbol(svc_result["symbol"], auth_id)
 
         # ── 3. Broadcast with retry ─────────────────────────────────────────

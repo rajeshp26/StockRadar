@@ -1,8 +1,7 @@
 """Shared utilities for stock split handling."""
 
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
-from typing import Dict, List, Tuple
+from decimal import InvalidOperation
 
 
 def parse_split_factor(split_factor_str: str) -> float:
@@ -38,14 +37,14 @@ def parse_split_date(raw) -> date:
 
 
 def get_split_factors_from_rows(
-    rows: List[dict],
-) -> Dict[int, List[Tuple[date, float]]]:
+    rows: list[dict],
+) -> dict[int, list[tuple[date, float]]]:
     """Parse split rows from the splits table into {company_id: [(split_date, adjustment_factor)]}.
 
     Rows should have keys: company_id, report_date, split_factor.
     Returns sorted by date ascending.
     """
-    factors: Dict[int, List[Tuple[date, float]]] = {}
+    factors: dict[int, list[tuple[date, float]]] = {}
     for row in rows:
         cid = row.get("company_id")
         if not cid:

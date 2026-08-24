@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from domain.models.valuation_rule1 import DiagnosticFlag
+from shared.time_utils import now_iso
 
 SECTOR_FIN = {"Financial Services", "Banks", "Insurance", "Diversified Financials"}
 
@@ -17,10 +17,10 @@ class MetricResult:
     name: str
     status: str  # pass | caution | fail | na
     points: int  # 1 only if pass
-    flag: Optional[DiagnosticFlag] = None
+    flag: DiagnosticFlag | None = None
 
 
-def _safe_float(x: Any) -> Optional[float]:
+def _safe_float(x: Any) -> float | None:
     try:
         if x is None:
             return None
@@ -32,13 +32,13 @@ def _safe_float(x: Any) -> Optional[float]:
     return None
 
 
-def _mean(vals: List[float]) -> Optional[float]:
+def _mean(vals: list[float]) -> float | None:
     if not vals:
         return None
     return sum(vals) / len(vals)
 
 
-def _stdev(vals: List[float]) -> Optional[float]:
+def _stdev(vals: list[float]) -> float | None:
     if len(vals) < 2:
         return None
     m = _mean(vals)
@@ -48,7 +48,7 @@ def _stdev(vals: List[float]) -> Optional[float]:
     return math.sqrt(var)
 
 
-def _cagr(v0: float, vN: float, years: int) -> Optional[float]:
+def _cagr(v0: float, vN: float, years: int) -> float | None:
     if years <= 0 or v0 <= 0 or vN <= 0:
         return None
     try:
@@ -85,8 +85,8 @@ def _recommended_model_from_passes(passes: int) -> str:
 async def evaluate_ddm_suitability(
     repo: Any,
     company_id: int,
-    sector: Optional[str],
-) -> Tuple[int, str, List[DiagnosticFlag], Dict[str, Any]]:
+    sector: str | None,
+) -> tuple[int, str, list[DiagnosticFlag], dict[str, Any]]:
     """
     Quantitative DDM suitability scorecard (7 metrics).
 
@@ -107,9 +107,9 @@ async def evaluate_ddm_suitability(
     bs_latest = await repo.get_balance_sheet_latest(company_id)
     cf_latest = await repo.get_cash_flow_latest(company_id)
 
-    results: List[MetricResult] = []
-    flags: List[DiagnosticFlag] = []
-    evidence: Dict[str, Any] = {}
+    results: list[MetricResult] = []
+    flags: list[DiagnosticFlag] = []
+    evidence: dict[str, Any] = {}
 
     hard_fail = False
 
@@ -229,7 +229,7 @@ async def evaluate_ddm_suitability(
     # Metric 3: Earnings payout ratio
     # Source: derived_financial_metrics.dividend_payout_ratio (computed by derived_financial_metrics_job)
     payout_eps = _safe_float((derived_latest or {}).get("dividend_payout_ratio"))
-    
+
     evidence["m3_earnings_payout_ratio"] = payout_eps
     evidence["m3_source"] = "derived_financial_metrics"
 

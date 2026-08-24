@@ -6,12 +6,12 @@ Usage (unchanged):
     supabase.table("jobs").select("*").execute()
 """
 
-from supabase import create_client, Client
 from supabase.lib.client_options import SyncClientOptions
 from supabase_auth import SyncMemoryStorage
-from config import settings
-from tracing import TimedClient
 
+from config import settings
+from supabase import Client, create_client
+from tracing import TimedClient
 
 _client: Client = None
 

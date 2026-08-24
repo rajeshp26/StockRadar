@@ -28,19 +28,19 @@ import asyncio
 import logging
 import statistics
 from datetime import date, timedelta
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from database import supabase
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from shared.finance_math import safe_float
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
-def _infer_frequency(sorted_desc: List[Dict]) -> Tuple[str, int]:
+def _infer_frequency(sorted_desc: list[dict]) -> tuple[str, int]:
     """
     Infer payment frequency from average gap between dividend_history rows.
     Returns (label, payments_per_year).
@@ -70,7 +70,7 @@ class DividendAnalysisService:
     def __init__(self, repo: ValuationRepository):
         self.repo = repo
 
-    async def get_dividend_analysis(self, symbol: str) -> Dict[str, Any]:
+    async def get_dividend_analysis(self, symbol: str) -> dict[str, Any]:
         ctx = await self.repo.get_company_context(symbol)
         if not ctx:
             raise ValueError(f"Symbol '{symbol}' not found.")
@@ -130,11 +130,11 @@ class DividendAnalysisService:
 
     # ── Data fetchers ─────────────────────────────────────────────────────────
 
-    async def _fetch_dividend_history(self, company_id: int) -> List[Dict]:
+    async def _fetch_dividend_history(self, company_id: int) -> list[dict]:
         """Uses repo.get_dividend_history — reads dividend_history table."""
         return await self.repo.get_dividend_history(company_id, limit=120)
 
-    async def _fetch_dividends_paid(self, company_id: int) -> Optional[Dict]:
+    async def _fetch_dividends_paid(self, company_id: int) -> dict | None:
         """
         Direct query: dividends_paid is NOT in repo.get_cash_flow_latest's SELECT list.
         Also fetches free_cash_flow for fallback FCF payout computation.
@@ -154,7 +154,7 @@ class DividendAnalysisService:
             logger.warning("_fetch_dividends_paid failed company_id=%s: %s", company_id, exc)
             return None
 
-    async def _fetch_price_history(self, company_id: int) -> List[Dict]:
+    async def _fetch_price_history(self, company_id: int) -> list[dict]:
         """Direct query — price_history has no method in ValuationRepository."""
         try:
             cutoff = (now_utc().date() - timedelta(days=6 * 365)).isoformat()
@@ -175,14 +175,14 @@ class DividendAnalysisService:
 
     def _compute_overview(
         self,
-        sorted_desc:        List[Dict],
+        sorted_desc:        list[dict],
         freq_label:         str,
         freq_mult:          int,
-        income_latest:      Dict,
-        div_metrics:        Optional[Dict],
-        dividends_paid_row: Optional[Dict],
-        current_price:      Optional[float],
-    ) -> Dict[str, Any]:
+        income_latest:      dict,
+        div_metrics:        dict | None,
+        dividends_paid_row: dict | None,
+        current_price:      float | None,
+    ) -> dict[str, Any]:
         dm         = div_metrics or {}
         latest     = sorted_desc[0]
         per_period = safe_float(latest.get("dividend_amount"))
@@ -248,7 +248,7 @@ class DividendAnalysisService:
             "current_price":        round(float(cp), 2) if cp else None,
         }
 
-    def _last_increase_date(self, sorted_desc: List[Dict]) -> Optional[str]:
+    def _last_increase_date(self, sorted_desc: list[dict]) -> str | None:
         for i in range(len(sorted_desc) - 1):
             curr = safe_float(sorted_desc[i].get("dividend_amount"))
             prev = safe_float(sorted_desc[i + 1].get("dividend_amount"))
@@ -256,7 +256,7 @@ class DividendAnalysisService:
                 return sorted_desc[i].get("ex_dividend_date")
         return None
 
-    def _determine_status(self, sorted_desc: List[Dict]) -> str:
+    def _determine_status(self, sorted_desc: list[dict]) -> str:
         if not sorted_desc:
             return "no_dividend"
         amounts = [safe_float(d.get("dividend_amount")) for d in sorted_desc[:8] if d.get("dividend_amount")]
@@ -272,15 +272,15 @@ class DividendAnalysisService:
 
     def _compute_safety(
         self,
-        sorted_desc:        List[Dict],
-        income_annual:      List[Dict],
-        income_latest:      Dict,
-        cf_latest:          Optional[Dict],
-        dividends_paid_row: Optional[Dict],
-        bs_latest:          Optional[Dict],
-        fcf_history:        List[Dict],
-        div_metrics:        Optional[Dict],
-    ) -> Dict[str, Any]:
+        sorted_desc:        list[dict],
+        income_annual:      list[dict],
+        income_latest:      dict,
+        cf_latest:          dict | None,
+        dividends_paid_row: dict | None,
+        bs_latest:          dict | None,
+        fcf_history:        list[dict],
+        div_metrics:        dict | None,
+    ) -> dict[str, Any]:
         dm = div_metrics or {}
 
         # Income
@@ -390,7 +390,7 @@ class DividendAnalysisService:
         return min(100, s)
 
     def _build_safety_metrics(self, payout_adj, payout_gaap, cash_payout, fcf_payout,
-                               fcf_cov, nd_ebitda, int_cov, net_income) -> List[Dict]:
+                               fcf_cov, nd_ebitda, int_cov, net_income) -> list[dict]:
         def _rate(v, tiers):
             if v is None: return "info"
             for t, r in tiers:
@@ -434,7 +434,7 @@ class DividendAnalysisService:
                         "moderate" if int_cov and int_cov >= 2.0 else "risk") if int_cov is not None else "info"},
         ]
 
-    def _check_cut_history(self, sorted_desc: List[Dict]) -> Tuple[bool, Optional[int]]:
+    def _check_cut_history(self, sorted_desc: list[dict]) -> tuple[bool, int | None]:
         for i in range(len(sorted_desc) - 1):
             curr = safe_float(sorted_desc[i].get("dividend_amount"))
             prev = safe_float(sorted_desc[i + 1].get("dividend_amount"))
@@ -444,7 +444,7 @@ class DividendAnalysisService:
                 except: return True, None
         return False, None
 
-    def _classify_earnings_stability(self, incomes: List[float]) -> str:
+    def _classify_earnings_stability(self, incomes: list[float]) -> str:
         if len(incomes) < 3:
             return "insufficient_data"
         try:
@@ -455,7 +455,7 @@ class DividendAnalysisService:
         except statistics.StatisticsError:
             return "insufficient_data"
 
-    def _growth_trend(self, sorted_desc: List[Dict]) -> str:
+    def _growth_trend(self, sorted_desc: list[dict]) -> str:
         amounts = [safe_float(d.get("dividend_amount")) for d in sorted_desc[:8] if d.get("dividend_amount")]
         if not amounts or len(amounts) < 2: return "insufficient_data"
         if amounts[0] > amounts[-1] * 1.02: return "growing"
@@ -490,7 +490,7 @@ class DividendAnalysisService:
 
     # ── Growth ────────────────────────────────────────────────────────────────
 
-    def _compute_growth(self, sorted_desc: List[Dict], div_metrics: Optional[Dict]) -> Dict[str, Any]:
+    def _compute_growth(self, sorted_desc: list[dict], div_metrics: dict | None) -> dict[str, Any]:
         dm = div_metrics or {}
 
         # Prefer pre-computed CAGRs from dividend_metrics
@@ -520,7 +520,7 @@ class DividendAnalysisService:
         elif consecutive_increases >= 3:  score += 16
         elif consecutive_increases >= 1:  score += 8
         # Aggregate annual totals from dividend history
-        annual_totals: Dict[str, float] = {}
+        annual_totals: dict[str, float] = {}
         for d in sorted_desc:
             raw = d.get("ex_dividend_date", "")
             try:
@@ -564,22 +564,22 @@ class DividendAnalysisService:
             "recent_changes":        recent_changes[:6],
         }
 
-    def _compute_1y_cagr(self, sorted_desc: List[Dict]) -> Optional[float]:
+    def _compute_1y_cagr(self, sorted_desc: list[dict]) -> float | None:
         if len(sorted_desc) < 5: return None
         curr = safe_float(sorted_desc[0].get("dividend_amount"))
         prev = safe_float(sorted_desc[4].get("dividend_amount"))
         if curr and prev and prev > 0:
             return (curr - prev) / prev
         return None
-    
-    def _compute_cagr_from_history(self, sorted_desc: List[Dict], years: int) -> Optional[float]:
+
+    def _compute_cagr_from_history(self, sorted_desc: list[dict], years: int) -> float | None:
         """
         Computes CAGR by aggregating dividend payments into annual totals per
         calendar year, then comparing the most recent full year against `years`
         years prior.  Used as a fallback when dividend_metrics is not yet
         populated by the ingestion job.
         """
-        annual: Dict[int, float] = {}
+        annual: dict[int, float] = {}
         for d in sorted_desc:
             raw = d.get("ex_dividend_date", "")
             try:
@@ -605,8 +605,8 @@ class DividendAnalysisService:
         except Exception:
             return None
 
-    def _count_consecutive_increases(self, sorted_desc: List[Dict]) -> int:
-        annual: Dict[int, float] = {}
+    def _count_consecutive_increases(self, sorted_desc: list[dict]) -> int:
+        annual: dict[int, float] = {}
         for d in sorted_desc:
             dt = d.get("ex_dividend_date", "")
             try:   year = int(str(dt)[:4])
@@ -627,12 +627,12 @@ class DividendAnalysisService:
 
     def _compute_yield(
         self,
-        sorted_desc:   List[Dict],
+        sorted_desc:   list[dict],
         freq_mult:     int,
-        price_history: List[Dict],
-        current_price: Optional[float],
-        div_metrics:   Optional[Dict],
-    ) -> Dict[str, Any]:
+        price_history: list[dict],
+        current_price: float | None,
+        div_metrics:   dict | None,
+    ) -> dict[str, Any]:
         dm = div_metrics or {}
 
         curr_yield = safe_float(dm.get("dividend_yield"))
@@ -680,7 +680,7 @@ class DividendAnalysisService:
             "yield_history":       yield_history[-60:],
         }
 
-    def _build_yield_history(self, sorted_desc: List[Dict], price_history: List[Dict]) -> List[Dict]:
+    def _build_yield_history(self, sorted_desc: list[dict], price_history: list[dict]) -> list[dict]:
         if not price_history or not sorted_desc:
             return []
         div_timeline = sorted(

@@ -22,8 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from shared.time_utils import now_utc
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from domain.models.analysis_technical import (
     BollingerReadings,
@@ -41,6 +40,7 @@ from domain.models.analysis_technical import (
     VolumeAnalysis,
 )
 from infrastructure.repositories.valuation_repository import ValuationRepository
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -111,14 +111,14 @@ class TechnicalAnalysisService:
 
     async def _fetch_daily_bars(
         self, symbol: str, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Primary: DefeatBetaProvider (already returns daily OHLCV).
         Fallback: YFinanceProvider.
         Sorted oldest-first, last _FETCH_DAYS calendar days only.
         """
         start = now_utc().date() - timedelta(days=_FETCH_DAYS)
-        bars: List[Dict[str, Any]] = []
+        bars: list[dict[str, Any]] = []
 
         try:
             bars = await self._dbeta.fetch_price_history(
@@ -158,10 +158,10 @@ class TechnicalAnalysisService:
     # ── Data quality ───────────────────────────────────────────────────────────
 
     def _assess_data_quality(
-        self, bars: List[Dict], dates_str: List[str]
+        self, bars: list[dict], dates_str: list[str]
     ) -> TechnicalDataQuality:
         n = len(bars)
-        degraded: List[str] = []
+        degraded: list[str] = []
         if n < _MIN_BARS_FULL:
             degraded.append("sma200")
         if n < _MIN_BARS_MACD:
@@ -182,15 +182,15 @@ class TechnicalAnalysisService:
     # ── Indicator math ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _sma(values: List[float], period: int) -> List[Optional[float]]:
+    def _sma(values: list[float], period: int) -> list[float | None]:
         n = len(values)
-        result: List[Optional[float]] = [None] * n
+        result: list[float | None] = [None] * n
         for i in range(period - 1, n):
             result[i] = sum(values[i - period + 1 : i + 1]) / period
         return result
 
     @staticmethod
-    def _slope(sma_series: List[Optional[float]], lookback: int = 10) -> str:
+    def _slope(sma_series: list[float | None], lookback: int = 10) -> str:
         """Classify SMA slope using last `lookback` non-None values."""
         vals = [v for v in sma_series if v is not None]
         if len(vals) < lookback:
@@ -204,9 +204,9 @@ class TechnicalAnalysisService:
         return "flat"
 
     @staticmethod
-    def _ema(values: List[Optional[float]], period: int) -> List[Optional[float]]:
+    def _ema(values: list[float | None], period: int) -> list[float | None]:
         n = len(values)
-        result: List[Optional[float]] = [None] * n
+        result: list[float | None] = [None] * n
         k = 2.0 / (period + 1)
         # Seed: find first contiguous window of `period` non-None values
         for start in range(n):
@@ -224,14 +224,14 @@ class TechnicalAnalysisService:
         return result
 
     @staticmethod
-    def _wilder_rsi(closes: List[float], period: int = 14) -> List[Optional[float]]:
+    def _wilder_rsi(closes: list[float], period: int = 14) -> list[float | None]:
         """
         Wilder's smoothed RSI.  The first RS value is seeded with a simple
         average of the first `period` gains/losses; subsequent values use
         Wilder's EMA: avg = (prev_avg * (period-1) + current) / period.
         """
         n = len(closes)
-        result: List[Optional[float]] = [None] * n
+        result: list[float | None] = [None] * n
         if n < period + 1:
             return result
 
@@ -255,26 +255,26 @@ class TechnicalAnalysisService:
     @classmethod
     def _macd(
         cls,
-        closes: List[float],
+        closes: list[float],
         fast: int = 12,
         slow: int = 26,
         signal: int = 9,
-    ) -> Tuple[List[Optional[float]], List[Optional[float]], List[Optional[float]]]:
+    ) -> tuple[list[float | None], list[float | None], list[float | None]]:
         ema_fast = cls._ema(closes, fast)  # type: ignore[arg-type]
         ema_slow = cls._ema(closes, slow)  # type: ignore[arg-type]
-        macd_line: List[Optional[float]] = [
+        macd_line: list[float | None] = [
             (f - s) if (f is not None and s is not None) else None
             for f, s in zip(ema_fast, ema_slow)
         ]
         signal_line = cls._ema(macd_line, signal)
-        histogram: List[Optional[float]] = [
+        histogram: list[float | None] = [
             (m - s) if (m is not None and s is not None) else None
             for m, s in zip(macd_line, signal_line)
         ]
         return macd_line, signal_line, histogram
 
     @staticmethod
-    def _obv(closes: List[float], volumes: List[int]) -> List[float]:
+    def _obv(closes: list[float], volumes: list[int]) -> list[float]:
         result = [0.0]
         for i in range(1, len(closes)):
             vol = volumes[i] or 0
@@ -288,8 +288,8 @@ class TechnicalAnalysisService:
 
     @staticmethod
     def _pivot_highs(
-        highs: List[float], n: int = 2
-    ) -> List[Tuple[int, float]]:
+        highs: list[float], n: int = 2
+    ) -> list[tuple[int, float]]:
         pivots = []
         for i in range(n, len(highs) - n):
             if all(highs[i] >= highs[i - j] for j in range(1, n + 1)) and all(
@@ -300,8 +300,8 @@ class TechnicalAnalysisService:
 
     @staticmethod
     def _pivot_lows(
-        lows: List[float], n: int = 2
-    ) -> List[Tuple[int, float]]:
+        lows: list[float], n: int = 2
+    ) -> list[tuple[int, float]]:
         pivots = []
         for i in range(n, len(lows) - n):
             if all(lows[i] <= lows[i - j] for j in range(1, n + 1)) and all(
@@ -312,23 +312,23 @@ class TechnicalAnalysisService:
 
     @staticmethod
     def _stochastic(
-        highs: List[float],
-        lows: List[float],
-        closes: List[float],
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
         k_period: int = 14,
         k_smooth: int = 3,
         d_smooth: int = 3,
-    ) -> Tuple[List[Optional[float]], List[Optional[float]]]:
+    ) -> tuple[list[float | None], list[float | None]]:
         n = len(closes)
-        raw_k: List[Optional[float]] = [None] * n
+        raw_k: list[float | None] = [None] * n
         for i in range(k_period - 1, n):
             h = max(highs[i - k_period + 1 : i + 1])
             lo = min(lows[i - k_period + 1 : i + 1])
             raw_k[i] = 50.0 if h == lo else 100.0 * (closes[i] - lo) / (h - lo)
 
         # %K = smoothed raw_k; %D = smoothed %K
-        def _sma_opt(vals: List[Optional[float]], p: int) -> List[Optional[float]]:
-            out: List[Optional[float]] = [None] * len(vals)
+        def _sma_opt(vals: list[float | None], p: int) -> list[float | None]:
+            out: list[float | None] = [None] * len(vals)
             for i in range(p - 1, len(vals)):
                 window = vals[i - p + 1 : i + 1]
                 if all(v is not None for v in window):
@@ -341,18 +341,18 @@ class TechnicalAnalysisService:
 
     @staticmethod
     def _bollinger(
-        closes: List[float], period: int = 20, n_std: float = 2.0
-    ) -> Tuple[
-        List[Optional[float]],
-        List[Optional[float]],
-        List[Optional[float]],
-        List[Optional[float]],
+        closes: list[float], period: int = 20, n_std: float = 2.0
+    ) -> tuple[
+        list[float | None],
+        list[float | None],
+        list[float | None],
+        list[float | None],
     ]:
         size = len(closes)
-        upper: List[Optional[float]] = [None] * size
-        mid: List[Optional[float]] = [None] * size
-        lower: List[Optional[float]] = [None] * size
-        bw: List[Optional[float]] = [None] * size
+        upper: list[float | None] = [None] * size
+        mid: list[float | None] = [None] * size
+        lower: list[float | None] = [None] * size
+        bw: list[float | None] = [None] * size
         for i in range(period - 1, size):
             w = closes[i - period + 1 : i + 1]
             mean = sum(w) / period
@@ -367,8 +367,8 @@ class TechnicalAnalysisService:
 
     @staticmethod
     def _detect_rsi_divergence(
-        closes: List[float], rsi_vals: List[Optional[float]], lookback: int = 60
-    ) -> Tuple[str, Optional[str]]:
+        closes: list[float], rsi_vals: list[float | None], lookback: int = 60
+    ) -> tuple[str, str | None]:
         """
         Compare the last two price peaks and the corresponding RSI peaks.
         Returns ("bullish"|"bearish"|"none"|"insufficient_data", note).
@@ -406,8 +406,8 @@ class TechnicalAnalysisService:
 
     @staticmethod
     def _detect_macd_divergence(
-        closes: List[float], macd_line: List[Optional[float]], lookback: int = 60
-    ) -> Tuple[str, Optional[str]]:
+        closes: list[float], macd_line: list[float | None], lookback: int = 60
+    ) -> tuple[str, str | None]:
         n = len(closes)
         if n < lookback:
             return "insufficient_data", None
@@ -432,7 +432,7 @@ class TechnicalAnalysisService:
 
     # ── Layer computation ──────────────────────────────────────────────────────
 
-    def _compute_trend(self, closes: List[float], dates: List[str]) -> TrendAnalysis:
+    def _compute_trend(self, closes: list[float], dates: list[str]) -> TrendAnalysis:
         n = len(closes)
         price = closes[-1]
 
@@ -442,12 +442,12 @@ class TechnicalAnalysisService:
         sma50 = sma50_series[-1]
         sma200 = sma200_series[-1]
 
-        def _pos(price: float, sma: Optional[float]) -> str:
+        def _pos(price: float, sma: float | None) -> str:
             if sma is None:
                 return "unknown"
             return "above" if price >= sma else "below"
 
-        def _rel(a: Optional[float], b: Optional[float]) -> str:
+        def _rel(a: float | None, b: float | None) -> str:
             if a is None or b is None:
                 return "unknown"
             return "above" if a >= b else "below"
@@ -457,7 +457,7 @@ class TechnicalAnalysisService:
 
         # Golden / death cross detection (look back 60 bars)
         golden_cross = death_cross = False
-        cross_bars_ago: Optional[int] = None
+        cross_bars_ago: int | None = None
         lookback_cross = min(60, n)
         s50 = sma50_series[-lookback_cross:]
         s200 = sma200_series[-lookback_cross:]
@@ -529,7 +529,7 @@ class TechnicalAnalysisService:
             distance_from_sma50_pct=round(dist50, 2) if dist50 is not None else None,
         )
 
-    def _compute_momentum(self, closes: List[float]) -> MomentumAnalysis:
+    def _compute_momentum(self, closes: list[float]) -> MomentumAnalysis:
         macd_line, sig_line, histogram = self._macd(closes)
         rsi_series = self._wilder_rsi(closes)
 
@@ -627,7 +627,7 @@ class TechnicalAnalysisService:
         )
 
     def _compute_volume(
-        self, closes: List[float], volumes: List[int]
+        self, closes: list[float], volumes: list[int]
     ) -> VolumeAnalysis:
         obv_series = self._obv(closes, volumes)
         obv_current = obv_series[-1] if obv_series else None
@@ -686,10 +686,10 @@ class TechnicalAnalysisService:
 
     def _compute_support_resistance(
         self,
-        highs: List[float],
-        lows: List[float],
-        closes: List[float],
-        dates: List[str],
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
+        dates: list[str],
     ) -> SupportResistanceAnalysis:
         price = closes[-1]
 
@@ -700,7 +700,7 @@ class TechnicalAnalysisService:
         recent_highs = sorted(ph, key=lambda x: x[0], reverse=True)[:3]
         recent_lows = sorted(pl, key=lambda x: x[0], reverse=True)[:3]
 
-        levels: List[PriceLevel] = []
+        levels: list[PriceLevel] = []
 
         for _, p in recent_highs:
             dist = (p - price) / price * 100
@@ -749,9 +749,9 @@ class TechnicalAnalysisService:
 
     def _compute_oscillators(
         self,
-        highs: List[float],
-        lows: List[float],
-        closes: List[float],
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
     ) -> OscillatorAnalysis:
         # Bollinger Bands
         bb_upper, bb_mid, bb_lower, bb_bw = self._bollinger(closes, period=20, n_std=2.0)
@@ -849,8 +849,8 @@ class TechnicalAnalysisService:
         Murphy's rule: trend > volume > momentum > oscillators.
         An overbought oscillator in a confirmed uptrend is not a sell signal.
         """
-        observations: List[str] = []
-        conflicts: List[str] = []
+        observations: list[str] = []
+        conflicts: list[str] = []
         score = 50  # start neutral
 
         # ── Layer 1: Trend (most important) ───────────────────────────────────

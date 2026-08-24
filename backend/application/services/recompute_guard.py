@@ -39,7 +39,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from infrastructure.repositories.valuation_repository import ValuationRepository
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +63,7 @@ logger = logging.getLogger(__name__)
 #   Beta uses 2% relative: beta is a noisy statistical estimate. A 2% move
 #   on beta=0.85 produces only ~1 bps change in k — genuinely immaterial.
 
-_DDM_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
+_DDM_NUMERIC_THRESHOLDS: dict[str, dict[str, Any]] = {
     "d0": {
         "method":    "relative",
         "threshold": 0.005,       # 0.5%
@@ -90,7 +93,7 @@ _DDM_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
 # Structural fields: a change in the source path is always material,
 # regardless of whether the resulting numeric value happens to be similar.
 # This catches: "beta went missing → fallback to default k" and similar.
-_DDM_STRUCTURAL_FIELDS: Tuple[str, ...] = ("g_source", "k_source", "d0_source")
+_DDM_STRUCTURAL_FIELDS: tuple[str, ...] = ("g_source", "k_source", "d0_source")
 
 # ── Per-field materiality specification (DCF) ─────────────────────────────────
 #
@@ -101,7 +104,7 @@ _DDM_STRUCTURAL_FIELDS: Tuple[str, ...] = ("g_source", "k_source", "d0_source")
 # net_debt: 1% relative — balance sheet item, stable; 1% ≈ rounding on reported figures.
 # shares: 0.5% relative — dilution moves in whole-share blocks; 0.5% is below
 #   minimum meaningful buyback/issuance threshold for large-cap.
-_DCF_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
+_DCF_NUMERIC_THRESHOLDS: dict[str, dict[str, Any]] = {
     "base_fcf": {
         "method":    "relative",
         "threshold": 0.02,       # 2%
@@ -124,7 +127,7 @@ _DCF_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-_DCF_STRUCTURAL_FIELDS: Tuple[str, ...] = (
+_DCF_STRUCTURAL_FIELDS: tuple[str, ...] = (
     "wacc_source",
     "terminal_g_source",
     "terminal_method",      # perpetuity_growth → exit_multiple is always material
@@ -138,7 +141,7 @@ _DCF_STRUCTURAL_FIELDS: Tuple[str, ...] = (
 # terminal_g_final: 25bps absolute — same as DCF.
 # net_debt / shares: same as DCF.
 
-_OE_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
+_OE_NUMERIC_THRESHOLDS: dict[str, dict[str, Any]] = {
     "base_oe": {
         "method":    "relative",
         "threshold": 0.02,       # 2%
@@ -165,7 +168,7 @@ _OE_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-_OE_STRUCTURAL_FIELDS: Tuple[str, ...] = (
+_OE_STRUCTURAL_FIELDS: tuple[str, ...] = (
     "g_oe_source",
     "discount_rate_source",
 )
@@ -179,7 +182,7 @@ _OE_STRUCTURAL_FIELDS: Tuple[str, ...] = (
 # g_ri_final: 50bps absolute — EPS CAGR proxy is noisier; wider tolerance.
 # terminal_g_final: 25bps absolute.
 
-_RI_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
+_RI_NUMERIC_THRESHOLDS: dict[str, dict[str, Any]] = {
     "bv_per_share": {
         "method":    "relative",
         "threshold": 0.005,      # 0.5%
@@ -202,7 +205,7 @@ _RI_NUMERIC_THRESHOLDS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-_RI_STRUCTURAL_FIELDS: Tuple[str, ...] = (
+_RI_STRUCTURAL_FIELDS: tuple[str, ...] = (
     "k_e_source",     # "capm" → "default.k_default (beta missing)" = structural
     "g_ri_source",    # "eps_cagr_approx" → "default.g_default" = structural
 )
@@ -212,8 +215,8 @@ _RI_STRUCTURAL_FIELDS: Tuple[str, ...] = (
 @dataclass
 class RecomputeDecision:
     should_recompute:       bool
-    last_valuation_at:      Optional[datetime]
-    latest_dependency_at:   Optional[datetime]
+    last_valuation_at:      datetime | None
+    latest_dependency_at:   datetime | None
     reason:                 str
     # Gate 1 reason tokens:
     #   "no_prior_valuation" | "no_dependencies" | "dependencies_newer" |
@@ -227,7 +230,7 @@ class RecomputeDecision:
     # Bypass reason tokens:
     #   "override_present"
     gate:           int              = 1
-    change_details: Dict[str, Any]  = field(default_factory=dict)
+    change_details: dict[str, Any]  = field(default_factory=dict)
 
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
@@ -243,7 +246,7 @@ class RecomputeGuard:
       update_valuation_fingerprint(company_id, method, fingerprint) → None
     """
 
-    def __init__(self, valuation_repo: "ValuationRepository"):
+    def __init__(self, valuation_repo: ValuationRepository):
         self.repo = valuation_repo
 
     # ── Gate 1: Timestamp ──────────────────────────────────────────────────────
@@ -344,7 +347,7 @@ class RecomputeGuard:
         stored_fingerprint = (snap or {}).get("dependency_fingerprint")
 
         if stored_fingerprint is not None:
-            if not isinstance(stored_fingerprint, str) or not _VALID_FINGERPRINT_RE.match(stored_fingerprint):
+            if not isinstance(stored_fingerprint, str) or not self._VALID_FINGERPRINT_RE.match(stored_fingerprint):
                 logger.warning(
                     "[GATE2][%s][%s] Stored fingerprint is malformed (type=%s value=%.40r) "
                     "— treating as absent; one-time recompute will restore valid fingerprint.",
@@ -393,10 +396,10 @@ class RecomputeGuard:
 
     def is_material_change(
         self,
-        resolved_current: Dict[str, Any],
-        resolved_stored:  Dict[str, Any],
+        resolved_current: dict[str, Any],
+        resolved_stored:  dict[str, Any],
         method:           str,
-    ) -> Tuple[bool, str, Dict[str, Any]]:
+    ) -> tuple[bool, str, dict[str, Any]]:
         """
         Gate 3: determine whether resolved input changes are economically significant.
 
@@ -439,13 +442,13 @@ class RecomputeGuard:
 
     def _is_material_generic(
         self,
-        current:          Dict[str, Any],
-        stored:           Dict[str, Any],
-        numeric_thresholds: Dict[str, Dict[str, Any]],
-        structural_fields:  Tuple[str, ...],
+        current:          dict[str, Any],
+        stored:           dict[str, Any],
+        numeric_thresholds: dict[str, dict[str, Any]],
+        structural_fields:  tuple[str, ...],
         method:           str,
-    ) -> Tuple[bool, str, Dict[str, Any]]:
-        details: Dict[str, Any] = {}
+    ) -> tuple[bool, str, dict[str, Any]]:
+        details: dict[str, Any] = {}
 
         # ── Structural checks ──────────────────────────────────────────────
         for struct_field in structural_fields:
@@ -521,10 +524,10 @@ class RecomputeGuard:
 
     def _is_material_ddm(
         self,
-        current: Dict[str, Any],
-        stored:  Dict[str, Any],
-    ) -> Tuple[bool, str, Dict[str, Any]]:
-        details: Dict[str, Any] = {}
+        current: dict[str, Any],
+        stored:  dict[str, Any],
+    ) -> tuple[bool, str, dict[str, Any]]:
+        details: dict[str, Any] = {}
 
         # ── Structural checks: source-path changes are always material ─────────
         for struct_field in _DDM_STRUCTURAL_FIELDS:

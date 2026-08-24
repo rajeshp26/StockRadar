@@ -7,14 +7,17 @@
 # or cached JWKS public keys (RS256).
 #
 import json
+import logging
 import time
+
 import httpx
-from jwt import decode as jwt_decode, get_unverified_header
-from jwt.algorithms import RSAAlgorithm, ECAlgorithm
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
+from jwt import decode as jwt_decode
+from jwt import get_unverified_header
+from jwt.algorithms import ECAlgorithm, RSAAlgorithm
+
 from config import settings
 from shared.constants import AUTHORIZATION_HEADER, BEARER_PREFIX
-import logging
 
 logger = logging.getLogger(__name__)
 

@@ -14,8 +14,7 @@ All methods are async, return plain dicts/lists, and raise on DB error.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from database import supabase
 
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 class FundamentalsRepository:
     """Read-only data access for the Fundamentals tab."""
 
-    async def get_company_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+    async def get_company_by_symbol(self, symbol: str) -> dict[str, Any] | None:
         resp = (
             supabase.table("companies")
             .select("company_id, company_name, sector, industry, exchange, ticker_symbol, security_type")
@@ -37,7 +36,7 @@ class FundamentalsRepository:
 
     async def get_annual_financial_ratios(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return all annual ratios (fiscal_quarter IS NULL).
 
         Ordered by fiscal_year ascending so the frontend can render trends
@@ -55,7 +54,7 @@ class FundamentalsRepository:
 
     async def get_quarterly_financial_ratios(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return all quarterly ratios (fiscal_quarter IS NOT NULL).
 
         Ordered by fiscal_year + fiscal_quarter ascending.
@@ -74,7 +73,7 @@ class FundamentalsRepository:
 
     async def get_annual_income_statements(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         resp = (
             supabase.table("income_statements")
             .select("fiscal_year, revenue, net_income, net_income_to_common, ebitda, period_end_date")
@@ -87,7 +86,7 @@ class FundamentalsRepository:
 
     async def get_quarterly_income_statements(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         resp = (
             supabase.table("income_statements")
             .select("fiscal_year, fiscal_quarter, revenue, net_income, net_income_to_common, ebitda, shares_outstanding_diluted, period_end_date")
@@ -101,7 +100,7 @@ class FundamentalsRepository:
 
     async def get_annual_cash_flows(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         resp = (
             supabase.table("cash_flow_statements")
             .select("fiscal_year, cash_from_operating_activities, capital_expenditures, period_end_date")
@@ -114,7 +113,7 @@ class FundamentalsRepository:
 
     async def get_quarterly_cash_flows(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         resp = (
             supabase.table("cash_flow_statements")
             .select("fiscal_year, fiscal_quarter, cash_from_operating_activities, capital_expenditures, period_end_date")
@@ -128,7 +127,7 @@ class FundamentalsRepository:
 
     async def get_quarterly_balance_sheets(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         resp = (
             supabase.table("balance_sheets")
             .select("fiscal_year, fiscal_quarter, total_equity, total_debt, total_assets, retained_earnings, current_assets, current_liabilities, cash_and_cash_equivalents")
@@ -140,7 +139,7 @@ class FundamentalsRepository:
         )
         return resp.data or []
 
-    async def get_company_name(self, company_id: int) -> Optional[str]:
+    async def get_company_name(self, company_id: int) -> str | None:
         resp = (
             supabase.table("companies")
             .select("company_name")
@@ -169,7 +168,7 @@ class FundamentalsRepository:
         )
         return len(resp.data or []) > 0
 
-    async def get_buy_anchor(self, company_id: int, user_id: str) -> Optional[Dict[str, Any]]:
+    async def get_buy_anchor(self, company_id: int, user_id: str) -> dict[str, Any] | None:
         """Return the earliest purchase date + average cost for a held position.
 
         Sources from ``portfolio_holdings.first_purchase_date`` (the earliest
@@ -197,7 +196,7 @@ class FundamentalsRepository:
             "unit_price": row.get("average_cost"),
         }
 
-    async def _get_user_account_ids(self, user_id: str) -> List[int]:
+    async def _get_user_account_ids(self, user_id: str) -> list[int]:
         """Return all active account IDs for the given user."""
         resp = (
             supabase.table("portfolio_accounts")
@@ -210,7 +209,7 @@ class FundamentalsRepository:
 
     async def get_company_summary_history(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get company_summary snapshots for valuation multiples (P/E, EV/EBITDA).
 
         Ordered by snapshot_date descending (most recent first).
@@ -227,7 +226,7 @@ class FundamentalsRepository:
 
     async def get_latest_valuation_overview(
         self, company_id: int
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get the latest valuation_runs output_snapshot for a company.
 
         Returns the most recent run's overview data for Price vs Intrinsic comparison.
@@ -245,7 +244,7 @@ class FundamentalsRepository:
 
     async def get_earnings_history(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get all quarterly earnings data for surprise and beat-rate computation.
 
         Returns actual vs estimate fields for the Narrative snapshot header.
@@ -261,7 +260,7 @@ class FundamentalsRepository:
         )
         return resp.data or []
 
-    async def get_valuation_snapshots(self, company_id: int) -> Dict[str, Any]:
+    async def get_valuation_snapshots(self, company_id: int) -> dict[str, Any]:
         """Get the latest output_snapshot for each valuation method."""
         methods = ["dcf", "rule1", "ddm_gordon", "ddm_two_stage", "owner_earnings", "residual_income"]
         resp = (
@@ -279,7 +278,7 @@ class FundamentalsRepository:
                 latest_by_method[m] = row.get("output_snapshot")
         return latest_by_method
 
-    async def get_current_market_price(self, company_id: int) -> Optional[float]:
+    async def get_current_market_price(self, company_id: int) -> float | None:
         """Get the latest current_price from current_market_data."""
         resp = (
             supabase.table("current_market_data")
@@ -292,7 +291,7 @@ class FundamentalsRepository:
         rows = resp.data or []
         return rows[0]["current_price"] if rows else None
 
-    async def get_retained_earnings(self, company_id: int, fiscal_year: int) -> Optional[float]:
+    async def get_retained_earnings(self, company_id: int, fiscal_year: int) -> float | None:
         """Get retained_earnings for a specific fiscal year from balance_sheets."""
         resp = (
             supabase.table("balance_sheets")

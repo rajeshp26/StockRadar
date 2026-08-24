@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import json as _json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from config import settings
-
-from application.services.prompts.suitability import build_suitability_prompt
-from application.services.prompts.company_snapshot import CompanySnapshotBuilder
-from application.services.prompts.overview import build_overview_prompt, OVERVIEW_FALLBACK, _METHOD_LABELS
-from providers.ai_provider import AIProvider, OpenRouterProvider
 from application.services.caching.cache_manager import CacheManager
+from application.services.prompts.company_snapshot import CompanySnapshotBuilder
+from application.services.prompts.overview import (
+    _METHOD_LABELS,
+    OVERVIEW_FALLBACK,
+    build_overview_prompt,
+)
+from application.services.prompts.suitability import build_suitability_prompt
+from config import settings
+from providers.ai_provider import AIProvider, OpenRouterProvider
 
 logger = logging.getLogger(__name__)
 
-_provider: Optional[AIProvider] = None
-_snapshot_builder: Optional[CompanySnapshotBuilder] = None
-_cache_manager: Optional[CacheManager] = None
+_provider: AIProvider | None = None
+_snapshot_builder: CompanySnapshotBuilder | None = None
+_cache_manager: CacheManager | None = None
 
 _SUITABILITY_SYSTEM_INSTRUCTION = (
     "You are a financial analysis assistant writing plain-English summaries "
@@ -34,9 +37,9 @@ _OVERVIEW_SYSTEM_INSTRUCTION = (
 
 
 def configure_ai(
-    provider: Optional[AIProvider] = None,
-    snapshot_builder: Optional[CompanySnapshotBuilder] = None,
-    cache_manager: Optional[CacheManager] = None,
+    provider: AIProvider | None = None,
+    snapshot_builder: CompanySnapshotBuilder | None = None,
+    cache_manager: CacheManager | None = None,
 ) -> None:
     global _provider, _snapshot_builder, _cache_manager
     if provider is not None:
@@ -47,7 +50,7 @@ def configure_ai(
         _cache_manager = cache_manager
 
 
-def _get_or_create_provider() -> Optional[AIProvider]:
+def _get_or_create_provider() -> AIProvider | None:
     global _provider
     if _provider is None:
         key = settings.OPEN_ROUTER_KEY or ""
@@ -75,12 +78,12 @@ async def generate_suitability_summary(
     method:           str,
     score:            int,
     category:         str,
-    flags:            List[dict],
-    evidence:         Optional[Dict[str, Any]] = None,
-    valuation_inputs: Optional[Dict[str, Any]] = None,
-    input_decisions:  Optional[Dict[str, Any]] = None,
+    flags:            list[dict],
+    evidence:         dict[str, Any] | None = None,
+    valuation_inputs: dict[str, Any] | None = None,
+    input_decisions:  dict[str, Any] | None = None,
     timeout:          float = 8.0,
-) -> Optional[str]:
+) -> str | None:
     provider = _get_or_create_provider()
     if provider is None:
         return None
@@ -133,12 +136,12 @@ async def generate_suitability_summary(
 
 async def generate_overview_summary(
     symbol:        str,
-    sector:        Optional[str],
+    sector:        str | None,
     currency:      str,
-    current_price: Optional[float],
-    methods:       Dict[str, Any],
+    current_price: float | None,
+    methods:       dict[str, Any],
     timeout:       float = 10.0,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     provider = _get_or_create_provider()
     if provider is None:
         logger.info("[AI] OPEN_ROUTER_KEY not set — overview summaries disabled")

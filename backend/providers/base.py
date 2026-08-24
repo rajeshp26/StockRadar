@@ -1,8 +1,9 @@
 
 from abc import ABC, abstractmethod
-from typing import Optional
-from pydantic import BaseModel
 from datetime import date
+
+from pydantic import BaseModel
+
 
 class TickerInfo(BaseModel):
     """Standardized model for basic ticker information."""
@@ -17,31 +18,31 @@ class StockDetails(TickerInfo):
     price: float
     change: float
     change_percent: float
-    open_price: Optional[float] = None
-    high_price: Optional[float] = None
-    low_price: Optional[float] = None
-    close_price: Optional[float] = None
-    volume: Optional[int] = None
-    market_state: Optional[str] = None
+    open_price: float | None = None
+    high_price: float | None = None
+    low_price: float | None = None
+    close_price: float | None = None
+    volume: int | None = None
+    market_state: str | None = None
 
     # Company Info
-    exchange: Optional[str] = None
-    sector: Optional[str] = None
-    industry: Optional[str] = None
-    currency: Optional[str] = None
-    fiscal_year_end_month: Optional[int] = None
-    description: Optional[str] = None
-    website: Optional[str] = None
-    next_earnings_date: Optional[date] = None
+    exchange: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    currency: str | None = None
+    fiscal_year_end_month: int | None = None
+    description: str | None = None
+    website: str | None = None
+    next_earnings_date: date | None = None
 
     # Classification (from yfinance quoteType)
-    quote_type: Optional[str] = None
+    quote_type: str | None = None
 
 class StockDataProvider(ABC):
     @abstractmethod
-    def get_ticker_info(self, ticker_symbol: str) -> Optional[TickerInfo]:
+    def get_ticker_info(self, ticker_symbol: str) -> TickerInfo | None:
         pass
 
     @abstractmethod
-    def get_stock_details(self, ticker_symbol: str) -> Optional[StockDetails]:
+    def get_stock_details(self, ticker_symbol: str) -> StockDetails | None:
         pass

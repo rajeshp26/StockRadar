@@ -1,20 +1,20 @@
-import asyncio
 import logging
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from config import settings
-from shared.time_utils import now_utc
-from shared.fx_service import FXService
-from shared.snapshot_builder import build_snapshot_row, check_snapshot_spike, convert_holding_fx
-from shared.replay_engine import ReplayEngine
+from database import supabase
 from infrastructure.repositories.event_store import EventStore
-from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from shared.fx_service import FXService
+from shared.replay_engine import ReplayEngine
+from shared.snapshot_builder import build_snapshot_row, check_snapshot_spike, convert_holding_fx
+from shared.time_utils import now_utc
 
 logger = logging.getLogger("stockerpro.portfolio.snapshots")
 
@@ -36,13 +36,13 @@ def timed(logger=logger):
 def _build_snapshot_via_replay(
     account_id: int,
     snapshot_date: date,
-    prices_by_company: Dict[int, Dict],
-    price_history: Dict[int, List[tuple]],
+    prices_by_company: dict[int, dict],
+    price_history: dict[int, list[tuple]],
     account_currency: str = "CAD",
-    exchange_overrides: Optional[Dict[int, Optional[str]]] = None,
-    company_currencies: Optional[Dict[int, str]] = None,
-    companies_map: Optional[Dict[int, Dict]] = None,
-) -> Optional[dict]:
+    exchange_overrides: dict[int, str | None] | None = None,
+    company_currencies: dict[int, str] | None = None,
+    companies_map: dict[int, dict] | None = None,
+) -> dict | None:
     """Build snapshot using event-replay engine. Returns None if replay fails."""
     try:
         event_store = EventStore()
@@ -66,16 +66,16 @@ async def _fill_snapshot_gaps(
     account_id: int,
     today: date,
     account_currency: str,
-    prices_by_company: Dict[int, Dict],
-    price_history: Dict[int, List[tuple]],
-    exchange_overrides: Dict[int, Optional[str]],
+    prices_by_company: dict[int, dict],
+    price_history: dict[int, list[tuple]],
+    exchange_overrides: dict[int, str | None],
     snapshots_repo: PortfolioSnapshotsRepository,
     job_id_prefix: str,
     spike_threshold: float,
     financial_repo: SupabaseFinancialRepository = None,
-    all_company_ids: List[int] = None,
-    company_currencies: Optional[Dict[int, str]] = None,
-    companies_map: Optional[Dict[int, Dict]] = None,
+    all_company_ids: list[int] = None,
+    company_currencies: dict[int, str] | None = None,
+    companies_map: dict[int, dict] | None = None,
 ) -> int:
     """Fill missing snapshot dates between last known snapshot and today.
 
@@ -182,25 +182,30 @@ async def _fill_snapshot_gaps(
 
 async def _fill_snapshot_gaps_incremental(
     account_id: int,
-    missing: List[date],
+    missing: list[date],
     account_currency: str,
-    prices_by_company: Dict[int, Dict],
-    price_history: Dict[int, List[tuple]],
-    exchange_overrides: Dict[int, Optional[str]],
+    prices_by_company: dict[int, dict],
+    price_history: dict[int, list[tuple]],
+    exchange_overrides: dict[int, str | None],
     snapshots_repo: PortfolioSnapshotsRepository,
     job_id_prefix: str,
     spike_threshold: float,
     financial_repo: SupabaseFinancialRepository = None,
-    all_company_ids: List[int] = None,
-    company_currencies: Optional[Dict[int, str]] = None,
-    companies_map: Optional[Dict[int, Dict]] = None,
+    all_company_ids: list[int] = None,
+    company_currencies: dict[int, str] | None = None,
+    companies_map: dict[int, dict] | None = None,
 ) -> int:
     """Cold-start: rebuild snapshots using incremental event replay.
 
     Fetches all events once, sorts by date, then processes gap dates in order,
     accumulating state incrementally instead of replaying from scratch each time.
     """
-    from shared.replay_engine import ReplayEngine, AccountState, _parse_account_id, _decimal, HoldingState
+    from shared.replay_engine import (
+        AccountState,
+        ReplayEngine,
+        _decimal,
+        _parse_account_id,
+    )
 
     event_store = EventStore()
     all_events = event_store.get_all_events(aggregate_type="account")
@@ -243,17 +248,17 @@ async def _fill_snapshot_gaps_incremental(
         f"{len(all_latest_raw)} companies with latest prices"
     )
 
-    def _prices_as_of(target_date: date) -> Dict[int, Dict]:
+    def _prices_as_of(target_date: date) -> dict[int, dict]:
         """Filter pre-fetched latest prices to only include those <= target_date."""
-        result: Dict[int, Dict] = {}
+        result: dict[int, dict] = {}
         for cid, info in all_latest_raw.items():
             if info["price_date"] <= target_date:
                 result[cid] = info
         return result
 
-    def _history_as_of(target_date: date) -> Dict[int, List[tuple]]:
+    def _history_as_of(target_date: date) -> dict[int, list[tuple]]:
         """Filter pre-fetched history to only include rows <= target_date."""
-        result: Dict[int, List[tuple]] = {}
+        result: dict[int, list[tuple]] = {}
         for cid, prices in all_price_history_raw.items():
             filtered = [(pd, px) for pd, px in prices if pd <= target_date]
             if filtered:
@@ -279,7 +284,7 @@ async def _fill_snapshot_gaps_incremental(
         holdings_list = []
         total_market_value = _decimal("0")
         total_cost = _decimal("0")
-        from shared.replay_engine import _resolve_holding_price, PriceTier, TIER_QUALITY_MAP
+        from shared.replay_engine import TIER_QUALITY_MAP, PriceTier, _resolve_holding_price
 
         for cid, holding in state.holdings.items():
             qty = holding.quantity
@@ -338,8 +343,8 @@ async def _fill_snapshot_gaps_incremental(
                 if exch_override == "TOR":
                     holding_dict["price_currency"] = "CAD"
                 try:
-                    from shared.fx_service import FXService
                     from database import supabase as _sb
+                    from shared.fx_service import FXService
                     _fx_svc = FXService(_sb) if settings.ENABLE_FX_CONVERSION else None
                     current_value, cost = convert_holding_fx(
                         holding_dict, raw_value, holding.total_cost,
@@ -458,9 +463,9 @@ async def compute_daily_snapshots():
                 if h.get("company_id"):
                     all_company_ids.add(h["company_id"])
 
-        company_names: Dict[int, str] = {}
-        company_currencies: Dict[int, str] = {}
-        companies_map: Dict[int, Dict] = {}
+        company_names: dict[int, str] = {}
+        company_currencies: dict[int, str] = {}
+        companies_map: dict[int, dict] = {}
         if all_company_ids:
             names_result = portfolio_repo.get_company_names(list(all_company_ids))
             for row in names_result:
@@ -475,7 +480,7 @@ async def compute_daily_snapshots():
 
         prices_by_company = await financial_repo.get_latest_prices(list(all_company_ids), today)
 
-        price_history: Dict[int, List[tuple]] = {}
+        price_history: dict[int, list[tuple]] = {}
         if all_company_ids:
             price_history = portfolio_repo.get_all_prices_historical(
                 list(all_company_ids), today
@@ -510,7 +515,7 @@ async def compute_daily_snapshots():
                     qty = Decimal(str(h.get("quantity") or 0))
                     if qty < 0:
                         logger.error(f"Account {aid}: negative quantity: {h}")
-                        raise ValueError(f"Data corruption: negative quantity in holdings")
+                        raise ValueError("Data corruption: negative quantity in holdings")
                     if qty == 0:
                         continue
                     h["company_name"] = company_names.get(h.get("company_id"), h.get("symbol", "?"))
@@ -550,7 +555,7 @@ async def compute_daily_snapshots():
     logger.info("Daily snapshot computation complete")
 
 
-async def handle_portfolio_snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_portfolio_snapshot(job: dict[str, Any]) -> dict[str, Any]:
     """Handler registered with JobEngine."""
     await compute_daily_snapshots()
     return {"status": "completed", "accounts_processed": ...}

@@ -1,13 +1,10 @@
 """Reconciliation engine: compares CSV truth with stored state, auto-corrects small deltas."""
 
-from dataclasses import dataclass, field
-from datetime import date, datetime
-from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
-
 import logging
+from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
 
-from database import supabase
 from infrastructure.repositories.event_store import EventStore
 from shared.alerting import SlackAlerter
 
@@ -22,9 +19,9 @@ class ReconciliationResult:
     cash_delta: Decimal
     holdings_delta: int
     auto_corrected: bool
-    correction_event_id: Optional[str] = None
+    correction_event_id: str | None = None
     needs_review: bool = False
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -32,7 +29,7 @@ class BrokerStatement:
     account_external_id: str
     statement_date: date
     cash_balance: Decimal
-    holdings: Dict[str, Decimal]  # symbol -> quantity
+    holdings: dict[str, Decimal]  # symbol -> quantity
     currency: str = "CAD"
     source_file: str = ""
     is_parsed_from_csv: bool = True
@@ -44,7 +41,7 @@ class BrokerStatementCSVAdapter:
     REQUIRED_COLUMNS = {"account", "date", "cash", "holdings_json"}
 
     @staticmethod
-    def parse_row(row: Dict[str, str]) -> Optional[BrokerStatement]:
+    def parse_row(row: dict[str, str]) -> BrokerStatement | None:
         try:
             account = row.get("account", "").strip()
             date_str = row.get("date", "").strip()
@@ -66,7 +63,7 @@ class BrokerStatementCSVAdapter:
         except Exception:
             cash = Decimal("0")
 
-        holdings: Dict[str, Decimal] = {}
+        holdings: dict[str, Decimal] = {}
         if holdings_json_str:
             import json
             try:
@@ -90,7 +87,7 @@ class BrokerStatementCSVAdapter:
         )
 
     @staticmethod
-    def parse_csv(content: str) -> List[BrokerStatement]:
+    def parse_csv(content: str) -> list[BrokerStatement]:
         import csv
         import io
 
@@ -111,8 +108,8 @@ class ReconciliationEngine:
 
     def __init__(
         self,
-        event_store: Optional[EventStore] = None,
-        alerter: Optional[SlackAlerter] = None,
+        event_store: EventStore | None = None,
+        alerter: SlackAlerter | None = None,
     ):
         self.event_store = event_store or EventStore()
         self.alerter = alerter or SlackAlerter()
@@ -228,8 +225,8 @@ class ReconciliationEngine:
     def reconcile_from_csv(
         self,
         csv_content: str,
-        account_id_map: Dict[str, int],
-    ) -> List[ReconciliationResult]:
+        account_id_map: dict[str, int],
+    ) -> list[ReconciliationResult]:
         """Reconcile all statements found in a CSV against known account IDs."""
         statements = BrokerStatementCSVAdapter.parse_csv(csv_content)
         results = []

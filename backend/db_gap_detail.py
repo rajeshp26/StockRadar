@@ -1,4 +1,6 @@
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, r'C:\Project\StockerPro\StockerPro\backend')
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 from database import supabase

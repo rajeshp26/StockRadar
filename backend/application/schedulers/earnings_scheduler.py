@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Earnings Refresh Scheduler
 Runs every N hours to refresh financial data for companies with upcoming earnings.
@@ -10,23 +9,25 @@ import asyncio
 import logging
 import uuid
 from datetime import date, timedelta
-from shared.time_utils import now_utc
-from typing import Dict, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from config import settings
-from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from domain.exceptions import (
-    MaxRetriesExceededError,
-    SchedulerRefreshError,
-    CompanyNotFoundError,
-)
+if TYPE_CHECKING:
+    from providers.defeat_beta_provider import DefeatBetaProvider
 
+from application.jobs.data_quality_audit_job import audit_company_data_quality
 from application.jobs.derived_financial_metrics_job import (
     compute_and_upsert_derived_financial_metrics,
     compute_and_upsert_quarterly_health_scores,
     compute_and_upsert_quarterly_valuation_metrics,
 )
-from application.jobs.data_quality_audit_job import audit_company_data_quality
+from config import settings
+from domain.exceptions import (
+    CompanyNotFoundError,
+    MaxRetriesExceededError,
+    SchedulerRefreshError,
+)
+from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class EarningsRefreshScheduler:
 
     def __init__(
         self,
-        financial_repo: Optional[SupabaseFinancialRepository] = None,
+        financial_repo: SupabaseFinancialRepository | None = None,
         defeat_beta_provider: Optional["DefeatBetaProvider"] = None,
     ):
         """
@@ -61,8 +62,8 @@ class EarningsRefreshScheduler:
                 from providers.defeat_beta_provider import DefeatBetaProvider
                 from providers.yfinance_provider import YFinanceProvider
                 yf_provider = YFinanceProvider()
-                from providers.stockdex_provider import StockdexMacrotrendsProvider
                 from providers.edgar_provider import EdgarToolsProvider
+                from providers.stockdex_provider import StockdexMacrotrendsProvider
                 self.defeat_beta_provider = DefeatBetaProvider(
                     yfinance_provider=yf_provider,
                     stockdex_provider=StockdexMacrotrendsProvider(),
@@ -73,7 +74,7 @@ class EarningsRefreshScheduler:
                 self.defeat_beta_provider = None
 
         self.is_running = False
-        self.task: Optional[asyncio.Task] = None
+        self.task: asyncio.Task | None = None
 
         # Per-company lock TTL; earnings refresh per company may be longer; default 45 min
         self.lock_ttl_seconds: int = int(getattr(settings, "SCHEDULER_COMPANY_LOCK_TTL_SECONDS", 2700))
@@ -227,7 +228,7 @@ class EarningsRefreshScheduler:
             try:
                 await self._check_and_refresh_earnings()
             except Exception as e:
-                logger.error(f"Scheduler cycle failed: {str(e)}")
+                logger.error(f"Scheduler cycle failed: {e!s}")
 
             # Sleep until next cycle
             sleep_seconds = settings.EARNINGS_REFRESH_CHECK_INTERVAL_HOURS * 3600
@@ -240,7 +241,7 @@ class EarningsRefreshScheduler:
             except asyncio.CancelledError:
                 break
 
-    async def _check_and_refresh_earnings(self) -> Dict[str, Any]:
+    async def _check_and_refresh_earnings(self) -> dict[str, Any]:
         """
         Check for companies with upcoming earnings and refresh them.
 
@@ -315,7 +316,7 @@ class EarningsRefreshScheduler:
                     results['companies_refreshed'] += 1
                     results['refreshed_companies'].append(symbol)
                 except Exception as e:
-                    logger.error(f"Failed to refresh {symbol}: {str(e)}")
+                    logger.error(f"Failed to refresh {symbol}: {e!s}")
                     results['companies_failed'] += 1
                     results['failed_companies'].append({'symbol': symbol, 'error': str(e)})
                 finally:
@@ -337,7 +338,7 @@ class EarningsRefreshScheduler:
             return results
 
         except Exception as e:
-            logger.error(f"Earnings check cycle failed: {str(e)}")
+            logger.error(f"Earnings check cycle failed: {e!s}")
             raise
 
     # ========================================================================
@@ -347,8 +348,8 @@ class EarningsRefreshScheduler:
         self,
         company_id: int,
         symbol: str,
-        earnings_date: Optional[date] = None,
-    ) -> Dict[str, Any]:
+        earnings_date: date | None = None,
+    ) -> dict[str, Any]:
         """
         Refresh financial data for a single company.
 
@@ -413,7 +414,7 @@ class EarningsRefreshScheduler:
                 + upsert_results.get("balance_sheets", 0)
                 + upsert_results.get("cash_flows", 0)
             )
- 
+
             if statement_rows_written > 0:
                 logger.info(
                     "[DERIVED] %s: %d new statement rows → computing derived metrics",
@@ -480,9 +481,9 @@ class EarningsRefreshScheduler:
 
                 # Trigger RI valuation
                 try:
-                    from infrastructure.repositories.valuation_repository import ValuationRepository
                     from application.services.recompute_guard import RecomputeGuard
                     from application.services.valuation_service import ValuationService
+                    from infrastructure.repositories.valuation_repository import ValuationRepository
                     valuation_repo = ValuationRepository()
                     vs = ValuationService(repo=valuation_repo, guard=RecomputeGuard(valuation_repo))
                     await vs.compute_residual_income_if_stale(symbol=symbol, user_id=None, force=True)
@@ -494,7 +495,7 @@ class EarningsRefreshScheduler:
                     "[DERIVED] %s: no new statement rows → skipping derived metrics",
                     symbol,
                 )
- 
+
 
             return {
                 'company_id': company_id,
@@ -511,17 +512,17 @@ class EarningsRefreshScheduler:
             }
 
         except MaxRetriesExceededError as e:
-            logger.error(f"Max retries exceeded for {symbol}: {str(e)}")
+            logger.error(f"Max retries exceeded for {symbol}: {e!s}")
             raise SchedulerRefreshError(company_id, symbol, e)
 
         except Exception as e:
-            logger.error(f"Failed to refresh {symbol}: {str(e)}")
+            logger.error(f"Failed to refresh {symbol}: {e!s}")
             raise SchedulerRefreshError(company_id, symbol, e)
 
     # ========================================================================
     # MANUAL TRIGGER (for testing/admin)
     # ========================================================================
-    async def trigger_immediate_check(self) -> Dict[str, Any]:
+    async def trigger_immediate_check(self) -> dict[str, Any]:
         """
         Manually trigger an immediate earnings check.
         Useful for: testing, admin operations, force-refresh.

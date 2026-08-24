@@ -15,11 +15,10 @@ Terminal value methods: perpetuity_growth | exit_multiple
 Price policy: intrinsic is cached; currentPrice + upside computed at read-time only.
 """
 from __future__ import annotations
- 
+
 import logging
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional
- 
+from typing import Any
+
 from application.services.ai_service import generate_suitability_summary
 from application.services.dcf_suitability import evaluate_dcf_suitability
 from application.services.recompute_guard import RecomputeGuard
@@ -39,6 +38,7 @@ from shared.finance_math import (
     pct_or_frac_to_frac,
     safe_float,
 )
+from shared.time_utils import now_iso, now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,8 @@ class DcfService:
     async def compute_dcf_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[DcfRequestOverrides] = None,
+        user_id:   int | None,
+        overrides: DcfRequestOverrides | None = None,
         force:     bool = False,
     ) -> DcfResponse:
         overrides  = overrides or DcfRequestOverrides()
@@ -171,7 +171,7 @@ class DcfService:
             dependency_fingerprint=fingerprint,
         )
 
-    async def get_cached(self, symbol: str) -> Optional[DcfResponse]:
+    async def get_cached(self, symbol: str) -> DcfResponse | None:
         """
         Pure cache read — no gate logic, no recompute, no DB writes.
         Returns None if no prior valuation exists.
@@ -181,11 +181,11 @@ class DcfService:
         if not ctx:
             return None
         company_id = int(ctx["company_id"])
- 
+
         snap = await self.repo.get_last_output_snapshot(company_id=company_id, method="dcf")
         if not snap:
             return None
- 
+
         valuation_payload     = snap.get("valuation")     or {}
         applicability_payload = snap.get("applicability") or {}
         dq_payload            = snap.get("dataQuality")   or {}
@@ -193,7 +193,7 @@ class DcfService:
             (dq_payload.get("freshnessDays") or {}).get("lastComputedAt")
             or snap.get("lastComputedAt")
         )
- 
+
         # Refresh currentPrice and upside at read time
         current_price = await self.repo.get_current_market_price(company_id)
         intrinsic_ps  = safe_float(valuation_payload.get("intrinsicValuePerShare"))
@@ -203,7 +203,7 @@ class DcfService:
             upside = (float(intrinsic_ps) - float(current_price)) / float(current_price)
         valuation_payload["currentPrice"]      = current_price
         valuation_payload["upsideDownsidePct"] = upside
- 
+
         if not applicability_payload:
             applicability_payload = {
                 "score": 0, "category": "Caution",
@@ -214,13 +214,13 @@ class DcfService:
             dq_payload = {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
         if isinstance(dq_payload.get("freshnessDays"), dict) and last_computed:
             dq_payload["freshnessDays"]["lastComputedAt"] = last_computed
- 
+
         return DcfResponse(
             valuation=DcfValuation(**valuation_payload),
             applicability=Applicability(**applicability_payload),
             dataQuality=DataQuality(**dq_payload),
         )
- 
+
     # ── Cached path ────────────────────────────────────────────────────────────
 
     async def _serve_cached(
@@ -228,8 +228,8 @@ class DcfService:
         symbol:     str,
         company_id: int,
         currency:   str,
-        sector:     Optional[str],
-        user_id:    Optional[int],
+        sector:     str | None,
+        user_id:    int | None,
         method:     str,
         overrides:  DcfRequestOverrides,
     ) -> DcfResponse:
@@ -308,15 +308,15 @@ class DcfService:
         self,
         company_id: int,
         overrides:  DcfRequestOverrides,
-        defaults:   Dict[str, Any],
-    ) -> Dict[str, Any]:
+        defaults:   dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Lightweight input resolution for Gate 3.
         Resolves base_fcf, wacc, terminal_g without computing intrinsic value.
         Returns dict with same keys stored in input_snapshot["resolved"].
         """
         # ── Base FCF ──────────────────────────────────────────────────────
-        base_fcf: Optional[float] = None
+        base_fcf: float | None = None
         base_fcf_source = "cash_flow_statements"
         if overrides.forecastFcf is not None:
             base_fcf        = safe_float(overrides.forecastFcf[0]) if overrides.forecastFcf else None
@@ -326,7 +326,7 @@ class DcfService:
             base_fcf   = safe_float(cf_data.get("value"))
 
         # ── WACC ──────────────────────────────────────────────────────────
-        wacc: Optional[float] = None
+        wacc: float | None = None
         wacc_source = "unknown"
         if overrides.wacc is not None:
             wacc_raw   = float(overrides.wacc)
@@ -342,7 +342,7 @@ class DcfService:
             )
 
         # ── Terminal growth ────────────────────────────────────────────────
-        terminal_g: Optional[float] = None
+        terminal_g: float | None = None
         terminal_g_source = "unknown"
         terminal_method   = (
             overrides.terminalMethod
@@ -362,7 +362,7 @@ class DcfService:
             terminal_g_source = "exit_multiple"
 
         # ── Net debt ──────────────────────────────────────────────────────
-        net_debt: Optional[float] = None
+        net_debt: float | None = None
         if overrides.netDebt is not None:
             net_debt = float(overrides.netDebt)
         else:
@@ -373,7 +373,7 @@ class DcfService:
                 net_debt = float(debt) - float(cash)
 
         # ── Shares ────────────────────────────────────────────────────────
-        shares: Optional[float] = None
+        shares: float | None = None
         if overrides.sharesOutstanding is not None:
             shares = float(overrides.sharesOutstanding)
         else:
@@ -411,15 +411,15 @@ class DcfService:
         symbol:                 str,
         company_id:             int,
         currency:               str,
-        sector:                 Optional[str],
-        user_id:                Optional[int],
+        sector:                 str | None,
+        user_id:                int | None,
         overrides:              DcfRequestOverrides,
-        dependency_fingerprint: Optional[str] = None,
+        dependency_fingerprint: str | None = None,
     ) -> DcfResponse:
         defaults = await self.repo.get_method_params(company_id, method="dcf")
 
-        flags:          List[DiagnosticFlag] = []
-        input_decisions: Dict[str, Any]     = {"dcf": {}}
+        flags:          list[DiagnosticFlag] = []
+        input_decisions: dict[str, Any]     = {"dcf": {}}
         fallbacks_used                       = False
 
         current_price = await self.repo.get_current_market_price(company_id)
@@ -435,9 +435,9 @@ class DcfService:
             fallbacks_used = True
         n = int(clamp(float(n), 1, 20))
 
-        series:          Optional[List[float]] = overrides.forecastFcf
-        base_fcf_value:  Optional[float]       = None
-        base_fcf_fy:     Optional[int]         = None
+        series:          list[float] | None = overrides.forecastFcf
+        base_fcf_value:  float | None       = None
+        base_fcf_fy:     int | None         = None
 
         if series is not None:
             if len(series) != n:
@@ -544,8 +544,8 @@ class DcfService:
                 ))
 
         # ── Discount forecast cash flows ───────────────────────────────────
-        pv_fcf:           List[float] = []
-        discount_factors: List[float] = []
+        pv_fcf:           list[float] = []
+        discount_factors: list[float] = []
         total_pv                      = 0.0
 
         if wacc > 0:
@@ -584,8 +584,8 @@ class DcfService:
 
         # ── Terminal value ─────────────────────────────────────────────────
         tv = None; pv_tv = None
-        terminal_g_used: Optional[float] = None
-        cf_n_plus_1:     Optional[float] = None
+        terminal_g_used: float | None = None
+        cf_n_plus_1:     float | None = None
         g_source_for_resolved             = "unknown"
 
         if wacc > 0:
@@ -657,13 +657,13 @@ class DcfService:
                 }
 
         # ── Enterprise → Equity → Per-share bridge ─────────────────────────
-        enterprise_value: Optional[float] = None
+        enterprise_value: float | None = None
         if tv is not None and pv_tv is not None:
             enterprise_value = float(total_pv) + float(pv_tv)
         else:
             enterprise_value = float(total_pv) if total_pv else None
 
-        net_debt: Optional[float] = None
+        net_debt: float | None = None
         net_debt_source = None
         if overrides.netDebt is not None:
             net_debt        = float(overrides.netDebt)
@@ -678,11 +678,11 @@ class DcfService:
                 fallbacks_used  = True
         input_decisions["dcf"]["netDebt"] = {"source": net_debt_source, "value": net_debt}
 
-        equity_value: Optional[float] = None
+        equity_value: float | None = None
         if enterprise_value is not None and net_debt is not None:
             equity_value = float(enterprise_value) - float(net_debt)
 
-        shares: Optional[float] = None
+        shares: float | None = None
         shares_source = None
         if overrides.sharesOutstanding is not None:
             shares        = float(overrides.sharesOutstanding)
@@ -705,16 +705,16 @@ class DcfService:
                     fallbacks_used = True
         input_decisions["dcf"]["sharesOutstanding"] = {"source": shares_source, "value": shares}
 
-        intrinsic_ps: Optional[float] = None
+        intrinsic_ps: float | None = None
         if equity_value is not None and shares is not None and float(shares) > 0:
             intrinsic_ps = float(equity_value) / float(shares)
 
-        upside: Optional[float] = None
+        upside: float | None = None
         if current_price is not None and float(current_price) > 0 and intrinsic_ps and intrinsic_ps > 0:
             upside = (float(intrinsic_ps) - float(current_price)) / float(current_price)
 
         # ── Sensitivity grid ───────────────────────────────────────────────
-        sensitivity_grid: Optional[DcfSensitivityGrid] = None
+        sensitivity_grid: DcfSensitivityGrid | None = None
         if (terminal_method == "perpetuity_growth" and wacc and float(wacc) > 0
                 and terminal_g_used is not None and intrinsic_ps is not None
                 and equity_value is not None and shares and float(shares) > 0):
@@ -742,9 +742,9 @@ class DcfService:
                 derived = True
                 g_list = [max(0.00, g_used - 0.01), g_used, max(0.00, g_used + 0.01)]
 
-            matrix: List[List[Optional[float]]] = []
+            matrix: list[list[float | None]] = []
             for r_s in r_list:
-                row: List[Optional[float]] = []
+                row: list[float | None] = []
                 for g_s in g_list:
                     if g_s >= r_s:
                         row.append(None)
@@ -857,7 +857,7 @@ class DcfService:
         # ── Build resolved inputs for Gate 3 storage ───────────────────────
         # Captures the actual computed values so future Gate 3 comparisons
         # can determine whether a source data change is economically material.
-        resolved_inputs: Dict[str, Any] = {
+        resolved_inputs: dict[str, Any] = {
             "base_fcf":          round(float(base_fcf_value), 2) if base_fcf_value is not None else None,
             "base_fcf_source":   "cash_flow_statements",
             "wacc_final":        round(float(wacc), 4) if wacc else None,
@@ -918,7 +918,7 @@ class DcfService:
             ),
         )
 
-    async def _resolve_base_fcf(self, company_id: int) -> Dict[str, Any]:
+    async def _resolve_base_fcf(self, company_id: int) -> dict[str, Any]:
         cf    = await self.repo.get_cash_flow_latest(company_id)
         ocf   = safe_float(cf.get("cash_from_operating_activities")) if cf else None
         capex = safe_float(cf.get("capital_expenditures"))           if cf else None

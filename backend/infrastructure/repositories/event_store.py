@@ -1,6 +1,5 @@
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from uuid import UUID, uuid4
+from datetime import datetime
+from typing import Any
 
 from database import supabase
 from supabase import Client
@@ -24,8 +23,8 @@ class EventStore:
         aggregate_id: str,
         aggregate_type: str,
         data: dict,
-        metadata: Optional[dict] = None,
-        idempotency_key: Optional[str] = None,
+        metadata: dict | None = None,
+        idempotency_key: str | None = None,
         event_version: int = 1,
     ) -> dict:
         row = {
@@ -50,8 +49,8 @@ class EventStore:
 
     def append_events_batch(
         self,
-        events: List[Dict[str, Any]],
-    ) -> List[dict]:
+        events: list[dict[str, Any]],
+    ) -> list[dict]:
         if not events:
             return []
         try:
@@ -80,12 +79,12 @@ class EventStore:
 
     def get_all_events(
         self,
-        aggregate_type: Optional[str] = None,
-        aggregate_id: Optional[str] = None,
-        event_type: Optional[str] = None,
-        since: Optional[datetime] = None,
+        aggregate_type: str | None = None,
+        aggregate_id: str | None = None,
+        event_type: str | None = None,
+        since: datetime | None = None,
         limit: int = 10000,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """Fetch all matching events with pagination handling for large datasets."""
         PAGE_SIZE = 1000
         all_events = []
@@ -122,12 +121,12 @@ class EventStore:
 
     def get_events(
         self,
-        aggregate_type: Optional[str] = None,
-        aggregate_id: Optional[str] = None,
-        event_type: Optional[str] = None,
-        since: Optional[datetime] = None,
+        aggregate_type: str | None = None,
+        aggregate_id: str | None = None,
+        event_type: str | None = None,
+        since: datetime | None = None,
         limit: int = 100,
-    ) -> List[dict]:
+    ) -> list[dict]:
         query = self.client.table(self.TABLE).select("*").order("created_at")
 
         if aggregate_type:
@@ -146,7 +145,7 @@ class EventStore:
         self,
         reference_table: str = "portfolio_transactions",
         join_column: str = "import_batch_id",
-        since: Optional[datetime] = None,
+        since: datetime | None = None,
     ) -> int:
         """Count events whose idempotency_key references a non-existent transaction.
         
@@ -181,7 +180,7 @@ class EventStore:
                 orphans += 1
         return orphans
 
-    def get_recent_events(self, limit: int = 20) -> List[dict]:
+    def get_recent_events(self, limit: int = 20) -> list[dict]:
         res = (
             self.client.table(self.TABLE)
             .select("*")
@@ -191,7 +190,7 @@ class EventStore:
         )
         return res.data or []
 
-    def get_earliest_event_date(self, account_id: int) -> Optional[str]:
+    def get_earliest_event_date(self, account_id: int) -> str | None:
         """Get the earliest event date for an account.
 
         Events use aggregate_id format 'account_{id}' and store dates in
@@ -215,7 +214,7 @@ class EventStore:
             )
         return None
 
-    def _get_by_idempotency_key(self, key: str) -> Optional[dict]:
+    def _get_by_idempotency_key(self, key: str) -> dict | None:
         res = (
             self.client.table(self.TABLE)
             .select("*")

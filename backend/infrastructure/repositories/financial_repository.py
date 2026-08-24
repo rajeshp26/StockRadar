@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Financial Data Repository - Refactored
 Handles all database operations with improved error handling and type safety.
@@ -13,28 +12,26 @@ Additions in this version:
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Dict, Any, Optional
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from decimal import Decimal
+from itertools import islice
+from typing import Any
 
-from supabase import Client
-from database import supabase
 from application.validators.financial_data_validator import (
     verify_database_write,
 )
-from itertools import islice
-
 from config import settings
+from database import supabase
 from domain.model_types import (
-    IncomeStatementRow,
     BalanceSheetRow,
     CashFlowRow,
-    EarningsRow,
-    DividendRow,
-    UpcomingDividendEvent,
     CompanyRefreshInfo,
     CompleteFundamentals,
+    DividendRow,
+    EarningsRow,
+    IncomeStatementRow,
 )
+from shared.time_utils import now_iso, now_utc, parse_db_timestamp
+from supabase import Client
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +57,7 @@ class DatabaseSerializer:
         for key, value in data.items():
             if value is None:
                 result[key] = None
-            elif isinstance(value, datetime):
-                result[key] = value.isoformat()
-            elif isinstance(value, date):
+            elif isinstance(value, datetime) or isinstance(value, date):
                 result[key] = value.isoformat()
             elif isinstance(value, Decimal):
                 if value == value.to_integral_value():
@@ -92,7 +87,7 @@ class SupabaseFinancialRepository:
     async def _chunked_upsert(
         self,
         table: str,
-        rows: List[Dict[str, Any]],
+        rows: list[dict[str, Any]],
         on_conflict: str,
         chunk_size: int = 1000,
     ) -> int:
@@ -220,12 +215,12 @@ class SupabaseFinancialRepository:
     async def log_conflict(
         self,
         company_id: int,
-        fiscal_year: Optional[int],
-        fiscal_quarter: Optional[int],
+        fiscal_year: int | None,
+        fiscal_quarter: int | None,
         field: str,
-        existing_value: Optional[float],
+        existing_value: float | None,
         existing_source: str,
-        new_value: Optional[float],
+        new_value: float | None,
         new_source: str,
         pct_diff: float,
     ) -> None:
@@ -255,7 +250,7 @@ class SupabaseFinancialRepository:
             logger.error(f"[CONFLICT] Failed to log conflict: {e}")
 
     @staticmethod
-    def _pct_diff(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    def _pct_diff(a: float | None, b: float | None) -> float | None:
         """Return absolute percent difference between two numbers (or None)."""
         if a is None or b is None:
             return None
@@ -307,8 +302,8 @@ class SupabaseFinancialRepository:
     # UPSERT METHODS - Financial Statements
     # ========================================================================
     async def upsert_income_statements(
-        self, rows: List[IncomeStatementRow]
-    ) -> Dict[str, Any]:
+        self, rows: list[IncomeStatementRow]
+    ) -> dict[str, Any]:
         if not rows:
             logger.debug("No income statements to upsert")
             return {"count": 0}
@@ -342,7 +337,7 @@ class SupabaseFinancialRepository:
                     },
                     symbol="(upsert)"
                 )
-                
+
                 if verify_issues:
                     logger.error(
                         "[DQ] Income statement post-write verification failed: %d issues",
@@ -360,12 +355,12 @@ class SupabaseFinancialRepository:
                 logger.info("✅ Upserted %d income statement rows", len(dedup))
             return response.data or {"count": len(dedup)}
         except Exception as e:
-            logger.error(f"Failed to upsert income statements: {str(e)}")
+            logger.error(f"Failed to upsert income statements: {e!s}")
             raise
 
     async def upsert_balance_sheets(
-        self, rows: List[BalanceSheetRow]
-    ) -> Dict[str, Any]:
+        self, rows: list[BalanceSheetRow]
+    ) -> dict[str, Any]:
         if not rows:
             logger.debug("No balance sheets to upsert")
             return {"count": 0}
@@ -398,7 +393,7 @@ class SupabaseFinancialRepository:
                     },
                     symbol="(upsert)"
                 )
-                
+
                 if verify_issues:
                     logger.error(
                         "[DQ] Balance sheet post-write verification failed: %d issues",
@@ -416,12 +411,12 @@ class SupabaseFinancialRepository:
                 logger.info("✅ Upserted %d balance sheet rows", len(dedup))
             return response.data or {"count": len(dedup)}
         except Exception as e:
-            logger.error(f"Failed to upsert balance sheets: {str(e)}")
+            logger.error(f"Failed to upsert balance sheets: {e!s}")
             raise
 
     async def upsert_cash_flows(
-        self, rows: List[CashFlowRow]
-    ) -> Dict[str, Any]:
+        self, rows: list[CashFlowRow]
+    ) -> dict[str, Any]:
         if not rows:
             logger.debug("No cash flows to upsert")
             return {"count": 0}
@@ -454,13 +449,13 @@ class SupabaseFinancialRepository:
                     },
                     symbol="(upsert)"
                 )
-                
+
                 if verify_issues:
                     logger.error(
                         "[DQ] Cash flow post-write verification failed: %d issues",
                         len(verify_issues)
                     )
-            
+
             returned = len(response.data) if response.data is not None else -1
             if returned == 0 and len(data) > 0:
                 logger.error(
@@ -472,12 +467,12 @@ class SupabaseFinancialRepository:
                 logger.info("✅ Upserted %d cash flow rows", len(dedup))
             return response.data or {"count": len(dedup)}
         except Exception as e:
-            logger.error(f"Failed to upsert cash flows: {str(e)}")
+            logger.error(f"Failed to upsert cash flows: {e!s}")
             raise
 
     async def upsert_earnings(
-        self, rows: List[EarningsRow]
-    ) -> Dict[str, Any]:
+        self, rows: list[EarningsRow]
+    ) -> dict[str, Any]:
         if not rows:
             logger.debug("No earnings to upsert")
             return {"count": 0}
@@ -496,12 +491,12 @@ class SupabaseFinancialRepository:
             logger.info(f"✅ Upserted {len(dedup)} earnings rows")
             return response.data or {"count": len(dedup)}
         except Exception as e:
-            logger.error(f"Failed to upsert earnings: {str(e)}")
+            logger.error(f"Failed to upsert earnings: {e!s}")
             raise
 
     async def upsert_dividends(
-        self, rows: List[DividendRow]
-    ) -> Dict[str, Any]:
+        self, rows: list[DividendRow]
+    ) -> dict[str, Any]:
         if not rows:
             logger.debug("No dividends to upsert")
             return {"count": 0}
@@ -521,18 +516,30 @@ class SupabaseFinancialRepository:
             logger.info(f"✅ Upserted {len(dedup)} dividend rows")
             return response.data or {"count": len(dedup)}
         except Exception as e:
-            logger.error(f"Failed to upsert dividends: {str(e)}")
+            logger.error(f"Failed to upsert dividends: {e!s}")
             raise
 
     # ========================================================================
     # UPSERT METHODS (Market Data Scheduler) + Conflict Detection
     # ========================================================================
     async def upsert_price_history(
-        self, rows: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """Upsert monthly OHLCV rows (unique by company_id, price_date)."""
         if not rows:
             return {"count": 0}
+        # Defensive: close_price is NOT NULL; null-OHLC rows are provider garbage
+        # (delisted/suspended days) and must not reach the database.
+        valid_rows = [r for r in rows if r.get("close_price") is not None]
+        dropped = len(rows) - len(valid_rows)
+        if dropped:
+            logger.warning(
+                "[PRICE] Dropping %d/%d price_history rows with null close_price",
+                dropped, len(rows),
+            )
+        if not valid_rows:
+            return {"count": 0}
+        rows = valid_rows
         try:
             # Optional conflict detection (row-by-row check)
             if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
@@ -601,8 +608,8 @@ class SupabaseFinancialRepository:
             raise
 
     async def upsert_splits(
-        self, rows: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """Upsert split events (unique by company_id, report_date)."""
         if not rows:
             return {"count": 0}
@@ -667,8 +674,8 @@ class SupabaseFinancialRepository:
             raise
 
     async def upsert_revenue_forecast(
-        self, rows: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """Upsert revenue forecasts (unique by company_id, report_date, period_type, provider)."""
         if not rows:
             return {"count": 0}
@@ -737,8 +744,8 @@ class SupabaseFinancialRepository:
             raise
 
     async def upsert_earnings_forecast(
-        self, rows: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """Upsert earnings forecasts (unique by company_id, report_date, period_type, provider)."""
         if not rows:
             return {"count": 0}
@@ -805,8 +812,8 @@ class SupabaseFinancialRepository:
             raise
 
     async def upsert_company_summary(
-        self, snapshot: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, snapshot: dict[str, Any]
+    ) -> dict[str, Any]:
         """Daily company summary snapshot (unique by company_id, snapshot_date, provider)."""
         if not snapshot:
             return {"count": 0}
@@ -871,8 +878,8 @@ class SupabaseFinancialRepository:
     # DERIVED METRICS (Phase 4)
     # ========================================================================
     async def upsert_derived_financial_metrics(
-        self, rows: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """Upsert derived metrics (unique by company_id, fiscal_year, fiscal_quarter).
 
         Supports both annual (fiscal_quarter=None) and quarterly (fiscal_quarter=1..4) rows.
@@ -902,8 +909,8 @@ class SupabaseFinancialRepository:
     # ========================================================================
     async def get_companies_for_market_data(
         self,
-        statuses: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        statuses: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         statuses = statuses or ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"]
         try:
             resp = (
@@ -917,7 +924,7 @@ class SupabaseFinancialRepository:
             logger.error(f"Failed to fetch companies for market data: {e}")
             raise
 
-    async def get_active_companies_for_market_data(self) -> List[Dict[str, Any]]:
+    async def get_active_companies_for_market_data(self) -> list[dict[str, Any]]:
         """
         Returns companies that are in ANY user's portfolio or watchlist.
         This is the active set — only ~150 companies instead of all 3,114.
@@ -972,10 +979,10 @@ class SupabaseFinancialRepository:
         self,
         company_id: int,
         last_fiscal_year: int,
-        last_fiscal_quarter: Optional[int],
+        last_fiscal_quarter: int | None,
         is_first_load: bool = False,
-        next_earnings_date: Optional[date] = None,
-    ) -> Dict[str, Any]:
+        next_earnings_date: date | None = None,
+    ) -> dict[str, Any]:
         try:
             now = now_utc()
             status = "COMPLETE" if is_first_load else "CURRENT"
@@ -1000,7 +1007,7 @@ class SupabaseFinancialRepository:
             return response.data[0] if response.data else {}
 
         except Exception as e:
-            logger.error(f"Failed to update metadata for company {company_id}: {str(e)}")
+            logger.error(f"Failed to update metadata for company {company_id}: {e!s}")
             raise
 
     async def update_next_earnings_date(self, company_id: int, earnings_date: date) -> None:
@@ -1017,7 +1024,7 @@ class SupabaseFinancialRepository:
         self,
         start_date: date,
         end_date: date,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             response = self.client.table('companies').select(
                 'company_id, ticker_symbol, next_earnings_date, '
@@ -1041,12 +1048,12 @@ class SupabaseFinancialRepository:
             return response.data or []
 
         except Exception as e:
-            logger.error(f"Failed to query companies with upcoming earnings: {str(e)}")
+            logger.error(f"Failed to query companies with upcoming earnings: {e!s}")
             raise
 
     async def get_company_refresh_info(
         self, company_id: int
-    ) -> Optional[CompanyRefreshInfo]:
+    ) -> CompanyRefreshInfo | None:
         """Get company's refresh metadata for smart filtering."""
         try:
             response = self.client.table('companies').select(
@@ -1092,7 +1099,7 @@ class SupabaseFinancialRepository:
             )
 
         except Exception as e:
-            logger.error(f"Failed to get refresh info for company {company_id}: {str(e)}")
+            logger.error(f"Failed to get refresh info for company {company_id}: {e!s}")
             raise
 
     async def update_price_refresh_marker(self, company_id: int) -> None:
@@ -1106,7 +1113,7 @@ class SupabaseFinancialRepository:
             ).execute()
             logger.debug(f"Updated last_price_refresh_at for company_id={company_id}")
         except Exception as e:
-            logger.error(f"Failed to update price refresh marker for {company_id}: {str(e)}")
+            logger.error(f"Failed to update price refresh marker for {company_id}: {e!s}")
 
     async def update_price_attempt_marker(self, company_id: int) -> None:
         try:
@@ -1138,7 +1145,7 @@ class SupabaseFinancialRepository:
     # ========================================================================
     async def upsert_all_financials(
         self, financials: CompleteFundamentals
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         logger.info(
             f"Upserting all financials for {financials.symbol}: "
             f"{financials.total_rows_fetched} total rows"
@@ -1192,7 +1199,7 @@ class SupabaseFinancialRepository:
             return results
 
         except Exception as e:
-            logger.error(f"Failed to upsert all financials: {str(e)}")
+            logger.error(f"Failed to upsert all financials: {e!s}")
             raise
 
     # ========================================================================
@@ -1212,7 +1219,7 @@ class SupabaseFinancialRepository:
         except Exception:
             return False
 
-    async def get_company_by_id(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_company_by_id(self, company_id: int) -> dict[str, Any] | None:
         """Get full company record."""
         try:
             response = (
@@ -1228,7 +1235,7 @@ class SupabaseFinancialRepository:
 
     async def get_company_by_symbol(
         self, symbol: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get company by ticker symbol."""
         try:
             response = (
@@ -1245,7 +1252,7 @@ class SupabaseFinancialRepository:
 
     async def get_shares_history(
         self, company_id: int
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Return annual share count rows, oldest-to-newest.
 
@@ -1323,7 +1330,7 @@ class SupabaseFinancialRepository:
 
     async def get_company_summary_latest(
         self, company_id: int
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Return the most recent company_summary row for a company.
         Used as a fallback shares source when income_statements.shares_outstanding_diluted
@@ -1423,9 +1430,9 @@ class SupabaseFinancialRepository:
     # ========================================================================
 
     async def get_latest_prices(
-        self, company_ids: List[int], target_date: date,
+        self, company_ids: list[int], target_date: date,
         include_current_fallback: bool = True,
-    ) -> Dict[int, Dict]:
+    ) -> dict[int, dict]:
         if not company_ids:
             return {}
 
@@ -1449,7 +1456,7 @@ class SupabaseFinancialRepository:
             .execute()
         )
 
-        latest_by_company: Dict[int, Dict] = {}
+        latest_by_company: dict[int, dict] = {}
         for row in result.data or []:
             cid = row["company_id"]
             pd = row["price_date"]

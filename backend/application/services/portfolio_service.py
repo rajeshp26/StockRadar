@@ -4,40 +4,45 @@ Portfolio Service — Business logic for portfolio management.
 """
 
 import asyncio
-import base64
-import csv
 import hashlib
-import io
-import json
 import logging
 import time
 import uuid
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
-from functools import lru_cache
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from functools import cache
+from typing import Any
 
 import numpy as np
-from typing import Any, Dict, List, Optional, Tuple
 
-from application.parsers.portfolio_parser import ParseResult
-from application.services.caching.cache_manager import CacheManager
-from domain.interfaces.stock_provider import StockProvider
-from infrastructure.repositories.financial_repository import SupabaseFinancialRepository as FinancialRepository
-from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
-from shared.snapshot_builder import check_snapshot_spike
-
-from providers.base import StockDataProvider
-from providers.yfinance_provider import YFinanceProvider
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from shared.snapshot_builder import _classify_lot_action, resolve_price_forward_filled, build_snapshot_row, CDR_RATIO, convert_holding_fx
-from shared.portfolio_stats import (
-    annualize_return, compute_annualized_volatility, compute_daily_returns,
-    compute_max_drawdown, compute_portfolio_twr, compute_portfolio_mwr,
-)
+from application.parsers.portfolio_parser import ParseResult, get_parser
 from config import settings
 from database import supabase
+from infrastructure.repositories.financial_repository import (
+    SupabaseFinancialRepository as FinancialRepository,
+)
+from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from providers.base import StockDataProvider
+from providers.yfinance_provider import YFinanceProvider
+from shared.portfolio_stats import (
+    annualize_return,
+    compute_annualized_volatility,
+    compute_daily_returns,
+    compute_max_drawdown,
+    compute_portfolio_mwr,
+    compute_portfolio_twr,
+)
+from shared.snapshot_builder import (
+    CDR_RATIO,
+    _classify_lot_action,
+    build_snapshot_row,
+    check_snapshot_spike,
+    convert_holding_fx,
+    resolve_price_forward_filled,
+)
+from shared.time_utils import now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +60,7 @@ def timed(logger_: logging.Logger = logger):
     return decorator
 
 
-def _map_quote_type(quote_type: Optional[str]) -> str:
+def _map_quote_type(quote_type: str | None) -> str:
     """Map yfinance quoteType to the companies.security_type enum."""
     if not quote_type:
         return "stock"
@@ -73,29 +78,29 @@ def _map_quote_type(quote_type: Optional[str]) -> str:
 
 class PortfolioService:
     """Service for portfolio operations following existing service patterns."""
-    
+
     def __init__(
         self,
-        portfolio_repo: Optional[PortfolioRepository] = None,
-        financial_repo: Optional[FinancialRepository] = None,
-        stock_provider: Optional[StockDataProvider] = None,
+        portfolio_repo: PortfolioRepository | None = None,
+        financial_repo: FinancialRepository | None = None,
+        stock_provider: StockDataProvider | None = None,
     ):
         self.portfolio_repo = portfolio_repo or PortfolioRepository()
         self.financial_repo = financial_repo or FinancialRepository()
         self.stock_provider = stock_provider or YFinanceProvider()
-    
+
 
     # ========================================================================
     # DUPLICATE DETECTION
     # ========================================================================
-    
+
     def _calculate_csv_hash(self, csv_content: str) -> str:
         """Calculate SHA-256 hash of CSV content for duplicate detection."""
         return hashlib.sha256(csv_content.encode('utf-8')).hexdigest()
-    
+
     async def check_duplicate_import(
         self, user_id: int, csv_hash: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Check if this CSV has been imported before.
         
@@ -116,7 +121,7 @@ class PortfolioService:
         except Exception as e:
             logger.error(f"Failed to check duplicate import: {e}")
             return None
-    
+
     # ========================================================================
     # IMPORT OPERATIONS
     # ========================================================================
@@ -126,9 +131,9 @@ class PortfolioService:
         user_id: int,
         brokerage_code: str,
         csv_content: str,
-        account_filter: Optional[List[str]] = None,
-        csv_filename: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        account_filter: list[str] | None = None,
+        csv_filename: str | None = None,
+    ) -> dict[str, Any]:
         """
         Queue a CSV import for background processing.
         
@@ -228,7 +233,7 @@ class PortfolioService:
         import_batch_id: uuid.UUID,
         csv_hash: str,
         csv_size: int,
-        account_filter: Optional[List[str]],
+        account_filter: list[str] | None,
         parse_result: ParseResult,
         brokerage_id: int,
         user_id: int,
@@ -243,7 +248,7 @@ class PortfolioService:
             repo.update_import_progress(import_batch_id, status="processing", rows_parsed=0)
 
             # --- Create accounts ---
-            accounts_map: Dict[str, int] = {}
+            accounts_map: dict[str, int] = {}
             accounts_created = 0
 
             for tx in parse_result.transactions:
@@ -264,7 +269,7 @@ class PortfolioService:
             repo.update_import_progress(import_batch_id, rows_parsed=len(parse_result.transactions))
 
             # --- Company lookup (with exchange override for CDR symbols) ---
-            symbols_meta: Dict[str, Optional[str]] = {}
+            symbols_meta: dict[str, str | None] = {}
             for tx in parse_result.transactions:
                 if tx.symbol:
                     override = getattr(tx, "exchange_override", None)
@@ -393,7 +398,7 @@ class PortfolioService:
             logger.info(
                 f"Background import {import_batch_id} complete: "
                 f"{inserted_count} inserted, {duplicate_count} duplicates, "
-                f"{holdings_updated} accounts updated"
+                f"{len(accounts_map)} accounts updated"
             )
 
         except Exception as e:
@@ -401,12 +406,12 @@ class PortfolioService:
             repo.update_import_progress(
                 import_batch_id,
                 status="failed",
-                error_message=f"Import failed: {str(e)}",
+                error_message=f"Import failed: {e!s}",
             )
-    
+
     async def _ensure_companies_exist_with_tracking(
-        self, symbols: Dict[str, Optional[str]]
-    ) -> Tuple[Dict[str, int], List[str]]:
+        self, symbols: dict[str, str | None]
+    ) -> tuple[dict[str, int], list[str]]:
         """
         Ensure companies exist and track which were created.
         
@@ -419,10 +424,10 @@ class PortfolioService:
         """
         if not symbols:
             return {}, []
-        
-        companies_map: Dict[str, int] = {}
-        created_symbols: List[str] = []
-        
+
+        companies_map: dict[str, int] = {}
+        created_symbols: list[str] = []
+
         # Check existing
         try:
             res = (
@@ -435,7 +440,7 @@ class PortfolioService:
                 companies_map[row["ticker_symbol"]] = row["company_id"]
         except Exception as e:
             logger.error(f"Failed to check existing companies: {e}")
-        
+
         # Create missing
         missing = set(symbols.keys()) - companies_map.keys()
         if missing:
@@ -453,24 +458,24 @@ class PortfolioService:
                         created_symbols.append(symbol)
                 except Exception as e:
                     logger.error(f"Failed to create company for {symbol}: {e}")
-        
+
         return companies_map, created_symbols
-    
+
     # ========================================================================
     # HOLDINGS CALCULATION (FIFO Cost Basis)
     # ========================================================================
-    
-    
-    
+
+
+
     async def _enrich_holdings(
-        self, holdings: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, holdings: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         if not holdings:
             return holdings
         cids = list(set(h["company_id"] for h in holdings if h.get("company_id")))
         prices = {}
         # Fetch cdr_ratio for CDR pricing
-        cdr_ratios: Dict[int, float] = {}
+        cdr_ratios: dict[int, float] = {}
         if cids:
             try:
                 cmr = supabase.table("current_market_data").select("company_id, current_price").in_("company_id", cids).execute()
@@ -554,7 +559,7 @@ class PortfolioService:
         holdings.sort(key=lambda h: h.get("current_value") or 0, reverse=True)
         return holdings
 
-    def _get_price_currency(self, company_id: Optional[int]) -> str:
+    def _get_price_currency(self, company_id: int | None) -> str:
         """Look up the price currency for a company from the companies table."""
         if not company_id:
             return "USD"
@@ -568,14 +573,14 @@ class PortfolioService:
         return "USD"
 
     def aggregate_holdings(
-        self, holdings: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, holdings: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Group holdings by company_id, aggregating quantities and costs.
 
         Returns one record per symbol with combined quantities, weighted
         average cost, and a per-account breakdown.
         """
-        groups: Dict[int, Dict[str, Any]] = {}
+        groups: dict[int, dict[str, Any]] = {}
 
         for h in holdings:
             cid = h.get("company_id")
@@ -647,7 +652,7 @@ class PortfolioService:
         result.sort(key=lambda x: x["current_value"], reverse=True)
         return result
 
-    async def _get_current_price(self, symbol: str) -> Optional[Dict[str, float]]:
+    async def _get_current_price(self, symbol: str) -> dict[str, float] | None:
         """
         Get current price for a symbol with three-tier fallback:
         1. current_market_data (live market price)
@@ -708,7 +713,7 @@ class PortfolioService:
     # ON-DEMAND PRICE FETCH (Phase 2)
     # ========================================================================
 
-    
+
 
     async def _fetch_and_store_prices(self, symbol: str) -> None:
         """
@@ -792,8 +797,8 @@ class PortfolioService:
             return False
 
     async def _get_daily_price_history(
-        self, symbol: str, company_id: int, exchange: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, symbol: str, company_id: int, exchange: str | None = None
+    ) -> list[dict[str, Any]]:
         """Fetch daily OHLCV price history from YFinance provider."""
         try:
             # YFinanceProvider has get_price_history_df returning a DataFrame
@@ -820,8 +825,8 @@ class PortfolioService:
 
     @staticmethod
     def _compress_daily_to_monthly_eom(
-        daily_rows: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        daily_rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Convert daily OHLCV rows to monthly EOM rows:
           - Group by (year, month)
@@ -843,7 +848,7 @@ class PortfolioService:
             df["month"] = df["price_date"].dt.month
             idx = df.groupby(["year", "month"])["price_date"].idxmax()
             last_trading_rows = df.loc[idx].copy()
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for _, r in last_trading_rows.iterrows():
                 out.append({
                     "company_id": int(r.get("company_id")),
@@ -867,27 +872,27 @@ class PortfolioService:
     # ========================================================================
     # DIVIDEND EXTRACTION
     # ========================================================================
-    
-    async def _extract_dividends(self, account_ids: List[int]) -> int:
+
+    async def _extract_dividends(self, account_ids: list[int]) -> int:
         """
         Extract dividend transactions and insert into portfolio_dividends table.
         
         Returns number of dividend records created.
         """
         dividend_records = []
-        
+
         for account_id in account_ids:
             transactions = self.portfolio_repo.get_account_transactions(account_id)
-            
+
             for tx in transactions:
                 activity_type = tx.get("activity_type", "").upper()
                 activity_sub = (tx.get("activity_sub_type") or "").upper()
-                
+
                 # Identify dividend transactions
                 if activity_type == "DIVIDEND" or activity_sub in ["DIV", "DIST", "DIVIDEND"]:
                     payment_date = tx["transaction_date"]
                     amount = Decimal(str(tx.get("net_cash_amount") or 0))
-                    
+
                     if amount > 0:  # Dividends are positive cash flow
                         dividend_records.append({
                             "account_id": account_id,
@@ -900,22 +905,22 @@ class PortfolioService:
                             "fiscal_year": payment_date.year if isinstance(payment_date, date) else parse_db_timestamp(payment_date).year,
                             "fiscal_month": payment_date.month if isinstance(payment_date, date) else parse_db_timestamp(payment_date).month,
                         })
-        
+
         if dividend_records:
             return self.portfolio_repo.insert_dividends(dividend_records)
-        
+
         return 0
-    
+
     # ========================================================================
     # PORTFOLIO SUMMARY
     # ========================================================================
-    
+
     @timed()
     async def get_user_portfolio_overview(
         self, user_id: int,
-        account_ids: Optional[List[int]] = None,
-        display_currency: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        account_ids: list[int] | None = None,
+        display_currency: str | None = None,
+    ) -> dict[str, Any]:
         """
         Get comprehensive portfolio overview for user.
 
@@ -951,7 +956,7 @@ class PortfolioService:
         holdings = await self._enrich_holdings(all_holdings)
         if account_ids:
             holdings = [h for h in holdings if h.get("account_id") in account_ids]
-        
+
         # Calculate totals
         total_value = sum(h.get("current_value") or 0 for h in holdings)
         total_cost = sum(h.get("total_cost") or 0 for h in holdings)
@@ -959,7 +964,7 @@ class PortfolioService:
         total_gain_loss_pct = (
             (total_gain_loss / total_cost * 100) if total_cost > 0 else 0
         )
-        
+
         # Get dividend summary for current year (batched query)
         current_year = now_utc().year
         ytd_dividends = Decimal("0")
@@ -969,12 +974,12 @@ class PortfolioService:
         ytd_dividends = sum(
             Decimal(str(d.get("amount") or 0)) for d in all_divs
         )
-        
+
         # Top 10 holdings by value
         top_holdings = sorted(
             holdings, key=lambda h: h.get("current_value") or 0, reverse=True
         )[:10]
-        
+
         # Account breakdown
         value_currency = display_currency or (holdings[0].get("value_currency") if holdings else "USD")
         account_breakdown = []
@@ -984,7 +989,7 @@ class PortfolioService:
             ]
             acc_value = sum(h.get("current_value") or 0 for h in acc_holdings)
             acc_cost = sum(h.get("total_cost") or 0 for h in acc_holdings)
-            
+
             account_breakdown.append({
                 "account_id": account["account_id"],
                 "account_name": account["account_name"],
@@ -999,7 +1004,7 @@ class PortfolioService:
                 ),
                 "value_currency": value_currency,
             })
-        
+
         return {
             "success": True,
             "net_worth": float(total_value),
@@ -1019,8 +1024,8 @@ class PortfolioService:
 
     async def get_user_all_dividends(
         self, user_id: int,
-        account_ids: Optional[List[int]] = None,
-    ) -> Dict[str, Any]:
+        account_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
         """Aggregate dividends across all (or specified) user accounts.
 
         When account_ids is provided, scope to those accounts only.
@@ -1079,13 +1084,13 @@ class PortfolioService:
 
     async def get_user_all_transactions(
         self, user_id: int,
-        account_ids: Optional[List[int]] = None,
+        account_ids: list[int] | None = None,
         limit: int = 100,
-        activity_type: Optional[str] = None,
-        search: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        activity_type: str | None = None,
+        search: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> dict[str, Any]:
         """Get transactions across all (or specified) user accounts.
 
         Supports the same filters as the per-account endpoint.
@@ -1145,7 +1150,7 @@ class PortfolioService:
 
     async def get_dividend_history_detail(
         self, user_id: int, account_id: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get detailed dividend history for an account with company names."""
         repo = self.portfolio_repo
         account = repo.get_account_by_id(account_id)
@@ -1164,7 +1169,7 @@ class PortfolioService:
         )
 
         company_ids = list({d.get("company_id") for d in dividends if d.get("company_id")})
-        company_names: Dict[int, str] = {}
+        company_names: dict[int, str] = {}
         if company_ids:
             try:
                 res = (
@@ -1202,19 +1207,19 @@ class PortfolioService:
     # ========================================================================
     # MANUAL TRADE ENTRY
     # ========================================================================
-    
+
     async def add_manual_transaction(
         self,
         user_id: int,
         account_id: int,
         transaction_date: date,
         activity_type: str,
-        symbol: Optional[str],
-        quantity: Optional[Decimal],
-        unit_price: Optional[Decimal],
+        symbol: str | None,
+        quantity: Decimal | None,
+        unit_price: Decimal | None,
         commission: Decimal = Decimal("0"),
-        notes: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        notes: str | None = None,
+    ) -> dict[str, Any]:
         try:
             company_id = None
             company_created = False
@@ -1295,9 +1300,9 @@ class PortfolioService:
 
         except Exception as e:
             logger.error(f"Failed to add manual transaction: {e}", exc_info=True)
-            return {"success": False, "error": f"Failed to create transaction: {str(e)}"}
+            return {"success": False, "error": f"Failed to create transaction: {e!s}"}
 
-    async def _create_company_from_symbol(self, symbol: str, exchange_override: Optional[str] = None) -> Optional[int]:
+    async def _create_company_from_symbol(self, symbol: str, exchange_override: str | None = None) -> int | None:
         """
         Fetch company details from YFinance and create database record.
         
@@ -1387,7 +1392,7 @@ class PortfolioService:
     # ========================================================================
 
     def _period_to_date_range(
-        self, period: str, account_ids: Optional[List[int]] = None
+        self, period: str, account_ids: list[int] | None = None
     ) -> tuple[date, date]:
         """Convert period string to (start_date, end_date).
 
@@ -1423,9 +1428,7 @@ class PortfolioService:
     def _step_for_period(self, period: str) -> timedelta:
         """Return the snapshot interval for a given period string."""
         p = period.upper()
-        if p == "1D":
-            return timedelta(days=1)
-        elif p == "1W":
+        if p == "1D" or p == "1W":
             return timedelta(days=1)
         elif p == "1M":
             return timedelta(days=2)
@@ -1440,10 +1443,10 @@ class PortfolioService:
 
     def _generate_snapshot_dates(
         self, period: str, start_date: date, end_date: date
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate snapshot date strings at intervals appropriate for the period."""
         step = self._step_for_period(period)
-        dates: List[str] = []
+        dates: list[str] = []
         current_d = start_date
         while current_d <= end_date:
             dates.append(current_d.isoformat())
@@ -1455,12 +1458,12 @@ class PortfolioService:
 
     def _compute_fifo_snapshots(
         self,
-        lots: Dict[tuple, list],
-        in_txns_sorted: List[Dict],
-        sorted_dates: List[str],
-        price_map: Dict[str, Dict[str, float]],
-        cumulative_invested_map: Optional[Dict[date, float]] = None,
-    ) -> List[Dict]:
+        lots: dict[tuple, list],
+        in_txns_sorted: list[dict],
+        sorted_dates: list[str],
+        price_map: dict[str, dict[str, float]],
+        cumulative_invested_map: dict[date, float] | None = None,
+    ) -> list[dict]:
         """Core FIFO snapshot engine — used by both portfolio and single-stock.
 
         Args:
@@ -1472,7 +1475,7 @@ class PortfolioService:
 
         Returns list of {date, value, cost_basis, net_deposits} dicts.
         """
-        snapshots: List[Dict] = []
+        snapshots: list[dict] = []
         txn_index = 0
 
         for d in sorted_dates:
@@ -1556,13 +1559,13 @@ class PortfolioService:
 
         return snapshots
 
-    def _get_cashflow_deltas(self, account_ids: List[int]) -> List[Dict]:
+    def _get_cashflow_deltas(self, account_ids: list[int]) -> list[dict]:
         """Fetch MoneyMovement & BonusPayment transactions as sorted cash flow deltas.
 
         Returns list of {date: date, amount: float} sorted chronologically.
         Positive amount = deposit (money in), negative = withdrawal (money out).
         """
-        raw: List[Dict] = []
+        raw: list[dict] = []
         cft_batch = self.portfolio_repo.get_accounts_transactions(
             account_ids, activity_types=["MoneyMovement", "BonusPayment"]
         )
@@ -1581,8 +1584,8 @@ class PortfolioService:
         ]
 
     def _compress_snapshots_by_interval(
-        self, snapshots: List[Dict], period: str
-    ) -> List[Dict]:
+        self, snapshots: list[dict], period: str
+    ) -> list[dict]:
         if not snapshots:
             return snapshots
 
@@ -1607,8 +1610,8 @@ class PortfolioService:
         return compressed
 
     def _compute_returns_from_snapshots(
-        self, snapshots: List[Dict], period: str
-    ) -> Dict[str, Any]:
+        self, snapshots: list[dict], period: str
+    ) -> dict[str, Any]:
         """Compute all return metrics from a snapshot list.
 
         Returns dict with:
@@ -1670,8 +1673,8 @@ class PortfolioService:
     @timed()
     async def get_portfolio_performance(
         self, user_id: int, period: str = "1Y",
-        account_ids: Optional[List[int]] = None,
-    ) -> Dict[str, Any]:
+        account_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
         if account_ids is None:
             accounts = self.portfolio_repo.get_user_accounts(user_id)
             account_ids = [a["account_id"] for a in accounts]
@@ -1710,7 +1713,7 @@ class PortfolioService:
 
         use_locf = getattr(settings, "ENABLE_PERFORMANCE_LOCF", True)
 
-        by_account: Dict[int, List[Dict]] = defaultdict(list)
+        by_account: dict[int, list[dict]] = defaultdict(list)
         for s in raw_snapshots:
             by_account[s["account_id"]].append(s)
 
@@ -1719,7 +1722,7 @@ class PortfolioService:
         latest_date = all_dates[-1] if all_dates else None
 
         account_iters = {}
-        current_snap: Dict[int, Optional[Dict]] = {}
+        current_snap: dict[int, dict | None] = {}
         for aid in accounts_with_data:
             it = iter(by_account[aid])
             account_iters[aid] = it
@@ -1728,15 +1731,15 @@ class PortfolioService:
             except StopIteration:
                 current_snap[aid] = None
 
-        last_value: Dict[int, float] = {}
-        last_cost: Dict[int, float] = {}
-        last_cash: Dict[int, float] = {}
-        last_nd: Dict[int, float] = {}
+        last_value: dict[int, float] = {}
+        last_cost: dict[int, float] = {}
+        last_cash: dict[int, float] = {}
+        last_nd: dict[int, float] = {}
         locf_count = 0
-        merged: Dict[str, Dict] = {}
+        merged: dict[str, dict] = {}
         spike_detected = False
         spike_threshold = getattr(settings, "SNAPSHOT_SPIKE_THRESHOLD", 0.20)
-        prev_merged: Optional[Dict[str, Any]] = None
+        prev_merged: dict[str, Any] | None = None
 
         for d in all_dates:
             total_value = 0.0
@@ -1868,8 +1871,8 @@ class PortfolioService:
 
     async def _get_portfolio_performance_legacy(
         self, user_id: int, period: str = "1Y",
-        account_ids: Optional[List[int]] = None,
-    ) -> Dict[str, Any]:
+        account_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
         start_date, end_date = self._period_to_date_range(period, account_ids)
         return await self._compute_performance_fallback(
             user_id, period, account_ids, start_date, end_date
@@ -1907,13 +1910,13 @@ class PortfolioService:
         _perf_fx_svc = None
         if settings.ENABLE_FX_CONVERSION:
             try:
-                from shared.fx_service import FXService as _FX
                 from database import supabase as _db
+                from shared.fx_service import FXService as _FX
                 _perf_fx_svc = _FX(_db)
             except Exception:
                 _perf_fx_svc = None
 
-        @lru_cache(maxsize=None)
+        @cache
         def _cached_cash_balance(aid: int, dt_str: str, acct_ccy: str) -> Decimal:
             target = date.fromisoformat(dt_str)
             total = Decimal("0.00")
@@ -1930,7 +1933,7 @@ class PortfolioService:
                         total += Decimal(str(nca))
             return total
 
-        @lru_cache(maxsize=None)
+        @cache
         def _cached_net_deposits(aid: int, dt_str: str, acct_ccy: str) -> Decimal:
             target = date.fromisoformat(dt_str)
             total = Decimal("0.00")
@@ -1947,7 +1950,7 @@ class PortfolioService:
                         total += Decimal(str(nca))
             return total
 
-        lots: Dict[tuple, list] = defaultdict(list)
+        lots: dict[tuple, list] = defaultdict(list)
         for t in pre_txns:
             action = _classify_lot_action(t)
             if action is None:
@@ -2023,7 +2026,7 @@ class PortfolioService:
                 txn_index += 1
 
             # Group holdings by account_id for per-account snapshots
-            cid_holdings_by_account: Dict[int, Dict[int, dict]] = defaultdict(dict)
+            cid_holdings_by_account: dict[int, dict[int, dict]] = defaultdict(dict)
             for (aid, cid), lot_list in lots.items():
                 qty_held = sum(l["quantity"] for l in lot_list)
                 if qty_held <= 0.001:
@@ -2128,12 +2131,12 @@ class PortfolioService:
     # ------------------------------------------------------------------
 
     def _compute_monthly_returns(
-        self, snapshots: List[Dict[str, Any]],
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        self, snapshots: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         if len(snapshots) < 2:
             return None, None
 
-        monthly_map: Dict[str, List[float]] = {}
+        monthly_map: dict[str, list[float]] = {}
         for i in range(1, len(snapshots)):
             prev_val = snapshots[i - 1]["position_value"]
             curr_val = snapshots[i]["position_value"]
@@ -2142,11 +2145,11 @@ class PortfolioService:
                 month_key = snapshots[i]["date"][:7]
                 monthly_map.setdefault(month_key, []).append(ret_pct)
 
-        best: Optional[Dict[str, Any]] = None
-        worst: Optional[Dict[str, Any]] = None
+        best: dict[str, Any] | None = None
+        worst: dict[str, Any] | None = None
         for month_key, returns in monthly_map.items():
             avg_ret = sum(returns) / len(returns)
-            dt = datetime.strptime(month_key + "-01", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(month_key + "-01", "%Y-%m-%d").replace(tzinfo=UTC)
             label = dt.strftime("%b %Y")
             entry = {"month": month_key, "return_pct": round(avg_ret, 2), "label": label}
             if best is None or avg_ret > best["return_pct"]:
@@ -2156,8 +2159,8 @@ class PortfolioService:
         return best, worst
 
     def _compute_longest_drawdown(
-        self, snapshots: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        self, snapshots: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         if len(snapshots) < 2:
             return None
 
@@ -2202,7 +2205,7 @@ class PortfolioService:
         }
 
     def _compute_30d_volatility(
-        self, snapshots: List[Dict[str, Any]],
+        self, snapshots: list[dict[str, Any]],
     ) -> float:
         values = np.array([s["position_value"] for s in snapshots], dtype=np.float64)
         daily_returns = compute_daily_returns(values)
@@ -2211,8 +2214,8 @@ class PortfolioService:
         return round(compute_annualized_volatility(daily_returns) * 100, 2)
 
     def _compute_days_above_cost_basis(
-        self, snapshots: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        self, snapshots: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         total_days = len(snapshots)
         if total_days < 2:
             return None
@@ -2227,8 +2230,8 @@ class PortfolioService:
         }
 
     def _compute_performance_summary(
-        self, snapshots: List[Dict[str, Any]], total_return: float, total_dividends: float, period: str,
-    ) -> Dict[str, Any]:
+        self, snapshots: list[dict[str, Any]], total_return: float, total_dividends: float, period: str,
+    ) -> dict[str, Any]:
         combined_return = round(total_return + total_dividends, 2)
         best_month, worst_month = self._compute_monthly_returns(snapshots)
         month_info = {}
@@ -2250,8 +2253,8 @@ class PortfolioService:
         }
 
     def _compute_max_drawdown_info(
-        self, snapshots: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        self, snapshots: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         if len(snapshots) < 2:
             return None
         values = np.array([s["position_value"] for s in snapshots], dtype=np.float64)
@@ -2267,7 +2270,7 @@ class PortfolioService:
 
     async def get_holding_performance(
         self, user_id: int, symbol: str, period: str = "1Y",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Compute time-series performance for a single stock in user's portfolio.
 
@@ -2309,7 +2312,7 @@ class PortfolioService:
         pre_txns = [t for t in txns if t["transaction_date"] < start_date]
         in_txns = [t for t in txns if start_date <= t["transaction_date"] <= end_date]
 
-        price_map: Dict[str, Dict[str, float]] = {}
+        price_map: dict[str, dict[str, float]] = {}
         try:
             sym_up = symbol.upper()
             company_id = txns[0].get("company_id") if txns else None
@@ -2377,7 +2380,7 @@ class PortfolioService:
         except Exception as e:
             logger.warning(f"Failed to fetch price_history for {symbol}: {e}")
 
-        lots: Dict[tuple, list] = defaultdict(list)
+        lots: dict[tuple, list] = defaultdict(list)
         for t in pre_txns:
             sym = t.get("symbol")
             if not sym:
@@ -2412,7 +2415,7 @@ class PortfolioService:
         sorted_dates = self._generate_snapshot_dates(period, start_date, end_date)
 
         # Build cumulative_invested map: total $ put in (buys - sells) to date
-        cumulative_invested_map: Dict[date, float] = {}
+        cumulative_invested_map: dict[date, float] = {}
         running_ci = Decimal("0")
         for t in txns:
             d = t["transaction_date"]
@@ -2504,13 +2507,13 @@ class PortfolioService:
 
     async def get_holding_dividends(
         self, user_id: int, symbol: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get dividend history for a single held stock, aggregated by fiscal quarter."""
         divs = self.portfolio_repo.get_dividends_for_symbol(user_id, symbol)
         if not divs:
             return []
 
-        quarterly: Dict[tuple, dict] = {}
+        quarterly: dict[tuple, dict] = {}
         for d in divs:
             fy = d.get("fiscal_year") or date.fromisoformat(str(d.get("payment_date", "2000-01-01"))).year
             fm = d.get("fiscal_month") or date.fromisoformat(str(d.get("payment_date", "2000-01-01"))).month
@@ -2555,7 +2558,7 @@ class PortfolioService:
 
     async def get_holding_transactions(
         self, user_id: int, symbol: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return all BUY/SELL transactions for a symbol across user accounts."""
         txns = self.portfolio_repo.get_transactions_for_symbol(user_id, symbol)
         accounts = self.portfolio_repo.get_user_accounts(user_id)
@@ -2590,7 +2593,7 @@ class PortfolioService:
 
     async def get_holding_accounts(
         self, user_id: int, symbol: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return per-account breakdown of a single holding."""
         symbol_up = symbol.upper()
         holdings = self.portfolio_repo.get_user_all_holdings(user_id)
@@ -2600,7 +2603,7 @@ class PortfolioService:
         enriched = await self._enrich_holdings(symbol_holdings)
 
         divs = self.portfolio_repo.get_dividends_for_symbol(user_id, symbol)
-        divs_by_account: Dict[int, float] = {}
+        divs_by_account: dict[int, float] = {}
         for d in divs:
             aid = d.get("account_id")
             if aid:
@@ -2632,8 +2635,8 @@ class PortfolioService:
     # ------------------------------------------------------------------
 
     async def get_holding_performance_compare(
-        self, user_id: int, symbol: str, period: str, benchmark_symbols: List[str],
-    ) -> Dict[str, Any]:
+        self, user_id: int, symbol: str, period: str, benchmark_symbols: list[str],
+    ) -> dict[str, Any]:
         """Compare single-stock performance against benchmarks using the
         symbol's own buy/sell cash flows (not portfolio-level deposits)."""
         perf = await self.get_holding_performance(user_id, symbol, period)
@@ -2715,7 +2718,7 @@ class PortfolioService:
     # Benchmark simulation (same-cash-flows approach)
     # ------------------------------------------------------------------
 
-    def _nearest_price(self, price_map: Dict[str, float], target: str) -> Optional[float]:
+    def _nearest_price(self, price_map: dict[str, float], target: str) -> float | None:
         """Find the nearest price on or before target date in price_map.
 
         If no price exists on or before target, falls forward to the
@@ -2737,9 +2740,9 @@ class PortfolioService:
         start_date: date,
         end_date: date,
         initial_value: float,
-        cashflow_deltas: List[Dict],
-        snapshot_dates: List[str],
-    ) -> Optional[List[Dict]]:
+        cashflow_deltas: list[dict],
+        snapshot_dates: list[str],
+    ) -> list[dict] | None:
         """
         Simulate what a benchmark (e.g. SPY) would be worth if the same
         deposits/withdrawals had been invested in it instead of the portfolio.
@@ -2767,7 +2770,7 @@ class PortfolioService:
 
         benchmark_split_factors = self.portfolio_repo._get_split_factors([benchmark_company_id]).get(benchmark_company_id, [])
 
-        price_map: Dict[str, float] = {}
+        price_map: dict[str, float] = {}
         for row in resp.data:
             pd_val = row["price_date"]
             if isinstance(pd_val, str):
@@ -2811,7 +2814,7 @@ class PortfolioService:
             if start_date <= cf["date"] <= end_date
         ]
 
-        series: List[Dict] = []
+        series: list[dict] = []
         cf_index = 0
 
         for sd in snapshot_dates:
@@ -2847,8 +2850,8 @@ class PortfolioService:
 
     async def get_portfolio_allocation(
         self, user_id: int, group_by: str = "sector",
-        account_ids: Optional[List[int]] = None,
-    ) -> Dict[str, Any]:
+        account_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
         """
         Get portfolio allocation breakdown grouped by sector, geography, or account.
 
@@ -2904,11 +2907,11 @@ class PortfolioService:
             return self._group_allocation_flat(holdings, group_by)
 
     def _group_allocation_by_type(
-        self, holdings: List[Dict[str, Any]],
-        type_labels: Dict[str, str],
-    ) -> Dict[str, Any]:
+        self, holdings: list[dict[str, Any]],
+        type_labels: dict[str, str],
+    ) -> dict[str, Any]:
         """Two-level grouping: security_type → sector."""
-        types: Dict[str, Dict[str, Any]] = {}
+        types: dict[str, dict[str, Any]] = {}
 
         for h in holdings:
             st = h.get("security_type") or "stock"
@@ -2979,10 +2982,10 @@ class PortfolioService:
         }
 
     def _group_allocation_flat(
-        self, holdings: List[Dict[str, Any]], group_by: str,
-    ) -> Dict[str, Any]:
+        self, holdings: list[dict[str, Any]], group_by: str,
+    ) -> dict[str, Any]:
         """Flat grouping for geography or account views."""
-        segments: Dict[str, Dict[str, Any]] = {}
+        segments: dict[str, dict[str, Any]] = {}
 
         for h in holdings:
             if group_by == "geography":
@@ -3020,7 +3023,7 @@ class PortfolioService:
             "total_value": round(total_value, 2),
         }
 
-    async def get_benchmarks(self) -> List[Dict[str, Any]]:
+    async def get_benchmarks(self) -> list[dict[str, Any]]:
         """List all active benchmarks from benchmark_config — delegates to shared repository logic."""
         from infrastructure.repositories.analysis_repository import AnalysisRepository
         from infrastructure.repositories.valuation_repository import ValuationRepository
@@ -3028,9 +3031,9 @@ class PortfolioService:
         return await repo.list_active_benchmarks()
 
     async def get_performance_compare(
-        self, user_id: int, period: str, benchmark_symbols: List[str],
-        account_ids: Optional[List[int]] = None,
-    ) -> Dict[str, Any]:
+        self, user_id: int, period: str, benchmark_symbols: list[str],
+        account_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
         """
         Compare portfolio performance against benchmark indices.
 

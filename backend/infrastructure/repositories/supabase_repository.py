@@ -1,13 +1,15 @@
-from typing import List, Dict, Any, Optional
+from typing import Any
+
+from database import supabase
 from domain.interfaces.repository import WatchlistRepository
-from database import supabase, get_supabase_user_client
 from supabase import Client
+
 
 class SupabaseWatchlistRepository(WatchlistRepository):
     def __init__(self, client: Client = supabase):
         self.client = client
 
-    def _fetch_one(self, table: str, column: str, value) -> Optional[Dict[str, Any]]:
+    def _fetch_one(self, table: str, column: str, value) -> dict[str, Any] | None:
         """Single-row lookup. Returns None cleanly when 0 rows match.
         Uses limit(1) — not single() — so 0 rows returns None instead of
         raising APIError. Defined once here; never repeated at call sites."""
@@ -20,7 +22,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         )
         return res.data[0] if res.data else None
 
-    def find_user_by_auth_id(self, auth_id: str) -> Optional[Dict[str, Any]]:
+    def find_user_by_auth_id(self, auth_id: str) -> dict[str, Any] | None:
         res = (
             self.client.table('users')
             .select('user_id')
@@ -30,7 +32,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         )
         return res.data[0] if res.data else None
 
-    def find_watchlist_owner(self, watchlist_id: int) -> Optional[Dict[str, Any]]:
+    def find_watchlist_owner(self, watchlist_id: int) -> dict[str, Any] | None:
         res = (
             self.client.table('watchlists')
             .select('user_id')
@@ -49,7 +51,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         )
         return res.count or 0
 
-    def find_watchlist_item_with_owner(self, item_id: int) -> Optional[Dict[str, Any]]:
+    def find_watchlist_item_with_owner(self, item_id: int) -> dict[str, Any] | None:
         # Query 1: Get item with companies (regular join - works with PostgREST)
         res = (
             self.client.table('watchlist_items')
@@ -74,7 +76,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
             'companies': item.get('companies')
         }
 
-    def find_company_by_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def find_company_by_symbol(self, symbol: str) -> dict[str, Any] | None:
         res = (
             self.client.table('companies')
             .select('company_id')
@@ -83,11 +85,11 @@ class SupabaseWatchlistRepository(WatchlistRepository):
             .execute()
         )
         return res.data[0] if res.data else None
-    def find_by_user_id(self, user_id: int) -> List[Dict[str, Any]]:
+    def find_by_user_id(self, user_id: int) -> list[dict[str, Any]]:
         res = self.client.table('watchlists').select('*').eq('user_id', user_id).execute()
         return res.data or []
 
-    def find_default_by_user_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+    def find_default_by_user_id(self, user_id: int) -> dict[str, Any] | None:
         # IMPORTANT: `.single()` throws when 0 rows are returned (new users or no default set),
         # which bubbles up as a 500. Return None instead.
         res = (
@@ -100,7 +102,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         )
         return (res.data[0] if res.data else None)
 
-    def create_default(self, user_id: int, name: str) -> Dict[str, Any]:
+    def create_default(self, user_id: int, name: str) -> dict[str, Any]:
         res = self.client.table('watchlists').insert({
             'user_id': user_id,
             'watchlist_name': name,
@@ -108,7 +110,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         }).execute()
         return res.data[0]
 
-    def get_items_by_watchlist_id(self, watchlist_id: int) -> List[Dict[str, Any]]:
+    def get_items_by_watchlist_id(self, watchlist_id: int) -> list[dict[str, Any]]:
         res = self.client.table('watchlist_items').select(
             'watchlist_item_id, target_buy, target_sell, '
             'companies(company_id, ticker_symbol, company_name, sector, industry)'
@@ -122,9 +124,9 @@ class SupabaseWatchlistRepository(WatchlistRepository):
     def update_item_targets(
         self,
         item_id: int,
-        target_buy: Optional[float],
-        target_sell: Optional[float]
-    ) -> Optional[Dict[str, Any]]:
+        target_buy: float | None,
+        target_sell: float | None
+    ) -> dict[str, Any] | None:
         """Update target prices for a watchlist item."""
         update_data = {}
         if target_buy is not None:
@@ -167,7 +169,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
         )
         return bool(res.data)
 
-    def get_user_symbols(self, user_id: int) -> List[str]:
+    def get_user_symbols(self, user_id: int) -> list[str]:
         """Get all symbols user has across ALL watchlists. Used for bulk cleanup."""
         # Step 1: Get user's watchlist IDs
         watchlists = self.find_by_user_id(user_id)
@@ -192,7 +194,7 @@ class SupabaseUserRepository:
     def __init__(self, client: Client = supabase):
         self.client = client
 
-    def find_by_firebase_uid(self, firebase_uid: str) -> Optional[Dict[str, Any]]:
+    def find_by_firebase_uid(self, firebase_uid: str) -> dict[str, Any] | None:
         # IMPORTANT: `.single()` throws when 0 rows are returned (user exists in Firebase but not in DB),
         # which bubbles up as a 500. Return None instead so service can raise a controlled AppException.
         res = (

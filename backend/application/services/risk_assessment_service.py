@@ -1,38 +1,38 @@
 from __future__ import annotations
+
 import logging
-import math
 import statistics
 from datetime import date
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from domain.models.risk_assessment import (
-    RiskAssessmentResponse,
-    CompositeScore,
-    BearCase,
-    ScenarioResult,
-    RiskMetric,
-    RiskLayer,
-    RiskDataQuality,
-    RiskAiNarrative,
-    BusinessFragility,
-    BalanceSheetRisk,
-    ValuationCompressionRisk,
-    EarningsStressRisk,
-    DrawdownRisk,
-    CrisisDrawdown,
-    LayerName,
-    RiskCategory,
-    RiskSeverity,
-)
 from application.services.moat_analysis_service import MoatAnalysisService
 from application.services.moat_wacc_service import MoatWaccService
+from domain.models.risk_assessment import (
+    BalanceSheetRisk,
+    BearCase,
+    BusinessFragility,
+    CompositeScore,
+    CrisisDrawdown,
+    DrawdownRisk,
+    EarningsStressRisk,
+    LayerName,
+    RiskAiNarrative,
+    RiskAssessmentResponse,
+    RiskCategory,
+    RiskDataQuality,
+    RiskLayer,
+    RiskMetric,
+    RiskSeverity,
+    ScenarioResult,
+    ValuationCompressionRisk,
+)
 from infrastructure.repositories.risk_repository import RiskRepository
-from shared.finance_math import safe_float, safe_div
+from shared.finance_math import safe_div, safe_float
+from shared.time_utils import now_iso
 
 logger = logging.getLogger(__name__)
 
-_LAYER_WEIGHTS: Dict[LayerName, float] = {
+_LAYER_WEIGHTS: dict[LayerName, float] = {
     "business_fragility": 0.20,
     "balance_sheet": 0.25,
     "valuation_compression": 0.20,
@@ -40,7 +40,7 @@ _LAYER_WEIGHTS: Dict[LayerName, float] = {
     "drawdown_risk": 0.10,
 }
 
-_SECTOR_RECURRENCE: Dict[str, str] = {
+_SECTOR_RECURRENCE: dict[str, str] = {
     "Technology": "High",
     "Healthcare": "High",
     "Consumer Defensive": "High",
@@ -55,7 +55,7 @@ _SECTOR_RECURRENCE: Dict[str, str] = {
     "Consumer Cyclical": "Low",
 }
 
-_CRISIS_PERIODS: List[Dict[str, Any]] = [
+_CRISIS_PERIODS: list[dict[str, Any]] = [
     {"name": "COVID Crash", "start": date(2020, 2, 19), "end": date(2020, 3, 23)},
     {"name": "2022 Rate Hike", "start": date(2022, 1, 3), "end": date(2022, 10, 12)},
 ]
@@ -110,7 +110,7 @@ class RiskAssessmentService:
         layer4 = self._analyze_earnings_stress(income)
         layer5 = self._analyze_drawdown_risk(prices, ctx)
 
-        layers: Dict[LayerName, RiskLayer] = {
+        layers: dict[LayerName, RiskLayer] = {
             "business_fragility": layer1,
             "balance_sheet": layer2,
             "valuation_compression": layer3,
@@ -213,9 +213,9 @@ class RiskAssessmentService:
 
     def _analyze_business_fragility(
         self,
-        ctx: Dict[str, Any],
+        ctx: dict[str, Any],
         moat: Any,
-        ratios_history: List[Dict[str, Any]],
+        ratios_history: list[dict[str, Any]],
     ) -> BusinessFragility:
         sector = ctx.get("sector", "")
         industry = ctx.get("industry", "")
@@ -270,8 +270,8 @@ class RiskAssessmentService:
 
     def _analyze_balance_sheet(
         self,
-        ratios: Optional[Dict[str, Any]],
-        cash_flow: Optional[Dict[str, Any]],
+        ratios: dict[str, Any] | None,
+        cash_flow: dict[str, Any] | None,
     ) -> BalanceSheetRisk:
         if not ratios:
             return BalanceSheetRisk(
@@ -441,7 +441,7 @@ class RiskAssessmentService:
 
     def _analyze_earnings_stress(
         self,
-        income_statements: List[Dict[str, Any]],
+        income_statements: list[dict[str, Any]],
     ) -> EarningsStressRisk:
         if not income_statements or len(income_statements) < 2:
             return EarningsStressRisk(
@@ -532,8 +532,8 @@ class RiskAssessmentService:
 
     def _analyze_drawdown_risk(
         self,
-        prices: List[Dict[str, Any]],
-        ctx: Dict[str, Any],
+        prices: list[dict[str, Any]],
+        ctx: dict[str, Any],
     ) -> DrawdownRisk:
         if not prices or len(prices) < 2:
             return DrawdownRisk(
@@ -624,7 +624,7 @@ class RiskAssessmentService:
 
     # ── Composite Scoring ─────────────────────────────────────────────────
 
-    def _compute_composite(self, layers: Dict[LayerName, RiskLayer]) -> CompositeScore:
+    def _compute_composite(self, layers: dict[LayerName, RiskLayer]) -> CompositeScore:
         total = 0.0
         weight_sum = 0.0
 
@@ -656,9 +656,9 @@ class RiskAssessmentService:
 
     def _compute_scenarios(
         self,
-        income_statements: List[Dict[str, Any]],
-        current_price: Optional[float],
-    ) -> Optional[List[ScenarioResult]]:
+        income_statements: list[dict[str, Any]],
+        current_price: float | None,
+    ) -> list[ScenarioResult] | None:
         if not income_statements or current_price is None:
             return None
 
@@ -677,9 +677,9 @@ class RiskAssessmentService:
             future_eps_fn = lambda g: current_eps * ((1.0 + g) ** years)
         else:
             # Revenue-based fallback: compute RPS per year, CAGR on RPS, apply terminal margin
-            revenue_values: List[float] = []
-            shares_values: List[float] = []
-            net_income_values: List[float] = []
+            revenue_values: list[float] = []
+            shares_values: list[float] = []
+            net_income_values: list[float] = []
             for r in sorted_is:
                 rev = safe_float(r.get("revenue"))
                 shares = safe_float(r.get("shares_outstanding_diluted"))
@@ -710,7 +710,7 @@ class RiskAssessmentService:
                 future_rps = current_rps * ((1.0 + g) ** years)
                 return future_rps * terminal_margin
 
-        scenarios: List[Dict[str, Any]] = [
+        scenarios: list[dict[str, Any]] = [
             {"name": "bull", "eps_growth": max(growth_base * 1.8, 0.10), "exit_pe": 28, "probability": 0.25},
             {"name": "base", "eps_growth": max(growth_base, 0.05), "exit_pe": 22, "probability": 0.50},
             {"name": "bear", "eps_growth": max(growth_base * 0.3, 0.02), "exit_pe": 15, "probability": 0.20},
@@ -737,7 +737,7 @@ class RiskAssessmentService:
 
         return results
 
-    def _compute_mel(self, scenarios: Optional[List[ScenarioResult]]) -> Optional[float]:
+    def _compute_mel(self, scenarios: list[ScenarioResult] | None) -> float | None:
         if not scenarios:
             return None
         weighted_loss = sum(
@@ -766,7 +766,7 @@ class RiskAssessmentService:
             "Keep the response to 2-3 paragraphs."
         )
 
-    async def _call_ai(self, prompt: str) -> Optional[str]:
+    async def _call_ai(self, prompt: str) -> str | None:
         try:
             from config import settings
             key = settings.OPEN_ROUTER_KEY or ""
@@ -813,7 +813,7 @@ class RiskAssessmentService:
         return _SECTOR_RECURRENCE.get(sector, "Medium")
 
     @staticmethod
-    def _assess_pricing_power(ratios_history: List[Dict[str, Any]]) -> str:
+    def _assess_pricing_power(ratios_history: list[dict[str, Any]]) -> str:
         valid = [r for r in ratios_history if safe_float(r.get("gross_margin")) is not None]
         if len(valid) < 2:
             return "Unknown"
@@ -826,7 +826,7 @@ class RiskAssessmentService:
         return "Weak"
 
     @staticmethod
-    def _compute_fcf_stability(cash_flow: Optional[Dict[str, Any]]) -> Optional[float]:
+    def _compute_fcf_stability(cash_flow: dict[str, Any] | None) -> float | None:
         if not cash_flow:
             return None
         ocf = safe_float(cash_flow.get("cash_from_operating_activities"))
@@ -837,7 +837,7 @@ class RiskAssessmentService:
         return None
 
     @staticmethod
-    def _compute_cagr(values: List[float]) -> Optional[float]:
+    def _compute_cagr(values: list[float]) -> float | None:
         if len(values) < 2:
             return None
         n = len(values) - 1
@@ -848,7 +848,7 @@ class RiskAssessmentService:
         return (end / start) ** (1.0 / n) - 1.0
 
     @staticmethod
-    def _compute_max_drawdown(values: List[float]) -> float:
+    def _compute_max_drawdown(values: list[float]) -> float:
         if len(values) < 2:
             return 0.0
         peak = values[0]
@@ -863,9 +863,9 @@ class RiskAssessmentService:
 
     @staticmethod
     def _compute_crisis_drawdowns(
-        close_values: List[float],
-        price_dates: List[str],
-    ) -> Optional[List[CrisisDrawdown]]:
+        close_values: list[float],
+        price_dates: list[str],
+    ) -> list[CrisisDrawdown] | None:
         if len(close_values) != len(price_dates) or not close_values:
             return None
 
@@ -903,7 +903,7 @@ class RiskAssessmentService:
         return results if results else None
 
     @staticmethod
-    def _compute_recovery_time(close_values: List[float]) -> Optional[int]:
+    def _compute_recovery_time(close_values: list[float]) -> int | None:
         if len(close_values) < 2:
             return None
 
@@ -931,7 +931,7 @@ class RiskAssessmentService:
         return len(close_values) - trough_idx
 
     @staticmethod
-    def _compute_percentile(value: Optional[float], values: List[float]) -> float:
+    def _compute_percentile(value: float | None, values: list[float]) -> float:
         if value is None or not values:
             return 50.0
         sorted_vals = sorted(values)
@@ -942,7 +942,7 @@ class RiskAssessmentService:
         return (below / count) * 100.0
 
     @staticmethod
-    def _compute_margin_trend(income_statements: List[Dict[str, Any]]) -> str:
+    def _compute_margin_trend(income_statements: list[dict[str, Any]]) -> str:
         margins = []
         for r in income_statements:
             ni = safe_float(r.get("net_income"))
@@ -964,7 +964,7 @@ class RiskAssessmentService:
         return "stable"
 
     @staticmethod
-    def _compute_eps_volatility(eps_values: List[float]) -> Optional[float]:
+    def _compute_eps_volatility(eps_values: list[float]) -> float | None:
         if len(eps_values) < 2:
             return None
         growth_rates = []
@@ -978,8 +978,8 @@ class RiskAssessmentService:
 
     @staticmethod
     def _compute_revenue_eps_alignment(
-        eps_values: List[float],
-        revenue_values: List[float],
+        eps_values: list[float],
+        revenue_values: list[float],
     ) -> str:
         if len(eps_values) < 3 or len(revenue_values) < 3:
             return "volatile"
@@ -1003,8 +1003,8 @@ class RiskAssessmentService:
 
     @staticmethod
     def _compute_layer_score(
-        metrics: List[RiskMetric],
-        weights: Dict[str, float],
+        metrics: list[RiskMetric],
+        weights: dict[str, float],
     ) -> float:
         total = 0.0
         max_possible = 0.0
@@ -1050,7 +1050,7 @@ class RiskAssessmentService:
     # ── Status Helpers ────────────────────────────────────────────────────
 
     @staticmethod
-    def _moat_status(category: Optional[str]) -> str:
+    def _moat_status(category: str | None) -> str:
         if not category:
             return "na"
         if category in ("Wide", "Narrow"):
@@ -1074,7 +1074,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _debt_ebitda_status(value: Optional[float]) -> str:
+    def _debt_ebitda_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value < 2.0:
@@ -1084,7 +1084,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _interest_coverage_status(value: Optional[float]) -> str:
+    def _interest_coverage_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value >= 10.0:
@@ -1094,7 +1094,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _ratio_status(value: Optional[float], pass_thresh: float, fail_thresh: float) -> str:
+    def _ratio_status(value: float | None, pass_thresh: float, fail_thresh: float) -> str:
         if value is None:
             return "na"
         if value >= pass_thresh:
@@ -1104,7 +1104,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _de_ratio_status(value: Optional[float]) -> str:
+    def _de_ratio_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value < 1.0:
@@ -1114,7 +1114,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _fcf_stability_status(value: Optional[float]) -> str:
+    def _fcf_stability_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value >= 0.8:
@@ -1124,7 +1124,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _percentile_status(value: Optional[float]) -> str:
+    def _percentile_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value < 40:
@@ -1134,7 +1134,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _peg_status(value: Optional[float]) -> str:
+    def _peg_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value < 1.5:
@@ -1144,7 +1144,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _cagr_status(value: Optional[float]) -> str:
+    def _cagr_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value >= 0.10:
@@ -1154,7 +1154,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _margin_status(value: Optional[float]) -> str:
+    def _margin_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value >= 0.15:
@@ -1180,7 +1180,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _drawdown_status(value: Optional[float]) -> str:
+    def _drawdown_status(value: float | None) -> str:
         if value is None:
             return "na"
         v = abs(value)
@@ -1191,7 +1191,7 @@ class RiskAssessmentService:
         return "fail"
 
     @staticmethod
-    def _beta_status(value: Optional[float]) -> str:
+    def _beta_status(value: float | None) -> str:
         if value is None:
             return "na"
         if value < 1.2:

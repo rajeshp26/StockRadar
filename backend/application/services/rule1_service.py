@@ -37,15 +37,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional
-
-from shared.finance_math import (
-    build_fingerprint,
-    clamp,
-    safe_float,
-)
+from datetime import date, datetime
+from typing import Any
 
 from application.services.ai_service import generate_suitability_summary
 from application.services.recompute_guard import RecomputeGuard
@@ -59,6 +52,11 @@ from domain.models.valuation_rule1 import (
     Rule1Valuation,
 )
 from infrastructure.repositories.valuation_repository import ValuationRepository
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+)
+from shared.time_utils import now_iso, now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +65,7 @@ SECTOR_CYCL = {"Energy", "Materials"}
 
 # ── Module-level helpers ───────────────────────────────────────────────────────
 
-def _as_date(d: Any) -> Optional[date]:
+def _as_date(d: Any) -> date | None:
     if d is None:
         return None
     if isinstance(d, date) and not isinstance(d, datetime):
@@ -94,8 +92,8 @@ class Rule1Service:
     async def compute_rule1_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[Rule1RequestOverrides] = None,
+        user_id:   int | None,
+        overrides: Rule1RequestOverrides | None = None,
         force:     bool = False,
     ) -> Rule1Response:
         overrides = overrides or Rule1RequestOverrides()
@@ -182,9 +180,9 @@ class Rule1Service:
     async def compute_rule1_with_diagnostics(
         self,
         symbol:                 str,
-        user_id:                Optional[int],
-        overrides:              Optional[Rule1RequestOverrides] = None,
-        dependency_fingerprint: Optional[str] = None,
+        user_id:                int | None,
+        overrides:              Rule1RequestOverrides | None = None,
+        dependency_fingerprint: str | None = None,
     ) -> Rule1Response:
         overrides = overrides or Rule1RequestOverrides()
 
@@ -212,15 +210,15 @@ class Rule1Service:
             else params.get("margin_of_safety", 0.50)
         )
 
-        extra_flags:     List[DiagnosticFlag] = []
-        dq_freshness:    Dict[str, Any]       = {}
-        input_decisions: Dict[str, Any]       = {}
+        extra_flags:     list[DiagnosticFlag] = []
+        dq_freshness:    dict[str, Any]       = {}
+        input_decisions: dict[str, Any]       = {}
         fallbacks_used                         = False
 
         # ── EPS ───────────────────────────────────────────────────────────
         trailing           = await self.repo.get_trailing_eps(company_id)
-        eps0:              Optional[float] = None
-        eps_snapshot_date: Optional[date]  = None
+        eps0:              float | None = None
+        eps_snapshot_date: date | None  = None
 
         prefer_trailing = bool(params.get("prefer_trailing_eps", True))
         if trailing and trailing.get("trailing_eps") is not None and prefer_trailing:
@@ -252,7 +250,7 @@ class Rule1Service:
         }
 
         # ── Growth rate ────────────────────────────────────────────────────
-        growth:        Optional[float] = None
+        growth:        float | None = None
         growth_source: str             = ""
         prefer_forecast = bool(params.get("prefer_forecast_growth", True))
 
@@ -410,7 +408,7 @@ class Rule1Service:
             )
         )
 
-        all_flags: List[DiagnosticFlag] = list(metric_flags) + list(extra_flags)
+        all_flags: list[DiagnosticFlag] = list(metric_flags) + list(extra_flags)
 
         # ── AI summary ────────────────────────────────────────────────────
         suitability_summary = await generate_suitability_summary(
@@ -461,7 +459,7 @@ class Rule1Service:
         _now_iso = now_iso()
         dq_freshness["lastComputedAt"] = _now_iso
 
-        resolved_inputs: Dict[str, Any] = {
+        resolved_inputs: dict[str, Any] = {
             "eps0":          eps0_safe,
             "growth":        float(growth),
             "growth_source": growth_source,
@@ -478,7 +476,7 @@ class Rule1Service:
         # ── Build output snapshot ──────────────────────────────────────────
         # Option B: output_snapshot is the primary cache source for Rule 1,
         # matching the pattern used by DCF, DDM, OE, and RI.
-        output_snapshot: Dict[str, Any] = {
+        output_snapshot: dict[str, Any] = {
             "valuation": {
                 "symbol":       symbol.upper(),
                 "companyId":    company_id,
@@ -542,7 +540,7 @@ class Rule1Service:
 
     # ── Pure cache read ────────────────────────────────────────────────────────
 
-    async def get_cached(self, symbol: str) -> Optional[Rule1Response]:
+    async def get_cached(self, symbol: str) -> Rule1Response | None:
         """
         Pure cache read — no gate logic, no recompute, no DB writes.
         Returns None if no prior valuation exists.
@@ -660,7 +658,7 @@ class Rule1Service:
         ])
 
     @staticmethod
-    def _cagr(v0: float, vN: float, years: int) -> Optional[float]:
+    def _cagr(v0: float, vN: float, years: int) -> float | None:
         if years <= 0 or v0 <= 0 or vN <= 0:
             return None
         try:
@@ -669,10 +667,10 @@ class Rule1Service:
             return None
 
     def _cagr_from_series(
-        self, rows: List[Dict[str, Any]], key: str
-    ) -> Optional[float]:
-        vals:  List[float] = []
-        years: List[int]   = []
+        self, rows: list[dict[str, Any]], key: str
+    ) -> float | None:
+        vals:  list[float] = []
+        years: list[int]   = []
         for r in rows:
             v = r.get(key)
             y = r.get("fiscal_year")

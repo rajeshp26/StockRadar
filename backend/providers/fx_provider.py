@@ -6,10 +6,9 @@ Uses yf.download() (historical endpoint) instead of ticker.info to avoid
 heavy scraping that can return partial data.
 """
 
-from decimal import Decimal
-from typing import Optional
 import logging
 import math
+from decimal import Decimal
 
 import pandas as pd
 import yfinance as yf
@@ -17,7 +16,7 @@ import yfinance as yf
 logger = logging.getLogger(__name__)
 
 
-def fetch_fx_rate(base: str, target: str) -> Optional[Decimal]:
+def fetch_fx_rate(base: str, target: str) -> Decimal | None:
     """Fetch live FX rate via yfinance.
 
     Uses the last 5 trading days of history and returns the most recent close.

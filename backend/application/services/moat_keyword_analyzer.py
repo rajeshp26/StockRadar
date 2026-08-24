@@ -1,13 +1,13 @@
 from __future__ import annotations
+
 import logging
 import re
-from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-KEYWORD_GROUPS: Dict[str, List[Dict[str, Any]]] = {
+KEYWORD_GROUPS: dict[str, list[dict[str, Any]]] = {
     "intangible_assets": [
         {"keywords": ["patent", "patents", "patented"], "weight": 0.9},
         {"keywords": ["trademark", "trademarks"], "weight": 0.8},
@@ -64,7 +64,7 @@ KEYWORD_GROUPS: Dict[str, List[Dict[str, Any]]] = {
 
 class MoatKeywordAnalyzer:
     def __init__(self) -> None:
-        self._compiled: Dict[str, List[Tuple[re.Pattern, float]]] = {}
+        self._compiled: dict[str, list[tuple[re.Pattern, float]]] = {}
         for group_name, entries in KEYWORD_GROUPS.items():
             compiled_list = []
             for entry in entries:
@@ -78,9 +78,9 @@ class MoatKeywordAnalyzer:
     def analyze(
         self,
         text: str,
-        sections: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
+        sections: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "groups_found": [],
             "total_matches": 0,
             "evidence": [],
@@ -127,8 +127,8 @@ class MoatKeywordAnalyzer:
         return result
 
     def _deduplicate_by_snippet(
-        self, matches: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, matches: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         seen_snippets: set = set()
         unique = []
         for m in matches:
@@ -139,7 +139,7 @@ class MoatKeywordAnalyzer:
         return unique
 
     def compute_stage2_score(
-        self, analysis_result: Dict[str, Any]
+        self, analysis_result: dict[str, Any]
     ) -> float:
         groups_found = analysis_result.get("groups_found", [])
         group_scores = analysis_result.get("group_scores", {})

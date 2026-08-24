@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from domain.models.valuation_rule1 import DiagnosticFlag
 
@@ -14,10 +14,10 @@ class MetricResult:
     name: str
     status: str  # "pass" | "caution" | "fail" | "na"
     points: int  # 1 only if pass
-    flag: Optional[DiagnosticFlag] = None
+    flag: DiagnosticFlag | None = None
 
 
-def _safe_float(x: Any) -> Optional[float]:
+def _safe_float(x: Any) -> float | None:
     try:
         if x is None:
             return None
@@ -29,7 +29,7 @@ def _safe_float(x: Any) -> Optional[float]:
     return None
 
 
-def _cagr(v0: float, vN: float, years: int) -> Optional[float]:
+def _cagr(v0: float, vN: float, years: int) -> float | None:
     if years <= 0 or v0 <= 0 or vN <= 0:
         return None
     try:
@@ -38,13 +38,13 @@ def _cagr(v0: float, vN: float, years: int) -> Optional[float]:
         return None
 
 
-def _mean(vals: List[float]) -> Optional[float]:
+def _mean(vals: list[float]) -> float | None:
     if not vals:
         return None
     return sum(vals) / len(vals)
 
 
-def _stdev(vals: List[float]) -> Optional[float]:
+def _stdev(vals: list[float]) -> float | None:
     if len(vals) < 2:
         return None
     m = _mean(vals)
@@ -54,12 +54,12 @@ def _stdev(vals: List[float]) -> Optional[float]:
     return math.sqrt(var)
 
 
-def _take_last_n_years(rows: List[Dict[str, Any]], key: str, n: int) -> List[Tuple[int, float]]:
+def _take_last_n_years(rows: list[dict[str, Any]], key: str, n: int) -> list[tuple[int, float]]:
     """
     rows: [{fiscal_year:int, <key>: number}, ...] ascending by fiscal_year
     returns last n usable (year,value) pairs
     """
-    out: List[Tuple[int, float]] = []
+    out: list[tuple[int, float]] = []
     for r in rows:
         y = r.get("fiscal_year")
         v = _safe_float(r.get(key))
@@ -71,10 +71,10 @@ def _take_last_n_years(rows: List[Dict[str, Any]], key: str, n: int) -> List[Tup
 
 
 def _series_cagr_span(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     key: str,
     target_years: int,
-) -> Tuple[Optional[float], Optional[int], List[int], List[int]]:
+) -> tuple[float | None, int | None, list[int], list[int]]:
     """
     Option 1: Compute CAGR over the actual span (yN - y0) and report gaps.
     - Return gaps so UI can show "computed over 6y span due to missing fiscal years".
@@ -98,7 +98,7 @@ def _series_cagr_span(
     return cagr, span, years_present, missing
 
 
-def _eps_drawdown(rows: List[Dict[str, Any]], key: str, window_years: int = 5) -> Optional[float]:
+def _eps_drawdown(rows: list[dict[str, Any]], key: str, window_years: int = 5) -> float | None:
     pairs = _take_last_n_years(rows, key=key, n=window_years)
     if len(pairs) < 3:
         return None
@@ -141,8 +141,8 @@ def _category_from_points(points: int, total_possible: int, has_hard_fail: bool)
 async def evaluate_rule1_suitability(
     repo: Any,
     company_id: int,
-    sector: Optional[str],
-) -> Tuple[int, str, List[DiagnosticFlag], Dict[str, Any]]:
+    sector: str | None,
+) -> tuple[int, str, list[DiagnosticFlag], dict[str, Any]]:
     """
     Returns:
       score_0_100,
@@ -168,9 +168,9 @@ async def evaluate_rule1_suitability(
     if hasattr(repo, "get_derived_metrics_latest"):
         derived_latest = await repo.get_derived_metrics_latest(company_id)
 
-    results: List[MetricResult] = []
-    flags: List[DiagnosticFlag] = []
-    evidence: Dict[str, Any] = {}
+    results: list[MetricResult] = []
+    flags: list[DiagnosticFlag] = []
+    evidence: dict[str, Any] = {}
 
     # ---------------------------------------------------------------------
     # Debug / Transparency: Capture actual keys returned by repo snapshots.
@@ -199,7 +199,7 @@ async def evaluate_rule1_suitability(
 
     # Collect per-metric coverage so UI can show "missing data" clearly.
     # Filled progressively as metrics compute their input availability.
-    coverage: Dict[str, Any] = {}
+    coverage: dict[str, Any] = {}
     # ---------------------------------------------------------
     # Metric 1: Positive Earnings Consistency (last 5 years)
     # % of last 5 years with positive net income
@@ -326,7 +326,7 @@ async def evaluate_rule1_suitability(
         "missingYears": rev_missing,
     }
 
-    span_flag_m3: Optional[DiagnosticFlag] = None
+    span_flag_m3: DiagnosticFlag | None = None
     if rev_cagr is not None and rev_span is not None and rev_span != 5:
         span_flag_m3 = DiagnosticFlag(
             code="R1-REV-CAGR-SPAN",
@@ -390,7 +390,7 @@ async def evaluate_rule1_suitability(
         "missingYears": eps_missing,
     }
 
-    span_flag_m4: Optional[DiagnosticFlag] = None
+    span_flag_m4: DiagnosticFlag | None = None
     if eps_cagr is not None and eps_span is not None and eps_span != 5:
         span_flag_m4 = DiagnosticFlag(
             code="R1-EPS-CAGR-SPAN",
@@ -660,8 +660,8 @@ async def evaluate_rule1_suitability(
     # Metric 9: FCF Conversion (FCF / Net Income)
     # FCF = CFO +/- CapEx (sign-normalized; do NOT assume sign convention)
     # ---------------------------------------------------------
-    conv: Optional[float] = None
-    fcf: Optional[float] = None
+    conv: float | None = None
+    fcf: float | None = None
     capex_rule: str = "n/a"
 
     # Prefer derived metrics if present (safe: does not assume keys exist)

@@ -11,15 +11,17 @@ from __future__ import annotations
 
 import logging
 import re
+
+import pandas as pd
 from datetime import timedelta
-from shared.time_utils import now_utc
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from dependencies import get_current_user_dep, limiter
 from database import supabase
+from dependencies import get_current_user_dep, limiter
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -42,38 +44,38 @@ def _normalize(symbol: str) -> str:
 
 class PriceHistoryPoint(BaseModel):
     date: str
-    open: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    close: Optional[float] = None
-    volume: Optional[int] = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: int | None = None
 
 
 class PriceHistoryResponse(BaseModel):
     success: bool
     symbol: str
     days: int
-    data: List[PriceHistoryPoint]
-    error: Optional[str] = None
+    data: list[PriceHistoryPoint]
+    error: str | None = None
 
 
 class NewsArticle(BaseModel):
-    uuid: Optional[str] = None
+    uuid: str | None = None
     title: str
-    summary: Optional[str] = None
+    summary: str | None = None
     publisher: str
     published_at: str
     article_type: str = "STORY"
-    url: Optional[str] = None
-    related_symbols: List[str] = []
+    url: str | None = None
+    related_symbols: list[str] = []
 
 
 class NewsResponse(BaseModel):
     success: bool
     symbol: str
-    articles: List[NewsArticle]
+    articles: list[NewsArticle]
     source: str
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ── Price History ─────────────────────────────────────────────────────────
@@ -188,7 +190,7 @@ async def _fallback_price_history(symbol: str, days: int) -> PriceHistoryRespons
 
 # ── News ──────────────────────────────────────────────────────────────────
 
-def _get_news_from_defeatbeta(symbol: str, limit: int) -> Optional[List[NewsArticle]]:
+def _get_news_from_defeatbeta(symbol: str, limit: int) -> list[NewsArticle] | None:
     """Fetch news from DefeatBeta provider (primary)."""
     try:
         from defeatbeta_api.data.ticker import Ticker
@@ -221,7 +223,7 @@ def _get_news_from_defeatbeta(symbol: str, limit: int) -> Optional[List[NewsArti
         return None
 
 
-def _get_news_from_yfinance(symbol: str, limit: int) -> Optional[List[NewsArticle]]:
+def _get_news_from_yfinance(symbol: str, limit: int) -> list[NewsArticle] | None:
     """Fetch news from YFinance (fallback)."""
     try:
         import yfinance as yf
@@ -303,22 +305,22 @@ class FieldCoverage(BaseModel):
     total_rows: int
     present: int
     missing: int
-    providers: Dict[str, int]
+    providers: dict[str, int]
 
 
 class StatementCoverage(BaseModel):
     statement_type: str
     total_rows: int
-    fields: List[FieldCoverage]
-    data_source_breakdown: Dict[str, int]
+    fields: list[FieldCoverage]
+    data_source_breakdown: dict[str, int]
 
 
 class FinancialCoverageResponse(BaseModel):
     success: bool
     symbol: str
-    company_id: Optional[int] = None
-    statements: Optional[Dict[str, StatementCoverage]] = None
-    error: Optional[str] = None
+    company_id: int | None = None
+    statements: dict[str, StatementCoverage] | None = None
+    error: str | None = None
 
 
 _INCOME_FIELDS = [
@@ -345,15 +347,15 @@ _CASHFLOW_FIELDS = [
 
 
 def _analyze_statement(
-    rows: List[Dict[str, Any]], fields: List[str], stmt_type: str,
+    rows: list[dict[str, Any]], fields: list[str], stmt_type: str,
 ) -> StatementCoverage:
     total = len(rows)
-    source_counts: Dict[str, int] = {}
-    field_covs: List[FieldCoverage] = []
+    source_counts: dict[str, int] = {}
+    field_covs: list[FieldCoverage] = []
 
     for fld in fields:
         present = 0
-        providers: Dict[str, int] = {}
+        providers: dict[str, int] = {}
         for r in rows:
             if r.get(fld) is not None:
                 present += 1

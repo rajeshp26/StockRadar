@@ -23,14 +23,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from database import supabase
 
 logger = logging.getLogger(__name__)
 
 
-def _as_int(x: Any) -> Optional[int]:
+def _as_int(x: Any) -> int | None:
     try:
         return int(x) if x is not None else None
     except Exception:
@@ -43,7 +43,7 @@ def _log_event(
     metric: str,
     severity: str,
     message: str,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> None:
     payload = {
         "company_id": company_id,
@@ -56,8 +56,8 @@ def _log_event(
     supabase.table("data_quality_events").insert(payload).execute()
 
 
-def _detect_year_gaps(years: List[int]) -> List[Dict[str, Any]]:
-    gaps: List[Dict[str, Any]] = []
+def _detect_year_gaps(years: list[int]) -> list[dict[str, Any]]:
+    gaps: list[dict[str, Any]] = []
     ys = sorted(set([y for y in years if isinstance(y, int)]))
     for i in range(1, len(ys)):
         prev_y = ys[i - 1]
@@ -67,7 +67,7 @@ def _detect_year_gaps(years: List[int]) -> List[Dict[str, Any]]:
     return gaps
 
 
-async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
+async def audit_company_data_quality(company_id: int) -> dict[str, Any]:
     """
     PHASE 8 audit:
       - missing years / insufficient depth for annual EPS / shares / revenue
@@ -231,7 +231,7 @@ async def audit_company_data_quality(company_id: int) -> Dict[str, Any]:
         .order("fiscal_year", desc=False)
         .execute()
     )
-    recon_failures: List[Dict[str, Any]] = []
+    recon_failures: list[dict[str, Any]] = []
     for row in (cf_recon_resp.data or []):
         ocf      = row.get("cash_from_operating_activities")
         icf      = row.get("cash_from_investing_activities")

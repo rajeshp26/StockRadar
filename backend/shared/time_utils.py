@@ -8,13 +8,12 @@ timezone-aware (UTC).  This module is the single source of truth for
 Python 3.12 deprecated datetime.utcnow() — use now_utc() instead.
 """
 
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 
 def now_utc() -> datetime:
     """Return the current UTC time as an aware datetime (tzinfo=UTC)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def now_iso() -> str:
@@ -34,14 +33,14 @@ def parse_db_timestamp(value: str) -> datetime:
     """
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
 def ensure_aware(dt: datetime) -> datetime:
     """If `dt` is naive, treat it as UTC and add timezone info."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 

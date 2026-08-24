@@ -1,10 +1,12 @@
 # domain/models/valuation_owner_earnings.py
 from __future__ import annotations
-from typing import Any, List, Optional
+
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator
 
 # Reuse shared primitives from Rule #1 (keeps FE behaviour consistent)
-from domain.models.valuation_rule1 import Applicability, DataQuality  # noqa: E402
+from domain.models.valuation_rule1 import Applicability, DataQuality
 
 
 class OwnerEarningsRequestOverrides(BaseModel):
@@ -19,28 +21,28 @@ class OwnerEarningsRequestOverrides(BaseModel):
     """
 
     # Forecast controls
-    forecastYears: Optional[int] = Field(default=None, ge=1, le=20)
+    forecastYears: int | None = Field(default=None, ge=1, le=20)
 
     # Growth rate applied to Owner Earnings stream
-    oeGrowthRate: Optional[float] = Field(
+    oeGrowthRate: float | None = Field(
         default=None,
         description="Annual growth rate for Owner Earnings (accepts percent or fraction).",
     )
 
     # Discount rate (hurdle rate / required return on equity)
-    discountRate: Optional[float] = Field(
+    discountRate: float | None = Field(
         default=None,
         description="Discount rate. Accepts percent or fraction.",
     )
 
     # Terminal value (perpetuity growth)
-    terminalGrowthRate: Optional[float] = Field(
+    terminalGrowthRate: float | None = Field(
         default=None,
         description="Perpetual growth rate for terminal value. Accepts percent or fraction.",
     )
 
     # Capex adjustment
-    maintenanceCapexRatio: Optional[float] = Field(
+    maintenanceCapexRatio: float | None = Field(
         default=None,
         ge=0.0,
         le=1.0,
@@ -48,21 +50,21 @@ class OwnerEarningsRequestOverrides(BaseModel):
     )
 
     # Working capital change adjustment (optional)
-    includeWorkingCapitalChange: Optional[bool] = Field(
+    includeWorkingCapitalChange: bool | None = Field(
         default=None,
         description="Whether to include change_in_working_capital in OE calculation.",
     )
 
     # Equity bridge overrides
-    sharesOutstanding: Optional[float] = Field(default=None, gt=0)
-    netDebt: Optional[float] = Field(
+    sharesOutstanding: float | None = Field(default=None, gt=0)
+    netDebt: float | None = Field(
         default=None,
         description="Net debt (total debt − cash). May be negative (net cash position).",
     )
 
     # Meta
-    analystName: Optional[str] = None
-    notes: Optional[str] = None
+    analystName: str | None = None
+    notes: str | None = None
 
     @field_validator("oeGrowthRate", "discountRate", "terminalGrowthRate", mode="before")
     @classmethod
@@ -91,42 +93,42 @@ class OwnerEarningsValuation(BaseModel):
     # Forecast parameters used
     forecastYears: int
     discountRateUsed: float
-    oeGrowthRateUsed: Optional[float] = None
-    terminalGrowthRateUsed: Optional[float] = None
-    maintenanceCapexRatioUsed: Optional[float] = None
+    oeGrowthRateUsed: float | None = None
+    terminalGrowthRateUsed: float | None = None
+    maintenanceCapexRatioUsed: float | None = None
 
     # Base OE decomposition (transparency)
-    baseOe: Optional[float] = None
-    baseOeFiscalYear: Optional[int] = None
-    netIncomeUsed: Optional[float] = None
-    daUsed: Optional[float] = None               # Depreciation & Amortization
-    capexUsed: Optional[float] = None            # Capex (sign-normalized to negative)
-    wcChangeUsed: Optional[float] = None         # Working Capital Change (optional)
+    baseOe: float | None = None
+    baseOeFiscalYear: int | None = None
+    netIncomeUsed: float | None = None
+    daUsed: float | None = None               # Depreciation & Amortization
+    capexUsed: float | None = None            # Capex (sign-normalized to negative)
+    wcChangeUsed: float | None = None         # Working Capital Change (optional)
 
     # Forecast stream
-    forecastOe: List[float] = Field(default_factory=list)
-    pvOe: List[float] = Field(default_factory=list)
-    discountFactors: Optional[List[float]] = None
+    forecastOe: list[float] = Field(default_factory=list)
+    pvOe: list[float] = Field(default_factory=list)
+    discountFactors: list[float] | None = None
     totalPvOe: float = 0.0
 
     # Terminal value
-    terminalValue: Optional[float] = None
-    pvTerminalValue: Optional[float] = None
-    oeNPlus1: Optional[float] = None             # OE_{n+1} used in perpetuity formula
+    terminalValue: float | None = None
+    pvTerminalValue: float | None = None
+    oeNPlus1: float | None = None             # OE_{n+1} used in perpetuity formula
 
     # Equity bridge
-    enterpriseValue: Optional[float] = None
-    netDebtUsed: Optional[float] = None
-    equityValue: Optional[float] = None
-    sharesOutstanding: Optional[float] = None
-    intrinsicValuePerShare: Optional[float] = None
+    enterpriseValue: float | None = None
+    netDebtUsed: float | None = None
+    equityValue: float | None = None
+    sharesOutstanding: float | None = None
+    intrinsicValuePerShare: float | None = None
 
     # Read-time market comparison
-    currentPrice: Optional[float] = None
-    upsideDownsidePct: Optional[float] = None    # fraction (e.g. 0.25 = 25% upside)
+    currentPrice: float | None = None
+    upsideDownsidePct: float | None = None    # fraction (e.g. 0.25 = 25% upside)
 
     # Sensitivity grid (discount_rate × terminal_growth_rate)
-    sensitivityScenarios: Optional["OeSensitivityGrid"] = None
+    sensitivityScenarios: OeSensitivityGrid | None = None
 
 
 class OeSensitivityGrid(BaseModel):
@@ -135,10 +137,10 @@ class OeSensitivityGrid(BaseModel):
     Mirrors DcfSensitivityGrid structure for FE reuse.
     """
 
-    discountRates: List[float]
-    terminalGrowthRates: List[float]
-    intrinsicValuePerShareMatrix: List[List[Optional[float]]]
-    currency: Optional[str] = None
+    discountRates: list[float]
+    terminalGrowthRates: list[float]
+    intrinsicValuePerShareMatrix: list[list[float | None]]
+    currency: str | None = None
 
     model_config = {"extra": "ignore"}
 

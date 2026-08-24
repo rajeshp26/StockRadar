@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Financial Data Quality Validator
 Matches super_investors validation pattern exactly.
@@ -15,11 +14,10 @@ Design:
 """
 
 import logging
-from typing import Dict, List, Optional, Any
-from decimal import Decimal
-from datetime import datetime
-from enum import Enum
 from dataclasses import dataclass
+from decimal import Decimal
+from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +36,9 @@ class ValidationIssue:
     severity: Severity
     field: str
     message: str
-    expected: Optional[Any] = None
-    actual: Optional[Any] = None
-    suggestion: Optional[str] = None
+    expected: Any | None = None
+    actual: Any | None = None
+    suggestion: str | None = None
 
 
 @dataclass
@@ -48,18 +46,18 @@ class ValidationResult:
     """Validation result for a statement row"""
     symbol: str
     fiscal_year: int
-    fiscal_quarter: Optional[int]
+    fiscal_quarter: int | None
     statement_type: str  # "income", "balance", "cashflow"
-    issues: List[ValidationIssue]
+    issues: list[ValidationIssue]
     quality_score: int  # 0-100
-    field_sources: Optional[Dict[str, List[str]]] = None
-    
+    field_sources: dict[str, list[str]] | None = None
+
     def has_critical_issues(self) -> bool:
         return any(i.severity == Severity.CRITICAL for i in self.issues)
-    
+
     def has_errors(self) -> bool:
         return any(i.severity in (Severity.CRITICAL, Severity.ERROR) for i in self.issues)
-    
+
     def should_trigger_fallback(self) -> bool:
         """Should we try YFinance fallback?"""
         return self.has_critical_issues() or self.quality_score < 70
@@ -72,7 +70,7 @@ class ValidationResult:
 # From your DB schema + DefeatBeta aliases, these are the ACTUAL required fields
 INCOME_REQUIRED = {
     "revenue",
-    "gross_profit", 
+    "gross_profit",
     "operating_income",
     "net_income",
     "fiscal_year",
@@ -130,16 +128,16 @@ VALUE_RANGES = {
     "gross_profit": (0, 1_000_000_000_000),
     "operating_income": (-50_000_000_000, 500_000_000_000),
     "ebitda": (-50_000_000_000, 500_000_000_000),
-    
+
     # Balance Sheet
     "total_assets": (100_000, 10_000_000_000_000),  # $100K to $10T
     "total_liabilities": (0, 10_000_000_000_000),
     "shareholders_equity": (-100_000_000_000, 5_000_000_000_000),  # Can be negative
-    
+
     # Cash Flow
     "cash_from_operating_activities": (-50_000_000_000, 500_000_000_000),
     "capital_expenditures": (-500_000_000_000, 0),  # Always negative
-    
+
     # Shares
     "shares_outstanding_diluted": (1_000_000, 100_000_000_000),  # 1M to 100B shares
 }
@@ -154,14 +152,14 @@ class FinancialDataValidator:
     Validates financial data at provider layer.
     Matches super_investors validation pattern.
     """
-    
+
     # ========================================================================
     # Income Statement Validation
     # ========================================================================
-    
+
     @staticmethod
     def validate_income_statement(
-        row: Dict[str, Any],
+        row: dict[str, Any],
         symbol: str,
     ) -> ValidationResult:
         """
@@ -174,10 +172,10 @@ class FinancialDataValidator:
         Returns:
             ValidationResult with issues and quality score
         """
-        issues: List[ValidationIssue] = []
+        issues: list[ValidationIssue] = []
         fy = row.get("fiscal_year")
         fq = row.get("fiscal_quarter")
-        
+
         # 1. REQUIRED FIELDS
         for field in INCOME_REQUIRED:
             if field == "fiscal_quarter" and fq is None:
@@ -189,7 +187,7 @@ class FinancialDataValidator:
                     message="Missing required field",
                     suggestion="Use YFinance fallback"
                 ))
-        
+
         # 2. IMPORTANT FIELDS (not critical but degrades quality)
         for field in INCOME_IMPORTANT:
             if row.get(field) is None:
@@ -198,7 +196,7 @@ class FinancialDataValidator:
                     field=field,
                     message="Missing important field - quality degraded",
                 ))
-        
+
         # 3. VALUE RANGE VALIDATION
         revenue = _safe_float(row.get("revenue"))
         if revenue is not None:
@@ -211,7 +209,7 @@ class FinancialDataValidator:
                     expected=f"${min_val:,} to ${max_val:,}",
                     actual=f"${revenue:,.0f}"
                 ))
-        
+
         net_income = _safe_float(row.get("net_income"))
         if net_income is not None:
             min_val, max_val = VALUE_RANGES["net_income"]
@@ -223,7 +221,7 @@ class FinancialDataValidator:
                     expected=f"${min_val:,} to ${max_val:,}",
                     actual=f"${net_income:,.0f}"
                 ))
-        
+
         # 4. LOGICAL CONSISTENCY (like super_investors checks)
         gross_profit = _safe_float(row.get("gross_profit"))
         if revenue and gross_profit:
@@ -234,7 +232,7 @@ class FinancialDataValidator:
                     message="Gross profit exceeds revenue",
                     actual=f"GP: ${gross_profit:,.0f} > Rev: ${revenue:,.0f}"
                 ))
-        
+
         operating_income = _safe_float(row.get("operating_income"))
         if gross_profit and operating_income:
             if operating_income > gross_profit * 1.1:
@@ -244,7 +242,7 @@ class FinancialDataValidator:
                     message="Operating income exceeds gross profit (unusual)",
                     actual=f"OI: ${operating_income:,.0f} > GP: ${gross_profit:,.0f}"
                 ))
-        
+
         # 5. SHARES REASONABLENESS
         shares = _safe_float(row.get("shares_outstanding_diluted"))
         if shares is not None:
@@ -257,10 +255,10 @@ class FinancialDataValidator:
                     actual=f"{shares:,.0f}",
                     suggestion="Verify not pre-split adjustment"
                 ))
-        
+
         quality_score = _calculate_quality_score(issues)
         field_sources = row.get("field_sources")
-        
+
         return ValidationResult(
             symbol=symbol,
             fiscal_year=fy or 0,
@@ -270,21 +268,21 @@ class FinancialDataValidator:
             quality_score=quality_score,
             field_sources=field_sources,
         )
-    
+
     # ========================================================================
     # Balance Sheet Validation
     # ========================================================================
-    
+
     @staticmethod
     def validate_balance_sheet(
-        row: Dict[str, Any],
+        row: dict[str, Any],
         symbol: str,
     ) -> ValidationResult:
         """Validate balance sheet row BEFORE returning from provider."""
-        issues: List[ValidationIssue] = []
+        issues: list[ValidationIssue] = []
         fy = row.get("fiscal_year")
         fq = row.get("fiscal_quarter")
-        
+
         # 1. REQUIRED FIELDS
         for field in BALANCE_REQUIRED:
             if field == "fiscal_quarter" and fq is None:
@@ -296,7 +294,7 @@ class FinancialDataValidator:
                     message="Missing required field",
                     suggestion="Use YFinance fallback"
                 ))
-        
+
         # 2. IMPORTANT FIELDS
         for field in BALANCE_IMPORTANT:
             if row.get(field) is None:
@@ -305,16 +303,16 @@ class FinancialDataValidator:
                     field=field,
                     message="Missing important field",
                 ))
-        
+
         # 3. ACCOUNTING EQUATION: Assets = Liabilities + Equity
         assets = _safe_float(row.get("total_assets"))
         liabilities = _safe_float(row.get("total_liabilities"))
         equity = _safe_float(row.get("shareholders_equity"))
-        
+
         if all(v is not None for v in [assets, liabilities, equity]):
             expected_assets = liabilities + equity
             diff_pct = abs(assets - expected_assets) / assets if assets != 0 else 0
-            
+
             if diff_pct > 0.02:  # >2% deviation is error
                 issues.append(ValidationIssue(
                     severity=Severity.ERROR,
@@ -324,7 +322,7 @@ class FinancialDataValidator:
                     actual=f"Assets: ${assets:,.0f} (diff: {diff_pct:.2%})",
                     suggestion="Data quality issue - use YFinance fallback"
                 ))
-        
+
         # 4. VALUE RANGES
         if assets is not None:
             min_val, max_val = VALUE_RANGES["total_assets"]
@@ -336,10 +334,10 @@ class FinancialDataValidator:
                     expected=f"${min_val:,} to ${max_val:,}",
                     actual=f"${assets:,.0f}"
                 ))
-        
+
         quality_score = _calculate_quality_score(issues)
         field_sources = row.get("field_sources")
-        
+
         return ValidationResult(
             symbol=symbol,
             fiscal_year=fy or 0,
@@ -349,21 +347,21 @@ class FinancialDataValidator:
             quality_score=quality_score,
             field_sources=field_sources,
         )
-    
+
     # ========================================================================
     # Cash Flow Validation
     # ========================================================================
-    
+
     @staticmethod
     def validate_cash_flow(
-        row: Dict[str, Any],
+        row: dict[str, Any],
         symbol: str,
     ) -> ValidationResult:
         """Validate cash flow row BEFORE returning from provider."""
-        issues: List[ValidationIssue] = []
+        issues: list[ValidationIssue] = []
         fy = row.get("fiscal_year")
         fq = row.get("fiscal_quarter")
-        
+
         # 1. REQUIRED FIELDS
         for field in CASHFLOW_REQUIRED:
             if field == "fiscal_quarter" and fq is None:
@@ -375,7 +373,7 @@ class FinancialDataValidator:
                     message="Missing required field",
                     suggestion="Use YFinance fallback"
                 ))
-        
+
         # 2. IMPORTANT FIELDS
         for field in CASHFLOW_IMPORTANT:
             if row.get(field) is None:
@@ -384,7 +382,7 @@ class FinancialDataValidator:
                     field=field,
                     message="Missing important field",
                 ))
-        
+
         # 3. CAPEX SIGN CHECK (should be negative)
         capex = _safe_float(row.get("capital_expenditures"))
         if capex is not None and capex > 0:
@@ -395,10 +393,10 @@ class FinancialDataValidator:
                 actual=f"${capex:,.0f}",
                 suggestion="Verify sign convention"
             ))
-        
+
         quality_score = _calculate_quality_score(issues)
         field_sources = row.get("field_sources")
-        
+
         return ValidationResult(
             symbol=symbol,
             fiscal_year=fy or 0,
@@ -419,10 +417,10 @@ def verify_database_write(
     table: str,
     company_id: int,
     fiscal_year: int,
-    fiscal_quarter: Optional[int],
-    expected_values: Dict[str, Any],
+    fiscal_quarter: int | None,
+    expected_values: dict[str, Any],
     symbol: str,
-) -> List[ValidationIssue]:
+) -> list[ValidationIssue]:
     """
     Post-write verification matching super_investors pattern EXACTLY.
     
@@ -440,8 +438,8 @@ def verify_database_write(
     Returns:
         List of validation issues
     """
-    issues: List[ValidationIssue] = []
-    
+    issues: list[ValidationIssue] = []
+
     try:
         # Build query
         query = (
@@ -450,14 +448,14 @@ def verify_database_write(
             .eq("company_id", company_id)
             .eq("fiscal_year", fiscal_year)
         )
-        
+
         if fiscal_quarter is not None:
             query = query.eq("fiscal_quarter", fiscal_quarter)
         else:
             query = query.is_("fiscal_quarter", "null")
-        
+
         result = query.execute()
-        
+
         # Check entry exists
         if not result.data or len(result.data) == 0:
             issues.append(ValidationIssue(
@@ -471,16 +469,16 @@ def verify_database_write(
                 symbol, table, fiscal_year, fiscal_quarter or "Annual"
             )
             return issues
-        
+
         written_row = result.data[0]
-        
+
         # Verify each expected value (EXACT pattern from super_investors)
         for field, expected_val in expected_values.items():
             if expected_val is None:
                 continue
-            
+
             written_val = written_row.get(field)
-            
+
             if written_val is None:
                 issues.append(ValidationIssue(
                     severity=Severity.ERROR,
@@ -494,14 +492,14 @@ def verify_database_write(
                     symbol, table, field, expected_val
                 )
                 continue
-            
+
             # Numeric comparison with tolerance (0.1% like super_investors)
             if isinstance(expected_val, (int, float, Decimal)):
                 try:
                     expected_float = float(expected_val)
                     written_float = float(written_val)
                     tolerance = abs(expected_float) * 0.001  # 0.1%
-                    
+
                     if abs(written_float - expected_float) > tolerance:
                         issues.append(ValidationIssue(
                             severity=Severity.ERROR,
@@ -516,15 +514,15 @@ def verify_database_write(
                         )
                 except (ValueError, TypeError):
                     pass
-        
+
     except Exception as e:
         logger.error("[DQ] %s: Post-write verification failed: %s", symbol, e)
         issues.append(ValidationIssue(
             severity=Severity.ERROR,
             field="post_write_check",
-            message=f"Verification failed: {str(e)}",
+            message=f"Verification failed: {e!s}",
         ))
-    
+
     return issues
 
 
@@ -536,12 +534,12 @@ def log_validation_result(result: ValidationResult) -> None:
     """Log validation result with severity-based formatting and provider attribution."""
     if not result.issues:
         logger.debug("[DQ] %s FY%s Q%s %s: ✅ PASS (score: %d/100)",
-                    result.symbol, result.fiscal_year, 
+                    result.symbol, result.fiscal_year,
                     result.fiscal_quarter or "Annual",
                     result.statement_type.upper(),
                     result.quality_score)
         return
-    
+
     logger.warning(
         "[DQ] %s FY%s Q%s %s: Quality Score %d/100",
         result.symbol, result.fiscal_year,
@@ -549,7 +547,7 @@ def log_validation_result(result: ValidationResult) -> None:
         result.statement_type.upper(),
         result.quality_score
     )
-    
+
     for issue in result.issues:
         prefix = {
             Severity.CRITICAL: "🔴 CRITICAL",
@@ -557,24 +555,22 @@ def log_validation_result(result: ValidationResult) -> None:
             Severity.WARNING: "🟡 WARNING",
             Severity.INFO: "ℹ️  INFO",
         }[issue.severity]
-        
+
         msg = f"[DQ]   {prefix}: {issue.field} - {issue.message}"
         if issue.expected is not None:
             msg += f" (expected: {issue.expected}, got: {issue.actual})"
-        
+
         if result.field_sources and issue.severity in (Severity.CRITICAL, Severity.WARNING):
             sources = result.field_sources.get(issue.field)
             if sources:
                 msg += f" [provider: {', '.join(sources)}]"
             else:
                 msg += " [provider: NONE]"
-        
+
         if issue.suggestion:
             msg += f" → {issue.suggestion}"
-        
-        if issue.severity == Severity.CRITICAL:
-            logger.error(msg)
-        elif issue.severity == Severity.ERROR:
+
+        if issue.severity == Severity.CRITICAL or issue.severity == Severity.ERROR:
             logger.error(msg)
         elif issue.severity == Severity.WARNING:
             logger.warning(msg)
@@ -586,7 +582,7 @@ def log_validation_result(result: ValidationResult) -> None:
 # HELPERS
 # ============================================================================
 
-def _safe_float(val: Any) -> Optional[float]:
+def _safe_float(val: Any) -> float | None:
     """Safe float conversion (None on failure)."""
     if val is None:
         return None
@@ -598,11 +594,11 @@ def _safe_float(val: Any) -> Optional[float]:
         return None
 
 
-def _calculate_quality_score(issues: List[ValidationIssue]) -> int:
+def _calculate_quality_score(issues: list[ValidationIssue]) -> int:
     """Calculate quality score (0-100) based on issues (like super_investors)."""
     if not issues:
         return 100
-    
+
     penalty = 0
     for issue in issues:
         if issue.severity == Severity.CRITICAL:
@@ -613,6 +609,6 @@ def _calculate_quality_score(issues: List[ValidationIssue]) -> int:
             penalty += 3
         else:  # INFO
             penalty += 1
-    
+
     score = max(0, 100 - penalty)
     return score

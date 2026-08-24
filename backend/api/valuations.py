@@ -3,23 +3,29 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 
+from application.services.valuation_service import ValuationService
 from dependencies import (
     get_current_user_dep,
     get_user_repository,
     get_valuation_service,
     limiter,
 )
-from domain.models.valuation_rule1 import Rule1RequestOverrides, Rule1Response
-from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
 from domain.models.valuation_dcf import DcfRequestOverrides, DcfResponse  # ✅ NEW
+from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
+from domain.models.valuation_owner_earnings import (
+    OwnerEarningsRequestOverrides,
+    OwnerEarningsResponse,
+)
+from domain.models.valuation_residual_income import (
+    ResidualIncomeRequestOverrides,
+    ResidualIncomeResponse,
+)
+from domain.models.valuation_rule1 import Rule1RequestOverrides, Rule1Response
 from infrastructure.repositories.supabase_repository import SupabaseUserRepository
-from application.services.valuation_service import ValuationService
-from domain.models.valuation_owner_earnings import (OwnerEarningsRequestOverrides, OwnerEarningsResponse)
-from domain.models.valuation_residual_income import (ResidualIncomeRequestOverrides, ResidualIncomeResponse)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/valuations", tags=["Valuations"])
@@ -50,14 +56,14 @@ async def get_valuation_overview(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Overview fetch failed.",
         )
-        
-def _extract_auth_id(user_payload: dict) -> Optional[str]:
+
+def _extract_auth_id(user_payload: dict) -> str | None:
     if not isinstance(user_payload, dict):
         return None
     return user_payload.get("uid") or user_payload.get("user_id") or user_payload.get("sub")
 
 
-def _resolve_internal_user_id(user_payload: dict, user_repo: SupabaseUserRepository) -> Optional[int]:
+def _resolve_internal_user_id(user_payload: dict, user_repo: SupabaseUserRepository) -> int | None:
     auth_id = _extract_auth_id(user_payload)
     if not auth_id:
         return None
@@ -183,7 +189,7 @@ async def get_ddm_cached(
     except Exception as e:
         logger.error("get_ddm_cached failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Cache read failed.")
- 
+
 
 @router.post(
     "/{symbol}/ddm",
@@ -272,7 +278,7 @@ async def get_dcf_cached(
     except Exception as e:
         logger.error("get_dcf_cached failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Cache read failed.")
- 
+
 @router.post(
     "/{symbol}/dcf",
     response_model=DcfResponse,

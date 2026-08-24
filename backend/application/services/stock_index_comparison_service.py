@@ -14,13 +14,13 @@ from __future__ import annotations
 import logging
 import math
 from datetime import date, timedelta
-from shared.time_utils import now_utc
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
 from infrastructure.repositories.analysis_repository import AnalysisRepository
 from shared.finance_math import safe_float
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,9 @@ class StockIndexComparisonService:
     async def evaluate_outperformance(
         self,
         symbol: str,
-        benchmark_symbols: Optional[List[str]] = None,
+        benchmark_symbols: list[str] | None = None,
         years: int = 3,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Full outperformance evaluation against one or more benchmarks.
 
@@ -107,7 +107,7 @@ class StockIndexComparisonService:
             raise ValueError("Insufficient benchmark price history for analysis")
 
         # Fetch price data for all other benchmarks
-        all_benchmark_prices: Dict[str, List[Dict]] = {}
+        all_benchmark_prices: dict[str, list[dict]] = {}
         all_benchmark_prices[primary["symbol"]] = primary_prices
         for bm in benchmarks[1:]:
             bm_prices = await self.repo.get_price_history_range(
@@ -150,10 +150,10 @@ class StockIndexComparisonService:
     async def _quantitative_analysis(
         self,
         company_id: int,
-        stock_prices: List[Dict],
-        index_prices: List[Dict],
+        stock_prices: list[dict],
+        index_prices: list[dict],
         years: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         stock_closes = [float(p["close_price"]) for p in stock_prices]
         index_closes = [float(p["close_price"]) for p in index_prices]
 
@@ -220,8 +220,8 @@ class StockIndexComparisonService:
         }
 
     def _visual_analysis(
-        self, stock_prices: List[Dict], index_prices: List[Dict]
-    ) -> Dict[str, Any]:
+        self, stock_prices: list[dict], index_prices: list[dict]
+    ) -> dict[str, Any]:
         min_len = min(len(stock_prices), len(index_prices))
         stock_prices = stock_prices[:min_len]
         index_prices = index_prices[:min_len]
@@ -263,20 +263,20 @@ class StockIndexComparisonService:
 
     def _prepare_chart_data(
         self,
-        stock_prices: List[Dict],
-        benchmark_prices: Dict[str, List[Dict]],
+        stock_prices: list[dict],
+        benchmark_prices: dict[str, list[dict]],
         stock_symbol: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         dates = [p["price_date"] for p in stock_prices]
         stock_closes = [float(p["close_price"]) for p in stock_prices]
         stock_norm = self._normalize_prices(stock_closes)
         stock_rolling = self._rolling_returns(stock_closes, 12)
         stock_dd = self._drawdown_series(stock_closes)
 
-        normalized_prices: Dict[str, List[float]] = {stock_symbol: stock_norm}
-        relative_strength: Dict[str, List[float]] = {}
-        rolling_12m_returns: Dict[str, List[Optional[float]]] = {stock_symbol: stock_rolling}
-        drawdowns: Dict[str, List[float]] = {stock_symbol: stock_dd}
+        normalized_prices: dict[str, list[float]] = {stock_symbol: stock_norm}
+        relative_strength: dict[str, list[float]] = {}
+        rolling_12m_returns: dict[str, list[float | None]] = {stock_symbol: stock_rolling}
+        drawdowns: dict[str, list[float]] = {stock_symbol: stock_dd}
 
         for bm_symbol, bm_prices in benchmark_prices.items():
             min_len = min(len(stock_closes), len(bm_prices))
@@ -302,20 +302,20 @@ class StockIndexComparisonService:
             "drawdowns": drawdowns,
         }
 
-    def _calculate_returns(self, prices: List[float]) -> List[float]:
+    def _calculate_returns(self, prices: list[float]) -> list[float]:
         return [
             (prices[i] - prices[i - 1]) / prices[i - 1]
             for i in range(1, len(prices))
         ]
 
     def _align_returns(
-        self, stock_returns: List[float], index_returns: List[float]
+        self, stock_returns: list[float], index_returns: list[float]
     ) -> tuple:
         min_len = min(len(stock_returns), len(index_returns))
         return stock_returns[:min_len], index_returns[:min_len]
 
     def _calculate_beta(
-        self, stock_returns: List[float], index_returns: List[float]
+        self, stock_returns: list[float], index_returns: list[float]
     ) -> float:
         if len(stock_returns) < 2 or len(index_returns) < 2:
             return 1.0
@@ -328,7 +328,7 @@ class StockIndexComparisonService:
 
         return covariance / variance if variance != 0 else 1.0
 
-    def _annualized_return(self, prices: List[Dict]) -> float:
+    def _annualized_return(self, prices: list[dict]) -> float:
         if len(prices) < 2:
             return 0.0
 
@@ -344,7 +344,7 @@ class StockIndexComparisonService:
 
         return (end_price / start_price) ** (1 / years) - 1
 
-    def _sharpe_ratio(self, returns: List[float], annual_return: float) -> float:
+    def _sharpe_ratio(self, returns: list[float], annual_return: float) -> float:
         if not returns:
             return 0.0
 
@@ -354,7 +354,7 @@ class StockIndexComparisonService:
 
         return (annual_return - RISK_FREE_RATE) / std_dev
 
-    def _calculate_fcf_growth(self, fcf_data: List[Dict]) -> Optional[float]:
+    def _calculate_fcf_growth(self, fcf_data: list[dict]) -> float | None:
         if len(fcf_data) < 2:
             return None
 
@@ -371,13 +371,13 @@ class StockIndexComparisonService:
 
         return (fcf_end / fcf_start) ** (1 / years) - 1
 
-    def _normalize_prices(self, prices: List[float]) -> List[float]:
+    def _normalize_prices(self, prices: list[float]) -> list[float]:
         if not prices or prices[0] == 0:
             return prices
         return [p / prices[0] * 100 for p in prices]
 
     def _count_outperformance_months(
-        self, stock_prices: List[Dict], index_prices: List[Dict]
+        self, stock_prices: list[dict], index_prices: list[dict]
     ) -> int:
         stock_closes = [float(p["close_price"]) for p in stock_prices]
         index_closes = [float(p["close_price"]) for p in index_prices]
@@ -394,7 +394,7 @@ class StockIndexComparisonService:
 
         return count
 
-    def _max_drawdown(self, prices: List[float]) -> float:
+    def _max_drawdown(self, prices: list[float]) -> float:
         if not prices:
             return 0.0
 
@@ -411,8 +411,8 @@ class StockIndexComparisonService:
         return abs(max_dd)
 
     def _rolling_returns(
-        self, prices: List[float], window: int
-    ) -> List[Optional[float]]:
+        self, prices: list[float], window: int
+    ) -> list[float | None]:
         if len(prices) < window:
             return [None] * len(prices)
 
@@ -423,7 +423,7 @@ class StockIndexComparisonService:
 
         return returns
 
-    def _drawdown_series(self, prices: List[float]) -> List[float]:
+    def _drawdown_series(self, prices: list[float]) -> list[float]:
         peak = prices[0]
         drawdowns = []
 
@@ -435,7 +435,7 @@ class StockIndexComparisonService:
 
         return drawdowns
 
-    async def list_benchmarks(self) -> List[Dict[str, Any]]:
+    async def list_benchmarks(self) -> list[dict[str, Any]]:
         """Returns all active benchmarks. Delegates to repository (shared source of truth)."""
         return await self.repo.list_active_benchmarks()
 

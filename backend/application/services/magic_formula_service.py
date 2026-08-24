@@ -19,22 +19,22 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from application.services.ai_service import generate_suitability_summary
 from domain.models.analysis_magic_formula import (
     DiagnosticFlag,
     MagicFormulaApplicability,
     MagicFormulaDataQuality,
-    MagicFormulaInputs,
     MagicFormulaIndustryContext,
+    MagicFormulaInputs,
     MagicFormulaResponse,
     MagicFormulaValuation,
 )
 from infrastructure.repositories.analysis_repository import AnalysisRepository
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from shared.finance_math import safe_float
+from shared.time_utils import now_iso, now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class MagicFormulaService:
 
     async def _serve_cached(
         self, company_id: int, symbol: str, currency: str
-    ) -> Optional[MagicFormulaResponse]:
+    ) -> MagicFormulaResponse | None:
         snap = await self._repo.get_last_output_snapshot(company_id, "magic_formula")
         if not snap:
             return None
@@ -101,7 +101,7 @@ class MagicFormulaService:
         return self._hydrate_response(snap)
 
     @staticmethod
-    def _hydrate_response(snap: Dict[str, Any]) -> Optional[MagicFormulaResponse]:
+    def _hydrate_response(snap: dict[str, Any]) -> MagicFormulaResponse | None:
         try:
             return MagicFormulaResponse(**snap["response"])
         except Exception as e:
@@ -159,9 +159,9 @@ class MagicFormulaService:
         bs_fy = bs.get("fiscal_year")
 
         # ── Greenblatt NWC and NFA ────────────────────────────────────────────
-        nwc: Optional[float] = None
-        nfa: Optional[float] = None
-        invested_capital_mf: Optional[float] = None
+        nwc: float | None = None
+        nfa: float | None = None
+        invested_capital_mf: float | None = None
 
         if (
             current_assets is not None
@@ -180,8 +180,8 @@ class MagicFormulaService:
             invested_capital_mf = nwc + nfa
 
         # ── Earnings Yield and ROC ────────────────────────────────────────────
-        earnings_yield: Optional[float] = None
-        roc: Optional[float] = None
+        earnings_yield: float | None = None
+        roc: float | None = None
 
         if ttm_ebit is not None and ev and ev > 0:
             earnings_yield = ttm_ebit / ev
@@ -191,7 +191,7 @@ class MagicFormulaService:
 
         # ROIC cross-check from financial_ratios
         roic_from_ratios = safe_float((ratios or {}).get("roic"))
-        roic_delta_note: Optional[str] = None
+        roic_delta_note: str | None = None
         if roc is not None and roic_from_ratios is not None:
             delta = abs(roc - roic_from_ratios)
             if delta > 0.05:
@@ -242,8 +242,8 @@ class MagicFormulaService:
         avg_ev_ebitda = safe_float(im.get("avg_ev_ebitda"))
         implied_ey = (1.0 / avg_ev_ebitda) if (avg_ev_ebitda and avg_ev_ebitda > 0) else None
 
-        ey_vs_industry: Optional[str] = None
-        ey_premium: Optional[float] = None
+        ey_vs_industry: str | None = None
+        ey_premium: float | None = None
         if earnings_yield is not None and implied_ey is not None:
             delta_pct = (earnings_yield - implied_ey) * 100
             ey_premium = round(delta_pct, 2)
@@ -349,14 +349,14 @@ class MagicFormulaService:
     def _assess_applicability(
         sector: str,
         industry: str,
-        ttm_ebit: Optional[float],
-        earnings_yield: Optional[float],
-        roc: Optional[float],
-        ev: Optional[float],
+        ttm_ebit: float | None,
+        earnings_yield: float | None,
+        roc: float | None,
+        ev: float | None,
     ) -> tuple:
-        flags: List[DiagnosticFlag] = []
+        flags: list[DiagnosticFlag] = []
         excluded = False
-        exclusion_reason: Optional[str] = None
+        exclusion_reason: str | None = None
 
         sector_lower = (sector or "").lower()
         industry_lower = (industry or "").lower()
@@ -405,10 +405,10 @@ class MagicFormulaService:
     @staticmethod
     def _compute_applicability_score(
         excluded: bool,
-        earnings_yield: Optional[float],
-        roc: Optional[float],
-        ttm_ebit: Optional[float],
-        ev: Optional[float],
+        earnings_yield: float | None,
+        roc: float | None,
+        ttm_ebit: float | None,
+        ev: float | None,
     ) -> int:
         if excluded:
             return 0

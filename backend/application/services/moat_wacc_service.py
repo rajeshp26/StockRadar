@@ -1,9 +1,9 @@
 from __future__ import annotations
-import logging
-from typing import Optional
 
-from shared.finance_math import compute_cost_of_equity, compute_wacc, safe_float
+import logging
+
 from infrastructure.repositories.moat_repository import MoatRepository
+from shared.finance_math import compute_cost_of_equity, compute_wacc, safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class MoatWaccService:
     def __init__(self, repo: MoatRepository) -> None:
         self._repo = repo
 
-    async def compute_wacc(self, company_id: int) -> Optional[float]:
+    async def compute_wacc(self, company_id: int) -> float | None:
         bs = await self._repo.get_balance_sheet_latest(company_id)
         cs = await self._repo.get_company_summary_latest(company_id)
 

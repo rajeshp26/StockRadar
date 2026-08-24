@@ -1,62 +1,70 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
+import re
 from datetime import date, datetime
-from shared.time_utils import now_utc
 from decimal import Decimal, InvalidOperation
-from typing import NamedTuple, Optional, Tuple, List, Dict, Any, Set
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+if TYPE_CHECKING:
+    from providers.base import StockDetails, TickerInfo
+    from providers.edgar_provider import EdgarToolsProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    from providers.yfinance_provider import YFinanceProvider
 
 import pandas as pd
-import html
-import re
-import json
-from pathlib import Path
 
 # Defeat Beta SDK
 from defeatbeta_api.data.ticker import Ticker
+
+from application.normalizers.statement_normalizer import (
+    normalize_balance_row,
+    normalize_cashflow_row,
+    normalize_income_row,
+)
+from application.validators.financial_data_validator import (
+    FinancialDataValidator,
+    log_validation_result,
+)
 
 # Domain exceptions and models
 from domain.exceptions import (
     DefeatBetaException,
     FinancialsFetchTimeoutError,
-    NoDataError,
     MaxRetriesExceededError,
+    NoDataError,
 )
 from domain.model_types import (
-    CompleteFundamentals,
-    IncomeStatementRow,
-    IncomeStatementRows,
     BalanceSheetRow,
     BalanceSheetRows,
     CashFlowRow,
     CashFlowRows,
-    EarningsRow,
-    EarningsRows,
+    CompleteFundamentals,
     DividendRow,
     DividendRows,
+    EarningsRow,
+    EarningsRows,
+    IncomeStatementRow,
+    IncomeStatementRows,
 )
-
-from application.normalizers.statement_normalizer import normalize_income_row, normalize_balance_row, normalize_cashflow_row
-
 from providers.base import StockDataProvider
-
-from application.validators.financial_data_validator import (
-    FinancialDataValidator,
-    log_validation_result
-)
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
 # --- Gap tracking types -------------------------------------------------------
-GapKey = Tuple[int, Optional[int], date]  # (fiscal_year, fiscal_quarter, period_end)
-GapDict = Dict[str, Set[GapKey]]          # {"is": ..., "bs": ..., "cf": ...}
+GapKey = tuple[int, int | None, date]  # (fiscal_year, fiscal_quarter, period_end)
+GapDict = dict[str, set[GapKey]]          # {"is": ..., "bs": ..., "cf": ...}
 # -------------------------------------------------------------------------------
 
 # --- Provider capability rules ------------------------------------------------
 # Controls which providers are tried for a given exchange + security_type.
 # Security types: "stock", "etf", "fund", etc.
-PROVIDER_EXCHANGE_RULES: Dict[str, Dict[str, Any]] = {
+PROVIDER_EXCHANGE_RULES: dict[str, dict[str, Any]] = {
     "stockdex": {
         "exchanges": {"NYSE", "NYQ", "NMS", "NGM", "NCM", "NASDAQ",
                        "TOR", "TSX", "VAN", "TSXV", "V", "CNQ", "NEO"},
@@ -121,7 +129,7 @@ class _FallbackStatements(NamedTuple):
     cf_rows: list
     earn_rows: list
     div_rows: list
-    next_earnings_date: Optional[datetime]
+    next_earnings_date: datetime | None
 
 
 class DefeatBetaProvider(StockDataProvider):
@@ -142,7 +150,7 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
 
     # Income Statement aliases
-    DB_INCOME_ALIASES: Dict[str, List[str]] = {
+    DB_INCOME_ALIASES: dict[str, list[str]] = {
         # Core P&L
         'revenue': ['Total Revenue', 'Operating Revenue'],
         # --- Phase 3 additions ---
@@ -207,7 +215,7 @@ class DefeatBetaProvider(StockDataProvider):
     }
 
     # Balance Sheet aliases
-    DB_BALANCE_ALIASES: Dict[str, List[str]] = {
+    DB_BALANCE_ALIASES: dict[str, list[str]] = {
         # Assets
         'total_assets': ['Total Assets'],
         # Phase 5 — Tier 2 additions
@@ -299,8 +307,8 @@ class DefeatBetaProvider(StockDataProvider):
     @staticmethod
     def _provider_applicable(
         provider_name: str,
-        exchange: Optional[str] = None,
-        security_type: Optional[str] = None,
+        exchange: str | None = None,
+        security_type: str | None = None,
     ) -> bool:
         rules = PROVIDER_EXCHANGE_RULES.get(provider_name)
         if rules is None:
@@ -338,9 +346,9 @@ class DefeatBetaProvider(StockDataProvider):
 
     def __init__(
         self,
-        yfinance_provider: Optional["YFinanceProvider"] = None,
-        edgar_provider: Optional["EdgarToolsProvider"] = None,
-        stockdex_provider: Optional["StockdexMacrotrendsProvider"] = None,
+        yfinance_provider: YFinanceProvider | None = None,
+        edgar_provider: EdgarToolsProvider | None = None,
+        stockdex_provider: StockdexMacrotrendsProvider | None = None,
     ):
         from config import settings
         self.settings = settings
@@ -354,20 +362,20 @@ class DefeatBetaProvider(StockDataProvider):
             yfinance_provider is not None,
         )
 
-    def get_ticker_info(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional['TickerInfo']:
+    def get_ticker_info(self, ticker_symbol: str, exchange: str | None = None) -> TickerInfo | None:
         if self.yfinance_provider:
             try:
                 return self.yfinance_provider.get_ticker_info(ticker_symbol, exchange=exchange)
             except Exception as e:
-                logger.warning(f"YFinance get_ticker_info failed for {ticker_symbol}: {str(e)}")
+                logger.warning(f"YFinance get_ticker_info failed for {ticker_symbol}: {e!s}")
         return None
 
-    def get_stock_details(self, ticker_symbol: str, exchange: Optional[str] = None) -> Optional['StockDetails']:
+    def get_stock_details(self, ticker_symbol: str, exchange: str | None = None) -> StockDetails | None:
         if self.yfinance_provider:
             try:
                 return self.yfinance_provider.get_stock_details(ticker_symbol, exchange=exchange)
             except Exception as e:
-                logger.warning(f"YFinance get_stock_details failed for {ticker_symbol}: {str(e)}")
+                logger.warning(f"YFinance get_stock_details failed for {ticker_symbol}: {e!s}")
         return None
 
     # ---------------------------------------------------------------------
@@ -377,15 +385,15 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         company_id: int,
-        last_refreshed_fiscal_year: Optional[int] = None,
-        last_refreshed_fiscal_quarter: Optional[int] = None,
+        last_refreshed_fiscal_year: int | None = None,
+        last_refreshed_fiscal_quarter: int | None = None,
         force_full_history: bool = False,
-        min_fiscal_year: Optional[int] = None,
-        exchange: Optional[str] = None,
-        security_type: Optional[str] = None,
+        min_fiscal_year: int | None = None,
+        exchange: str | None = None,
+        security_type: str | None = None,
     ) -> CompleteFundamentals:
         logger.info(f"Starting financials fetch for {symbol} (company_id={company_id})")
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
 
         for attempt in range(self.settings.RETRY_MAX_ATTEMPTS):
             try:
@@ -407,13 +415,13 @@ class DefeatBetaProvider(StockDataProvider):
                 logger.info(f"✅ Fetched {symbol}: {fin.total_rows_fetched} total rows")
                 return fin
 
-            except (DefeatBetaException, asyncio.TimeoutError) as e:
+            except (TimeoutError, DefeatBetaException) as e:
                 last_error = e
                 if attempt < self.settings.RETRY_MAX_ATTEMPTS - 1:
                     backoff = self.settings.RETRY_BACKOFF_SECONDS[attempt]
                     logger.warning(
                         f"Attempt {attempt + 1}/{self.settings.RETRY_MAX_ATTEMPTS} failed for {symbol}: "
-                        f"retrying in {backoff}s. Error: {str(e)}"
+                        f"retrying in {backoff}s. Error: {e!s}"
                     )
                     # Clear DuckDB cache on penultimate retry (transient corruption recovery)
                     if attempt == self.settings.RETRY_MAX_ATTEMPTS - 2:
@@ -445,10 +453,10 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         company_id: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-        exchange: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        start_date: date | None = None,
+        end_date: date | None = None,
+        exchange: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Priority: YFinance (primary) → DefeatBeta (last resort).
         Dates are applied client-side after provider retrieval.
@@ -463,7 +471,7 @@ class DefeatBetaProvider(StockDataProvider):
                         df = df[df["price_date"] >= pd.Timestamp(start_date)]
                     if end_date is not None:
                         df = df[df["price_date"] <= pd.Timestamp(end_date)]
-                    out: List[Dict[str, Any]] = []
+                    out: list[dict[str, Any]] = []
                     for _, r in df.iterrows():
                         dt = pd.to_datetime(str(r.get("price_date")), errors='coerce')
                         if pd.isna(dt):
@@ -500,8 +508,8 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         company_id: int,
-        start_date: Optional[date] = None,
-    ) -> List[Dict[str, Any]]:
+        start_date: date | None = None,
+    ) -> list[dict[str, Any]]:
         rows = await self.fetch_splits(symbol, company_id, start_date=start_date)
         if rows:
             return rows
@@ -525,7 +533,7 @@ class DefeatBetaProvider(StockDataProvider):
                 return out
         return []
 
-    async def get_company_summary_optimized(self, symbol: str, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_company_summary_optimized(self, symbol: str, company_id: int) -> dict[str, Any] | None:
         snap = await self.fetch_company_summary(symbol, company_id)
         if snap:
             return snap
@@ -539,7 +547,7 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
     # Primary DBeta fetch (statements & market)
     # ---------------------------------------------------------------------
-    async def _fetch_all_financials_internal(self, symbol: str, company_id: int) -> Tuple[CompleteFundamentals, GapDict]:
+    async def _fetch_all_financials_internal(self, symbol: str, company_id: int) -> tuple[CompleteFundamentals, GapDict]:
         try:
             ticker = Ticker(symbol)
             logger.debug(f"Created Ticker object for {symbol}")
@@ -590,18 +598,18 @@ class DefeatBetaProvider(StockDataProvider):
         except NoDataError:
             raise
         except Exception as e:
-            logger.error(f"Failed to fetch financials for {symbol}: {str(e)}", exc_info=True)
+            logger.error(f"Failed to fetch financials for {symbol}: {e!s}", exc_info=True)
             raise DefeatBetaException(
-                message=f"Failed to fetch financials for {symbol}: {str(e)}",
+                message=f"Failed to fetch financials for {symbol}: {e!s}",
                 error_code="DEFEAT_BETA_FETCH_ERROR",
                 details={"symbol": symbol, "original_error": str(e)},
             )
 
-    async def _fetch_income_statements(self, ticker: Ticker, symbol: str, company_id: int) -> Tuple[IncomeStatementRows, Set[GapKey]]:
+    async def _fetch_income_statements(self, ticker: Ticker, symbol: str, company_id: int) -> tuple[IncomeStatementRows, set[GapKey]]:
         logger.debug("[DBETA][%s] enter _fetch_income_statements", symbol)
         try:
-            all_rows: List[IncomeStatementRow] = []
-            all_gaps: Set[GapKey] = set()
+            all_rows: list[IncomeStatementRow] = []
+            all_gaps: set[GapKey] = set()
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_income_statement(), f"quarterly_income_statement for {symbol}")
             if q_obj is not None:
@@ -621,14 +629,14 @@ class DefeatBetaProvider(StockDataProvider):
 
             return (IncomeStatementRows(rows=all_rows), all_gaps)
         except Exception as e:
-            logger.warning(f"Income statement fetch failed for {symbol}: {str(e)}")
+            logger.warning(f"Income statement fetch failed for {symbol}: {e!s}")
             return (IncomeStatementRows(rows=[]), set())
 
-    async def _fetch_balance_sheets(self, ticker: Ticker, symbol: str, company_id: int) -> Tuple[BalanceSheetRows, Set[GapKey]]:
+    async def _fetch_balance_sheets(self, ticker: Ticker, symbol: str, company_id: int) -> tuple[BalanceSheetRows, set[GapKey]]:
         logger.debug("[DBETA][%s] enter _fetch_balance_sheets", symbol)
         try:
-            all_rows: List[BalanceSheetRow] = []
-            all_gaps: Set[GapKey] = set()
+            all_rows: list[BalanceSheetRow] = []
+            all_gaps: set[GapKey] = set()
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_balance_sheet(), f"quarterly_balance_sheet for {symbol}")
             if q_obj is not None:
@@ -654,14 +662,14 @@ class DefeatBetaProvider(StockDataProvider):
 
             return (BalanceSheetRows(rows=all_rows), all_gaps)
         except Exception as e:
-            logger.warning(f"Balance sheet fetch failed for {symbol}: {str(e)}")
+            logger.warning(f"Balance sheet fetch failed for {symbol}: {e!s}")
             return (BalanceSheetRows(rows=[]), set())
 
-    async def _fetch_cash_flows(self, ticker: Ticker, symbol: str, company_id: int) -> Tuple[CashFlowRows, Set[GapKey]]:
+    async def _fetch_cash_flows(self, ticker: Ticker, symbol: str, company_id: int) -> tuple[CashFlowRows, set[GapKey]]:
         logger.debug("[DBETA][%s] enter _fetch_cash_flows", symbol)
         try:
-            all_rows: List[CashFlowRow] = []
-            all_gaps: Set[GapKey] = set()
+            all_rows: list[CashFlowRow] = []
+            all_gaps: set[GapKey] = set()
 
             q_obj = await self._timeout_fetch(lambda: ticker.quarterly_cash_flow(), f"quarterly_cash_flow for {symbol}")
             if q_obj is not None:
@@ -681,7 +689,7 @@ class DefeatBetaProvider(StockDataProvider):
 
             return (CashFlowRows(rows=all_rows), all_gaps)
         except Exception as e:
-            logger.warning(f"Cash flow fetch failed for {symbol}: {str(e)}")
+            logger.warning(f"Cash flow fetch failed for {symbol}: {e!s}")
             return (CashFlowRows(rows=[]), set())
 
     # _fetch_earnings removed Feb 2026 - DefeatBeta ticker.earnings() API no longer exists
@@ -700,10 +708,10 @@ class DefeatBetaProvider(StockDataProvider):
                 return DividendRows(rows=[])
             return DividendRows(rows=self._parse_dividends(div_df, company_id, symbol=symbol, provider='dbeta'))
         except Exception as e:
-            logger.warning(f"Dividends fetch failed for {symbol}: {str(e)}")
+            logger.warning(f"Dividends fetch failed for {symbol}: {e!s}")
             return DividendRows(rows=[])
 
-    async def fetch_next_earnings_date(self, symbol: str) -> Optional[date]:
+    async def fetch_next_earnings_date(self, symbol: str) -> date | None:
         """
         Public method — fetch the next earnings date for a symbol.
         Lightweight (single ticker.calendar() call), suitable for calendar sync.
@@ -715,7 +723,7 @@ class DefeatBetaProvider(StockDataProvider):
             logger.warning("fetch_next_earnings_date failed for %s: %s", symbol, e)
             return None
 
-    async def _fetch_next_earnings_date(self, ticker: Ticker, symbol: str) -> Optional[date]:
+    async def _fetch_next_earnings_date(self, ticker: Ticker, symbol: str) -> date | None:
         """
         Uses Ticker.calendar() per docs; extracts 'report_date' as next earnings date (if present).
         """
@@ -744,9 +752,9 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         company_id: int,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None,
-        exchange: Optional[str] = None,
-        security_type: Optional[str] = None,
+        only_after: tuple[int | None, int | None] | None = None,
+        exchange: str | None = None,
+        security_type: str | None = None,
     ) -> _FallbackStatements:
         fyq_filter = only_after
 
@@ -785,9 +793,9 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         company_id: int,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None,
-        exchange: Optional[str] = None,
-        security_type: Optional[str] = None,
+        only_after: tuple[int | None, int | None] | None = None,
+        exchange: str | None = None,
+        security_type: str | None = None,
     ) -> CompleteFundamentals:
         if not self.edgar_provider and not self.yfinance_provider:
             logger.warning(
@@ -822,9 +830,9 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         fin: CompleteFundamentals,
         gaps: GapDict,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]] = None,
-        exchange: Optional[str] = None,
-        security_type: Optional[str] = None,
+        only_after: tuple[int | None, int | None] | None = None,
+        exchange: str | None = None,
+        security_type: str | None = None,
     ) -> CompleteFundamentals:
         if not self.yfinance_provider:
             return fin
@@ -912,9 +920,9 @@ class DefeatBetaProvider(StockDataProvider):
 
     async def _fill_shares_gap(
        self,
-       fin: "CompleteFundamentals",
+       fin: CompleteFundamentals,
        symbol: str,
-    ) -> "CompleteFundamentals":
+    ) -> CompleteFundamentals:
         """
         Field-level gap-fill for shares_outstanding_diluted.
 
@@ -936,7 +944,7 @@ class DefeatBetaProvider(StockDataProvider):
             )
             if yf_a_is is not None and not yf_a_is.empty:
                 # Build year -> shares map from yfinance IS
-                shares_by_year: Dict[int, Optional[int]] = {}
+                shares_by_year: dict[int, int | None] = {}
                 for col in yf_a_is.columns:
                     if not hasattr(col, "year"):
                         continue
@@ -967,7 +975,7 @@ class DefeatBetaProvider(StockDataProvider):
                         return fin
 
             # Attempt 2: yfinance info.sharesOutstanding (snapshot, applies to all years)
-            snapshot_shares: Optional[int] = None
+            snapshot_shares: int | None = None
             try:
                 details = await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
                 # get_stock_details caches yf.Ticker.info; sharesOutstanding lives there
@@ -1003,10 +1011,10 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         company_id: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-        exchange: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        start_date: date | None = None,
+        end_date: date | None = None,
+        exchange: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Returns rows for public.price_history (daily OHLCV).
         Applies client-side date filtering if start_date/end_date provided.
@@ -1014,7 +1022,9 @@ class DefeatBetaProvider(StockDataProvider):
         try:
             from .yfinance_provider import EXCHANGE_SUFFIX_MAP
             suffix = EXCHANGE_SUFFIX_MAP.get(exchange.upper()) if exchange else None
-            db_symbol = symbol.upper() + suffix if suffix else symbol.upper()
+            sym_upper = symbol.upper()
+            # Idempotent: never double-append (.TO + .TO => BCE.TO.TO)
+            db_symbol = sym_upper + suffix if suffix and not sym_upper.endswith(suffix) else sym_upper
             t = Ticker(db_symbol)
             obj = await self._timeout_fetch(lambda: t.price(), f"price history for {symbol}")
             df = obj.df() if hasattr(obj, 'df') else obj
@@ -1063,8 +1073,8 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         company_id: int,
-        start_date: Optional[date] = None,
-    ) -> List[Dict[str, Any]]:
+        start_date: date | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Returns rows for public.splits
         """
@@ -1114,7 +1124,7 @@ class DefeatBetaProvider(StockDataProvider):
             self._log_debug_once(f"Splits fetch failed for {symbol}: {e}")
             return []
 
-    async def fetch_revenue_forecast(self, symbol: str, company_id: int) -> List[Dict[str, Any]]:
+    async def fetch_revenue_forecast(self, symbol: str, company_id: int) -> list[dict[str, Any]]:
         """
         Maps defeatbeta.ticker.revenue_forecast() into public.revenue_forecast rows
         """
@@ -1147,7 +1157,7 @@ class DefeatBetaProvider(StockDataProvider):
             self._log_debug_once(f"Revenue forecast fetch failed for {symbol}: {e}")
             return []
 
-    async def fetch_earnings_forecast(self, symbol: str, company_id: int) -> List[Dict[str, Any]]:
+    async def fetch_earnings_forecast(self, symbol: str, company_id: int) -> list[dict[str, Any]]:
         """
         Maps defeatbeta.ticker.earnings_forecast() into public.earnings_forecast rows
         """
@@ -1183,7 +1193,7 @@ class DefeatBetaProvider(StockDataProvider):
             self._log_debug_once(f"Earnings forecast fetch failed for {symbol}: {e}")
             return []
 
-    async def fetch_company_summary(self, symbol: str, company_id: int) -> Optional[Dict[str, Any]]:
+    async def fetch_company_summary(self, symbol: str, company_id: int) -> dict[str, Any] | None:
         """
         One row for public.company_summary; snapshot_date defaults to today.
 
@@ -1264,7 +1274,7 @@ class DefeatBetaProvider(StockDataProvider):
         df.replace('*', pd.NA, inplace=True)
 
         kept_cols = []
-        col_to_dt: Dict[str, pd.Timestamp] = {}
+        col_to_dt: dict[str, pd.Timestamp] = {}
         for c in df.columns:
             cs = str(c).strip()
             if cs.upper() == 'TTM':
@@ -1303,7 +1313,7 @@ class DefeatBetaProvider(StockDataProvider):
             fq = int((ts.month - 1) // 3 + 1) if is_quarterly else None
             yield c, ts.date(), fy, fq
 
-    def _db_val(self, df: pd.DataFrame, aliases: List[str], col: str):
+    def _db_val(self, df: pd.DataFrame, aliases: list[str], col: str):
         for key in (aliases or []):
             k = self._normalize_alias_key(key)
             if k in df.index:
@@ -1314,9 +1324,9 @@ class DefeatBetaProvider(StockDataProvider):
         return None
 
     # ---- Income Statement parser (DBeta) ----
-    def _parse_income_statement(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> Tuple[List[IncomeStatementRow], Set[GapKey]]:
-        rows: List[IncomeStatementRow] = []
-        gaps: Set[GapKey] = set()
+    def _parse_income_statement(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> tuple[list[IncomeStatementRow], set[GapKey]]:
+        rows: list[IncomeStatementRow] = []
+        gaps: set[GapKey] = set()
         df = self._normalize_defeatbeta_df(raw_df)
         if df.empty:
             return rows, gaps
@@ -1367,26 +1377,26 @@ class DefeatBetaProvider(StockDataProvider):
             )
             # Normalize row
             normalized_row = normalize_income_row(row)
-            
+
             # Validate before adding to results
             validation_result = FinancialDataValidator.validate_income_statement(
                 row=normalized_row.model_dump(),
                 symbol=symbol
             )
             log_validation_result(validation_result)
-            
+
             # Only add if no critical issues; track dropped periods as gaps
             if not validation_result.has_critical_issues():
                 rows.append(normalized_row)
             else:
                 gaps.add((fy, fq, period_end))
-            
+
         return rows, gaps
 
     # ---- Balance Sheet parser (DBeta) ----
-    def _parse_balance_sheet(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> Tuple[List[BalanceSheetRow], Set[GapKey]]:
-        rows: List[BalanceSheetRow] = []
-        gaps: Set[GapKey] = set()
+    def _parse_balance_sheet(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> tuple[list[BalanceSheetRow], set[GapKey]]:
+        rows: list[BalanceSheetRow] = []
+        gaps: set[GapKey] = set()
         df = self._normalize_defeatbeta_df(raw_df)
         logger.debug("[DBETA][%s] BS kept date columns: %s", symbol, list(df.columns))
         logger.debug("[DBETA][%s] BS normalized labels (first 20): %s", symbol, list(df.index[:20]))
@@ -1464,14 +1474,14 @@ class DefeatBetaProvider(StockDataProvider):
             )
             # Normalize row
             normalized_row = normalize_balance_row(row)
-            
+
             # Validate before adding to results
             validation_result = FinancialDataValidator.validate_balance_sheet(
                 row=normalized_row.model_dump(),
                 symbol=symbol
             )
             log_validation_result(validation_result)
-            
+
             # Only add if no critical issues; track dropped periods as gaps
             if not validation_result.has_critical_issues():
                 rows.append(normalized_row)
@@ -1480,9 +1490,9 @@ class DefeatBetaProvider(StockDataProvider):
         return rows, gaps
 
     # ---- Cash Flow parser (DBeta) ----
-    def _parse_cash_flow(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> Tuple[List[CashFlowRow], Set[GapKey]]:
-        rows: List[CashFlowRow] = []
-        gaps: Set[GapKey] = set()
+    def _parse_cash_flow(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> tuple[list[CashFlowRow], set[GapKey]]:
+        rows: list[CashFlowRow] = []
+        gaps: set[GapKey] = set()
         df = self._normalize_defeatbeta_df(raw_df)
         if df.empty:
             return rows, gaps
@@ -1529,14 +1539,14 @@ class DefeatBetaProvider(StockDataProvider):
             )
             # Normalize row
             normalized_row = normalize_cashflow_row(row)
-            
+
             # Validate before adding to results
             validation_result = FinancialDataValidator.validate_cash_flow(
                 row=normalized_row.model_dump(),
                 symbol=symbol
             )
             log_validation_result(validation_result)
-            
+
             # Only add if no critical issues; track dropped periods as gaps
             if not validation_result.has_critical_issues():
                 rows.append(normalized_row)
@@ -1545,8 +1555,8 @@ class DefeatBetaProvider(StockDataProvider):
         return rows, gaps
 
     # ---- Dividends parser (DBeta & YF) ----
-    def _parse_dividends(self, df: pd.DataFrame, company_id: int, symbol: str, provider: str) -> List[DividendRow]:
-        rows: List[DividendRow] = []
+    def _parse_dividends(self, df: pd.DataFrame, company_id: int, symbol: str, provider: str) -> list[DividendRow]:
+        rows: list[DividendRow] = []
         if df is None or df.empty:
             return rows
         # Map possible column names
@@ -1611,10 +1621,10 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
     def _parse_yf_income_statement(
         self, df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]],
+        only_after: tuple[int | None, int | None] | None,
         source: str = "yfinance"
-    ) -> List[IncomeStatementRow]:
-        rows: List[IncomeStatementRow] = []
+    ) -> list[IncomeStatementRow]:
+        rows: list[IncomeStatementRow] = []
         if df is None or df.empty:
             return rows
 
@@ -1626,7 +1636,7 @@ class DefeatBetaProvider(StockDataProvider):
             if only_after and not self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1]):
                 continue
 
-            def gv(keys: List[str]) -> Any:
+            def gv(keys: list[str]) -> Any:
                 for k in keys:
                     if k in df.index:
                         v = df.loc[k, col]
@@ -1672,10 +1682,10 @@ class DefeatBetaProvider(StockDataProvider):
 
     def _parse_yf_balance_sheet(
         self, df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]],
+        only_after: tuple[int | None, int | None] | None,
         source: str = "yfinance"
-    ) -> List[BalanceSheetRow]:
-        rows: List[BalanceSheetRow] = []
+    ) -> list[BalanceSheetRow]:
+        rows: list[BalanceSheetRow] = []
         if df is None or df.empty:
             return rows
 
@@ -1687,7 +1697,7 @@ class DefeatBetaProvider(StockDataProvider):
             if only_after and not self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1]):
                 continue
 
-            def gv(keys: List[str]) -> Any:
+            def gv(keys: list[str]) -> Any:
                 for k in keys:
                     if k in df.index:
                         v = df.loc[k, col]
@@ -1733,10 +1743,10 @@ class DefeatBetaProvider(StockDataProvider):
 
     def _parse_yf_cash_flow(
         self, df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str,
-        only_after: Optional[Tuple[Optional[int], Optional[int]]],
+        only_after: tuple[int | None, int | None] | None,
         source: str = "yfinance"
-    ) -> List[CashFlowRow]:
-        rows: List[CashFlowRow] = []
+    ) -> list[CashFlowRow]:
+        rows: list[CashFlowRow] = []
         if df is None or df.empty:
             return rows
 
@@ -1748,7 +1758,7 @@ class DefeatBetaProvider(StockDataProvider):
             if only_after and not self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1]):
                 continue
 
-            def gv(keys: List[str]) -> Any:
+            def gv(keys: list[str]) -> Any:
                 for k in keys:
                     if k in df.index:
                         v = df.loc[k, col]
@@ -1791,8 +1801,8 @@ class DefeatBetaProvider(StockDataProvider):
             ))
         return rows
 
-    def _build_earnings_rows_from_yf(self, company_id: int, yf_earn: Optional[List[Dict[str, Any]]]) -> List[EarningsRow]:
-        rows: List[EarningsRow] = []
+    def _build_earnings_rows_from_yf(self, company_id: int, yf_earn: list[dict[str, Any]] | None) -> list[EarningsRow]:
+        rows: list[EarningsRow] = []
         if not yf_earn:
             return rows
 
@@ -1848,7 +1858,7 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
     def _extract_result(self, result, default):
         if isinstance(result, Exception):
-            logger.debug(f"Fetch failed: {str(result)}")
+            logger.debug(f"Fetch failed: {result!s}")
             return default
         return result if result else default
 
@@ -1873,7 +1883,7 @@ class DefeatBetaProvider(StockDataProvider):
                 asyncio.to_thread(func),
                 timeout=self.settings.DEFEAT_BETA_TIMEOUT_SECONDS
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"Timeout fetching {description}")
             symbol = description.split(" for ")[-1] if " for " in description else "unknown"
             raise FinancialsFetchTimeoutError(
@@ -1884,9 +1894,9 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         fin: CompleteFundamentals,
         last_year: int,
-        last_quarter: Optional[int]
+        last_quarter: int | None
     ) -> CompleteFundamentals:
-        def keep(fy: Optional[int], fq: Optional[int]) -> bool:
+        def keep(fy: int | None, fq: int | None) -> bool:
             return self._is_new_fiscal_period(fy, fq, last_year, last_quarter)
 
         fin.income_statements.rows = [r for r in fin.income_statements.rows if keep(r.fiscal_year, r.fiscal_quarter)]
@@ -1901,7 +1911,7 @@ class DefeatBetaProvider(StockDataProvider):
         fin: CompleteFundamentals,
         min_year: int,
     ) -> CompleteFundamentals:
-        def keep(fy: Optional[int]) -> bool:
+        def keep(fy: int | None) -> bool:
             return fy is None or fy >= min_year
 
         fin.income_statements.rows = [r for r in fin.income_statements.rows if keep(r.fiscal_year)]
@@ -1912,10 +1922,10 @@ class DefeatBetaProvider(StockDataProvider):
 
     def _is_new_fiscal_period(
         self,
-        fy: Optional[int],
-        fq: Optional[int],
-        last_year: Optional[int],
-        last_quarter: Optional[int]
+        fy: int | None,
+        fq: int | None,
+        last_year: int | None,
+        last_quarter: int | None
     ) -> bool:
         if fy is None:
             return False
@@ -1932,7 +1942,7 @@ class DefeatBetaProvider(StockDataProvider):
             return True
         return fq > last_quarter
 
-    def _safe_decimal(self, val: Any) -> Optional[Decimal]:
+    def _safe_decimal(self, val: Any) -> Decimal | None:
         if val is None:
             return None
         # Handle NaN floats
@@ -1943,7 +1953,7 @@ class DefeatBetaProvider(StockDataProvider):
         except (InvalidOperation, ValueError, TypeError):
             return None
 
-    def _safe_int_field(self, val: Any) -> Optional[int]:
+    def _safe_int_field(self, val: Any) -> int | None:
         """Convert a raw numeric value (float/Decimal/str) to int for bigint columns."""
         if val is None:
             return None
@@ -1953,7 +1963,7 @@ class DefeatBetaProvider(StockDataProvider):
             return None
 
     @staticmethod
-    def _build_field_sources(field_values: Dict[str, Any], source: str) -> Dict[str, List[str]]:
+    def _build_field_sources(field_values: dict[str, Any], source: str) -> dict[str, list[str]]:
         """Build field_sources metadata: maps non-null field names to their provider source."""
         return {k: [source] for k, v in field_values.items() if v is not None}
 
@@ -1971,7 +1981,7 @@ class DefeatBetaProvider(StockDataProvider):
     def _log_debug_once(self, msg: str):
         logger.debug(msg)
 
-    def _debug_alias_coverage(self, df: pd.DataFrame, alias_map: Dict[str, List[str]], col: str):
+    def _debug_alias_coverage(self, df: pd.DataFrame, alias_map: dict[str, list[str]], col: str):
         out = {}
         idx = set(df.index)
         for canonical, aliases in alias_map.items():
@@ -1994,8 +2004,8 @@ class DefeatBetaProvider(StockDataProvider):
         self,
         symbol: str,
         method_name: str,
-        exchange: Optional[str] = None,
-        security_type: Optional[str] = None,
+        exchange: str | None = None,
+        security_type: str | None = None,
     ) -> tuple[pd.DataFrame, str]:
         # 1. Try Stockdex/Macrotrends
         if self.stockdex_provider:

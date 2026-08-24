@@ -2,21 +2,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
-from application.services.ai_service import generate_overview_summary
-from application.services.ddm_service import DdmService
+from typing import Any
+
 from application.services.dcf_service import DcfService
+from application.services.ddm_service import DdmService
 from application.services.owner_earnings_service import OwnerEarningsService
+from application.services.recompute_guard import RecomputeGuard
 from application.services.residual_income_service import ResidualIncomeService
 from application.services.rule1_service import Rule1Service
-from application.services.recompute_guard import RecomputeGuard
-
-from domain.models.valuation_rule1 import (
-    Rule1RequestOverrides,
-    Rule1Response,
-)
-from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
 from domain.models.valuation_dcf import DcfRequestOverrides, DcfResponse
+from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse
 from domain.models.valuation_owner_earnings import (
     OwnerEarningsRequestOverrides,
     OwnerEarningsResponse,
@@ -25,8 +20,11 @@ from domain.models.valuation_residual_income import (
     ResidualIncomeRequestOverrides,
     ResidualIncomeResponse,
 )
+from domain.models.valuation_rule1 import (
+    Rule1RequestOverrides,
+    Rule1Response,
+)
 from infrastructure.repositories.valuation_repository import ValuationRepository
-
 from shared.finance_math import safe_float
 from shared.time_utils import now_utc, parse_db_timestamp
 
@@ -76,24 +74,24 @@ class ValuationService:
     async def compute_rule1_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[Rule1RequestOverrides] = None,
+        user_id:   int | None,
+        overrides: Rule1RequestOverrides | None = None,
         force:     bool = False,
     ) -> Rule1Response:
         return await self.rule1.compute_rule1_if_stale(
             symbol=symbol, user_id=user_id, overrides=overrides, force=force
         )
 
-    async def get_rule1_cached(self, symbol: str) -> Optional[Rule1Response]:
+    async def get_rule1_cached(self, symbol: str) -> Rule1Response | None:
         """Return last Rule #1 result instantly. None if never computed."""
         return await self.rule1.get_cached(symbol)
 
     async def compute_rule1_with_diagnostics(
         self,
         symbol:                 str,
-        user_id:                Optional[int],
-        overrides:              Optional[Rule1RequestOverrides] = None,
-        dependency_fingerprint: Optional[str] = None,
+        user_id:                int | None,
+        overrides:              Rule1RequestOverrides | None = None,
+        dependency_fingerprint: str | None = None,
     ) -> Rule1Response:
         """
         Thin wrapper kept for backward compatibility.
@@ -113,9 +111,9 @@ class ValuationService:
     async def compute_ddm_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
+        user_id:   int | None,
         variant:   str,
-        overrides: Optional[DdmRequestOverrides] = None,
+        overrides: DdmRequestOverrides | None = None,
         force:     bool = False,
     ) -> DdmResponse:
         return await self.ddm.compute_ddm_if_stale(
@@ -125,7 +123,7 @@ class ValuationService:
 
     async def get_ddm_cached(
         self, symbol: str, variant: str = "gordon"
-    ) -> Optional[DdmResponse]:
+    ) -> DdmResponse | None:
         """Return last DDM result instantly. None if never computed."""
         return await self.ddm.get_cached(symbol, variant=variant)
 
@@ -134,15 +132,15 @@ class ValuationService:
     async def compute_dcf_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[DcfRequestOverrides] = None,
+        user_id:   int | None,
+        overrides: DcfRequestOverrides | None = None,
         force:     bool = False,
     ) -> DcfResponse:
         return await self.dcf.compute_dcf_if_stale(
             symbol=symbol, user_id=user_id, overrides=overrides, force=force
         )
 
-    async def get_dcf_cached(self, symbol: str) -> Optional[DcfResponse]:
+    async def get_dcf_cached(self, symbol: str) -> DcfResponse | None:
         """Return last DCF result instantly. None if never computed."""
         return await self.dcf.get_cached(symbol)
 
@@ -151,8 +149,8 @@ class ValuationService:
     async def compute_owner_earnings_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[OwnerEarningsRequestOverrides] = None,
+        user_id:   int | None,
+        overrides: OwnerEarningsRequestOverrides | None = None,
         force:     bool = False,
     ) -> OwnerEarningsResponse:
         return await self.owner_earnings.compute_owner_earnings_if_stale(
@@ -161,7 +159,7 @@ class ValuationService:
 
     async def get_owner_earnings_cached(
         self, symbol: str
-    ) -> Optional[OwnerEarningsResponse]:
+    ) -> OwnerEarningsResponse | None:
         """Return last Owner Earnings result instantly. None if never computed."""
         return await self.owner_earnings.get_cached(symbol)
 
@@ -170,8 +168,8 @@ class ValuationService:
     async def compute_residual_income_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[ResidualIncomeRequestOverrides] = None,
+        user_id:   int | None,
+        overrides: ResidualIncomeRequestOverrides | None = None,
         force:     bool = False,
     ) -> ResidualIncomeResponse:
         return await self.residual_income.compute_residual_income_if_stale(
@@ -180,7 +178,7 @@ class ValuationService:
 
     async def get_residual_income_cached(
         self, symbol: str
-    ) -> Optional[ResidualIncomeResponse]:
+    ) -> ResidualIncomeResponse | None:
         """Return last Residual Income result instantly. None if never computed."""
         return await self.residual_income.get_cached(symbol)
 
@@ -200,15 +198,14 @@ class ValuationService:
         The AI recommendation is generated from whichever methods have data.
         If no methods have been computed yet, recommendation is None.
         """
-        import asyncio
- 
+
         ctx = await self.repo.get_company_context(symbol)
         if not ctx:
             raise ValueError(f"Symbol '{symbol}' not found.")
         company_id = int(ctx["company_id"])
         currency   = ctx.get("currency") or "USD"
         sector     = ctx.get("sector")
- 
+
         # ── Read all 5 snapshots in parallel ──────────────────────────────────
         snaps = await self.repo.get_last_output_snapshots(
             company_id, ["rule1", "dcf", "ddm_gordon", "owner_earnings", "residual_income"]
@@ -218,9 +215,9 @@ class ValuationService:
         ddm_gordon_snap = snaps.get("ddm_gordon")
         oe_snap = snaps.get("owner_earnings")
         ri_snap = snaps.get("residual_income")
- 
+
         current_price = await self.repo.get_current_market_price(company_id)
- 
+
         def _extract(snap, iv_field: str) -> dict:
             if not snap:
                 return {"status": "not_computed"}
@@ -246,7 +243,7 @@ class ValuationService:
                 "lastComputedAt": last_computed,
                 "currency":       currency,
             }
- 
+
         methods = {
             "rule1":          _extract(rule1_snap,      "stickerPrice"),
             "dcf":            _extract(dcf_snap,        "intrinsicValuePerShare"),
@@ -254,7 +251,7 @@ class ValuationService:
             "owner_earnings": _extract(oe_snap,         "intrinsicValuePerShare"),
             "residual_income": _extract(ri_snap,        "intrinsicValuePerShare"),
         }
- 
+
         # ── AI cross-method recommendation ─────────────────────────────────────
         # Only generate if at least one method has been computed.
         computed_methods = {k: v for k, v in methods.items() if v["status"] == "computed"}
@@ -274,7 +271,7 @@ class ValuationService:
                 logging.getLogger(__name__).warning(
                     "generate_overview_summary failed for %s: %s", symbol, exc
                 )
- 
+
         return {
             "symbol":          symbol.upper(),
             "currentPrice":    current_price,
@@ -342,8 +339,8 @@ class ValuationService:
         }
 
     def _build_method_summary(
-        self, method: str, row: Optional[Dict[str, Any]], currency: str
-    ) -> Dict[str, Any]:
+        self, method: str, row: dict[str, Any] | None, currency: str
+    ) -> dict[str, Any]:
         base = {
             "method": method,
             "intrinsicValue": None,
@@ -415,7 +412,7 @@ class ValuationService:
         return base
 
     @staticmethod
-    def _extract_input_as_of(input_snapshot: Any) -> Optional[Any]:
+    def _extract_input_as_of(input_snapshot: Any) -> Any | None:
         if not isinstance(input_snapshot, dict):
             return None
         resolved = input_snapshot.get("resolved")
@@ -424,7 +421,7 @@ class ValuationService:
         return None
 
     @staticmethod
-    def _freshness_days(computed_at: Any) -> Optional[int]:
+    def _freshness_days(computed_at: Any) -> int | None:
         if not computed_at:
             return None
         try:
@@ -435,7 +432,7 @@ class ValuationService:
             return None
 
     @staticmethod
-    def _extract_applicability(app: Dict[str, Any]) -> tuple:
+    def _extract_applicability(app: dict[str, Any]) -> tuple:
         score, category, hard_fail = None, None, False
         for flag in app.get("flags") or []:
             evidence = flag.get("evidence") or {}
@@ -450,7 +447,7 @@ class ValuationService:
         return score, category, hard_fail
 
     @staticmethod
-    def _recommendation_status(methods: Dict[str, Any]) -> Dict[str, Any]:
+    def _recommendation_status(methods: dict[str, Any]) -> dict[str, Any]:
         from config import settings
         configured = bool(settings.OPEN_ROUTER_KEY)
         base = {
@@ -468,7 +465,7 @@ class ValuationService:
         return base
 
     @staticmethod
-    def _deterministic_recommendation(methods: Dict[str, Any]) -> str:
+    def _deterministic_recommendation(methods: dict[str, Any]) -> str:
         available = [
             m for m in methods.values()
             if m.get("status") == "available" and m.get("upsideDownside") is not None
@@ -488,4 +485,3 @@ class ValuationService:
             f"{stance} — {len(available)} of {len(methods)} methods computed "
             f"(average upside {avg:+.1%})."
         )
- 

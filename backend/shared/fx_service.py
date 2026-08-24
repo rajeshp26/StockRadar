@@ -10,10 +10,9 @@ Caching strategy:
   - None results are cached briefly (60s) to avoid thundering herds.
 """
 
+import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Optional, Dict, Tuple
-import logging
 
 from shared.time_utils import now_utc
 
@@ -30,9 +29,9 @@ class FXService:
 
     def __init__(self, supabase_client):
         self._client = supabase_client
-        self._cache: Dict[Tuple[str, str, str], Tuple[Optional[Decimal], datetime]] = {}
+        self._cache: dict[tuple[str, str, str], tuple[Decimal | None, datetime]] = {}
 
-    def _cache_get(self, key: Tuple[str, str, str]) -> Optional[Decimal]:
+    def _cache_get(self, key: tuple[str, str, str]) -> Decimal | None:
         if key not in self._cache:
             return None
         val, ts = self._cache[key]
@@ -42,12 +41,12 @@ class FXService:
             return None
         return val
 
-    def _cache_set(self, key: Tuple[str, str, str], val: Optional[Decimal]) -> None:
+    def _cache_set(self, key: tuple[str, str, str], val: Decimal | None) -> None:
         self._cache[key] = (val, now_utc())
 
     def get_rate(
-        self, base: str, target: str, as_of: Optional[date] = None
-    ) -> Optional[Decimal]:
+        self, base: str, target: str, as_of: date | None = None
+    ) -> Decimal | None:
         """Look up cached rate; fall back to live fetch (today only)."""
         as_of = as_of or now_utc().date()
         cache_key = (base.upper(), target.upper(), as_of.isoformat())
@@ -83,8 +82,8 @@ class FXService:
         amount: Decimal,
         from_currency: str,
         to_currency: str,
-        as_of: Optional[date] = None,
-    ) -> Optional[Decimal]:
+        as_of: date | None = None,
+    ) -> Decimal | None:
         """Convert amount. Returns None if no rate is available."""
         if from_currency.upper() == to_currency.upper():
             return amount
@@ -98,9 +97,9 @@ class FXService:
         amount: Decimal,
         from_currency: str,
         to_currency: str,
-        as_of: Optional[date] = None,
-        holding_id: Optional[str] = None,
-    ) -> Tuple[Decimal, bool]:
+        as_of: date | None = None,
+        holding_id: str | None = None,
+    ) -> tuple[Decimal, bool]:
         """Convert or warn. Returns (converted_amount, fx_applied)."""
         result = self.convert(amount, from_currency, to_currency, as_of)
         if result is not None:
@@ -113,7 +112,7 @@ class FXService:
 
     def _query_cached_rate(
         self, base: str, target: str, as_of: date
-    ) -> Optional[Decimal]:
+    ) -> Decimal | None:
         """Check exchange_rates table for nearest-past rate within staleness limit."""
         res = (
             self._client.table("exchange_rates")
@@ -138,7 +137,7 @@ class FXService:
             return Decimal(str(row["rate"]))
         return None
 
-    def _fetch_and_cache_today(self, base: str, target: str) -> Optional[Decimal]:
+    def _fetch_and_cache_today(self, base: str, target: str) -> Decimal | None:
         """Live fetch via yfinance, cache under today's date only."""
         from providers.fx_provider import fetch_fx_rate
         rate = fetch_fx_rate(base, target)

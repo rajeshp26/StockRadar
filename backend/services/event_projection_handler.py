@@ -7,13 +7,12 @@ created_at-based polling if the table doesn't exist.
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
-from shared.replay_engine import ReplayEngine, AccountState
+from shared.replay_engine import AccountState, ReplayEngine
 
 logger = logging.getLogger("stockerpro.services.event_projection_handler")
 
@@ -60,24 +59,24 @@ class EventProjectionHandler:
                 supabase.table("projection_checkpoint").upsert({
                     "id": 1,
                     "last_seq_id": seq_id,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 }).execute()
             else:
                 CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
-                CHECKPOINT_FILE.write_text(json.dumps({"last_seq_id": seq_id, "updated_at": datetime.now(timezone.utc).isoformat()}))
+                CHECKPOINT_FILE.write_text(json.dumps({"last_seq_id": seq_id, "updated_at": datetime.now(UTC).isoformat()}))
         except Exception as e:
             logger.warning(f"Failed to save checkpoint: {e}")
 
     # ----------------------------------------------------------------
     # Polling
     # ----------------------------------------------------------------
-    def get_new_events(self) -> List[dict]:
+    def get_new_events(self) -> list[dict]:
         """Get events since last checkpoint."""
         if self._use_event_sequence:
             return self._poll_via_sequence()
         return self._poll_via_created_at()
 
-    def _poll_via_sequence(self) -> List[dict]:
+    def _poll_via_sequence(self) -> list[dict]:
         r = (
             supabase.table("event_sequence")
             .select("seq_id, event_id, aggregate_id")
@@ -88,7 +87,7 @@ class EventProjectionHandler:
         )
         return r.data or []
 
-    def _poll_via_created_at(self) -> List[dict]:
+    def _poll_via_created_at(self) -> list[dict]:
         # Use created_at with 1ms offset to avoid missing events
         events = self.event_store.get_all_events(
             aggregate_type="account",
@@ -98,7 +97,7 @@ class EventProjectionHandler:
         new_events = events[self._last_seq_id:]
         return new_events
 
-    def get_account_ids_from_events(self, events: List[dict]) -> Set[int]:
+    def get_account_ids_from_events(self, events: list[dict]) -> set[int]:
         from shared.replay_engine import _parse_account_id
         account_ids = set()
         for ev in events:
@@ -113,7 +112,7 @@ class EventProjectionHandler:
     # ----------------------------------------------------------------
     def rebuild_account(self, account_id: int) -> None:
         """Full replay for one account → atomic swap write to portfolio_holdings."""
-        state = self.replay_engine.replay_to_date(account_id, datetime.now(timezone.utc).date())
+        state = self.replay_engine.replay_to_date(account_id, datetime.now(UTC).date())
         self._atomic_write_holdings(account_id, state)
         logger.info(f"Rebuilt account {account_id}: {len(state.holdings)} holdings")
 
@@ -144,8 +143,8 @@ class EventProjectionHandler:
                 "currency": "CAD",
                 "exchange_override": current_overrides.get(cid),
                 "first_purchase_date": holding.trade_date.isoformat() if holding.trade_date else None,
-                "last_transaction_date": datetime.now(timezone.utc).date().isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "last_transaction_date": datetime.now(UTC).date().isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             })
 
         try:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Lock Manager
 Provides lease-token-based distributed locking for schedulers.
@@ -11,10 +10,9 @@ periodic lease renewal, and stale lock detection.
 import logging
 import uuid
 from datetime import timedelta
-from typing import Optional
 
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
 from infrastructure.repositories.scheduler_repository import SchedulerRepository
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +38,7 @@ class LockManager:
                 await lock_mgr.release_company_lock(company_id=123, owner_id="worker1", lease_token=token)
     """
 
-    def __init__(self, financial_repo, scheduler_repo: Optional[SchedulerRepository] = None):
+    def __init__(self, financial_repo, scheduler_repo: SchedulerRepository | None = None):
         self._financial_repo = financial_repo
         self._scheduler_repo = scheduler_repo or SchedulerRepository()
 
@@ -54,7 +52,7 @@ class LockManager:
         owner_id: str,
         lock_type: str = "financial_refresh",
         ttl_seconds: int = 1800,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Acquire a per-company lock.  Returns lease_token on success, None on failure.
 
@@ -159,7 +157,7 @@ class LockManager:
         lock_type: str,
         owner_id: str,
         ttl_seconds: int = 1800,
-    ) -> Optional[str]:
+    ) -> str | None:
         return self._scheduler_repo.acquire_resource_lock(
             resource_type=resource_type,
             resource_id=resource_id,

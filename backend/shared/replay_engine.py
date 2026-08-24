@@ -4,10 +4,15 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from infrastructure.repositories.event_store import EventStore
-from shared.snapshot_builder import PriceTier, _resolve_holding_price, TIER_QUALITY_MAP, convert_holding_fx
+from shared.snapshot_builder import (
+    TIER_QUALITY_MAP,
+    PriceTier,
+    _resolve_holding_price,
+    convert_holding_fx,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +25,8 @@ class HoldingState:
     total_cost: Decimal
     average_cost: Decimal
     realized_gain_loss: Decimal = Decimal("0")
-    trade_date: Optional[date] = None
-    lots: List[Dict] = field(default_factory=list)
+    trade_date: date | None = None
+    lots: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -29,7 +34,7 @@ class AccountState:
     account_id: int
     cash_balance: Decimal = Decimal("0.00")
     net_deposits: Decimal = Decimal("0.00")
-    holdings: Dict[int, HoldingState] = field(default_factory=dict)
+    holdings: dict[int, HoldingState] = field(default_factory=dict)
 
 
 @dataclass
@@ -40,10 +45,10 @@ class ComparisonResult:
     delta_cost: Decimal
     replay: dict
     stored: dict
-    differences: List[str]
+    differences: list[str]
 
 
-def _parse_account_id(aggregate_id: str) -> Optional[int]:
+def _parse_account_id(aggregate_id: str) -> int | None:
     if aggregate_id and aggregate_id.startswith("account_"):
         try:
             return int(aggregate_id.split("_")[1])
@@ -235,7 +240,7 @@ class ReplayEngine:
             if holding.quantity > 0:
                 holding.average_cost = holding.total_cost / holding.quantity
 
-    def _get_event_date(self, event: dict) -> Optional[date]:
+    def _get_event_date(self, event: dict) -> date | None:
         """Extract the relevant date from an event.
 
         Priority:
@@ -321,12 +326,12 @@ class ReplayEngine:
         self,
         account_id: int,
         target_date: date,
-        prices_by_company: Dict[int, Dict],
-        price_history: Optional[Dict[int, List[tuple]]] = None,
+        prices_by_company: dict[int, dict],
+        price_history: dict[int, list[tuple]] | None = None,
         account_currency: str = "CAD",
-        exchange_overrides: Optional[Dict[int, Optional[str]]] = None,
-        company_currencies: Optional[Dict[int, str]] = None,
-        companies_map: Optional[Dict[int, Dict]] = None,
+        exchange_overrides: dict[int, str | None] | None = None,
+        company_currencies: dict[int, str] | None = None,
+        companies_map: dict[int, dict] | None = None,
     ) -> dict:
         """Build a snapshot dict from replay state (compatible with build_snapshot_row output).
 
@@ -339,8 +344,8 @@ class ReplayEngine:
                 (with cdr_ratio field). Used for per-company CDR ratio lookup.
         """
         from config import settings
-        from shared.fx_service import FXService
         from database import supabase as _sb
+        from shared.fx_service import FXService
         from shared.snapshot_builder import get_cdr_ratio_for_company
 
         enable_fx = getattr(settings, "ENABLE_FX_CONVERSION", False)
@@ -351,7 +356,7 @@ class ReplayEngine:
         holdings_list = []
         total_market_value = Decimal("0.00")
         total_cost = Decimal("0.00")
-        used_tiers: List[PriceTier] = []
+        used_tiers: list[PriceTier] = []
 
         for cid, holding in state.holdings.items():
             qty = holding.quantity
@@ -489,11 +494,11 @@ class ReplayEngine:
         account_id: int,
         snapshot_date: date,
         stored_snapshot: dict,
-        prices_by_company: Dict[int, Dict],
-        price_history: Optional[Dict[int, List[tuple]]] = None,
+        prices_by_company: dict[int, dict],
+        price_history: dict[int, list[tuple]] | None = None,
         account_currency: str = "CAD",
-        company_currencies: Optional[Dict[int, str]] = None,
-        companies_map: Optional[Dict[int, Dict]] = None,
+        company_currencies: dict[int, str] | None = None,
+        companies_map: dict[int, dict] | None = None,
     ) -> ComparisonResult:
         """Compare replay result with a stored portfolio_snapshot row."""
         replay = self.build_snapshot_from_replay(
@@ -506,7 +511,7 @@ class ReplayEngine:
             companies_map=companies_map,
         )
 
-        differences: List[str] = []
+        differences: list[str] = []
 
         def delta(key: str) -> Decimal:
             r = _decimal(replay.get(key, 0))

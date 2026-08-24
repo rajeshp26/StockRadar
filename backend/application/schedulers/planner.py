@@ -3,31 +3,32 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from collections.abc import Callable, Coroutine
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from infrastructure.repositories.scheduler_repository import SchedulerRepository
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
+from shared.time_utils import now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
-PlanFunction = Callable[[], Coroutine[Any, Any, List[Dict[str, Any]]]]
+PlanFunction = Callable[[], Coroutine[Any, Any, list[dict[str, Any]]]]
 
 PLAN_TIMEOUT_SECONDS = 300  # 5 minutes max for a plan() call
 
 
-def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
+def to_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 class SchedulerPlanner:
-    def __init__(self, scheduler_repo: Optional[SchedulerRepository] = None):
+    def __init__(self, scheduler_repo: SchedulerRepository | None = None):
         self._repo = scheduler_repo or SchedulerRepository()
-        self._schedulers: Dict[str, Dict[str, Any]] = {}
+        self._schedulers: dict[str, dict[str, Any]] = {}
         self._planner_interval = 60
         self._plan_timeout = PLAN_TIMEOUT_SECONDS
 
@@ -35,8 +36,8 @@ class SchedulerPlanner:
         self,
         name: str,
         plan_fn: PlanFunction,
-        interval_hours: Optional[float] = None,
-        interval_minutes: Optional[float] = None,
+        interval_hours: float | None = None,
+        interval_minutes: float | None = None,
         enabled: bool = True,
     ) -> None:
         if interval_hours is None and interval_minutes is None:

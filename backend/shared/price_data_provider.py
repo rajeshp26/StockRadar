@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from shared.time_utils import now_utc
-from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 class PriceDataProvider:
     """Centralized price data fetching with caching."""
 
-    _cache: Dict[str, Tuple[pd.DataFrame, date, date]] = {}
+    _cache: dict[str, tuple[pd.DataFrame, date, date]] = {}
 
     # Exchange suffixes for yfinance — matches yfinance_provider.EXCHANGE_SUFFIX_MAP
-    _EXCHANGE_SUFFIX_MAP: Dict[str, str] = {
+    _EXCHANGE_SUFFIX_MAP: dict[str, str] = {
         "TOR": ".TO", "TSX": ".TO", "TO": ".TO",
         "VAN": ".V", "TSXV": ".V", "V": ".V",
         "CNQ": ".V", "NEO": ".V",
@@ -25,25 +25,27 @@ class PriceDataProvider:
     def __init__(self, timeout: int = 15):
         self._timeout = timeout
 
-    def _cache_key(self, symbols: Tuple[str, ...], start: date, end: date) -> str:
+    def _cache_key(self, symbols: tuple[str, ...], start: date, end: date) -> str:
         return f"{','.join(sorted(symbols))}:{start.isoformat()}:{end.isoformat()}"
 
     @staticmethod
-    def _resolve_symbol(symbol: str, exchange: Optional[str] = None) -> str:
+    def _resolve_symbol(symbol: str, exchange: str | None = None) -> str:
         sym = symbol.upper()
         if exchange:
             suffix = PriceDataProvider._EXCHANGE_SUFFIX_MAP.get(exchange.upper())
-            if suffix:
+            # Idempotent: skip suffix if the symbol already carries it
+            # (e.g. "BCE.TO" + ".TO" would produce the invalid "BCE.TO.TO").
+            if suffix and not sym.endswith(suffix):
                 return sym + suffix
         return sym
 
     def fetch_prices(
         self,
-        symbols: List[str],
+        symbols: list[str],
         start: date,
-        end: Optional[date] = None,
+        end: date | None = None,
         min_periods: int = 30,
-        exchange: Optional[str] = None,
+        exchange: str | None = None,
     ) -> pd.DataFrame:
         end = end or now_utc().date()
         key = self._cache_key(tuple(symbols), start, end)

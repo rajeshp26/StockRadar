@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Valuation Computation Scheduler
 Runs on-demand when stocks are added to watchlists or via scheduled refresh.
@@ -19,7 +18,11 @@ v3 Planner integration:
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional, List, Set
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from application.services.valuation_service import ValuationService
+    from infrastructure.repositories.valuation_repository import ValuationRepository
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +36,11 @@ VALUATION_METHODS = [
 
 
 class ValuationComputationScheduler:
-    _in_flight: Set[str] = set()
+    _in_flight: set[str] = set()
 
     def __init__(self):
         self.is_running = False
-        self.task: Optional[asyncio.Task] = None
+        self.task: asyncio.Task | None = None
 
     @property
     def interval_hours(self) -> int:
@@ -48,7 +51,7 @@ class ValuationComputationScheduler:
     # v3 Planner Integration
     # -------------------------------------------------------------------------
 
-    async def plan(self) -> List[Dict[str, Any]]:
+    async def plan(self) -> list[dict[str, Any]]:
         """
         v3 planner integration — returns valuation_computation job dicts for
         every active company (in any user's watchlist or portfolio).
@@ -97,12 +100,9 @@ class ValuationComputationScheduler:
     async def compute_all(
         self,
         symbol: str,
-        user_id: Optional[int] = None,
+        user_id: int | None = None,
         force: bool = False,
-    ) -> Dict[str, Any]:
-        from infrastructure.repositories.valuation_repository import ValuationRepository
-        from application.services.recompute_guard import RecomputeGuard
-        from application.services.valuation_service import ValuationService
+    ) -> dict[str, Any]:
 
         symbol = symbol.upper()
 
@@ -119,14 +119,14 @@ class ValuationComputationScheduler:
     async def _run_all(
         self,
         symbol: str,
-        user_id: Optional[int],
+        user_id: int | None,
         force: bool,
-    ) -> Dict[str, Any]:
-        from infrastructure.repositories.valuation_repository import ValuationRepository
+    ) -> dict[str, Any]:
         from application.services.recompute_guard import RecomputeGuard
         from application.services.valuation_service import ValuationService
+        from infrastructure.repositories.valuation_repository import ValuationRepository
 
-        results: Dict[str, Any] = {}
+        results: dict[str, Any] = {}
         repo = ValuationRepository()
         guard = RecomputeGuard(repo)
         service = ValuationService(repo=repo, guard=guard)
@@ -165,9 +165,9 @@ class ValuationComputationScheduler:
     @staticmethod
     async def _applicability_skip(
         repo: "ValuationRepository",
-        company_id: Optional[int],
+        company_id: int | None,
         method: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Cheap DB pre-checks that skip methods which can never produce a
         meaningful result for this company. Returns a reason code, or None
@@ -196,7 +196,7 @@ class ValuationComputationScheduler:
         service: "ValuationService",
         method: str,
         symbol: str,
-        user_id: Optional[int],
+        user_id: int | None,
         force: bool,
     ) -> Any:
         if method == "rule1":
@@ -214,13 +214,13 @@ class ValuationComputationScheduler:
 
     async def compute_batch(
         self,
-        symbols: List[str],
-        user_id: Optional[int] = None,
+        symbols: list[str],
+        user_id: int | None = None,
         force: bool = False,
         max_concurrent: int = 3,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         semaphore = asyncio.Semaphore(max_concurrent)
-        all_results: Dict[str, Dict[str, Any]] = {}
+        all_results: dict[str, dict[str, Any]] = {}
 
         async def _compute_with_semaphore(sym: str):
             async with semaphore:

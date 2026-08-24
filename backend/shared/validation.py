@@ -1,14 +1,13 @@
 from collections import defaultdict
-from typing import Dict, List, Any, Set
 
 
-def validate_company_id_consistency(account_ids: List[int]) -> List[str]:
-    issues: List[str] = []
+def validate_company_id_consistency(account_ids: list[int]) -> list[str]:
+    issues: list[str] = []
     from infrastructure.repositories.portfolio_repository import PortfolioRepository
     repo = PortfolioRepository()
     rows = repo.get_symbol_company_mappings(account_ids)
 
-    symbol_to_companies: Dict[str, Set[int]] = defaultdict(set)
+    symbol_to_companies: dict[str, set[int]] = defaultdict(set)
     for r in rows:
         sym = r.get("symbol")
         cid = r.get("company_id")

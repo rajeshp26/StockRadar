@@ -1,8 +1,8 @@
 # backend/shared/metrics.py
 """Minimal route-level timing without Prometheus dependency."""
 
-import time
 import logging
+import time
 
 logger = logging.getLogger("perf.portfolio")
 

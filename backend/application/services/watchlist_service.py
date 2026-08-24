@@ -8,38 +8,38 @@ Updated Watchlist Service with Financial Data Integration
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
-from datetime import date, timedelta
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from domain.interfaces.stock_provider import StockProvider
-from domain.interfaces.repository import WatchlistRepository, UserRepository
-from domain.entities.watchlist import WatchlistWithStocks, StockPriceInfo
-from shared.exceptions.base import NotFoundError, ExternalServiceError
 from database import supabase
-
+from domain.entities.watchlist import StockPriceInfo, WatchlistWithStocks
+from domain.interfaces.repository import UserRepository, WatchlistRepository
+from domain.interfaces.stock_provider import StockProvider
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from shared.exceptions.base import ExternalServiceError, NotFoundError
 from shared.price_utils import build_price_snapshot
+
 if TYPE_CHECKING:
     from providers.defeat_beta_provider import DefeatBetaProvider
 
 # NEW: Valuation imports
-from infrastructure.repositories.valuation_repository import ValuationRepository
-from application.services.recompute_guard import RecomputeGuard
-from application.services.valuation_service import ValuationService
+from application.jobs.data_quality_audit_job import audit_company_data_quality
 from application.jobs.derived_financial_metrics_job import (
     compute_and_upsert_derived_financial_metrics,
     compute_and_upsert_quarterly_health_scores,
 )
-from application.jobs.data_quality_audit_job import audit_company_data_quality
+from application.services.recompute_guard import RecomputeGuard
+from application.services.valuation_service import ValuationService
+from infrastructure.repositories.valuation_repository import ValuationRepository
 
 logger = logging.getLogger(__name__)
 
 
-def _map_quote_type(quote_type: Optional[str]) -> str:
+def _map_quote_type(quote_type: str | None) -> str:
     """Map yfinance quoteType to the companies.security_type enum."""
     if not quote_type:
         return "stock"
@@ -68,7 +68,7 @@ class WatchlistService:
         watchlist_repo: WatchlistRepository,
         user_repo: UserRepository,
         defeat_beta_provider: DefeatBetaProvider,
-        financial_repo: Optional[SupabaseFinancialRepository] = None,
+        financial_repo: SupabaseFinancialRepository | None = None,
     ):
         self.stock_provider = stock_provider
         self.watchlist_repo = watchlist_repo
@@ -219,7 +219,7 @@ class WatchlistService:
     # ========================================================================
     # Phase 2: Fast watchlist STRUCTURE (no price enrichment)
     # ========================================================================
-    def get_default_watchlist_structure(self, firebase_uid: str) -> Dict[str, Any]:
+    def get_default_watchlist_structure(self, firebase_uid: str) -> dict[str, Any]:
         """
         Fast path for initial watchlist render:
         - Returns watchlist + items WITH prices from current_market_data
@@ -246,7 +246,7 @@ class WatchlistService:
 
         # 2) Fetch Watchlist Items (structure only)
         raw_items = self.watchlist_repo.get_items_by_watchlist_id(watchlist_id)
-        stocks: List[Dict[str, Any]] = []
+        stocks: list[dict[str, Any]] = []
 
         for item in raw_items or []:
             company = item.get("companies")
@@ -293,7 +293,7 @@ class WatchlistService:
             "stocks": stocks,
         }
 
-    def get_watchlist_structure_by_id(self, firebase_uid: str, watchlist_id: int) -> Dict[str, Any]:
+    def get_watchlist_structure_by_id(self, firebase_uid: str, watchlist_id: int) -> dict[str, Any]:
         """Get structure (symbols + targets) for a specific watchlist by ID."""
         db_user_id = self.get_db_user_id(firebase_uid)
 
@@ -346,9 +346,9 @@ class WatchlistService:
         user_id: int,
         symbol: str,
         watchlist_id: int,
-        target_buy: Optional[float] = None,
-        target_sell: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        target_buy: float | None = None,
+        target_sell: float | None = None,
+    ) -> dict[str, Any]:
         """
         Add a stock to the given watchlist with fast path + background fundamentals.
 
@@ -386,7 +386,7 @@ class WatchlistService:
             logger.debug("Company %s: ID=%s", symbol, company_id)
 
             # 2) YF -> current price (fast)
-            current_price: Optional[float] = None
+            current_price: float | None = None
             try:
                 sd = self.stock_provider.get_stock_details(symbol)
                 current_price = sd.price if sd and (sd.price is not None) else None
@@ -457,7 +457,7 @@ class WatchlistService:
         self,
         symbol: str,
         company_id: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         On-demand refresh of company financial data.
 
@@ -537,7 +537,7 @@ class WatchlistService:
             val_repo = ValuationRepository()
             guard    = RecomputeGuard(val_repo)
             vs       = ValuationService(val_repo, guard)
-    
+
             try:
                 await vs.compute_rule1_if_stale(
                     symbol=symbol, user_id=None, overrides=None, force=True
@@ -545,7 +545,7 @@ class WatchlistService:
                 logger.info("[VALUATION] Rule #1 computed after on-demand refresh for %s", symbol)
             except Exception as ve:
                 logger.error("[VALUATION] Rule #1 auto-compute (on-demand) failed for %s: %s", symbol, ve)
-    
+
             try:
                 await vs.compute_dcf_if_stale(
                     symbol=symbol, user_id=None, overrides=None, force=True
@@ -553,7 +553,7 @@ class WatchlistService:
                 logger.info("[VALUATION] DCF computed after on-demand refresh for %s", symbol)
             except Exception as ve:
                 logger.error("[VALUATION] DCF auto-compute (on-demand) failed for %s: %s", symbol, ve)
-    
+
             try:
                 await vs.compute_owner_earnings_if_stale(
                     symbol=symbol, user_id=None, overrides=None, force=True
@@ -561,7 +561,7 @@ class WatchlistService:
                 logger.info("[VALUATION] OE computed after on-demand refresh for %s", symbol)
             except Exception as ve:
                 logger.error("[VALUATION] OE auto-compute (on-demand) failed for %s: %s", symbol, ve)
-    
+
             try:
                 await vs.compute_ddm_if_stale(
                     symbol=symbol, user_id=None, variant="gordon", overrides=None, force=True
@@ -569,7 +569,7 @@ class WatchlistService:
                 logger.info("[VALUATION] DDM computed after on-demand refresh for %s", symbol)
             except Exception as ve:
                 logger.error("[VALUATION] DDM auto-compute (on-demand) failed for %s: %s", symbol, ve)
-    
+
             try:
                 await vs.compute_residual_income_if_stale(
                     symbol=symbol, user_id=None, overrides=None, force=True
@@ -597,7 +597,7 @@ class WatchlistService:
     # PRIVATE HELPER METHODS
     # ========================================================================
 
-    async def _get_or_create_company(self, symbol: str) -> Dict[str, Any]:
+    async def _get_or_create_company(self, symbol: str) -> dict[str, Any]:
         """Get existing company or create new one."""
         try:
             existing = await self.financial_repo.get_company_by_symbol(symbol)
@@ -670,12 +670,12 @@ class WatchlistService:
             logger.debug(f"Updated market data for {symbol}: ${current_price}")
 
         except Exception as e:
-            logger.warning(f"Failed to update market data for {symbol}: {str(e)}")
+            logger.warning(f"Failed to update market data for {symbol}: {e!s}")
 
     async def _add_watchlist_item(
-        self, watchlist_id: int, company_id: int, target_buy: Optional[float],
-        target_sell: Optional[float],
-    ) -> Dict[str, Any]:
+        self, watchlist_id: int, company_id: int, target_buy: float | None,
+        target_sell: float | None,
+    ) -> dict[str, Any]:
         """
         Insert into watchlist_items with default position=0.
         """
@@ -786,13 +786,13 @@ class WatchlistService:
                 logger.info("[QHLTH] quarterly health scores computed after fundamentals ingestion for %s", symbol)
             except Exception as qe:
                 logger.error("[QHLTH] compute failed after fundamentals ingestion for %s: %s", symbol, qe)
-                
+
             # PHASE 8: Data quality audit (non-blocking)
             try:
-                await audit_company_data_quality(company_id=company_id)  
+                await audit_company_data_quality(company_id=company_id)
                 logger.info("[DQ] audit complete after fundamentals ingestion for %s", symbol)
             except Exception as qe:
-                logger.error("[DQ] audit failed after fundamentals ingestion for %s: %s", symbol, qe)  
+                logger.error("[DQ] audit failed after fundamentals ingestion for %s: %s", symbol, qe)
             # ── Auto-compute all valuation methods (new company only) ──────────────
             # Runs only when is_new_company=True. If the stock already existed in the
             # companies table, Gate 1 will serve the cached results from a prior run —
@@ -803,7 +803,7 @@ class WatchlistService:
                 vs       = ValuationService(val_repo, guard)
                 # Lazy import to avoid circular dependency with api.watchlists
                 from api.watchlists import broadcast_valuation_ready
-    
+
                 # Priority 1: Rule #1 — fastest, EPS-only, user sees something first
                 try:
                     await vs.compute_rule1_if_stale(
@@ -816,7 +816,7 @@ class WatchlistService:
                         logger.debug("[SSE] broadcast_valuation_ready(rule1) failed (non-fatal): %s", be)
                 except Exception as ve:
                     logger.error("[VALUATION] Rule #1 auto-compute failed for %s: %s", symbol, ve)
-    
+
                 # Priority 2: DCF — most universally applicable
                 try:
                     await vs.compute_dcf_if_stale(
@@ -829,7 +829,7 @@ class WatchlistService:
                         logger.debug("[SSE] broadcast_valuation_ready(dcf) failed (non-fatal): %s", be)
                 except Exception as ve:
                     logger.error("[VALUATION] DCF auto-compute failed for %s: %s", symbol, ve)
-    
+
                 # Priority 3: Owner Earnings — shares CF inputs with DCF
                 try:
                     await vs.compute_owner_earnings_if_stale(
@@ -842,7 +842,7 @@ class WatchlistService:
                         logger.debug("[SSE] broadcast_valuation_ready(owner_earnings) failed (non-fatal): %s", be)
                 except Exception as ve:
                     logger.error("[VALUATION] OE auto-compute failed for %s: %s", symbol, ve)
-    
+
                 # Priority 4: DDM — only meaningful if dividends exist, but run anyway
                 # so the UI shows a proper "not applicable" result rather than NOT RUN
                 try:
@@ -856,7 +856,7 @@ class WatchlistService:
                         logger.debug("[SSE] broadcast_valuation_ready(ddm_gordon) failed (non-fatal): %s", be)
                 except Exception as ve:
                     logger.error("[VALUATION] DDM auto-compute failed for %s: %s", symbol, ve)
-    
+
                 # Priority 5: Residual Income — most data-intensive, runs last
                 try:
                     await vs.compute_residual_income_if_stale(
@@ -869,7 +869,7 @@ class WatchlistService:
                         logger.debug("[SSE] broadcast_valuation_ready(residual_income) failed (non-fatal): %s", be)
                 except Exception as ve:
                     logger.error("[VALUATION] RI auto-compute failed for %s: %s", symbol, ve)
-    
+
             else:
                 # Existing company — financial data may have been refreshed incrementally.
                 # Gate 1/2/3 will determine on next user request whether recompute is needed.
@@ -950,7 +950,7 @@ class WatchlistService:
             return False
 
     @staticmethod
-    def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Convert daily OHLCV rows to monthly EOM rows:
           - Group by (year, month)
@@ -970,9 +970,9 @@ class WatchlistService:
         df["month"] = df["price_date"].dt.month
         idx = df.groupby(["year", "month"])["price_date"].idxmax()
         last_trading_rows = df.loc[idx].copy()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for _, r in last_trading_rows.iterrows():
-            def _safe_num(v: Any) -> Optional[float]:
+            def _safe_num(v: Any) -> float | None:
                 if v is None:
                     return None
                 try:
@@ -995,7 +995,9 @@ class WatchlistService:
 
     async def _compute_valuations_background(self, symbol: str, user_id: int) -> None:
         try:
-            from application.schedulers.valuation_computation_scheduler import ValuationComputationScheduler
+            from application.schedulers.valuation_computation_scheduler import (
+                ValuationComputationScheduler,
+            )
             scheduler = ValuationComputationScheduler()
             await scheduler.compute_all(symbol=symbol, user_id=user_id, force=False)
             logger.info("Background valuation computation completed for %s", symbol)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Super Investors API
 
@@ -17,13 +16,13 @@ Two route groups:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from shared.time_utils import now_utc
-from typing import Any, Dict, List, Optional
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from database import supabase
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +61,7 @@ def _get_latest_quarter() -> str:
 
 def _prev_quarter(quarter_date: str) -> str:
     """Return the quarter_end_date that is one quarter before the given date."""
-    d = datetime.strptime(quarter_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).date()
+    d = datetime.strptime(quarter_date, "%Y-%m-%d").replace(tzinfo=UTC).date()
     # Step back ~92 days (one quarter)
     prev = d - timedelta(days=92)
     # Snap to quarter-end
@@ -80,7 +79,7 @@ def _prev_quarter(quarter_date: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/analysis/{symbol}/super-investors")
-async def get_super_investors(symbol: str) -> Dict[str, Any]:
+async def get_super_investors(symbol: str) -> dict[str, Any]:
     """
     Get institutional ownership data for a stock.
     Checks DB first (last 30 days); falls back to live SEC fetch.
@@ -113,7 +112,7 @@ async def get_super_investors(symbol: str) -> Dict[str, Any]:
 
 
 @router.get("/analysis/{symbol}/super-investors/history")
-async def get_super_investors_history(symbol: str) -> Dict[str, Any]:
+async def get_super_investors_history(symbol: str) -> dict[str, Any]:
     """Get historical quarterly holdings for super investors in this stock."""
     try:
         ticker = symbol.upper()
@@ -128,7 +127,7 @@ async def get_super_investors_history(symbol: str) -> Dict[str, Any]:
 
         company_id = company_result.data[0]["company_id"]
         five_years_ago = (now_utc() - timedelta(days=5 * 365)).date()
-        cutoff_date = max(five_years_ago, datetime(2021, 1, 1, tzinfo=timezone.utc).date())
+        cutoff_date = max(five_years_ago, datetime(2021, 1, 1, tzinfo=UTC).date())
 
         holdings_result = (
             supabase.table("institutional_holdings")
@@ -160,7 +159,7 @@ async def get_super_investors_history(symbol: str) -> Dict[str, Any]:
                     "earliest_date": None, "latest_date": None,
                     "message": "No super investor data found."}
 
-        investors_map: Dict[int, Dict] = {
+        investors_map: dict[int, dict] = {
             inv["investor_id"]: {
                 "investor_id": inv["investor_id"],
                 "investor_name": inv["investor_name"],
@@ -213,7 +212,7 @@ async def get_super_investors_history(symbol: str) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/super-investors/overview")
-async def get_overview() -> Dict[str, Any]:
+async def get_overview() -> dict[str, Any]:
     """
     Summary metrics + most-added and most-exited stocks for the latest quarter.
 
@@ -274,12 +273,12 @@ async def get_overview() -> Dict[str, Any]:
 
         # Most added: companies with the most "new" or "increased" investors this quarter
         added_rows = [r for r in curr_rows if r.get("change_type") in ("new", "increased")]
-        added_by_company: Dict[int, List[int]] = {}
+        added_by_company: dict[int, list[int]] = {}
         for r in added_rows:
             added_by_company.setdefault(r["company_id"], []).append(r["investor_id"])
 
         exited_rows = [r for r in curr_rows if r.get("change_type") in ("sold", "decreased")]
-        exited_by_company: Dict[int, List[int]] = {}
+        exited_by_company: dict[int, list[int]] = {}
         for r in exited_rows:
             exited_by_company.setdefault(r["company_id"], []).append(r["investor_id"])
 
@@ -292,7 +291,7 @@ async def get_overview() -> Dict[str, Any]:
         all_investor_ids = list({r["investor_id"] for r in curr_rows})
         investors_map = _fetch_investors_map(all_investor_ids)
 
-        def _build_list(by_company: Dict[int, List[int]], limit: int = 10) -> List[Dict]:
+        def _build_list(by_company: dict[int, list[int]], limit: int = 10) -> list[dict]:
             items = []
             for cid, iids in by_company.items():
                 co = companies_map.get(cid, {})
@@ -329,11 +328,11 @@ async def get_overview() -> Dict[str, Any]:
 
 @router.get("/super-investors/top-stocks")
 async def get_top_stocks(
-    sector: Optional[str] = Query(None, description="Filter by sector"),
-    style: Optional[str] = Query(None, description="Filter by investor style: value | growth | activist | lt_compounder | sector"),
+    sector: str | None = Query(None, description="Filter by sector"),
+    style: str | None = Query(None, description="Filter by investor style: value | growth | activist | lt_compounder | sector"),
     min_investors: int = Query(1, ge=1, description="Minimum number of investors holding"),
     limit: int = Query(50, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     All stocks held by tracked super investors, ranked by breadth (investor count).
 
@@ -364,7 +363,7 @@ async def get_top_stocks(
             return {"quarter": None, "total_stocks": 0, "stocks": []}
 
         # Build investor filter if style requested
-        filtered_investor_ids: Optional[List[int]] = None
+        filtered_investor_ids: list[int] | None = None
         if style:
             style_map = {
                 "value": "Value",
@@ -399,7 +398,7 @@ async def get_top_stocks(
         rows = holdings_result.data or []
 
         # Aggregate by company
-        by_company: Dict[int, Dict] = {}
+        by_company: dict[int, dict] = {}
         for r in rows:
             cid = r["company_id"]
             if cid not in by_company:
@@ -490,9 +489,9 @@ async def get_top_stocks(
 @router.get("/super-investors/overlap")
 async def get_overlap(
     min_investors: int = Query(3, ge=2, description="Minimum number of investors"),
-    sector: Optional[str] = Query(None),
+    sector: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Stocks held by min_investors or more super investors (consensus picks).
 
@@ -534,7 +533,7 @@ async def get_overlap(
         rows = holdings_result.data or []
 
         # Group by company
-        by_company: Dict[int, List[Dict]] = {}
+        by_company: dict[int, list[dict]] = {}
         for r in rows:
             by_company.setdefault(r["company_id"], []).append(r)
 
@@ -602,14 +601,14 @@ async def get_overlap(
 
 @router.get("/super-investors/activity")
 async def get_activity(
-    change_type: Optional[str] = Query(
+    change_type: str | None = Query(
         None,
         description="Filter: new | increased | decreased | sold | held"
     ),
-    investor_tag: Optional[str] = Query(None, description="Filter by investor tag e.g. BUFFETT"),
+    investor_tag: str | None = Query(None, description="Filter by investor tag e.g. BUFFETT"),
     quarters: int = Query(4, ge=1, le=20, description="Number of recent quarters to include"),
     limit: int = Query(100, ge=1, le=500),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Chronological 13F change log across all investors.
 
@@ -655,7 +654,7 @@ async def get_activity(
         oldest_quarter = quarters_to_show[-1]
 
         # Build investor filter
-        investor_filter_ids: Optional[List[int]] = None
+        investor_filter_ids: list[int] | None = None
         if investor_tag:
             inv_result = (
                 supabase.table("institutional_investors")
@@ -730,7 +729,7 @@ async def get_activity(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/super-investors/investors")
-async def get_investors_list() -> Dict[str, Any]:
+async def get_investors_list() -> dict[str, Any]:
     """
     List all tracked super investors with their latest portfolio summary.
 
@@ -785,7 +784,7 @@ async def get_investors_list() -> Dict[str, Any]:
         holdings_rows = holdings_result.data or []
 
         # Aggregate per investor
-        inv_agg: Dict[int, Dict] = {}
+        inv_agg: dict[int, dict] = {}
         for h in holdings_rows:
             iid = h["investor_id"]
             if iid not in inv_agg:
@@ -849,7 +848,7 @@ async def get_investors_list() -> Dict[str, Any]:
 async def get_investor_portfolio(
     tag: str,
     quarters: int = Query(8, ge=1, le=20, description="Quarters of history to return"),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Full portfolio for a single investor including Q-o-Q history.
 
@@ -958,7 +957,7 @@ async def get_investor_portfolio(
         portfolio_value = sum(float(h.get("position_value") or 0) for h in latest_holdings)
 
         # Build sector breakdown from latest quarter
-        sector_totals: Dict[str, float] = {}
+        sector_totals: dict[str, float] = {}
         for h in latest_holdings:
             co = companies_map.get(h["company_id"], {})
             sector = co.get("sector") or "Other"
@@ -975,7 +974,7 @@ async def get_investor_portfolio(
         ]
 
         # Group history by company
-        history_by_company: Dict[int, List[Dict]] = {}
+        history_by_company: dict[int, list[dict]] = {}
         for h in all_holdings:
             cid = h["company_id"]
             history_by_company.setdefault(cid, []).append(h)
@@ -1041,8 +1040,8 @@ async def get_investor_portfolio(
 
 @router.get("/super-investors/sectors")
 async def get_sector_breakdown(
-    style: Optional[str] = Query(None, description="Filter by investor style"),
-) -> Dict[str, Any]:
+    style: str | None = Query(None, description="Filter by investor style"),
+) -> dict[str, Any]:
     """
     Aggregate sector exposure across all super investors for the latest quarter.
 
@@ -1070,7 +1069,7 @@ async def get_sector_breakdown(
         if not latest_quarter:
             return {"quarter": None, "sectors": []}
 
-        filtered_investor_ids: Optional[List[int]] = None
+        filtered_investor_ids: list[int] | None = None
         if style:
             style_map = {
                 "value": "Value", "growth": "Growth", "activist": "Activist",
@@ -1100,7 +1099,7 @@ async def get_sector_breakdown(
         companies_map = _fetch_companies_map(company_ids)
 
         # Aggregate by sector
-        by_sector: Dict[str, Dict] = {}
+        by_sector: dict[str, dict] = {}
         for r in rows:
             co = companies_map.get(r["company_id"], {})
             sector = co.get("sector") or "Other"
@@ -1157,7 +1156,7 @@ async def get_sector_breakdown(
 # Shared DB helpers (kept private to this module)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fetch_companies_map(company_ids: List[int]) -> Dict[int, Dict]:
+def _fetch_companies_map(company_ids: list[int]) -> dict[int, dict]:
     if not company_ids:
         return {}
     result = (
@@ -1169,7 +1168,7 @@ def _fetch_companies_map(company_ids: List[int]) -> Dict[int, Dict]:
     return {c["company_id"]: c for c in (result.data or [])}
 
 
-def _fetch_investors_map(investor_ids: List[int]) -> Dict[int, Dict]:
+def _fetch_investors_map(investor_ids: list[int]) -> dict[int, dict]:
     if not investor_ids:
         return {}
     result = (
@@ -1181,7 +1180,7 @@ def _fetch_investors_map(investor_ids: List[int]) -> Dict[int, Dict]:
     return {i["investor_id"]: i for i in (result.data or [])}
 
 
-def _fetch_all_super_investor_ids() -> List[int]:
+def _fetch_all_super_investor_ids() -> list[int]:
     result = (
         supabase.table("institutional_investors")
         .select("investor_id")
@@ -1192,7 +1191,7 @@ def _fetch_all_super_investor_ids() -> List[int]:
     return [r["investor_id"] for r in (result.data or [])]
 
 
-def _investor_shape(inv: Dict) -> Dict:
+def _investor_shape(inv: dict) -> dict:
     return {
         "investor_name": inv["investor_name"],
         "firm_name": inv["firm_name"],
@@ -1202,7 +1201,7 @@ def _investor_shape(inv: Dict) -> Dict:
     }
 
 
-def _empty_overview() -> Dict[str, Any]:
+def _empty_overview() -> dict[str, Any]:
     return {
         "latest_quarter": None,
         "prev_quarter": None,
@@ -1219,7 +1218,7 @@ def _empty_overview() -> Dict[str, Any]:
 # Per-ticker DB helper (preserved from original)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_holdings_from_db(ticker: str) -> Dict[str, Any] | None:
+def _get_holdings_from_db(ticker: str) -> dict[str, Any] | None:
     try:
         company_result = supabase.table("companies").select("company_id").eq(
             "ticker_symbol", ticker

@@ -1,6 +1,6 @@
 import logging
-from datetime import date, datetime, time, timezone
-from typing import Any, Dict, List
+from datetime import UTC, datetime
+from typing import Any
 
 from shared.time_utils import now_utc
 
@@ -21,7 +21,7 @@ class PriceIngestionScheduler:
         return 0
 
     def _current_interval_minutes(self) -> int:
-        now_et = datetime.now(timezone.utc)
+        now_et = datetime.now(UTC)
         hour = now_et.hour - 4
         minute = now_et.minute
         total_minutes = hour * 60 + minute
@@ -33,7 +33,7 @@ class PriceIngestionScheduler:
         else:
             return 0
 
-    async def plan(self) -> List[Dict[str, Any]]:
+    async def plan(self) -> list[dict[str, Any]]:
         interval = self._current_interval_minutes()
         if interval == 0:
             return []

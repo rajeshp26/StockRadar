@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Super Investors Service — 13F Holdings Tracking
 
@@ -17,11 +16,11 @@ Key metrics:
 from __future__ import annotations
 
 import logging
-from shared.time_utils import now_utc
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
+
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 # 24 super investors - CIKs verified May 2026 (13F-HR only)
 # quarters: 4 for high-holding funds (Fundsmith, ARK), 20 for others
 # category: lt_compounder, value, growth, activist, sector
-SUPER_INVESTORS: Dict[str, Dict[str, str]] = {
+SUPER_INVESTORS: dict[str, dict[str, str]] = {
     # 🟢 Long-Term Compounders (4)
     "0001067983": {
         "name": "Warren Buffett",
@@ -252,8 +251,9 @@ class SuperInvestorsService:
     def _ensure_edgar_identity() -> None:
         """Set SEC identity if not already configured."""
         try:
-            from edgar import set_identity  # noqa: PLC0415
-            from config import settings  # noqa: PLC0415
+            from edgar import set_identity
+
+            from config import settings
 
             identity = getattr(settings, "EDGAR_IDENTITY", "stockerpro@example.com")
             set_identity(identity)
@@ -270,7 +270,7 @@ class SuperInvestorsService:
 
     def get_super_investor_holdings(
         self, ticker_symbol: str, limit: int = 10
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get super investor holdings for a stock.
 
@@ -302,10 +302,10 @@ class SuperInvestorsService:
             }
         """
         try:
-            from edgar import get_filings  # noqa: PLC0415
+            from edgar import get_filings
 
             ticker = ticker_symbol.upper()
-            holders: List[Dict[str, Any]] = []
+            holders: list[dict[str, Any]] = []
 
             # Fetch latest 13F for each super investor
             for cik, investor_info in SUPER_INVESTORS.items():
@@ -423,7 +423,7 @@ class SuperInvestorsService:
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _find_holding(holdings_df: pd.DataFrame, ticker: str) -> Optional[Dict[str, Any]]:
+    def _find_holding(holdings_df: pd.DataFrame, ticker: str) -> dict[str, Any] | None:
         """Find a stock in a 13F holdings DataFrame."""
         if holdings_df is None or holdings_df.empty:
             return None
@@ -445,21 +445,21 @@ class SuperInvestorsService:
         logger.info(f"[DEBUG] _find_holding: MATCH FOUND for '{ticker}' - {len(match)} row(s)")
 
         row = match.iloc[0]
-        
+
         # Get total portfolio value to calculate weight
         total_value = holdings_df["Value"].sum()
         holding_value = float(row.get("Value", 0))
         portfolio_weight = (holding_value / total_value) if total_value > 0 else 0.0
-        
+
         return {
             "shares": int(row.get("SharesPrnAmount", 0)),
-            "value": float(row.get("Value", 0)),  
+            "value": float(row.get("Value", 0)),
             "portfolio_weight": portfolio_weight,
         }
 
     @staticmethod
     def _calculate_change(
-        current: Optional[Dict], previous: Optional[Dict]
+        current: dict | None, previous: dict | None
     ) -> tuple[float, str]:
         """
         Calculate quarter-over-quarter change.
@@ -512,7 +512,7 @@ class SuperInvestorsService:
             return "low"
 
     @staticmethod
-    def _empty_response(ticker: str) -> Dict[str, Any]:
+    def _empty_response(ticker: str) -> dict[str, Any]:
         return {
             "ticker": ticker,
             "holders": [],
@@ -526,17 +526,17 @@ class SuperInvestorsService:
     # Database Operations
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def _get_or_create_investor(self, cik: str, investor_info: Dict[str, str]) -> Optional[int]:
+    def _get_or_create_investor(self, cik: str, investor_info: dict[str, str]) -> int | None:
         """Get investor_id from DB, or create if doesn't exist."""
         try:
             # Check if exists
             result = self.supabase.table("institutional_investors").select(
                 "investor_id"
             ).eq("cik", cik).execute()
-            
+
             if result.data and len(result.data) > 0:
                 return result.data[0]["investor_id"]
-            
+
             # Create new investor
             insert_data = {
                 "cik": cik,
@@ -546,33 +546,33 @@ class SuperInvestorsService:
                 "investment_style": investor_info.get("style", ""),
                 "is_super_investor": True,
             }
-            
+
             insert_result = self.supabase.table(
                 "institutional_investors"
             ).insert(insert_data).execute()
-            
+
             if insert_result.data and len(insert_result.data) > 0:
                 logger.info(f"[DEBUG] Created investor: {investor_info['name']}")
                 return insert_result.data[0]["investor_id"]
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"[DEBUG] Error creating investor {cik}: {e}")
             return None
 
-    def _get_company_id(self, ticker: str) -> Optional[int]:
+    def _get_company_id(self, ticker: str) -> int | None:
         """Get company_id from companies table."""
         try:
             result = self.supabase.table("companies").select(
                 "company_id"
             ).eq("ticker_symbol", ticker.upper()).execute()
-            
+
             if result.data and len(result.data) > 0:
                 return result.data[0]["company_id"]
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"[DEBUG] Error getting company_id for {ticker}: {e}")
             return None
@@ -580,7 +580,7 @@ class SuperInvestorsService:
     def _save_holdings_to_db(
         self,
         ticker: str,
-        holders: List[Dict[str, Any]],
+        holders: list[dict[str, Any]],
         quarter_date: str,
         filing_date: str,
     ) -> None:
@@ -590,7 +590,7 @@ class SuperInvestorsService:
             if not company_id:
                 logger.warning(f"[DEBUG] Cannot save holdings - company_id not found for {ticker}")
                 return
-            
+
             for holder in holders:
                 # Get or create investor
                 cik = None
@@ -598,21 +598,21 @@ class SuperInvestorsService:
                     if info["name"] == holder["investor_name"]:
                         cik = cik_num
                         break
-                
+
                 if not cik:
                     continue
-                
+
                 investor_id = self._get_or_create_investor(cik, {"name": holder["investor_name"], "firm": holder["firm"], "tag": holder["tag"], "style": holder.get("style", "")})
                 if not investor_id:
                     continue
-                
+
                 # Check if holding already exists for this quarter
                 existing = self.supabase.table("institutional_holdings").select(
                     "holding_id"
                 ).eq("investor_id", investor_id).eq(
                     "company_id", company_id
                 ).eq("quarter_end_date", quarter_date).execute()
-                
+
                 insert_data = {
                     "investor_id": investor_id,
                     "company_id": company_id,
@@ -626,7 +626,7 @@ class SuperInvestorsService:
                     "change_type": holder.get("change_type", "held"),
                     "data_source": "edgar",
                 }
-                
+
                 if existing.data and len(existing.data) > 0:
                     # Update existing
                     self.supabase.table("institutional_holdings").update(insert_data).eq(
@@ -637,6 +637,6 @@ class SuperInvestorsService:
                     # Insert new
                     self.supabase.table("institutional_holdings").insert(insert_data).execute()
                     logger.info(f"[DEBUG] Inserted holding: {holder['investor_name']} - {ticker}")
-                    
+
         except Exception as e:
             logger.error(f"[DEBUG] Error saving holdings to DB: {e}")

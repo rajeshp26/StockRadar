@@ -3,12 +3,11 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Optional, Tuple
 
-from domain.model_types import IncomeStatementRow, BalanceSheetRow, CashFlowRow
+from domain.model_types import BalanceSheetRow, CashFlowRow, IncomeStatementRow
 
 
-def _safe_decimal(x) -> Optional[Decimal]:
+def _safe_decimal(x) -> Decimal | None:
     if x is None:
         return None
     try:
@@ -17,7 +16,7 @@ def _safe_decimal(x) -> Optional[Decimal]:
         return None
 
 
-def _safe_int(x) -> Optional[int]:
+def _safe_int(x) -> int | None:
     if x is None:
         return None
     try:
@@ -27,7 +26,7 @@ def _safe_int(x) -> Optional[int]:
         return None
 
 
-def normalize_period(fiscal_year: Optional[int], fiscal_quarter: Optional[int], period_end_date: Optional[date]) -> Tuple[Optional[int], Optional[int], Optional[date]]:
+def normalize_period(fiscal_year: int | None, fiscal_quarter: int | None, period_end_date: date | None) -> tuple[int | None, int | None, date | None]:
     """
     Canonical period rules:
       - Annual: fiscal_quarter must be None

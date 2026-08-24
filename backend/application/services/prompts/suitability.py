@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ def _fmt(val: Any, as_pct: bool = False, decimals: int = 1) -> str:
         return str(val)
 
 
-def _critical_flags(flags: List[dict]) -> List[dict]:
+def _critical_flags(flags: list[dict]) -> list[dict]:
     skip = {"-SCORECARD", "-DATA-COVERAGE", "-REPO-KEYS"}
     return [
         f for f in flags
@@ -29,7 +29,7 @@ def _critical_flags(flags: List[dict]) -> List[dict]:
     ]
 
 
-def _input_source_summary(input_decisions: Dict[str, Any], method: str) -> str:
+def _input_source_summary(input_decisions: dict[str, Any], method: str) -> str:
     lines = []
 
     if method == "rule1":
@@ -129,10 +129,10 @@ def build_suitability_prompt(
     method: str,
     score: int,
     category: str,
-    flags: List[dict],
-    evidence: Dict[str, Any],
-    valuation_inputs: Dict[str, Any],
-    input_decisions: Dict[str, Any],
+    flags: list[dict],
+    evidence: dict[str, Any],
+    valuation_inputs: dict[str, Any],
+    input_decisions: dict[str, Any],
 ) -> str:
     if method == "rule1":
         return _prompt_rule1(symbol, score, category, flags, evidence, valuation_inputs, input_decisions)

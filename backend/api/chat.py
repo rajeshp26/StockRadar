@@ -6,12 +6,14 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from dependencies import get_current_user_dep, get_valuation_repository, limiter
 from application.services.ai_service import _get_or_create_provider
 from application.services.prompts.chat_prompt import (
-    ChatMessage, ChatRequest, normalize_symbol, build_chat_system_prompt,
+    ChatRequest,
+    build_chat_system_prompt,
+    normalize_symbol,
 )
 from application.services.prompts.company_snapshot import CompanySnapshotBuilder
+from dependencies import get_current_user_dep, get_valuation_repository, limiter
 from infrastructure.repositories.valuation_repository import ValuationRepository
 
 logger = logging.getLogger(__name__)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 EdgarTools-based provider for SEC EDGAR financial statements.
 
@@ -42,11 +41,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, Optional
 
 import pandas as pd
 
-from providers.base import StockDataProvider, TickerInfo, StockDetails
+from providers.base import StockDataProvider, StockDetails, TickerInfo
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +53,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Primary: XBRL concept name (us-gaap_ prefix stripped) → standard label
 # that DefeatBetaProvider._parse_yf_* parsers check for.
-_CONCEPT_MAP: Dict[str, str] = {
+_CONCEPT_MAP: dict[str, str] = {
     # ── Income Statement ─────────────────────────────────────────────────
     "RevenueFromContractWithCustomerExcludingAssessedTax": "Total Revenue",
     "RevenueFromContractWithCustomerIncludingAssessedTax": "Total Revenue",
@@ -132,7 +130,7 @@ _CONCEPT_MAP: Dict[str, str] = {
 
 # Fallback: display label (lowercased, whitespace-collapsed) → standard label.
 # Used when standard_concept is absent or not in _CONCEPT_MAP.
-_LABEL_MAP: Dict[str, str] = {
+_LABEL_MAP: dict[str, str] = {
     # Income
     "net sales": "Total Revenue",
     "total net sales": "Total Revenue",
@@ -218,7 +216,7 @@ class EdgarToolsProvider(StockDataProvider):
     ``asyncio.to_thread()`` just like YFinanceProvider.
     """
 
-    def __init__(self, identity: Optional[str] = None):
+    def __init__(self, identity: str | None = None):
         self._identity: str = self._resolve_identity(identity)
         self._initialized: bool = False
         logger.info("EdgarToolsProvider created (identity=%s)", self._identity)
@@ -227,10 +225,10 @@ class EdgarToolsProvider(StockDataProvider):
     # StockDataProvider interface — not available from SEC filings
     # ──────────────────────────────────────────────────────────────────────
 
-    def get_ticker_info(self, ticker_symbol: str) -> Optional[TickerInfo]:
+    def get_ticker_info(self, ticker_symbol: str) -> TickerInfo | None:
         return None  # SEC filings carry no live price data
 
-    def get_stock_details(self, ticker_symbol: str) -> Optional[StockDetails]:
+    def get_stock_details(self, ticker_symbol: str) -> StockDetails | None:
         return None  # SEC filings carry no live price data
 
     # ──────────────────────────────────────────────────────────────────────
@@ -271,7 +269,7 @@ class EdgarToolsProvider(StockDataProvider):
         """
         self._ensure_initialized()
         try:
-            from edgar import Company  # noqa: PLC0415
+            from edgar import Company
             company = Company(symbol.upper())
             financials = (
                 company.get_financials()
@@ -306,7 +304,7 @@ class EdgarToolsProvider(StockDataProvider):
 
     def _extract_statement_df(
         self, financials, statement: str, symbol: str
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """
         Pull the raw DataFrame from an edgartools Financials object.
 
@@ -356,7 +354,7 @@ class EdgarToolsProvider(StockDataProvider):
         return None
 
     @staticmethod
-    def _to_dataframe(obj, symbol: str) -> Optional[pd.DataFrame]:
+    def _to_dataframe(obj, symbol: str) -> pd.DataFrame | None:
         """
         Convert an edgartools FinancialStatement (or plain DataFrame) to a
         raw pandas DataFrame, preferring the `view="summary"` layout.
@@ -400,7 +398,7 @@ class EdgarToolsProvider(StockDataProvider):
         df = raw_df.copy()
 
         # ── Step 1: Identify period columns ───────────────────────────────
-        period_cols: Dict = {}          # original col → pd.Timestamp
+        period_cols: dict = {}          # original col → pd.Timestamp
         for col in df.columns:
             col_str = str(col).strip()
             if col_str.lower() in _METADATA_COLS:
@@ -426,7 +424,7 @@ class EdgarToolsProvider(StockDataProvider):
         label_col = "label" if "label" in df.columns else None
         concept_col = "standard_concept" if "standard_concept" in df.columns else None
 
-        rows: Dict[str, Dict] = {}      # standard_label → {period_ts: value}
+        rows: dict[str, dict] = {}      # standard_label → {period_ts: value}
 
         for _, row in df.iterrows():
             standard_label = self._resolve_label(row, label_col, concept_col)
@@ -435,7 +433,7 @@ class EdgarToolsProvider(StockDataProvider):
             if standard_label in rows:
                 continue  # keep first occurrence only
 
-            vals: Dict[pd.Timestamp, float] = {}
+            vals: dict[pd.Timestamp, float] = {}
             for orig_col, ts in period_cols.items():
                 raw_val = row.get(orig_col)
                 num = pd.to_numeric(raw_val, errors="coerce")
@@ -460,9 +458,9 @@ class EdgarToolsProvider(StockDataProvider):
     @staticmethod
     def _resolve_label(
         row: pd.Series,
-        label_col: Optional[str],
-        concept_col: Optional[str],
-    ) -> Optional[str]:
+        label_col: str | None,
+        concept_col: str | None,
+    ) -> str | None:
         """
         Try to map a DataFrame row to a standard label.
 
@@ -495,7 +493,7 @@ class EdgarToolsProvider(StockDataProvider):
         if self._initialized:
             return
         try:
-            from edgar import set_identity  # noqa: PLC0415
+            from edgar import set_identity
             set_identity(self._identity)
             logger.info("[EDGAR] SEC identity set: %s", self._identity)
         except ImportError:
@@ -506,14 +504,14 @@ class EdgarToolsProvider(StockDataProvider):
             self._initialized = True
 
     @staticmethod
-    def _resolve_identity(explicit: Optional[str]) -> str:
+    def _resolve_identity(explicit: str | None) -> str:
         if explicit:
             return explicit
         env = os.getenv("EDGAR_IDENTITY", "").strip()
         if env:
             return env
         try:
-            from config import settings  # noqa: PLC0415
+            from config import settings
             return getattr(settings, "EDGAR_IDENTITY", "stockerpro@example.com")
         except Exception:
             return "stockerpro@example.com"

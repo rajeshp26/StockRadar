@@ -9,33 +9,36 @@ SECURITY PRINCIPLES (fail-closed):
 """
 
 from __future__ import annotations
+
 import logging
 import os
-from fastapi import Request, HTTPException, status
+
+from fastapi import HTTPException, Request, status
 from slowapi import Limiter
 
-# Repositories
-from infrastructure.repositories.supabase_repository import (
-    SupabaseWatchlistRepository,
-    SupabaseUserRepository,
-)
-from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from infrastructure.repositories.valuation_repository import ValuationRepository
-
-# Providers
-from providers.yfinance_provider import YFinanceProvider
-# Lazy imports for DefeatBetaProvider and EdgarToolsProvider
-# to avoid startup failures from optional provider dependency issues
-
-# AI Provider & Snapshot Builder
-from providers.ai_provider import AIProvider, OpenRouterProvider
-from application.services.prompts.company_snapshot import CompanySnapshotBuilder
 from application.services.ai_service import configure_ai
+from application.services.prompts.company_snapshot import CompanySnapshotBuilder
+from application.services.recompute_guard import RecomputeGuard
+from application.services.valuation_service import ValuationService
 
 # Services
 from application.services.watchlist_service import WatchlistService
-from application.services.recompute_guard import RecomputeGuard
-from application.services.valuation_service import ValuationService
+from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+
+# Repositories
+from infrastructure.repositories.supabase_repository import (
+    SupabaseUserRepository,
+    SupabaseWatchlistRepository,
+)
+from infrastructure.repositories.valuation_repository import ValuationRepository
+
+# Lazy imports for DefeatBetaProvider and EdgarToolsProvider
+# to avoid startup failures from optional provider dependency issues
+# AI Provider & Snapshot Builder
+from providers.ai_provider import AIProvider, OpenRouterProvider
+
+# Providers
+from providers.yfinance_provider import YFinanceProvider
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +99,16 @@ limiter = Limiter(key_func=get_user_identifier)
 # PROVIDER SINGLETONS
 # ============================================================================
 
-_yfinance_provider: YFinanceProvider = None
-_defeat_beta_provider: DefeatBetaProvider = None
-_ai_provider: AIProvider = None
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from providers.defeat_beta_provider import DefeatBetaProvider
+    from providers.edgar_provider import EdgarToolsProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+
+_yfinance_provider: "YFinanceProvider | None" = None
+_defeat_beta_provider: "DefeatBetaProvider | None" = None
+_ai_provider: "AIProvider | None" = None
 _cache_manager = None
 _ai_configured: bool = False
 
@@ -114,8 +124,8 @@ def get_yfinance_provider() -> YFinanceProvider:
         _yfinance_provider = YFinanceProvider()
     return _yfinance_provider
 
-_edgar_provider: EdgarToolsProvider = None
-_stockdex_provider: "StockdexMacrotrendsProvider" = None
+_edgar_provider: "EdgarToolsProvider | None" = None
+_stockdex_provider: "StockdexMacrotrendsProvider | None" = None
 
 def get_edgar_provider():
     """
@@ -134,7 +144,7 @@ def get_edgar_provider():
         _edgar_provider = EdgarToolsProvider()
     return _edgar_provider
 
-def get_stockdex_provider() -> "StockdexMacrotrendsProvider":
+def get_stockdex_provider() -> StockdexMacrotrendsProvider:
     """Get or create StockdexMacrotrendsProvider singleton."""
     global _stockdex_provider
     if _stockdex_provider is None:
@@ -170,10 +180,10 @@ def get_defeat_beta_provider():
 # REPOSITORY SINGLETONS
 # ============================================================================
 
-_watchlist_repo: SupabaseWatchlistRepository = None
-_user_repo: SupabaseUserRepository = None
-_financial_repo: SupabaseFinancialRepository = None
-_valuation_repo: ValuationRepository = None
+_watchlist_repo: "SupabaseWatchlistRepository | None" = None
+_user_repo: "SupabaseUserRepository | None" = None
+_financial_repo: "SupabaseFinancialRepository | None" = None
+_valuation_repo: "ValuationRepository | None" = None
 
 
 def get_watchlist_repository() -> SupabaseWatchlistRepository:
@@ -255,8 +265,8 @@ def get_watchlist_service() -> WatchlistService:
     )
 
 
-_recompute_guard: RecomputeGuard = None
-_valuation_service: ValuationService = None
+_recompute_guard: "RecomputeGuard | None" = None
+_valuation_service: "ValuationService | None" = None
 
 
 def get_recompute_guard() -> RecomputeGuard:

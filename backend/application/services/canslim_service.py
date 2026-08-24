@@ -18,8 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from domain.models.analysis_canslim import (
     CANSlimDataQuality,
@@ -33,6 +32,7 @@ from domain.models.analysis_canslim import (
 from infrastructure.repositories.analysis_repository import AnalysisRepository
 from infrastructure.repositories.valuation_repository import ValuationRepository
 from shared.finance_math import safe_float
+from shared.time_utils import now_iso, now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class CANSlimService:
 
     async def _serve_cached(
         self, company_id: int, symbol: str, currency: str
-    ) -> Optional[CANSlimResponse]:
+    ) -> CANSlimResponse | None:
         snap = await self._repo.get_last_output_snapshot(company_id, "canslim")
         if not snap:
             return None
@@ -128,7 +128,7 @@ class CANSlimService:
         benchmark_company_id = benchmark["company_id"] if benchmark else None
 
         # ── Live benchmark price fetch ─────────────────────────────────────────
-        benchmark_prices: List[Dict] = []
+        benchmark_prices: list[dict] = []
         if benchmark_company_id:
             start = now_utc().date() - timedelta(days=_FETCH_DAYS_BENCHMARK)
             try:
@@ -200,7 +200,7 @@ class CANSlimService:
         category = "Strong" if composite >= 70 else "Moderate" if composite >= 45 else "Weak"
 
         # ── Global flags ───────────────────────────────────────────────────────
-        global_flags: List[DiagnosticFlag] = []
+        global_flags: list[DiagnosticFlag] = []
         if market_condition.condition in ("distribution", "downtrend"):
             global_flags.append(DiagnosticFlag(
                 code="CS-MARKET-CAUTION",
@@ -260,8 +260,8 @@ class CANSlimService:
 
     def _score_C(
         self,
-        q_earnings: List[Dict],
-        q_revenue: List[Dict],
+        q_earnings: list[dict],
+        q_revenue: list[dict],
     ) -> LetterScore:
         """YoY same-quarter EPS comparison + revenue acceleration check."""
         if len(q_earnings) < 5:
@@ -272,7 +272,7 @@ class CANSlimService:
             )
 
         # Build year/quarter index
-        by_yq: Dict[Tuple[int, int], float] = {}
+        by_yq: dict[tuple[int, int], float] = {}
         for r in q_earnings:
             fy = r.get("fiscal_year")
             fq = r.get("fiscal_quarter")
@@ -315,7 +315,7 @@ class CANSlimService:
 
         # Revenue YoY check
         rev_note = ""
-        rev_by_yq: Dict[Tuple[int, int], float] = {}
+        rev_by_yq: dict[tuple[int, int], float] = {}
         for r in q_revenue:
             fy, fq = r.get("fiscal_year"), r.get("fiscal_quarter")
             rev = safe_float(r.get("revenue"))
@@ -324,7 +324,7 @@ class CANSlimService:
 
         curr_rev = rev_by_yq.get((curr_y, curr_q))
         prior_rev = rev_by_yq.get((curr_y - 1, curr_q))
-        rev_growth: Optional[float] = None
+        rev_growth: float | None = None
         if curr_rev and prior_rev and prior_rev > 0:
             rev_growth = (curr_rev - prior_rev) / prior_rev
             if rev_growth >= 0.25:
@@ -378,7 +378,7 @@ class CANSlimService:
 
     # ── A — Annual earnings growth ────────────────────────────────────────────
 
-    def _score_A(self, annual_is: List[Dict]) -> LetterScore:
+    def _score_A(self, annual_is: list[dict]) -> LetterScore:
         if len(annual_is) < 3:
             return self._unavailable_letter(
                 "A", "Annual earnings growth",
@@ -388,7 +388,7 @@ class CANSlimService:
         # Sort oldest-first
         rows = sorted(annual_is, key=lambda r: r.get("fiscal_year") or 0)
 
-        eps_series: List[Tuple[int, float]] = []
+        eps_series: list[tuple[int, float]] = []
         for r in rows:
             fy = r.get("fiscal_year")
             eps = safe_float(r.get("eps_diluted") or r.get("net_income_to_common"))
@@ -402,7 +402,7 @@ class CANSlimService:
             )
 
         # 3-year and 5-year CAGR
-        def _cagr(series: List[Tuple[int, float]], years: int) -> Optional[float]:
+        def _cagr(series: list[tuple[int, float]], years: int) -> float | None:
             if len(series) < years + 1:
                 return None
             recent = series[-years - 1:]
@@ -472,7 +472,7 @@ class CANSlimService:
     # ── N — New product / near 52-week high ───────────────────────────────────
 
     def _score_N(
-        self, monthly_prices: List[Dict], q_revenue: List[Dict]
+        self, monthly_prices: list[dict], q_revenue: list[dict]
     ) -> LetterScore:
         if not monthly_prices:
             return self._unavailable_letter(
@@ -493,7 +493,7 @@ class CANSlimService:
 
         # Revenue acceleration (last 2 quarters vs prior 2 quarters)
         rev_accel = False
-        rev_by_yq: Dict[Tuple[int, int], float] = {}
+        rev_by_yq: dict[tuple[int, int], float] = {}
         for r in q_revenue:
             fy, fq = r.get("fiscal_year"), r.get("fiscal_quarter")
             rev = safe_float(r.get("revenue"))
@@ -555,7 +555,7 @@ class CANSlimService:
     # ── S — Supply and demand ─────────────────────────────────────────────────
 
     def _score_S(
-        self, monthly_prices: List[Dict], shares: Optional[float]
+        self, monthly_prices: list[dict], shares: float | None
     ) -> LetterScore:
         prices_sorted = sorted(monthly_prices, key=lambda b: str(b["price_date"]))
         volumes = [int(b.get("volume") or 0) for b in prices_sorted]
@@ -630,8 +630,8 @@ class CANSlimService:
 
     def _score_L(
         self,
-        monthly_prices: List[Dict],
-        bench_closes: List[float],
+        monthly_prices: list[dict],
+        bench_closes: list[float],
     ) -> LetterScore:
         if not monthly_prices or len(bench_closes) < 13:
             return self._unavailable_letter(
@@ -724,8 +724,8 @@ class CANSlimService:
     # ── M — Market direction ──────────────────────────────────────────────────
 
     def _score_M(
-        self, bench_closes: List[float], benchmark_symbol: str
-    ) -> Tuple[LetterScore, CANSlimMarketCondition]:
+        self, bench_closes: list[float], benchmark_symbol: str
+    ) -> tuple[LetterScore, CANSlimMarketCondition]:
         if len(bench_closes) < 51:
             condition = CANSlimMarketCondition(
                 condition="unknown",

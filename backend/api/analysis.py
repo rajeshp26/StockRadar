@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from dependencies import get_current_user_dep, limiter, get_valuation_service
+from dependencies import get_current_user_dep, get_valuation_service, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -42,33 +42,30 @@ def _resolve_db_user_id(auth_id: str) -> int:
 
 
 def _get_dividend_service():
-    from database import supabase
-    from infrastructure.repositories.valuation_repository import ValuationRepository
     from application.services.dividend_analysis_service import DividendAnalysisService
+    from infrastructure.repositories.valuation_repository import ValuationRepository
     repo = ValuationRepository()
     return DividendAnalysisService(repo)
 
 # ── New dependency factories (add after _get_dividend_service()) ─────────────
- 
+
 def _get_magic_formula_service():
-    from database import supabase
-    from infrastructure.repositories.valuation_repository import ValuationRepository
-    from infrastructure.repositories.analysis_repository import AnalysisRepository
     from application.services.magic_formula_service import MagicFormulaService
+    from infrastructure.repositories.analysis_repository import AnalysisRepository
+    from infrastructure.repositories.valuation_repository import ValuationRepository
     repo = ValuationRepository()
     arepo = AnalysisRepository(repo)
     return MagicFormulaService(repo, arepo)
- 
- 
+
+
 def _get_canslim_service():
-    from database import supabase
-    from infrastructure.repositories.valuation_repository import ValuationRepository
-    from infrastructure.repositories.analysis_repository import AnalysisRepository
     from application.services.canslim_service import CANSlimService
+    from infrastructure.repositories.analysis_repository import AnalysisRepository
+    from infrastructure.repositories.valuation_repository import ValuationRepository
     from providers.defeat_beta_provider import DefeatBetaProvider
-    from providers.yfinance_provider import YFinanceProvider
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
     from providers.edgar_provider import EdgarToolsProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    from providers.yfinance_provider import YFinanceProvider
     repo = ValuationRepository()
     arepo = AnalysisRepository(repo)
     yf = YFinanceProvider()
@@ -81,12 +78,12 @@ def _get_canslim_service():
 
 
 def _get_technical_service():
-    from infrastructure.repositories.valuation_repository import ValuationRepository
     from application.services.technical_analysis_service import TechnicalAnalysisService
+    from infrastructure.repositories.valuation_repository import ValuationRepository
     from providers.defeat_beta_provider import DefeatBetaProvider
-    from providers.yfinance_provider import YFinanceProvider
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
     from providers.edgar_provider import EdgarToolsProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    from providers.yfinance_provider import YFinanceProvider
     repo = ValuationRepository()
     yf = YFinanceProvider()
     dbeta = DefeatBetaProvider(
@@ -98,12 +95,11 @@ def _get_technical_service():
 
 
 def _get_stock_vs_index_service():
-    from database import supabase
-    from infrastructure.repositories.valuation_repository import ValuationRepository
-    from infrastructure.repositories.analysis_repository import AnalysisRepository
     from application.services.stock_index_comparison_service import (
         StockIndexComparisonService,
     )
+    from infrastructure.repositories.analysis_repository import AnalysisRepository
+    from infrastructure.repositories.valuation_repository import ValuationRepository
     repo = ValuationRepository()
     arepo = AnalysisRepository(repo)
     return StockIndexComparisonService(arepo)
@@ -138,7 +134,7 @@ async def get_dividend_analysis(
         )
 
 # ── New route handlers (add after get_dividend_analysis) ─────────────────────
- 
+
 @router.get(
     "/{symbol}/magic-formula",
     summary=(
@@ -168,8 +164,8 @@ async def get_magic_formula(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Magic Formula analysis failed.",
         )
- 
- 
+
+
 @router.get(
     "/{symbol}/canslim",
     summary=(
@@ -199,8 +195,8 @@ async def get_canslim(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="CANSlim analysis failed.",
         )
- 
- 
+
+
 @router.get(
     "/{symbol}/technical/murphy",
     summary=(
@@ -270,12 +266,11 @@ async def get_stock_vs_index(
 # ── MOAT Analysis ──────────────────────────────────────────────────────────────
 
 def _get_moat_service():
-    from database import supabase
-    from infrastructure.repositories.moat_repository import MoatRepository
-    from application.services.moat_wacc_service import MoatWaccService
     from application.services.edgar_filing_service import EdgarFilingService
-    from application.services.moat_keyword_analyzer import MoatKeywordAnalyzer
     from application.services.moat_analysis_service import MoatAnalysisService
+    from application.services.moat_keyword_analyzer import MoatKeywordAnalyzer
+    from application.services.moat_wacc_service import MoatWaccService
+    from infrastructure.repositories.moat_repository import MoatRepository
     repo = MoatRepository()
     wacc = MoatWaccService(repo)
     edgar = EdgarFilingService()
@@ -402,13 +397,12 @@ async def generate_moat_ai_narrative(
 # ── Risk Assessment ─────────────────────────────────────────────────────────
 
 def _get_risk_service():
-    from database import supabase
-    from infrastructure.repositories.moat_repository import MoatRepository
-    from infrastructure.repositories.valuation_repository import ValuationRepository
-    from infrastructure.repositories.risk_repository import RiskRepository
-    from application.services.moat_wacc_service import MoatWaccService
     from application.services.moat_analysis_service import MoatAnalysisService
+    from application.services.moat_wacc_service import MoatWaccService
     from application.services.risk_assessment_service import RiskAssessmentService
+    from infrastructure.repositories.moat_repository import MoatRepository
+    from infrastructure.repositories.risk_repository import RiskRepository
+    from infrastructure.repositories.valuation_repository import ValuationRepository
     repo = ValuationRepository()
     risk_repo = RiskRepository(repo)
     moat_repo = MoatRepository()
@@ -486,8 +480,8 @@ async def list_benchmarks(
 # ── Fundamentals Tab ───────────────────────────────────────────────────────────
 
 def _get_fundamentals_service():
-    from infrastructure.repositories.fundamentals_repository import FundamentalsRepository
     from application.services.fundamentals_service import FundamentalsService
+    from infrastructure.repositories.fundamentals_repository import FundamentalsRepository
     repo = FundamentalsRepository()
     return FundamentalsService(repo)
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 import logging
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from config import settings
 
@@ -14,8 +15,8 @@ class FilingSection:
         section_id: str,
         label: str,
         text: str,
-        filing_date: Optional[date] = None,
-        accession_number: Optional[str] = None,
+        filing_date: date | None = None,
+        accession_number: str | None = None,
     ) -> None:
         self.section_id = section_id
         self.label = label
@@ -29,8 +30,8 @@ class EdgarFilingService:
         self._identity = settings.EDGAR_IDENTITY or "StockerPro user@example.com"
 
     async def fetch_tenk_sections(
-        self, symbol: str, year: Optional[int] = None
-    ) -> Dict[str, FilingSection]:
+        self, symbol: str, year: int | None = None
+    ) -> dict[str, FilingSection]:
         try:
             from edgar import Company, set_identity
 
@@ -50,7 +51,7 @@ class EdgarFilingService:
             except Exception:
                 pass
 
-            sections: Dict[str, FilingSection] = {}
+            sections: dict[str, FilingSection] = {}
 
             obj = filing.obj()
             if obj is None:
@@ -98,7 +99,7 @@ class EdgarFilingService:
 
     def _fetch_proxy_statement(
         self, symbol: str, filings: Any
-    ) -> Optional[FilingSection]:
+    ) -> FilingSection | None:
         try:
             from edgar import Company
 
@@ -132,8 +133,8 @@ class EdgarFilingService:
             return None
 
     async def fetch_tenk_text(
-        self, symbol: str, year: Optional[int] = None
-    ) -> Optional[str]:
+        self, symbol: str, year: int | None = None
+    ) -> str | None:
         sections = await self.fetch_tenk_sections(symbol, year)
         if not sections:
             return None
@@ -149,7 +150,7 @@ class EdgarFilingService:
 
     async def get_latest_filing_date(
         self, symbol: str
-    ) -> Optional[date]:
+    ) -> date | None:
         try:
             from edgar import Company, set_identity
 

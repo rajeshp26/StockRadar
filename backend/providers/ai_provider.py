@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import httpx
 
@@ -22,7 +23,7 @@ class AIProvider(ABC):
         max_tokens: int = 800,
         temperature: float = 0.1,
         timeout: float = 10.0,
-    ) -> Optional[str]:
+    ) -> str | None:
         ...
 
     @abstractmethod
@@ -33,18 +34,18 @@ class AIProvider(ABC):
         max_tokens: int = 1000,
         temperature: float = 0.1,
         timeout: float = 10.0,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         ...
 
     @abstractmethod
     async def generate_text_stream(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         system_instruction: str = "",
         max_tokens: int = 1024,
         temperature: float = 0.1,
         timeout: float = 15.0,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream tokens from the AI provider.
 
         Yields dicts with one of these shapes:
@@ -72,7 +73,7 @@ class OpenRouterProvider(AIProvider):
         max_tokens: int = 800,
         temperature: float = 0.1,
         timeout: float = 10.0,
-    ) -> Optional[str]:
+    ) -> str | None:
         if not self._api_key:
             logger.info("[AI] OPEN_ROUTER_KEY not set — text generation disabled")
             return None
@@ -140,7 +141,7 @@ class OpenRouterProvider(AIProvider):
         max_tokens: int = 1000,
         temperature: float = 0.1,
         timeout: float = 10.0,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         raw = await self.generate_text(
             prompt=prompt,
             system_instruction=system_instruction,
@@ -166,17 +167,17 @@ class OpenRouterProvider(AIProvider):
 
     async def generate_text_stream(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         system_instruction: str = "",
         max_tokens: int = 1024,
         temperature: float = 0.1,
         timeout: float = 15.0,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         if not self._api_key:
             logger.info("[AI] OPEN_ROUTER_KEY not set — streaming disabled")
             return
 
-        chat_messages: List[Dict[str, str]] = []
+        chat_messages: list[dict[str, str]] = []
         if system_instruction:
             chat_messages.append({"role": "system", "content": system_instruction})
         chat_messages.extend(messages)

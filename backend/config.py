@@ -1,8 +1,8 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, field_validator
-from typing import List, Optional
-import os
 import logging
+import os
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -17,17 +17,17 @@ class Settings(BaseSettings):
     StockerPro Configuration Settings.
     Strictly validated but compatible with both JWT and Legacy Supabase formats.
     """
-    
+
     # ============================================
     # 🌍 Environment & Core
     # ============================================
     ENVIRONMENT: str = Field(default="development", pattern="^(development|staging|production)$")
-    
+
     # ============================================
     # 🗄️ Database (Supabase)
     # ============================================
     SUPABASE_URL: str = Field(..., description="The hosted Supabase project URL")
-    
+
     # Corrected: min_length=20 to accommodate valid 46-char legacy keys
     SUPABASE_SERVICE_ROLE_KEY: str = Field(..., min_length=20, description="Supabase service_role key (JWT or Legacy)")
     # ============================================
@@ -39,11 +39,11 @@ class Settings(BaseSettings):
     # ============================================
     API_HOST: str = Field(default="0.0.0.0")
     API_PORT: int = Field(default=8001, ge=1024, le=65535)
-    
+
     # ============================================
     # 🛡️ Security & CORS
     # ============================================
-    DEV_ORIGINS: List[str] = [
+    DEV_ORIGINS: list[str] = [
         "http://localhost:9000",      # Next.js Web App
         "http://127.0.0.1:9000",
         "http://localhost:9002",      # Legacy (keep for compatibility)
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # ============================================
     # 🤖 AI & External Providers
     # ============================================
-    OPEN_ROUTER_KEY: Optional[str] = Field(default=None, description="OpenRouter API key for AI stock analysis")
+    OPEN_ROUTER_KEY: str | None = Field(default=None, description="OpenRouter API key for AI stock analysis")
     OPEN_ROUTER_MODEL: str = Field(default="openai/gpt-oss-120b:free", description="OpenRouter model for suitability summaries")
     # EdgarTools Provider (SEC EDGAR filings)
     EDGAR_IDENTITY: str = Field(
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # ============================================
     # 📊 DEFEAT BETA INTEGRATION
     # ============================================
-    
+
     # Earnings Refresh Scheduler
     EARNINGS_REFRESH_CHECK_INTERVAL_HOURS: int = Field(
         default=2,
@@ -76,7 +76,7 @@ class Settings(BaseSettings):
         description="Buffer window for earnings date comparison (±N days). "
                     "±10 catches announcements from previous week with delayed availability."
     )
-    
+
     # Retry Logic & Resilience
     RETRY_MAX_ATTEMPTS: int = Field(
         default=3,
@@ -84,7 +84,7 @@ class Settings(BaseSettings):
         le=10,
         description="Maximum number of retry attempts for failed requests"
     )
-    RETRY_BACKOFF_SECONDS: List[int] = Field(
+    RETRY_BACKOFF_SECONDS: list[int] = Field(
         default=[1, 2, 4],
         description="Exponential backoff delays in seconds for retries"
     )
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
         default=True,
         description="Enable fallback to yfinance when defeat-beta fails completely"
     )
-    
+
     # Timeouts (seconds)
     YFINANCE_SINGLE_TIMEOUT_SECONDS: int = Field(
         default=5,
@@ -118,13 +118,13 @@ class Settings(BaseSettings):
         le=300,
         description="Complete company refresh timeout (all financial methods)"
     )
-    
+
     # On-Demand Refresh
     ENABLE_ON_DEMAND_FINANCIAL_REFRESH: bool = Field(
         default=True,
         description="Allow frontend to trigger immediate financial data refresh"
     )
-    
+
     # Logging
     LOG_LEVEL: str = Field(
         default="INFO",
@@ -143,13 +143,13 @@ class Settings(BaseSettings):
         default=False,
         description="Log every filtered row during deduplication"
     )
-    
+
     # Timezone
     DEFAULT_TIMEZONE: str = Field(
         default="America/New_York",
         description="Default timezone for companies (used for earnings date comparisons)"
     )
-    
+
     # Data Quality
     ENABLE_DATA_SOURCE_TRACKING: bool = Field(
         default=True,
@@ -177,7 +177,7 @@ class Settings(BaseSettings):
         le=1.0,
         description="Confidence score for yfinance fallback data (0.8 = 80% trust)"
     )
-    
+
     # SSE (Server-Sent Events)
     SSE_UPDATE_INTERVAL_SECONDS: int = Field(
         default=10,
@@ -185,7 +185,7 @@ class Settings(BaseSettings):
         le=60,
         description="How often background price monitor updates in seconds"
     )
-    
+
     # Batch Operations
     MAX_BATCH_SIZE: int = Field(
         default=100,
@@ -193,7 +193,7 @@ class Settings(BaseSettings):
         le=1000,
         description="Maximum number of stocks to update in a single batch"
     )
-    
+
     # Feature Flags
     ENABLE_PORTFOLIO_DASHBOARD: bool = Field(
         default=True,
@@ -323,7 +323,7 @@ class Settings(BaseSettings):
         description="When True, the daily snapshot job fills missing dates between the "
                     "last known snapshot and today using event-replay with consistent pricing."
     )
-    
+
     # Debugging & Development
     DEBUG_FILTERING_LOGIC: bool = Field(
         default=False,
@@ -333,17 +333,17 @@ class Settings(BaseSettings):
         default=False,
         description="Don't actually write to DB, just log what would be written"
     )
-    
+
     # ============================================
     # ⚙️ Computed Properties
     # ============================================
-    
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT.lower() == "production"
-    
+
     @property
-    def allowed_origins(self) -> List[str]:
+    def allowed_origins(self) -> list[str]:
         if self.is_production:
             return [
                 "https://stockerpro.com",
@@ -357,7 +357,7 @@ class Settings(BaseSettings):
             "https://9002-*.cloudworkstations.dev",
             "https://9003-*.cloudworkstations.dev",
         ]
-    
+
     # ============================================
     # ⚙️ Validators
     # ============================================
@@ -369,14 +369,14 @@ class Settings(BaseSettings):
         """
         is_jwt = v.startswith("eyJ")
         is_legacy = v.startswith("sb_secret_")
-        
+
         if not (is_jwt or is_legacy):
             raise ValueError(
                 f"Invalid Supabase key format. Must be JWT (starts with 'eyJ') or Legacy (starts with 'sb_secret_'). "
                 f"Got: {v[:10]}..."
             )
         return v
-    
+
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,  # ✅ Use absolute path
         env_file_encoding="utf-8",
@@ -396,7 +396,7 @@ def validate_config():
         print(f"API Endpoint : {s.API_HOST}:{s.API_PORT}")
         print(f"Supabase URL : {s.SUPABASE_URL}")
         print(f"Supabase Key : {key_type} format detected")
-        print(f"Auth Provider: Supabase JWT (local JWKS verification)")
+        print("Auth Provider: Supabase JWT (local JWKS verification)")
         print(f"AI Provider  : {'OpenRouter Enabled *' if s.OPEN_ROUTER_KEY else 'AI Disabled'}")
         print(f"Defeat Beta  : {'Enabled *' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}")
         print(f"Market Data  : {'Enabled *' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}")
@@ -413,7 +413,7 @@ def validate_config():
         print("\n" + "!"*60)
         print("[ERROR] CONFIGURATION ERROR: Backend cannot start.")
         print("!"*50)
-        print(f"\n{str(e)}\n")
+        print(f"\n{e!s}\n")
         print("Troubleshooting:")
         print(f"1. Checked .env at: {ENV_FILE}")
         print("2. Ensure all required variables (URL, Key, Project ID) are present.")

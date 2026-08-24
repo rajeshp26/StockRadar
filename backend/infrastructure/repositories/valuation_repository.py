@@ -1,17 +1,17 @@
 # infrastructure/repositories/valuation_repository.py
 from __future__ import annotations
+
 import asyncio
+import hashlib
+import json
 import logging
 import math
-from datetime import datetime, date, time, timedelta
-from typing import Any, Dict, List, Optional
- 
+from datetime import date, datetime, time, timedelta
+from typing import Any
+
 from database import supabase
 from shared.finance_math import safe_float
 from shared.time_utils import now_utc, parse_db_timestamp
-
-import hashlib
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ ALLOWED_METHODS = {
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _first(data: Any) -> Optional[Dict[str, Any]]:
+def _first(data: Any) -> dict[str, Any] | None:
     if not data:
         return None
     if isinstance(data, list) and len(data) > 0:
@@ -38,7 +38,7 @@ def _first(data: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_date(d: Any) -> Optional[date]:
+def _normalize_date(d: Any) -> date | None:
     if d is None:
         return None
     if isinstance(d, date) and not isinstance(d, datetime):
@@ -51,7 +51,7 @@ def _normalize_date(d: Any) -> Optional[date]:
     return None
 
 
-def _normalize_datetime(ts: Any) -> Optional[datetime]:
+def _normalize_datetime(ts: Any) -> datetime | None:
     if ts is None:
         return None
     if isinstance(ts, datetime):
@@ -68,14 +68,14 @@ def _normalize_datetime(ts: Any) -> Optional[datetime]:
     return None
 
 
-def _as_datetime_from_date(d: Any) -> Optional[datetime]:
+def _as_datetime_from_date(d: Any) -> datetime | None:
     base = _normalize_date(d)
     if not base:
         return None
     return datetime.combine(base, time(0, 0, 0))
 
 
-def _max_dt(*vals: Optional[datetime]) -> Optional[datetime]:
+def _max_dt(*vals: datetime | None) -> datetime | None:
     present = [v for v in vals if v is not None]
     return max(present) if present else None
 
@@ -84,7 +84,7 @@ def _pct_to_frac(x: float) -> float:
     return x / 100.0 if x > 1.0 else x
 
 
-def _compute_fcf(ocf_f: Optional[float], capex_f: Optional[float]) -> Optional[float]:
+def _compute_fcf(ocf_f: float | None, capex_f: float | None) -> float | None:
     """
     Sign-aware FCF: capex is stored as a NEGATIVE outflow in cash_flow_statements.
     BUG-01 fix: previous get_fcf_history() used ocf - capex which produced the
@@ -113,22 +113,22 @@ def _hash_params(params_rows: list) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def _safe_float_repo(x: Any) -> Optional[float]:
+def _safe_float_repo(x: Any) -> float | None:
     """Alias for shared.finance_math.safe_float — kept for call-site compatibility."""
     return safe_float(x)
 
 
-def _round2(x: Any) -> Optional[float]:
+def _round2(x: Any) -> float | None:
     v = _safe_float_repo(x)
     return round(v, 2) if v is not None else None
 
 
-def _round6(x: Any) -> Optional[float]:
+def _round6(x: Any) -> float | None:
     v = _safe_float_repo(x)
     return round(v, 6) if v is not None else None
 
 
-def _round8(x: Any) -> Optional[float]:
+def _round8(x: Any) -> float | None:
     v = _safe_float_repo(x)
     return round(v, 8) if v is not None else None
 
@@ -140,7 +140,7 @@ class ValuationRepository:
 
     # ── Company context ────────────────────────────────────────────────────────
 
-    async def get_company_context(self, symbol: str) -> Optional[Dict[str, Any]]:
+    async def get_company_context(self, symbol: str) -> dict[str, Any] | None:
         try:
             def _query():
                 return (
@@ -156,7 +156,7 @@ class ValuationRepository:
             logger.error("get_company_context failed for %s: %s", symbol, e)
             return None
 
-    async def get_company_meta(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_company_meta(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("companies")
@@ -172,7 +172,7 @@ class ValuationRepository:
 
     # ── Freshness gate ─────────────────────────────────────────────────────────
 
-    async def get_last_valuation_ts(self, company_id: int, method: str = "rule1") -> Optional[datetime]:
+    async def get_last_valuation_ts(self, company_id: int, method: str = "rule1") -> datetime | None:
         if method not in ALLOWED_METHODS:
             method = "rule1"
         try:
@@ -191,7 +191,7 @@ class ValuationRepository:
             logger.error("get_last_valuation_ts failed (%s): %s", method, e)
             return None
 
-    async def get_latest_dependency_ts(self, company_id: int, method: str = "rule1") -> Optional[datetime]:
+    async def get_latest_dependency_ts(self, company_id: int, method: str = "rule1") -> datetime | None:
         if method not in ALLOWED_METHODS:
             method = "rule1"
         if method == "rule1":
@@ -206,7 +206,7 @@ class ValuationRepository:
             return await self._latest_dependency_residual_income(company_id)
         return None
 
-    async def _latest_dependency_rule1(self, company_id: int) -> Optional[datetime]:
+    async def _latest_dependency_rule1(self, company_id: int) -> datetime | None:
         try:
             cm = await self.get_company_meta(company_id)
             sector = cm.get("sector") if cm else None
@@ -265,7 +265,7 @@ class ValuationRepository:
                 .execute()
             )
             sp_dt = _as_datetime_from_date((_first(sp.data) or {}).get("report_date"))
-            im_dt: Optional[datetime] = None
+            im_dt: datetime | None = None
             if sector and industry:
                 im = (
                     supabase.table("industry_multiples")
@@ -299,7 +299,7 @@ class ValuationRepository:
             logger.error("get_latest_dependency_ts(rule1) failed company_id=%s: %s", company_id, e)
             return None
 
-    async def _latest_dependency_ddm(self, company_id: int, method: str) -> Optional[datetime]:
+    async def _latest_dependency_ddm(self, company_id: int, method: str) -> datetime | None:
         try:
             cs = (
                 supabase.table("company_summary")
@@ -359,7 +359,7 @@ class ValuationRepository:
             logger.error("get_latest_dependency_ts(%s) failed company_id=%s: %s", method, company_id, e)
             return None
 
-    async def _latest_dependency_dcf(self, company_id: int) -> Optional[datetime]:
+    async def _latest_dependency_dcf(self, company_id: int) -> datetime | None:
         try:
             cf = (
                 supabase.table("cash_flow_statements")
@@ -428,7 +428,7 @@ class ValuationRepository:
             logger.error("get_latest_dependency_ts(dcf) failed company_id=%s: %s", company_id, e)
             return None
 
-    async def _latest_dependency_owner_earnings(self, company_id: int) -> Optional[datetime]:
+    async def _latest_dependency_owner_earnings(self, company_id: int) -> datetime | None:
         try:
             is_ = (
                 supabase.table("income_statements")
@@ -488,7 +488,7 @@ class ValuationRepository:
             logger.error("_latest_dependency_owner_earnings failed company_id=%s: %s", company_id, e)
             return None
 
-    async def _latest_dependency_residual_income(self, company_id: int) -> Optional[datetime]:
+    async def _latest_dependency_residual_income(self, company_id: int) -> datetime | None:
         try:
             is_ = (
                 supabase.table("income_statements")
@@ -550,7 +550,7 @@ class ValuationRepository:
 
     # ── Owner Earnings repo helpers ───────────────────────────────────────────
 
-    async def get_cash_flow_oe_inputs(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_cash_flow_oe_inputs(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("cash_flow_statements")
@@ -572,7 +572,7 @@ class ValuationRepository:
             logger.error("get_cash_flow_oe_inputs failed: %s", e)
             return None
 
-    async def get_annual_owner_earnings(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
+    async def get_annual_owner_earnings(self, company_id: int, years: int = 5) -> list[dict[str, Any]]:
         try:
             cf_resp = (
                 supabase.table("cash_flow_statements")
@@ -591,12 +591,12 @@ class ValuationRepository:
                 .order("fiscal_year", desc=False)
                 .execute()
             )
-            cf_by_year: Dict[int, Dict[str, Any]] = {}
+            cf_by_year: dict[int, dict[str, Any]] = {}
             for r in (cf_resp.data or []):
                 y = r.get("fiscal_year")
                 if isinstance(y, int):
                     cf_by_year[y] = r
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for r in (is_resp.data or []):
                 y = r.get("fiscal_year")
                 if not isinstance(y, int):
@@ -608,7 +608,7 @@ class ValuationRepository:
                 capex_raw = cf.get("capital_expenditures")
                 da = float(da_raw) if da_raw is not None else None
                 capex = float(capex_raw) if capex_raw is not None else None
-                oe: Optional[float] = None
+                oe: float | None = None
                 if ni is not None:
                     da_val = da if da is not None else 0.0
                     capex_adj = 0.0
@@ -622,7 +622,7 @@ class ValuationRepository:
             logger.error("get_owner_earnings_history failed: %s", e)
             return []
 
-    async def get_capex_da_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
+    async def get_capex_da_history(self, company_id: int, years: int = 5) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("cash_flow_statements")
@@ -644,7 +644,7 @@ class ValuationRepository:
 
     # ── Residual Income repo helpers ──────────────────────────────────────────
 
-    async def get_balance_sheet_ri_inputs(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_balance_sheet_ri_inputs(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("balance_sheets")
@@ -664,7 +664,7 @@ class ValuationRepository:
             logger.error("get_balance_sheet_ri_inputs failed: %s", e)
             return None
 
-    async def get_book_value_history(self, company_id: int, years: int = 6) -> List[Dict[str, Any]]:
+    async def get_book_value_history(self, company_id: int, years: int = 6) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("balance_sheets")
@@ -685,7 +685,7 @@ class ValuationRepository:
             logger.error("get_book_value_history failed: %s", e)
             return []
 
-    async def get_roe_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
+    async def get_roe_history(self, company_id: int, years: int = 5) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("financial_ratios")
@@ -706,7 +706,7 @@ class ValuationRepository:
 
     # ── Run history (used by API history endpoints) ───────────────────────────
 
-    async def get_owner_earnings_history(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_owner_earnings_history(self, symbol: str, limit: int = 50) -> list[dict[str, Any]]:
         try:
             ctx = await self.get_company_context(symbol)
             if not ctx:
@@ -743,7 +743,7 @@ class ValuationRepository:
             logger.error("get_owner_earnings_history failed for %s: %s", symbol, e)
             return []
 
-    async def get_residual_income_history(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_residual_income_history(self, symbol: str, limit: int = 50) -> list[dict[str, Any]]:
         try:
             ctx = await self.get_company_context(symbol)
             if not ctx:
@@ -781,10 +781,10 @@ class ValuationRepository:
 
     # ── Parameters ─────────────────────────────────────────────────────────────
 
-    async def get_method_params(self, company_id: int, method: str = "rule1") -> Dict[str, Any]:
+    async def get_method_params(self, company_id: int, method: str = "rule1") -> dict[str, Any]:
         if method not in ALLOWED_METHODS:
             method = "rule1"
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         try:
             defaults = (
                 supabase.table("valuation_method_defaults")
@@ -814,12 +814,12 @@ class ValuationRepository:
             logger.error("get_method_params overrides failed (%s): %s", method, e)
         return out
 
-    async def get_method_params_rule1(self, company_id: int) -> Dict[str, Any]:
+    async def get_method_params_rule1(self, company_id: int) -> dict[str, Any]:
         return await self.get_method_params(company_id, method="rule1")
 
     # ── Cached-path hydration ──────────────────────────────────────────────────
 
-    async def get_last_output_snapshot(self, company_id: int, method: str) -> Optional[Dict[str, Any]]:
+    async def get_last_output_snapshot(self, company_id: int, method: str) -> dict[str, Any] | None:
         if method not in ALLOWED_METHODS:
             method = "rule1"
         try:
@@ -838,8 +838,8 @@ class ValuationRepository:
             return None
 
     async def get_last_output_snapshots(
-        self, company_id: int, methods: List[str]
-    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        self, company_id: int, methods: list[str]
+    ) -> dict[str, dict[str, Any] | None]:
         """Single query to fetch the latest output snapshot for multiple methods.
            Returns a dictionary mapping method name to its latest output_snapshot (or None)."""
         if not methods:
@@ -863,13 +863,13 @@ class ValuationRepository:
                 m = row.get("method")
                 if m and m not in latest_by_method:
                     latest_by_method[m] = row.get("output_snapshot")
-            
+
             return {m: latest_by_method.get(m) for m in methods}
         except Exception as exc:
             logger.error("get_last_output_snapshots failed for company_id=%s methods=%s: %s", company_id, methods, exc)
             return {m: None for m in methods}
 
-    async def get_valuation_summary_rows(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_valuation_summary_rows(self, company_id: int) -> list[dict[str, Any]]:
         """One query on the Phase 2 read model (v_valuation_latest_runs).
 
         Returns the latest run row per method for the company (may be []).
@@ -889,7 +889,7 @@ class ValuationRepository:
             logger.error("get_valuation_summary_rows failed for company_id=%s: %s", company_id, exc)
             return []
 
-    async def get_last_input_snapshot(self, company_id: int, method: str) -> Optional[Dict[str, Any]]:
+    async def get_last_input_snapshot(self, company_id: int, method: str) -> dict[str, Any] | None:
         """
         Returns the input_snapshot from the most recent valuation run.
         Contains: dependency_fingerprint, resolved inputs, overrides.
@@ -944,10 +944,10 @@ class ValuationRepository:
         except Exception as exc:
             logger.error("update_valuation_fingerprint failed (%s, %s): %s", company_id, method, exc)
 
-    async def get_last_rule1_output_snapshot(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_last_rule1_output_snapshot(self, company_id: int) -> dict[str, Any] | None:
         return await self.get_last_output_snapshot(company_id, method="rule1")
 
-    async def get_last_rule1_diagnostics(self, company_id: int) -> Dict[str, Any]:
+    async def get_last_rule1_diagnostics(self, company_id: int) -> dict[str, Any]:
         snap = await self.get_last_rule1_output_snapshot(company_id)
         if not snap:
             return {}
@@ -956,7 +956,7 @@ class ValuationRepository:
         assumptions = (dq.get("inputDecisions") or {}).get("assumptions", {}) if isinstance(dq, dict) else {}
         return {"applicability": app, "dataQuality": dq, "assumptions": assumptions}
 
-    async def get_last_method_diagnostics(self, company_id: int, method: str = "rule1") -> Dict[str, Any]:
+    async def get_last_method_diagnostics(self, company_id: int, method: str = "rule1") -> dict[str, Any]:
         snap = await self.get_last_output_snapshot(company_id, method=method)
         if not snap:
             return {}
@@ -967,7 +967,7 @@ class ValuationRepository:
 
     # ── Fingerprint dependency values ─────────────────────────────────────────
 
-    async def get_ddm_dependency_values(self, company_id: int) -> Dict[str, Any]:
+    async def get_ddm_dependency_values(self, company_id: int) -> dict[str, Any]:
         ttm_rows = await self.get_dividend_history(company_id, limit=300)
         cutoff   = now_utc().date() - timedelta(days=365)
         ttm_dividends = sorted(
@@ -987,7 +987,7 @@ class ValuationRepository:
             {"year": r["year"], "dps": round(float(r["dps"]), 6)}
             for r in yearly_dps if r.get("dps") is not None
         ]
-        roe: Optional[float] = None
+        roe: float | None = None
         try:
             fr_resp = (
                 supabase.table("financial_ratios")
@@ -1002,11 +1002,11 @@ class ValuationRepository:
                 roe = round(float(fr_row["roe"]), 8)
         except Exception as exc:
             logger.warning("get_ddm_dependency_values: ROE fetch failed: %s", exc)
-        retention: Optional[float] = None
+        retention: float | None = None
         dm = await self.get_dividend_metrics_latest(company_id)
         if dm and dm.get("retention_ratio") is not None:
             retention = round(float(dm["retention_ratio"]), 8)
-        beta: Optional[float] = None
+        beta: float | None = None
         try:
             cs_resp = (
                 supabase.table("company_summary")
@@ -1021,7 +1021,7 @@ class ValuationRepository:
                 beta = round(float(cs_row["beta"]), 6)
         except Exception as exc:
             logger.warning("get_ddm_dependency_values: beta fetch failed: %s", exc)
-        params_hash: Optional[str] = None
+        params_hash: str | None = None
         try:
             md_resp = (
                 supabase.table("valuation_method_defaults")
@@ -1041,7 +1041,7 @@ class ValuationRepository:
             "params_version":  params_hash,
         }
 
-    async def get_rule1_dependency_values(self, company_id: int) -> Dict[str, Any]:
+    async def get_rule1_dependency_values(self, company_id: int) -> dict[str, Any]:
         ratios_series: list = []
         try:
             r = (
@@ -1116,7 +1116,7 @@ class ValuationRepository:
                 }
         except Exception as exc:
             logger.warning("get_rule1_dependency_values: CF latest failed: %s", exc)
-        beta: Optional[float] = None
+        beta: float | None = None
         try:
             cs = (
                 supabase.table("company_summary")
@@ -1131,7 +1131,7 @@ class ValuationRepository:
                 beta = _round6(cs_row["beta"])
         except Exception as exc:
             logger.warning("get_rule1_dependency_values: beta failed: %s", exc)
-        params_hash: Optional[str] = None
+        params_hash: str | None = None
         try:
             md = (
                 supabase.table("valuation_method_defaults")
@@ -1152,7 +1152,7 @@ class ValuationRepository:
             "params_version":     params_hash,
         }
 
-    async def get_dcf_dependency_values(self, company_id: int) -> Dict[str, Any]:
+    async def get_dcf_dependency_values(self, company_id: int) -> dict[str, Any]:
         cf_snap: dict = {}
         try:
             cf = await self.get_cash_flow_latest(company_id)
@@ -1175,8 +1175,8 @@ class ValuationRepository:
                 }
         except Exception as exc:
             logger.warning("get_dcf_dependency_values: BS latest failed: %s", exc)
-        shares: Optional[float] = None
-        shares_source: Optional[str] = None
+        shares: float | None = None
+        shares_source: str | None = None
         try:
             rows = await self.get_shares_history(company_id)
             if rows:
@@ -1196,7 +1196,7 @@ class ValuationRepository:
                         shares_source = "company_summary"
             except Exception as exc:
                 logger.warning("get_dcf_dependency_values: shares summary failed: %s", exc)
-        params_hash: Optional[str] = None
+        params_hash: str | None = None
         try:
             md = (
                 supabase.table("valuation_method_defaults")
@@ -1215,7 +1215,7 @@ class ValuationRepository:
             "params_version":   params_hash,
         }
 
-    async def get_oe_dependency_values(self, company_id: int) -> Dict[str, Any]:
+    async def get_oe_dependency_values(self, company_id: int) -> dict[str, Any]:
         cf_snap: dict = {}
         try:
             cf = await self.get_cash_flow_oe_inputs(company_id)
@@ -1252,8 +1252,8 @@ class ValuationRepository:
                 }
         except Exception as exc:
             logger.warning("get_oe_dependency_values: BS latest failed: %s", exc)
-        shares: Optional[float] = None
-        shares_source: Optional[str] = None
+        shares: float | None = None
+        shares_source: str | None = None
         try:
             rows = await self.get_shares_history(company_id)
             if rows:
@@ -1273,7 +1273,7 @@ class ValuationRepository:
                         shares_source = "company_summary"
             except Exception as exc:
                 logger.warning("get_oe_dependency_values: shares summary failed: %s", exc)
-        params_hash: Optional[str] = None
+        params_hash: str | None = None
         try:
             md = (
                 supabase.table("valuation_method_defaults")
@@ -1293,7 +1293,7 @@ class ValuationRepository:
             "params_version":     params_hash,
         }
 
-    async def get_ri_dependency_values(self, company_id: int) -> Dict[str, Any]:
+    async def get_ri_dependency_values(self, company_id: int) -> dict[str, Any]:
         bs_snap: dict = {}
         try:
             bs = await self.get_balance_sheet_latest(company_id)
@@ -1348,7 +1348,7 @@ class ValuationRepository:
             ]
         except Exception as exc:
             logger.warning("get_ri_dependency_values: EPS series failed: %s", exc)
-        params_hash: Optional[str] = None
+        params_hash: str | None = None
         try:
             md = (
                 supabase.table("valuation_method_defaults")
@@ -1369,7 +1369,7 @@ class ValuationRepository:
 
     # ── Company summary ────────────────────────────────────────────────────────
 
-    async def get_company_summary_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_company_summary_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("company_summary")
@@ -1386,7 +1386,7 @@ class ValuationRepository:
 
     # ── Persistence ────────────────────────────────────────────────────────────
 
-    async def insert_valuation_run(self, company_id: int, run: Dict[str, Any], method: str = "rule1") -> None:
+    async def insert_valuation_run(self, company_id: int, run: dict[str, Any], method: str = "rule1") -> None:
         if method not in ALLOWED_METHODS:
             logger.warning("insert_valuation_run received invalid method=%s; defaulting to rule1", method)
             method = "rule1"
@@ -1406,7 +1406,7 @@ class ValuationRepository:
             logger.error("insert_valuation_run failed (%s): %s", method, e)
             raise
 
-    async def upsert_intrinsic_value_analysis(self, company_id: int, payload: Dict[str, Any]) -> None:
+    async def upsert_intrinsic_value_analysis(self, company_id: int, payload: dict[str, Any]) -> None:
         try:
             data = {
                 "company_id":   company_id,
@@ -1422,13 +1422,13 @@ class ValuationRepository:
             logger.error("upsert_intrinsic_value_analysis failed: %s", e)
             raise
 
-    async def insert_dcf_valuation(self, payload: Dict[str, Any]) -> None:
+    async def insert_dcf_valuation(self, payload: dict[str, Any]) -> None:
         try:
             supabase.table("dcf_valuations").insert(payload).execute()
         except Exception as e:
             logger.error("insert_dcf_valuation failed: %s", e)
 
-    async def insert_ddm_valuation(self, payload: Dict[str, Any]) -> None:
+    async def insert_ddm_valuation(self, payload: dict[str, Any]) -> None:
         try:
             supabase.table("ddm_valuations").insert(payload).execute()
         except Exception as e:
@@ -1436,7 +1436,7 @@ class ValuationRepository:
 
     # ── Cached value read ──────────────────────────────────────────────────────
 
-    async def get_cached_intrinsic_value(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_cached_intrinsic_value(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("intrinsic_value_analysis")
@@ -1455,7 +1455,7 @@ class ValuationRepository:
 
     # ── EPS, growth, histories (Rule #1) ──────────────────────────────────────
 
-    async def get_trailing_eps(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_trailing_eps(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("company_summary")
@@ -1470,7 +1470,7 @@ class ValuationRepository:
             logger.error("get_trailing_eps failed: %s", e)
             return None
 
-    async def compute_ttm_eps_fallback(self, company_id: int) -> Optional[float]:
+    async def compute_ttm_eps_fallback(self, company_id: int) -> float | None:
         try:
             is_ = (
                 supabase.table("income_statements")
@@ -1499,7 +1499,7 @@ class ValuationRepository:
             logger.error("compute_ttm_eps_fallback failed: %s", e)
             return None
 
-    async def get_eps_forecast_growth(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_eps_forecast_growth(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("earnings_forecast")
@@ -1514,7 +1514,7 @@ class ValuationRepository:
             logger.error("get_eps_forecast_growth failed: %s", e)
             return None
 
-    async def get_eps_history(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_eps_history(self, company_id: int) -> list[dict[str, Any]]:
         rows = await self._get_eps_components_from_income_statements(company_id)
         eps_rows = []
         for r in rows:
@@ -1530,7 +1530,7 @@ class ValuationRepository:
             eps_rows.append({"fiscal_year": r.get("fiscal_year"), "eps": eps})
         return eps_rows
 
-    async def _get_eps_components_from_income_statements(self, company_id: int) -> List[Dict[str, Any]]:
+    async def _get_eps_components_from_income_statements(self, company_id: int) -> list[dict[str, Any]]:
         resp = (
             supabase.table("income_statements")
             .select("fiscal_year, net_income, shares_outstanding_diluted")
@@ -1542,7 +1542,7 @@ class ValuationRepository:
         )
         return resp.data or []
 
-    async def get_revenue_history(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_revenue_history(self, company_id: int) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1559,7 +1559,7 @@ class ValuationRepository:
             logger.error("get_revenue_history failed: %s", e)
             return []
 
-    async def get_industry_multiples(self, sector: Optional[str], industry: Optional[str]) -> Optional[Dict[str, Any]]:
+    async def get_industry_multiples(self, sector: str | None, industry: str | None) -> dict[str, Any] | None:
         if not sector or not industry:
             return None
         try:
@@ -1591,7 +1591,7 @@ class ValuationRepository:
             logger.error("get_recent_split_count_after failed: %s", e)
             return 0
 
-    async def get_next_earnings_date(self, company_id: int) -> Optional[date]:
+    async def get_next_earnings_date(self, company_id: int) -> date | None:
         try:
             resp = (
                 supabase.table("companies")
@@ -1608,7 +1608,7 @@ class ValuationRepository:
 
     # ── Rule #1 suitability helpers ────────────────────────────────────────────
 
-    async def get_net_income_history(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_net_income_history(self, company_id: int) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1625,15 +1625,15 @@ class ValuationRepository:
             logger.error("get_net_income_history failed: %s", e)
             return []
 
-    async def get_eps_yearly_series(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_eps_yearly_series(self, company_id: int) -> list[dict[str, Any]]:
         return await self.get_eps_history(company_id)
 
-    async def get_revenue_yearly_series(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_revenue_yearly_series(self, company_id: int) -> list[dict[str, Any]]:
         return await self.get_revenue_history(company_id)
 
     # ── Statement reads ────────────────────────────────────────────────────────
 
-    async def get_balance_sheet_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_balance_sheet_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("balance_sheets")
@@ -1653,7 +1653,7 @@ class ValuationRepository:
             logger.error("get_balance_sheet_latest failed: %s", e)
             return None
 
-    async def get_income_statement_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_income_statement_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1675,7 +1675,7 @@ class ValuationRepository:
             logger.error("get_income_statement_latest failed: %s", e)
             return None
 
-    async def get_income_statements_annual(self, company_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+    async def get_income_statements_annual(self, company_id: int, limit: int = 5) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1696,7 +1696,7 @@ class ValuationRepository:
             logger.error("get_income_statements_annual failed: %s", e)
             return []
 
-    async def get_cash_flow_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_cash_flow_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("cash_flow_statements")
@@ -1718,7 +1718,7 @@ class ValuationRepository:
 
     # ── Derived metrics ────────────────────────────────────────────────────────
 
-    async def get_derived_metrics_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_derived_metrics_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("financial_ratios")
@@ -1750,7 +1750,7 @@ class ValuationRepository:
             logger.error("get_derived_metrics_latest failed: %s", e)
             return None
 
-    async def get_roic_history(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_roic_history(self, company_id: int) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("financial_ratios")
@@ -1765,7 +1765,7 @@ class ValuationRepository:
             logger.error("get_roic_history failed: %s", e)
             return []
 
-    async def get_shares_history(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_shares_history(self, company_id: int) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("income_statements")
@@ -1783,7 +1783,7 @@ class ValuationRepository:
 
     # ── DCF suitability helpers ────────────────────────────────────────────────
 
-    async def get_fcf_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
+    async def get_fcf_history(self, company_id: int, years: int = 5) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("cash_flow_statements")
@@ -1794,7 +1794,7 @@ class ValuationRepository:
                 .execute()
             )
             rows = resp.data or []
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for r in rows:
                 y = r.get("fiscal_year")
                 if y is None:
@@ -1809,7 +1809,7 @@ class ValuationRepository:
             logger.error("get_fcf_history failed: %s", e)
             return []
 
-    async def get_capex_and_revenue_history(self, company_id: int, years: int = 5) -> List[Dict[str, Any]]:
+    async def get_capex_and_revenue_history(self, company_id: int, years: int = 5) -> list[dict[str, Any]]:
         try:
             cf = (
                 supabase.table("cash_flow_statements")
@@ -1827,12 +1827,12 @@ class ValuationRepository:
                 .order("fiscal_year", desc=False)
                 .execute()
             )
-            capex_by_year: Dict[int, Optional[float]] = {}
+            capex_by_year: dict[int, float | None] = {}
             for r in (cf.data or []):
                 y = r.get("fiscal_year")
                 if y is not None:
                     capex_by_year[int(y)] = _safe_float_repo(r.get("capital_expenditures"))
-            rev_by_year: Dict[int, Optional[float]] = {}
+            rev_by_year: dict[int, float | None] = {}
             for r in (is_.data or []):
                 y = r.get("fiscal_year")
                 if y is not None:
@@ -1846,7 +1846,7 @@ class ValuationRepository:
 
     # ── DDM: price, dividends, beta, growth ───────────────────────────────────
 
-    async def get_current_market_price(self, company_id: int) -> Optional[float]:
+    async def get_current_market_price(self, company_id: int) -> float | None:
         try:
             resp = (
                 supabase.table("current_market_data")
@@ -1861,7 +1861,7 @@ class ValuationRepository:
             logger.error("get_current_market_price failed: %s", e)
             return None
 
-    async def get_beta_latest(self, company_id: int) -> Optional[float]:
+    async def get_beta_latest(self, company_id: int) -> float | None:
         try:
             resp = (
                 supabase.table("company_summary")
@@ -1877,7 +1877,7 @@ class ValuationRepository:
             logger.error("get_beta_latest failed: %s", e)
             return None
 
-    async def get_dividend_history(self, company_id: int, limit: int = 600) -> List[Dict[str, Any]]:
+    async def get_dividend_history(self, company_id: int, limit: int = 600) -> list[dict[str, Any]]:
         try:
             resp = (
                 supabase.table("dividend_history")
@@ -1892,7 +1892,7 @@ class ValuationRepository:
             logger.error("get_dividend_history failed: %s", e)
             return []
 
-    async def get_dividend_ttm_dps(self, company_id: int) -> Optional[float]:
+    async def get_dividend_ttm_dps(self, company_id: int) -> float | None:
         rows = await self.get_dividend_history(company_id, limit=300)
         if not rows:
             return None
@@ -1912,9 +1912,9 @@ class ValuationRepository:
                     continue
         return float(total) if hit and total > 0 else None
 
-    async def get_dividend_yearly_dps(self, company_id: int, years: int = 10) -> List[Dict[str, Any]]:
+    async def get_dividend_yearly_dps(self, company_id: int, years: int = 10) -> list[dict[str, Any]]:
         rows = await self.get_dividend_history(company_id, limit=800)
-        per_year: Dict[int, float] = {}
+        per_year: dict[int, float] = {}
         for r in rows:
             exd = _normalize_date(r.get("ex_dividend_date"))
             amt = r.get("dividend_amount")
@@ -1930,7 +1930,7 @@ class ValuationRepository:
         last = ys[-years:]
         return [{"year": y, "dps": per_year.get(y)} for y in last]
 
-    async def get_dividend_metrics_latest(self, company_id: int) -> Optional[Dict[str, Any]]:
+    async def get_dividend_metrics_latest(self, company_id: int) -> dict[str, Any] | None:
         try:
             resp = (
                 supabase.table("dividend_metrics")
@@ -1951,7 +1951,7 @@ class ValuationRepository:
             logger.error("get_dividend_metrics_latest failed: %s", e)
             return None
 
-    async def get_dividend_cagr(self, company_id: int, years: int = 10) -> Optional[float]:
+    async def get_dividend_cagr(self, company_id: int, years: int = 10) -> float | None:
         series = await self.get_dividend_yearly_dps(company_id, years=years)
         if len(series) < 6:
             return None
@@ -1976,7 +1976,7 @@ class ValuationRepository:
         except Exception:
             return None
 
-    async def get_sustainable_dividend_growth(self, company_id: int) -> Optional[float]:
+    async def get_sustainable_dividend_growth(self, company_id: int) -> float | None:
         try:
             fr = (
                 supabase.table("financial_ratios")
@@ -2002,7 +2002,7 @@ class ValuationRepository:
 
     # ── Valuation history ──────────────────────────────────────────────────────
 
-    async def get_rule1_history(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_rule1_history(self, symbol: str, limit: int = 50) -> list[dict[str, Any]]:
         try:
             ctx = await self.get_company_context(symbol)
             if not ctx:
@@ -2038,7 +2038,7 @@ class ValuationRepository:
             logger.error("get_rule1_history failed for %s: %s", symbol, e)
             return []
 
-    async def get_ddm_history(self, symbol: str, method: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_ddm_history(self, symbol: str, method: str, limit: int = 50) -> list[dict[str, Any]]:
         try:
             ctx = await self.get_company_context(symbol)
             if not ctx:
@@ -2073,7 +2073,7 @@ class ValuationRepository:
             logger.error("get_ddm_history failed for %s: %s", symbol, e)
             return []
 
-    async def get_dcf_history(self, symbol: str, method: str = "dcf", limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_dcf_history(self, symbol: str, method: str = "dcf", limit: int = 50) -> list[dict[str, Any]]:
         if method not in ALLOWED_METHODS:
             method = "dcf"
         try:
@@ -2113,7 +2113,7 @@ class ValuationRepository:
 
     # ── Earnings events ────────────────────────────────────────────────────────
 
-    async def get_earnings_events(self, company_id: int) -> List[Dict[str, Any]]:
+    async def get_earnings_events(self, company_id: int) -> list[dict[str, Any]]:
         resp = (
             supabase.table("earnings")
             .select("*")

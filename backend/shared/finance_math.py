@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Optional
+from typing import Any
 
 
 def compute_fcf(
-    cash_from_operations: Optional[float],
-    capital_expenditures: Optional[float],
-) -> Optional[float]:
+    cash_from_operations: float | None,
+    capital_expenditures: float | None,
+) -> float | None:
     """
     Compute Free Cash Flow from Operating Cash Flow and Capital Expenditures.
 
@@ -50,9 +50,9 @@ def compute_fcf(
 
 
 def safe_div(
-    numerator: Optional[float],
-    denominator: Optional[float],
-) -> Optional[float]:
+    numerator: float | None,
+    denominator: float | None,
+) -> float | None:
     """Division returning None instead of raising on None or zero denominator."""
     if numerator is None or denominator is None:
         return None
@@ -67,7 +67,7 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def safe_float(x: Any) -> Optional[float]:
+def safe_float(x: Any) -> float | None:
     """
     Safely convert any value to float, returning None on failure or NaN.
 
@@ -131,12 +131,12 @@ def build_fingerprint(dep_values: dict) -> str:
     return hashlib.sha256(raw).hexdigest()[:32]
 
 def compute_wacc(
-    equity_value: Optional[float],
-    debt_value: Optional[float],
-    cost_of_equity: Optional[float],
-    cost_of_debt: Optional[float],
-    tax_rate: Optional[float],
-) -> Optional[float]:
+    equity_value: float | None,
+    debt_value: float | None,
+    cost_of_equity: float | None,
+    cost_of_debt: float | None,
+    tax_rate: float | None,
+) -> float | None:
     """
     Compute Weighted Average Cost of Capital (WACC).
 
@@ -177,11 +177,11 @@ def compute_wacc(
 
 
 def compute_cost_of_equity(
-    risk_free_rate: Optional[float],
-    beta: Optional[float],
-    equity_risk_premium: Optional[float],
-    default_value: Optional[float] = None,
-) -> Optional[float]:
+    risk_free_rate: float | None,
+    beta: float | None,
+    equity_risk_premium: float | None,
+    default_value: float | None = None,
+) -> float | None:
     """
     Compute Cost of Equity using CAPM.
 
@@ -203,9 +203,9 @@ def compute_cost_of_equity(
 
 
 def compute_roic(
-    nopat: Optional[float],
-    invested_capital: Optional[float],
-) -> Optional[float]:
+    nopat: float | None,
+    invested_capital: float | None,
+) -> float | None:
     """
     Compute Return on Invested Capital (ROIC).
 
@@ -223,9 +223,9 @@ def compute_roic(
 
 
 def compute_nopat(
-    ebit: Optional[float],
-    tax_rate: Optional[float],
-) -> Optional[float]:
+    ebit: float | None,
+    tax_rate: float | None,
+) -> float | None:
     """
     Compute Net Operating Profit After Tax (NOPAT).
 

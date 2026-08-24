@@ -20,22 +20,21 @@ AI summary: called AFTER intrinsic, upside, and g (g2 for two-stage) are finalis
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Tuple
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
- 
+from typing import Any
+
+from application.services.ai_service import generate_suitability_summary
+from application.services.ddm_suitability import evaluate_ddm_suitability
+from application.services.recompute_guard import RecomputeGuard
+from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse, DdmValuation
+from domain.models.valuation_rule1 import Applicability, DataQuality, DiagnosticFlag
+from infrastructure.repositories.valuation_repository import ValuationRepository
 from shared.finance_math import (
     build_fingerprint,
     clamp,
     pct_or_frac_to_frac,
     safe_float,
 )
-
-from application.services.ai_service import generate_suitability_summary
-from application.services.recompute_guard import RecomputeGuard
-from application.services.ddm_suitability import evaluate_ddm_suitability
-from domain.models.valuation_ddm import DdmRequestOverrides, DdmResponse, DdmValuation
-from domain.models.valuation_rule1 import Applicability, DataQuality, DiagnosticFlag
-from infrastructure.repositories.valuation_repository import ValuationRepository
+from shared.time_utils import now_iso, now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +53,9 @@ class DdmService:
     async def compute_ddm_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
+        user_id:   int | None,
         variant:   str,
-        overrides: Optional[DdmRequestOverrides] = None,
+        overrides: DdmRequestOverrides | None = None,
         force:     bool = False,
     ) -> DdmResponse:
         overrides  = overrides or DdmRequestOverrides()
@@ -191,7 +190,7 @@ class DdmService:
 
     async def get_cached(
         self, symbol: str, variant: str = "gordon"
-    ) -> Optional[DdmResponse]:
+    ) -> DdmResponse | None:
         """
         Pure cache read — no gate logic, no recompute, no DB writes.
         Returns None if no prior DDM valuation exists for this variant.
@@ -201,14 +200,14 @@ class DdmService:
         if not ctx:
             return None
         company_id = int(ctx["company_id"])
- 
+
         method = "ddm_gordon" if variant == "gordon" else "ddm_two_stage"
         snap   = await self.repo.get_last_output_snapshot(
             company_id=company_id, method=method
         )
         if not snap:
             return None
- 
+
         valuation_payload     = snap.get("valuation")     or {}
         applicability_payload = snap.get("applicability") or {}
         dq_payload            = snap.get("dataQuality")   or {}
@@ -216,7 +215,7 @@ class DdmService:
             (dq_payload.get("freshnessDays") or {}).get("lastComputedAt")
             or snap.get("lastComputedAt")
         )
- 
+
         # Refresh currentPrice and upside at read time
         current_price = await self.repo.get_current_market_price(company_id)
         intrinsic     = safe_float(valuation_payload.get("intrinsicValue"))
@@ -226,7 +225,7 @@ class DdmService:
             upside = (float(intrinsic) - float(current_price)) / float(current_price)
         valuation_payload["currentPrice"]      = current_price
         valuation_payload["upsideDownsidePct"] = upside
- 
+
         if not applicability_payload:
             applicability_payload = {
                 "score": 0, "category": "Caution",
@@ -240,7 +239,7 @@ class DdmService:
             dq_payload = {"freshnessDays": {}, "fallbacksUsed": False, "inputDecisions": {}}
         if isinstance(dq_payload.get("freshnessDays"), dict) and last_computed:
             dq_payload["freshnessDays"]["lastComputedAt"] = last_computed
- 
+
         return DdmResponse(
             valuation=DdmValuation(**valuation_payload),
             applicability=Applicability(**applicability_payload),
@@ -255,8 +254,8 @@ class DdmService:
         symbol:    str,
         company_id: int,
         currency:  str,
-        sector:    Optional[str],
-        user_id:   Optional[int],
+        sector:    str | None,
+        user_id:   int | None,
         method:    str,
         overrides: DdmRequestOverrides,
     ) -> DdmResponse:
@@ -344,8 +343,8 @@ class DdmService:
         self,
         company_id: int,
         overrides:  DdmRequestOverrides,
-        defaults:   Dict[str, Any],
-    ) -> Dict[str, Any]:
+        defaults:   dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Lightweight input resolution for Gate 3 comparison.
 
@@ -414,11 +413,11 @@ class DdmService:
         symbol:                 str,
         company_id:             int,
         currency:               str,
-        sector:                 Optional[str],
-        user_id:                Optional[int],
+        sector:                 str | None,
+        user_id:                int | None,
         method:                 str,
         overrides:              DdmRequestOverrides,
-        dependency_fingerprint: Optional[str] = None,
+        dependency_fingerprint: str | None = None,
     ) -> DdmResponse:
         """
         Full DDM computation path.  Resolves D0/g/k, computes intrinsic, runs
@@ -441,7 +440,7 @@ class DdmService:
 
         current_price = await self.repo.get_current_market_price(company_id)
 
-        input_decisions: Dict[str, Any] = {"d0Source": d0_source}
+        input_decisions: dict[str, Any] = {"d0Source": d0_source}
         flags: list[DiagnosticFlag]     = []
         fallbacks_used                  = False
 
@@ -550,7 +549,7 @@ class DdmService:
         # Stored in input_snapshot["resolved"] so future Gate 3 evaluations
         # have a precise record of what inputs produced this run.
         # Values rounded to 4dp (basis-point precision for rates, sub-cent for D0).
-        resolved_inputs: Dict[str, Any] = {
+        resolved_inputs: dict[str, Any] = {
             "d0":        round(d0, 4),
             "d0_source": d0_source,
             "g_final":   round(g_resolved_for_gate3, 4),
@@ -774,8 +773,8 @@ class DdmService:
         self,
         company_id: int,
         overrides:  DdmRequestOverrides,
-        defaults:   Dict[str, Any],
-    ) -> Tuple[float, Dict[str, Any]]:
+        defaults:   dict[str, Any],
+    ) -> tuple[float, dict[str, Any]]:
         k_floor     = float(defaults.get("kfloor",    0.07))
         k_cap       = float(defaults.get("kcap",      0.14))
         k_default   = float(defaults.get("kdefault",  0.10))
@@ -823,9 +822,9 @@ class DdmService:
         self,
         company_id: int,
         overrides:  DdmRequestOverrides,
-        defaults:   Dict[str, Any],
+        defaults:   dict[str, Any],
         k:          float,
-    ) -> Tuple[float, Dict[str, Any]]:
+    ) -> tuple[float, dict[str, Any]]:
         g_floor   = float(defaults.get("gfloor",    0.02))
         g_cap     = float(defaults.get("gcap",      0.10))
         gap_to_k  = float(defaults.get("ggaptok",   0.01))

@@ -1,6 +1,5 @@
 import logging
-from datetime import date
-from typing import Any, Dict, List
+from typing import Any
 
 from shared.time_utils import now_utc
 
@@ -14,7 +13,7 @@ class PortfolioSnapshotScheduler:
     def interval_hours(self) -> int:
         return 24
 
-    async def plan(self) -> List[Dict[str, Any]]:
+    async def plan(self) -> list[dict[str, Any]]:
         """Plan a single batch job for all active accounts."""
         return [{
             "job_type": "portfolio_snapshot",

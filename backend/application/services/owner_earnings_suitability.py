@@ -1,11 +1,12 @@
 # application/services/owner_earnings_suitability.py
 from __future__ import annotations
+
 import math
 from dataclasses import dataclass
-from shared.time_utils import now_utc
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from domain.models.valuation_rule1 import DiagnosticFlag
+from shared.time_utils import now_utc
 
 
 @dataclass
@@ -14,12 +15,12 @@ class MetricResult:
     name: str
     status: str   # pass | caution | fail | na
     points: int   # 1 only if pass
-    flag: Optional[DiagnosticFlag] = None
+    flag: DiagnosticFlag | None = None
 
 
 # ── Helpers (local copies — do NOT import from other services to preserve isolation) ─
 
-def _safe_float(x: Any) -> Optional[float]:
+def _safe_float(x: Any) -> float | None:
     try:
         if x is None:
             return None
@@ -31,11 +32,11 @@ def _safe_float(x: Any) -> Optional[float]:
     return None
 
 
-def _mean(vals: List[float]) -> Optional[float]:
+def _mean(vals: list[float]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
-def _stdev(vals: List[float]) -> Optional[float]:
+def _stdev(vals: list[float]) -> float | None:
     if len(vals) < 2:
         return None
     m = _mean(vals)
@@ -44,7 +45,7 @@ def _stdev(vals: List[float]) -> Optional[float]:
     return math.sqrt(sum((v - m) ** 2 for v in vals) / (len(vals) - 1))
 
 
-def _cagr(v0: float, vN: float, years: int) -> Optional[float]:
+def _cagr(v0: float, vN: float, years: int) -> float | None:
     if years <= 0 or v0 <= 0 or vN <= 0:
         return None
     try:
@@ -73,8 +74,8 @@ def _category_from_passes(passes: int) -> str:
 async def evaluate_owner_earnings_suitability(
     repo: Any,
     company_id: int,
-    sector: Optional[str],
-) -> Tuple[int, str, List[DiagnosticFlag], Dict[str, Any]]:
+    sector: str | None,
+) -> tuple[int, str, list[DiagnosticFlag], dict[str, Any]]:
     """
     7-metric Owner Earnings suitability scorecard.
 
@@ -89,10 +90,10 @@ async def evaluate_owner_earnings_suitability(
     - Income statement: repo.get_income_statement_latest
     - ROIC history: repo.get_roic_history
     """
-    results: List[MetricResult] = []
-    flags: List[DiagnosticFlag] = []
-    evidence: Dict[str, Any] = {}
-    coverage: Dict[str, Any] = {}
+    results: list[MetricResult] = []
+    flags: list[DiagnosticFlag] = []
+    evidence: dict[str, Any] = {}
+    coverage: dict[str, Any] = {}
 
     def add(m: MetricResult) -> None:
         results.append(m)
@@ -101,28 +102,28 @@ async def evaluate_owner_earnings_suitability(
 
     # ── Fetch data ────────────────────────────────────────────────────────────
 
-    oe_series: List[Dict[str, Any]] = []
+    oe_series: list[dict[str, Any]] = []
     if hasattr(repo, "get_annual_owner_earnings"):
         try:
             oe_series = await repo.get_annual_owner_earnings(company_id, years=5)
         except Exception:
             oe_series = []
 
-    rev_series: List[Dict[str, Any]] = []
+    rev_series: list[dict[str, Any]] = []
     try:
         rev_series = await repo.get_revenue_history(company_id)
     except Exception:
         rev_series = []
 
-    capex_da_series: List[Dict[str, Any]] = []
+    capex_da_series: list[dict[str, Any]] = []
     if hasattr(repo, "get_capex_da_history"):
         try:
             capex_da_series = await repo.get_capex_da_history(company_id, years=5)
         except Exception:
             capex_da_series = []
 
-    bs_latest: Optional[Dict[str, Any]] = None
-    is_latest: Optional[Dict[str, Any]] = None
+    bs_latest: dict[str, Any] | None = None
+    is_latest: dict[str, Any] | None = None
     try:
         bs_latest = await repo.get_balance_sheet_latest(company_id)
     except Exception:
@@ -132,7 +133,7 @@ async def evaluate_owner_earnings_suitability(
     except Exception:
         pass
 
-    roic_rows: List[Dict[str, Any]] = []
+    roic_rows: list[dict[str, Any]] = []
     try:
         roic_rows = await repo.get_roic_history(company_id)
     except Exception:
@@ -238,14 +239,14 @@ async def evaluate_owner_earnings_suitability(
 
     # ── Metric 3: OE Margin (OE / Revenue, 5y avg) ───────────────────────────
 
-    rev_by_year: Dict[int, Optional[float]] = {}
+    rev_by_year: dict[int, float | None] = {}
     for r in rev_series:
         y = r.get("fiscal_year")
         v = _safe_float(r.get("revenue"))
         if isinstance(y, int):
             rev_by_year[y] = v
 
-    oe_margins: List[float] = []
+    oe_margins: list[float] = []
     for r in oe_rows:
         y = r.get("fiscal_year")
         oe_v = _safe_float(r.get("oe"))
@@ -289,8 +290,8 @@ async def evaluate_owner_earnings_suitability(
 
     # ── Metric 4: OE CAGR (5y) ───────────────────────────────────────────────
 
-    oe_cagr: Optional[float] = None
-    years_span_oe: Optional[int] = None
+    oe_cagr: float | None = None
+    years_span_oe: int | None = None
     if len(oe_rows) >= 2:
         v0_oe = _safe_float(oe_rows[0].get("oe"))
         vN_oe = _safe_float(oe_rows[-1].get("oe"))
@@ -339,7 +340,7 @@ async def evaluate_owner_earnings_suitability(
     # High ratio → company needs more capex than it depreciates → high reinvestment burden.
     # Rule-of-thumb: < 1.5× is capital-light (Buffett preferred); > 3× is capital-heavy.
 
-    capex_da_ratios: List[float] = []
+    capex_da_ratios: list[float] = []
     for r in capex_da_series:
         capex_v = _safe_float(r.get("capex"))
         da_v = _safe_float(r.get("da"))
@@ -386,7 +387,7 @@ async def evaluate_owner_earnings_suitability(
     total_debt = _safe_float(bs_latest.get("total_debt")) if bs_latest else None
     cash = _safe_float(bs_latest.get("cash_and_cash_equivalents")) if bs_latest else None
     ebitda = _safe_float(is_latest.get("ebitda")) if is_latest else None
-    nd_to_ebitda: Optional[float] = None
+    nd_to_ebitda: float | None = None
     if total_debt is not None and cash is not None and ebitda is not None and ebitda > 0:
         nd_to_ebitda = (total_debt - cash) / ebitda
 
@@ -509,4 +510,4 @@ async def evaluate_owner_earnings_suitability(
         recommendation="Use suitability diagnostics to set appropriate conservatism in OE assumptions.",
     ))
 
-    return score_0_100, category, flags, evidence   
+    return score_0_100, category, flags, evidence

@@ -31,38 +31,31 @@ import logging
 import os
 import signal
 import sys
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, Optional
+from datetime import date
+from typing import Any
 
 # v3 infrastructure
-from application.jobs.job_engine import JobEngine, classify_failure
+from application.jobs.job_engine import JobEngine
 from application.jobs.portfolio_snapshot_job import handle_portfolio_snapshot
 from application.jobs.price_ingestion_job import handle_price_ingestion
+from application.schedulers.aggregation_scheduler import AggregationScheduler
+from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
+from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
 from application.schedulers.planner import SchedulerPlanner
-from infrastructure.repositories.scheduler_repository import SchedulerRepository
+from application.schedulers.portfolio_snapshot_scheduler import PortfolioSnapshotScheduler
+from application.schedulers.price_ingestion_scheduler import PriceIngestionScheduler
 
 # v2 scheduler classes (used for plan() + data logic)
 from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
-from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
-from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
-from application.schedulers.aggregation_scheduler import AggregationScheduler
-from application.schedulers.portfolio_snapshot_scheduler import PortfolioSnapshotScheduler
-from application.schedulers.price_ingestion_scheduler import PriceIngestionScheduler
 from application.schedulers.valuation_computation_scheduler import ValuationComputationScheduler
-
-# Event projection handler
-from services.event_projection_handler import EventProjectionHandler
-
-# Providers & Repos
-from providers.defeat_beta_provider import DefeatBetaProvider
-from providers.yfinance_provider import YFinanceProvider
-from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from infrastructure.repositories.valuation_repository import ValuationRepository
-from application.services.recompute_guard import RecomputeGuard
-from application.services.valuation_service import ValuationService
 
 # Config
 from config import settings
+from infrastructure.repositories.scheduler_repository import SchedulerRepository
+
+# Providers & Repos
+# Event projection handler
+from services.event_projection_handler import EventProjectionHandler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,7 +89,7 @@ class GracefulShutdown:
 # Job Handlers (the actual data-fetching work)
 # ============================================================================
 
-async def handle_company_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_company_refresh(job: dict[str, Any]) -> dict[str, Any]:
     """
     Handler for 'company_refresh' jobs.
     Runs all scopes in the payload's scopes list.
@@ -111,7 +104,7 @@ async def handle_company_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
     return results
 
 
-async def _handle_company_refresh_market_data(job: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_company_refresh_market_data(job: dict[str, Any]) -> dict[str, Any]:
     """Market data refresh for a single company (price, splits, forecasts, ratios)."""
     payload = job.get("payload", {})
     company_id = payload.get("company_id")
@@ -132,7 +125,7 @@ async def _handle_company_refresh_market_data(job: Dict[str, Any]) -> Dict[str, 
     return detail
 
 
-async def _handle_company_refresh_financials(job: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_company_refresh_financials(job: dict[str, Any]) -> dict[str, Any]:
     """Financial data refresh for a single company (IS/BS/CF, derived metrics)."""
     payload = job.get("payload", {})
     company_id = payload.get("company_id")
@@ -161,7 +154,7 @@ async def _handle_company_refresh_financials(job: Dict[str, Any]) -> Dict[str, A
         raise Exception(str(e)) from e
 
 
-async def handle_investor_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_investor_refresh(job: dict[str, Any]) -> dict[str, Any]:
     """Handler for 'investor_refresh' jobs — refresh a single super investor's portfolio."""
     payload = job.get("payload", {})
     cik = payload.get("cik")
@@ -176,7 +169,7 @@ async def handle_investor_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
     return {"cik": cik, "status": "ok" if result else "skipped"}
 
 
-async def handle_aggregation_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_aggregation_refresh(job: dict[str, Any]) -> dict[str, Any]:
     """Handler for 'aggregation_refresh' jobs — compute sector/industry percentile stats."""
     payload = job.get("payload", {})
     group_type = payload.get("group_type", "sector")
@@ -190,7 +183,7 @@ async def handle_aggregation_refresh(job: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-async def handle_valuation_computation(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_valuation_computation(job: dict[str, Any]) -> dict[str, Any]:
     """Handler for 'valuation_computation' jobs — pre-compute all valuation methods for a symbol."""
     payload = job.get("payload", {})
     symbol = payload.get("symbol")

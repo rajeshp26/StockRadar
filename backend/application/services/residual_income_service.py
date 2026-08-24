@@ -21,20 +21,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
-import logging
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional, Tuple
 
-from shared.finance_math import (
-    build_fingerprint,
-    clamp,
-    pct_or_frac_to_frac,
-    safe_float,
-)
+import logging
+from typing import Any
 
 from application.services.ai_service import generate_suitability_summary
-from application.services.residual_income_suitability import evaluate_residual_income_suitability
 from application.services.recompute_guard import RecomputeGuard
+from application.services.residual_income_suitability import evaluate_residual_income_suitability
 from domain.models.valuation_residual_income import (
     ResidualIncomeRequestOverrides,
     ResidualIncomeResponse,
@@ -42,6 +35,13 @@ from domain.models.valuation_residual_income import (
 )
 from domain.models.valuation_rule1 import Applicability, DataQuality, DiagnosticFlag
 from infrastructure.repositories.valuation_repository import ValuationRepository
+from shared.finance_math import (
+    build_fingerprint,
+    clamp,
+    pct_or_frac_to_frac,
+    safe_float,
+)
+from shared.time_utils import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,8 @@ class ResidualIncomeService:
     async def compute_residual_income_if_stale(
         self,
         symbol:    str,
-        user_id:   Optional[int],
-        overrides: Optional[ResidualIncomeRequestOverrides] = None,
+        user_id:   int | None,
+        overrides: ResidualIncomeRequestOverrides | None = None,
         force:     bool = False,
     ) -> ResidualIncomeResponse:
         overrides  = overrides or ResidualIncomeRequestOverrides()
@@ -171,7 +171,7 @@ class ResidualIncomeService:
 
     # ── Pure cache read ────────────────────────────────────────────────────────
 
-    async def get_cached(self, symbol: str) -> Optional[ResidualIncomeResponse]:
+    async def get_cached(self, symbol: str) -> ResidualIncomeResponse | None:
         """
         Pure cache read — no gate logic, no recompute, no DB writes.
         Returns None if no prior Residual Income valuation exists.
@@ -232,8 +232,8 @@ class ResidualIncomeService:
         symbol:     str,
         company_id: int,
         currency:   str,
-        sector:     Optional[str],
-        user_id:    Optional[int],
+        sector:     str | None,
+        user_id:    int | None,
         method:     str,
         overrides:  ResidualIncomeRequestOverrides,
     ) -> ResidualIncomeResponse:
@@ -302,14 +302,14 @@ class ResidualIncomeService:
         self,
         company_id: int,
         overrides:  ResidualIncomeRequestOverrides,
-        defaults:   Dict[str, Any],
-    ) -> Dict[str, Any]:
+        defaults:   dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Lightweight input resolution for Gate 3 comparison.
         Returns the same field structure as resolved_inputs in _compute_and_persist
         so Gate 3 comparisons are meaningful.
         """
-        shares: Optional[float] = None
+        shares: float | None = None
         try:
             rows = await self.repo.get_shares_history(company_id)
             if rows:
@@ -319,7 +319,7 @@ class ResidualIncomeService:
                     shares = float(sh)
                     logger.debug(
                         "[RI][%s] Gate3 shares=%.0f from %s",
-                        symbol, shares, latest.get("_source", "unknown"),
+                        company_id, shares, latest.get("_source", "unknown"),
                     )
         except Exception:
             pass
@@ -336,8 +336,8 @@ class ResidualIncomeService:
             except Exception:
                 pass
 
-        bv_per_share: Optional[float] = None
-        eps0:         Optional[float] = None
+        bv_per_share: float | None = None
+        eps0:         float | None = None
         try:
             bs_row = await self.repo.get_balance_sheet_latest(company_id)
             equity = safe_float(bs_row.get("shareholders_equity")) if bs_row else None
@@ -358,7 +358,7 @@ class ResidualIncomeService:
         k_e, k_evidence  = await self._resolve_cost_of_equity(company_id, overrides, defaults)
         g_ri, g_evidence = await self._resolve_ri_growth(company_id, overrides, defaults, k_e)
 
-        tg_used: Optional[float] = None
+        tg_used: float | None = None
         if overrides.terminalGrowthRate is not None:
             tg_used = pct_or_frac_to_frac(float(overrides.terminalGrowthRate))
         else:
@@ -390,15 +390,15 @@ class ResidualIncomeService:
         symbol:                 str,
         company_id:             int,
         currency:               str,
-        sector:                 Optional[str],
-        user_id:                Optional[int],
+        sector:                 str | None,
+        user_id:                int | None,
         overrides:              ResidualIncomeRequestOverrides,
-        dependency_fingerprint: Optional[str] = None,
+        dependency_fingerprint: str | None = None,
     ) -> ResidualIncomeResponse:
 
         defaults = await self.repo.get_method_params(company_id, method="residual_income")
-        flags: List[DiagnosticFlag] = []
-        input_decisions: Dict[str, Any] = {"ri": {}}
+        flags: list[DiagnosticFlag] = []
+        input_decisions: dict[str, Any] = {"ri": {}}
         fallbacks_used = False
 
         current_price = await self.repo.get_current_market_price(company_id)
@@ -409,7 +409,7 @@ class ResidualIncomeService:
         bs_row         = await self.repo.get_balance_sheet_latest(company_id)
         shares_history = await self.repo.get_shares_history(company_id)
 
-        shares: Optional[float] = None
+        shares: float | None = None
 
         if shares_history:
             latest = shares_history[-1]
@@ -474,7 +474,7 @@ class ResidualIncomeService:
 
             # Bug 1 fix: early-abort path also has a fully defined resolved_inputs
             # so insert_valuation_run always receives a complete audit record.
-            abort_resolved: Dict[str, Any] = {
+            abort_resolved: dict[str, Any] = {
                 "bv_per_share":     None,
                 "eps0":             None,
                 "k_e_final":        k_e_default,
@@ -612,19 +612,19 @@ class ResidualIncomeService:
 
         # ── Base values ────────────────────────────────────────────────────────
 
-        bv_per_share: Optional[float] = None
+        bv_per_share: float | None = None
         if equity is not None and shares is not None and float(shares) > 0:
             bv_per_share = float(equity) / float(shares)
 
-        eps0: Optional[float] = None
+        eps0: float | None = None
         if net_income is not None and shares is not None and float(shares) > 0:
             eps0 = float(net_income) / float(shares)
 
-        roe0: Optional[float] = None
+        roe0: float | None = None
         if net_income is not None and equity is not None and float(equity) > 0:
             roe0 = float(net_income) / float(equity)
 
-        ri0_per_share: Optional[float] = None
+        ri0_per_share: float | None = None
         if eps0 is not None and bv_per_share is not None:
             ri0_per_share = eps0 - k_e * bv_per_share
         elif roe0 is not None and bv_per_share is not None:
@@ -662,8 +662,8 @@ class ResidualIncomeService:
 
         # ── Terminal growth rate ───────────────────────────────────────────────
 
-        tg_used: Optional[float] = None
-        tg_raw:  Optional[float] = None
+        tg_used: float | None = None
+        tg_raw:  float | None = None
 
         if overrides.terminalGrowthRate is not None:
             tg_raw    = float(overrides.terminalGrowthRate)
@@ -688,7 +688,7 @@ class ResidualIncomeService:
         # Field names match _RI_NUMERIC_THRESHOLDS in recompute_guard.py and
         # the return value of resolve_current_inputs() in this service, so
         # Gate 3 comparisons are meaningful.
-        resolved_inputs: Dict[str, Any] = {
+        resolved_inputs: dict[str, Any] = {
             "bv_per_share":     round(bv_per_share, 4) if bv_per_share is not None else None,
             "eps0":             round(eps0, 4)          if eps0         is not None else None,
             "k_e_final":        round(float(k_e), 4),
@@ -702,7 +702,7 @@ class ResidualIncomeService:
 
         # ── Forecast RI per share ──────────────────────────────────────────────
 
-        forecast_ri: List[float] = []
+        forecast_ri: list[float] = []
         if ri0_per_share is not None:
             forecast_ri = [
                 float(ri0_per_share) * ((1.0 + g_ri) ** t)
@@ -713,8 +713,8 @@ class ResidualIncomeService:
 
         # ── Discount RI stream at k_e ──────────────────────────────────────────
 
-        pv_ri: List[float] = []
-        discount_factors: List[float] = []
+        pv_ri: list[float] = []
+        discount_factors: list[float] = []
         total_pv_ri = 0.0
 
         if k_e > 0:
@@ -730,9 +730,9 @@ class ResidualIncomeService:
 
         # ── Terminal RI value ──────────────────────────────────────────────────
 
-        terminal_ri_ps: Optional[float] = None
-        tv_ri:          Optional[float] = None
-        pv_tv_ri:       Optional[float] = None
+        terminal_ri_ps: float | None = None
+        tv_ri:          float | None = None
+        pv_tv_ri:       float | None = None
 
         if k_e > 0 and tg_used is not None:
             if tg_used >= k_e:
@@ -762,7 +762,7 @@ class ResidualIncomeService:
 
         # ── Intrinsic value per share ──────────────────────────────────────────
 
-        intrinsic_ps: Optional[float] = None
+        intrinsic_ps: float | None = None
         if bv_per_share is not None:
             intrinsic_ps = (
                 float(bv_per_share)
@@ -772,7 +772,7 @@ class ResidualIncomeService:
 
         # ── Upside (computed after intrinsic is final) ─────────────────────────
 
-        upside: Optional[float] = None
+        upside: float | None = None
         if current_price is not None and float(current_price) > 0 and intrinsic_ps is not None:
             upside = (intrinsic_ps - float(current_price)) / float(current_price)
 
@@ -841,7 +841,7 @@ class ResidualIncomeService:
         # ── Audit run ──────────────────────────────────────────────────────────
 
         _now_iso = now_iso()
-        output_snapshot: Dict[str, Any] = {
+        output_snapshot: dict[str, Any] = {
             "valuation": valuation.dict(),
             "applicability": {
                 "score":              ri_score,
@@ -895,8 +895,8 @@ class ResidualIncomeService:
         self,
         company_id: int,
         overrides:  ResidualIncomeRequestOverrides,
-        defaults:   Dict[str, Any],
-    ) -> Tuple[float, Dict[str, Any]]:
+        defaults:   dict[str, Any],
+    ) -> tuple[float, dict[str, Any]]:
         k_floor     = float(defaults.get("k_floor",    0.07))
         k_cap       = float(defaults.get("k_cap",      0.14))
         k_default   = float(defaults.get("k_default",  0.10))
@@ -947,9 +947,9 @@ class ResidualIncomeService:
         self,
         company_id: int,
         overrides:  ResidualIncomeRequestOverrides,
-        defaults:   Dict[str, Any],
+        defaults:   dict[str, Any],
         k_e:        float,
-    ) -> Tuple[float, Dict[str, Any]]:
+    ) -> tuple[float, dict[str, Any]]:
         """
         Resolve RI growth rate. Priority:
         1. Override.riGrowthRate
@@ -974,7 +974,7 @@ class ResidualIncomeService:
                 "clamped": g_final != g_raw,
             }
 
-        g_hist: Optional[float] = None
+        g_hist: float | None = None
         try:
             eps_rows = await self.repo.get_eps_yearly_series(company_id)
             eps_pairs = sorted(

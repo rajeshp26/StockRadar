@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from datetime import date
 
-from shared.time_utils import parse_db_timestamp
+
+from typing import Any
 
 import pandas as pd
+
+from shared.time_utils import parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +18,7 @@ logger = logging.getLogger(__name__)
 # renames rows so that _parse_yf_*'s gv() helper can find the values.
 _PER_SHARE_LABELS: set = {"Basic EPS", "Diluted EPS"}
 
-_LABEL_MAP: Dict[str, str] = {
+_LABEL_MAP: dict[str, str] = {
     # Balance Sheet
     "Cash On Hand": "Cash And Cash Equivalents",
     "Retained Earnings (Accumulated Deficit)": "Retained Earnings",
@@ -91,7 +94,7 @@ class StockdexMacrotrendsProvider:
     """
 
     def __init__(self) -> None:
-        self._ticker_cache: Dict[str, Any] = {}
+        self._ticker_cache: dict[str, Any] = {}
         self._cooldown_until: float = 0.0
         self._finviz_cooldown_until: float = 0.0
         logger.info("StockdexMacrotrendsProvider initialized")
@@ -125,7 +128,7 @@ class StockdexMacrotrendsProvider:
     # Upcoming ex-dividend date (Finviz via stockdex)
     # ------------------------------------------------------------------
 
-    def get_upcoming_ex_date(self, symbol: str) -> Optional[date]:
+    def get_upcoming_ex_date(self, symbol: str) -> date | None:
         """Get next ex-dividend date from Finviz via stockdex.
         
         Returns the ex-date string parsed to date, or None if the stock
@@ -205,7 +208,7 @@ class StockdexMacrotrendsProvider:
 
     def _get_raw_dataframe(
         self, period: str, statement: str, symbol: str
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """
         Pull the raw DataFrame from stockdex Macrotrends API.
 
@@ -278,7 +281,7 @@ class StockdexMacrotrendsProvider:
         df = raw_df.copy()
 
         # Step 1: Identify period (date) columns
-        period_cols: Dict[str, pd.Timestamp] = {}
+        period_cols: dict[str, pd.Timestamp] = {}
         for col in df.columns:
             col_str = str(col).strip()
             ts = pd.to_datetime(col_str, errors="coerce")
@@ -296,7 +299,7 @@ class StockdexMacrotrendsProvider:
             return pd.DataFrame()
 
         # Translate labels to names _parse_yf_* expects
-        translated: Dict[str, str] = {}
+        translated: dict[str, str] = {}
         used_labels: set = set()
         for label in labels:
             mapped = _LABEL_MAP.get(label, label)
@@ -309,9 +312,9 @@ class StockdexMacrotrendsProvider:
         # Step 3: Build result DataFrame -- translated labels as index, Timestamps as columns
         all_periods = sorted(period_cols.values())
 
-        data: Dict[str, List[float]] = {}
+        data: dict[str, list[float]] = {}
         for raw_label, output_label in translated.items():
-            vals: List[float] = []
+            vals: list[float] = []
             for orig_col_str, ts in period_cols.items():
                 raw_val = df.loc[raw_label, orig_col_str]
                 num = pd.to_numeric(raw_val, errors="coerce")

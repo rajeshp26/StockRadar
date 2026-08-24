@@ -3,21 +3,24 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from shared.time_utils import now_iso
-from typing import Dict, Set, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from dependencies import get_current_user_dep, get_watchlist_service, get_watchlist_repository, limiter
 from application.services.watchlist_service import WatchlistService
+from database import supabase
+from dependencies import (
+    get_current_user_dep,
+    get_watchlist_repository,
+    get_watchlist_service,
+    limiter,
+)
 from infrastructure.repositories.supabase_repository import (
     SupabaseWatchlistRepository,
 )
-
 from shared.exceptions.base import AppException
-from database import supabase
+from shared.time_utils import now_iso
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,8 +33,8 @@ MAX_NAME_LENGTH          = 50
 # -----------------------------------------------------------------------------
 # SSE in-memory state
 # -----------------------------------------------------------------------------
-user_queues: Dict[str, List[asyncio.Queue]] = defaultdict(list)
-symbol_subscribers: Dict[str, Set[str]] = defaultdict(set)
+user_queues: dict[str, list[asyncio.Queue]] = defaultdict(list)
+symbol_subscribers: dict[str, set[str]] = defaultdict(set)
 
 
 def _safe_put(queue: asyncio.Queue, payload: dict) -> bool:
@@ -184,7 +187,7 @@ async def stream_watchlist_updates(
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=5.0)
                     yield f"data: {json.dumps(data)}\n\n"
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keep-alive\n\n"
         finally:
             try:

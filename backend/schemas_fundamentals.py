@@ -1,66 +1,66 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List, Optional, Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class MetricComponent(BaseModel):
     label: str
-    value: Optional[float] = None
-    highlight: Optional[Literal["positive", "negative", "driver"]] = None
+    value: float | None = None
+    highlight: Literal["positive", "negative", "driver"] | None = None
 
 
 class QuarterDataPoint(BaseModel):
     fiscal_year: int
     fiscal_quarter: int
     label: str
-    value: Optional[float] = None
-    raw_value: Optional[float] = None
+    value: float | None = None
+    raw_value: float | None = None
     """Absolute value of the underlying metric (e.g. revenue in $B for revenue_yoy).
        Populated for growth metrics so the frontend can toggle between YoY% and absolute views."""
-    narrative_label: Optional[str] = None
-    status: Optional[Literal["normal", "not_applicable", "insufficient_data"]] = None
-    components: Optional[List[MetricComponent]] = None
-    ttm_eps: Optional[float] = None
-    quarter_end_price: Optional[float] = None
+    narrative_label: str | None = None
+    status: Literal["normal", "not_applicable", "insufficient_data"] | None = None
+    components: list[MetricComponent] | None = None
+    ttm_eps: float | None = None
+    quarter_end_price: float | None = None
 
 
 class GaugeConfig(BaseModel):
     display_mode: Literal["gauge", "compact_gauge", "slider", "disabled"]
     benchmark: Literal["historical", "sector", "none"]
-    benchmark_value: Optional[float] = None
-    band_low: Optional[float] = None
-    band_high: Optional[float] = None
-    current_value: Optional[float] = None
-    current_quarter_raw: Optional[float] = None
-    min_value: Optional[float] = None
-    max_value: Optional[float] = None
-    avg_value: Optional[float] = None
+    benchmark_value: float | None = None
+    band_low: float | None = None
+    band_high: float | None = None
+    current_value: float | None = None
+    current_quarter_raw: float | None = None
+    min_value: float | None = None
+    max_value: float | None = None
+    avg_value: float | None = None
     positive_count: int = 0
     total_quarters: int = 0
     na_count: int = 0
-    warnings: List[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     # ── Design 4: Sparkline / Percentile / Delta ──
-    sparkline_values: Optional[List[Optional[float]]] = None
+    sparkline_values: list[float | None] | None = None
     """Last 8-12 quarters of this metric's values for mini sparkline chart.
        None entries indicate missing quarters (break the line)."""
-    percentile: Optional[int] = None
+    percentile: int | None = None
     """Percentile rank of current value within all-time history (0-100)."""
-    historical_avg: Optional[float] = None
+    historical_avg: float | None = None
     """Mean of all available historical values for this metric."""
-    vs_avg_delta: Optional[float] = None
+    vs_avg_delta: float | None = None
     """current_value - historical_avg. Positive = above avg (more expensive)."""
-    recent_quarter_label: Optional[str] = None
+    recent_quarter_label: str | None = None
     """Label of the quarter used for 'current' value.
        e.g. 'Q3 2025' when the most recent quarter had negative earnings."""
     # ── Sector benchmark fields (populated when sector stats available) ──
-    sector_p05: Optional[float] = None
+    sector_p05: float | None = None
     """5th percentile of this metric within the company's sector."""
-    sector_p50: Optional[float] = None
+    sector_p50: float | None = None
     """50th percentile (median) of this metric within the company's sector."""
-    sector_p95: Optional[float] = None
+    sector_p95: float | None = None
     """95th percentile of this metric within the company's sector."""
     sector_sample_size: int = 0
     """Number of companies in the sector used to compute the percentiles."""
@@ -70,12 +70,12 @@ class MetricQuarterSeries(BaseModel):
     metric_id: str
     label: str
     unit: str
-    quarters: List[QuarterDataPoint]
-    buy_quarter_index: Optional[int] = None
+    quarters: list[QuarterDataPoint]
+    buy_quarter_index: int | None = None
     trend_direction: Literal["up", "down", "stable"]
-    change_pct: Optional[float] = None
+    change_pct: float | None = None
     change_label: str = "stable"
-    gauge_config: Optional[GaugeConfig] = None
+    gauge_config: GaugeConfig | None = None
 
 
 class SectionStatus(BaseModel):
@@ -90,31 +90,31 @@ class IntrinsicValuation(BaseModel):
 class MetricSection(BaseModel):
     section_id: str
     title: str
-    metrics: List[MetricQuarterSeries]
+    metrics: list[MetricQuarterSeries]
     status: SectionStatus
-    score: Optional[float] = None
-    intrinsic_valuations: Optional[List[IntrinsicValuation]] = None
-    current_price: Optional[float] = None
+    score: float | None = None
+    intrinsic_valuations: list[IntrinsicValuation] | None = None
+    current_price: float | None = None
 
 
 class DataQuality(BaseModel):
-    sources: List[str] = Field(default_factory=lambda: ["financial_ratios", "income_statements", "cash_flow_statements", "earnings"])
-    staleness_days: Optional[int] = None
-    earliest_data_year: Optional[int] = None
-    quarterly_data_count: Optional[int] = None
+    sources: list[str] = Field(default_factory=lambda: ["financial_ratios", "income_statements", "cash_flow_statements", "earnings"])
+    staleness_days: int | None = None
+    earliest_data_year: int | None = None
+    quarterly_data_count: int | None = None
 
 
 class FundamentalsResponse(BaseModel):
     success: bool = True
     symbol: str
-    company_name: Optional[str] = None
+    company_name: str | None = None
     currency: str = "USD"
     has_portfolio_position: bool = False
-    purchase_date: Optional[date] = None
-    purchase_period: Optional[str] = None
-    quarters: List[str] = Field(default_factory=list)
-    buy_quarter_index: Optional[int] = None
-    composite_score: Optional[float] = None
-    sections: List[MetricSection] = Field(default_factory=list)
-    data_quality: Optional[DataQuality] = None
-    error: Optional[str] = None
+    purchase_date: date | None = None
+    purchase_period: str | None = None
+    quarters: list[str] = Field(default_factory=list)
+    buy_quarter_index: int | None = None
+    composite_score: float | None = None
+    sections: list[MetricSection] = Field(default_factory=list)
+    data_quality: DataQuality | None = None
+    error: str | None = None

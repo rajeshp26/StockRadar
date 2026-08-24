@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from infrastructure.repositories.valuation_repository import ValuationRepository
 
@@ -15,7 +15,7 @@ class CompanySnapshotBuilder:
     def __init__(self, repo: ValuationRepository) -> None:
         self._repo = repo
 
-    async def build(self, symbol: str) -> Dict[str, Any]:
+    async def build(self, symbol: str) -> dict[str, Any]:
         import asyncio
 
         ctx = await self._repo.get_company_context(symbol)
@@ -61,11 +61,11 @@ class CompanySnapshotBuilder:
             return e
 
     @staticmethod
-    def format_context(snapshot: Dict[str, Any]) -> str:
+    def format_context(snapshot: dict[str, Any]) -> str:
         if snapshot.get("error"):
             return ""
 
-        lines: List[str] = []
+        lines: list[str] = []
         ctx = snapshot.get("company_context")
         if ctx:
             lines.append(f"Company: {snapshot.get('symbol', '?')}")

@@ -3,12 +3,13 @@
 import logging
 import time as _time
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
 
 from database import supabase
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp, iso_minus, iso_plus
+from shared.time_utils import iso_minus, iso_plus, now_iso, now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -35,21 +36,21 @@ def _is_retryable(err: Exception) -> bool:
 class JobRow:
     id: str
     job_type: str
-    resource_type: Optional[str]
-    resource_id: Optional[str]
+    resource_type: str | None
+    resource_id: str | None
     dedupe_key: str
     priority: int
     status: str
-    payload: Optional[Dict[str, Any]]
-    not_before: Optional[str]
-    available_at: Optional[str]
-    lease_owner: Optional[str]
-    lease_token: Optional[str]
-    leased_until: Optional[str]
+    payload: dict[str, Any] | None
+    not_before: str | None
+    available_at: str | None
+    lease_owner: str | None
+    lease_token: str | None
+    leased_until: str | None
     attempts: int
     max_attempts: int
-    last_error: Optional[str]
-    last_error_at: Optional[str]
+    last_error: str | None
+    last_error_at: str | None
     created_at: str
     updated_at: str
 
@@ -59,11 +60,11 @@ class SchedulerStateRow:
     scheduler_name: str
     enabled: bool = True
     interval_hours: float = 24.0
-    last_planned_at: Optional[str] = None
-    last_status: Optional[str] = None
-    last_error: Optional[str] = None
-    next_due_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    last_planned_at: str | None = None
+    last_status: str | None = None
+    last_error: str | None = None
+    next_due_at: str | None = None
+    updated_at: str | None = None
 
 
 class SchedulerRepository:
@@ -106,12 +107,12 @@ class SchedulerRepository:
         self,
         job_type: str,
         dedupe_key: str,
-        payload: Optional[Dict[str, Any]] = None,
-        resource_type: Optional[str] = None,
-        resource_id: Optional[str] = None,
+        payload: dict[str, Any] | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
         priority: int = 50,
         max_attempts: int = 3,
-        not_before: Optional[str] = None,
+        not_before: str | None = None,
     ) -> bool:
         new_payload = payload or {}
         new_scopes = set(new_payload.get("scopes", []))
@@ -190,14 +191,14 @@ class SchedulerRepository:
         except Exception:
             return False
 
-    def enqueue_job_batch(self, jobs: List[Dict[str, Any]]) -> int:
+    def enqueue_job_batch(self, jobs: list[dict[str, Any]]) -> int:
         count = 0
         for j in jobs:
             if self.enqueue_job(**j):
                 count += 1
         return count
 
-    def claim_job(self, worker_id: str, lease_ttl_minutes: int = 30) -> Optional[Dict[str, Any]]:
+    def claim_job(self, worker_id: str, lease_ttl_minutes: int = 30) -> dict[str, Any] | None:
         now = now_iso()
         leased_until = iso_plus(minutes=lease_ttl_minutes)
         lease_token = str(uuid.uuid4())
@@ -346,7 +347,7 @@ class SchedulerRepository:
             logger.error(f"[FAIL] Failed to fail job {job_id}: {e}")
             return "error"
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
         try:
             result = (
                 supabase.table(self.JOBS_TABLE)
@@ -360,7 +361,7 @@ class SchedulerRepository:
             logger.error(f"[GET_JOB] Failed: {e}")
             return None
 
-    def get_jobs_by_status(self, status: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_jobs_by_status(self, status: str, limit: int = 100) -> list[dict[str, Any]]:
         try:
             result = (
                 supabase.table(self.JOBS_TABLE)
@@ -375,7 +376,7 @@ class SchedulerRepository:
             logger.error(f"[GET_JOBS] Failed: {e}")
             return []
 
-    def get_queue_depth(self) -> Dict[str, int]:
+    def get_queue_depth(self) -> dict[str, int]:
         counts = {"pending": 0, "running": 0, "succeeded": 0, "dead_letter": 0, "cancelled": 0}
         for status in counts:
             try:
@@ -391,7 +392,7 @@ class SchedulerRepository:
                 pass
         return counts
 
-    def get_oldest_pending_age_seconds(self) -> Optional[float]:
+    def get_oldest_pending_age_seconds(self) -> float | None:
         try:
             result = (
                 supabase.table(self.JOBS_TABLE)
@@ -462,8 +463,8 @@ class SchedulerRepository:
         job_id: str,
         attempt: int,
         status: str,
-        error: Optional[str] = None,
-        duration_ms: Optional[int] = None,
+        error: str | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         try:
             supabase.table(self.JOB_ATTEMPTS_TABLE).upsert({
@@ -478,7 +479,7 @@ class SchedulerRepository:
         except Exception as e:
             logger.error(f"[ATTEMPT] Failed to record attempt for job {job_id}: {e}")
 
-    def get_attempts(self, job_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_attempts(self, job_id: str, limit: int = 10) -> list[dict[str, Any]]:
         try:
             result = (
                 supabase.table(self.JOB_ATTEMPTS_TABLE)
@@ -496,7 +497,7 @@ class SchedulerRepository:
     # SCHEDULER STATE
     # ====================================================================
 
-    def get_scheduler_state(self, scheduler_name: str) -> Optional[Dict[str, Any]]:
+    def get_scheduler_state(self, scheduler_name: str) -> dict[str, Any] | None:
         try:
             result = self._db_call(
                 f"get_scheduler_state({scheduler_name})",
@@ -512,7 +513,7 @@ class SchedulerRepository:
         except Exception:
             return None
 
-    def get_all_scheduler_states(self) -> List[Dict[str, Any]]:
+    def get_all_scheduler_states(self) -> list[dict[str, Any]]:
         try:
             result = (
                 supabase.table(self.SCHEDULER_STATE_TABLE)
@@ -524,7 +525,7 @@ class SchedulerRepository:
         except Exception:
             return []
 
-    def upsert_scheduler_state(self, state: Dict[str, Any]) -> None:
+    def upsert_scheduler_state(self, state: dict[str, Any]) -> None:
         state["updated_at"] = now_iso()
         try:
             self._db_call(
@@ -536,7 +537,7 @@ class SchedulerRepository:
         except Exception as e:
             logger.error(f"[STATE] Failed to upsert scheduler state: {e}")
 
-    def update_scheduler_state(self, scheduler_name: str, updates: Dict[str, Any]) -> None:
+    def update_scheduler_state(self, scheduler_name: str, updates: dict[str, Any]) -> None:
         updates["updated_at"] = now_iso()
         try:
             supabase.table(self.SCHEDULER_STATE_TABLE).update(updates).eq(
@@ -554,8 +555,8 @@ class SchedulerRepository:
         scheduler_name: str,
         jobs_enqueued: int = 0,
         status: str = "succeeded",
-        error: Optional[str] = None,
-        duration_ms: Optional[int] = None,
+        error: str | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         try:
             self._db_call(
@@ -572,7 +573,7 @@ class SchedulerRepository:
         except Exception as e:
             logger.error(f"[RUN_HISTORY] Failed to record run: {e}")
 
-    def get_recent_runs(self, scheduler_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_runs(self, scheduler_name: str, limit: int = 10) -> list[dict[str, Any]]:
         try:
             result = (
                 supabase.table(self.SCHEDULER_RUN_HISTORY_TABLE)
@@ -593,8 +594,8 @@ class SchedulerRepository:
     def record_heartbeat(
         self,
         worker_id: str,
-        hostname: Optional[str] = None,
-        pid: Optional[int] = None,
+        hostname: str | None = None,
+        pid: int | None = None,
         active_jobs: int = 0,
     ) -> None:
         try:
@@ -631,7 +632,7 @@ class SchedulerRepository:
             logger.error(f"[SHUTDOWN] Failed to release leases for {worker_id}: {e}")
             return 0
 
-    def get_worker_heartbeats(self, stale_threshold_minutes: int = 2) -> List[Dict[str, Any]]:
+    def get_worker_heartbeats(self, stale_threshold_minutes: int = 2) -> list[dict[str, Any]]:
         cutoff = now_utc() - timedelta(minutes=stale_threshold_minutes)
         try:
             result = (
@@ -703,7 +704,7 @@ class SchedulerRepository:
         lock_type: str,
         owner_id: str,
         ttl_seconds: int = 1800,
-    ) -> Optional[str]:
+    ) -> str | None:
         lease_token = str(uuid.uuid4())
         now = now_utc()
         leased_until = (now + timedelta(seconds=ttl_seconds)).isoformat()
@@ -813,8 +814,8 @@ class SchedulerRepository:
     def record_refresh_request(
         self,
         company_id: int,
-        scopes: List[str],
-        reasons: Optional[List[str]] = None,
+        scopes: list[str],
+        reasons: list[str] | None = None,
         priority: int = 50,
     ) -> None:
         try:
@@ -829,7 +830,7 @@ class SchedulerRepository:
         except Exception as e:
             logger.error(f"[REFRESH_REQ] Failed for company {company_id}: {e}")
 
-    def get_unprocessed_refresh_requests(self, company_id: int) -> List[Dict[str, Any]]:
+    def get_unprocessed_refresh_requests(self, company_id: int) -> list[dict[str, Any]]:
         try:
             result = (
                 supabase.table(self.COMPANY_REFRESH_REQUESTS_TABLE)
@@ -888,7 +889,7 @@ class SchedulerRepository:
             logger.error(f"[JANITOR] Failed to reclaim leases: {e}")
             return 0
 
-    def prune_old_records(self) -> Dict[str, int]:
+    def prune_old_records(self) -> dict[str, int]:
         results = {}
         now = now_utc()
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -89,7 +89,7 @@ def compute_sortino_ratio(
     return _sanity_bounds("sortino_ratio", sortino, -3.0, 10.0)
 
 
-def compute_max_drawdown(values: np.ndarray) -> Tuple[float, float, int, int]:
+def compute_max_drawdown(values: np.ndarray) -> tuple[float, float, int, int]:
     if len(values) < 2:
         return 0.0, 0.0, 0, 0
     running_max = np.maximum.accumulate(values)
@@ -242,7 +242,7 @@ def _parse_snapshot_date(d: Any) -> date:
     raise TypeError(f"Cannot parse snapshot date: {d!r}")
 
 
-def compute_portfolio_twr(snapshots: List[Dict[str, Any]]) -> float:
+def compute_portfolio_twr(snapshots: list[dict[str, Any]]) -> float:
     """
     Time-Weighted Return — measures investment performance independent of
     deposit/withdrawal timing.
@@ -283,7 +283,7 @@ def compute_portfolio_twr(snapshots: List[Dict[str, Any]]) -> float:
     return product - 1.0 if count >= 1 else 0.0
 
 
-def compute_portfolio_mwr(snapshots: List[Dict[str, Any]]) -> float:
+def compute_portfolio_mwr(snapshots: list[dict[str, Any]]) -> float:
     """
     Money-Weighted Return (Modified Dietz) — measures the actual return
     experienced by the investor, including the impact of deposit/withdrawal

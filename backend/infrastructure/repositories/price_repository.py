@@ -1,6 +1,6 @@
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from database import supabase
 from supabase import Client
@@ -12,7 +12,7 @@ class PriceRepository:
     def __init__(self, client: Client = supabase):
         self.client = client
 
-    def get_company_exchanges(self, company_ids: List[int]) -> Dict[int, str]:
+    def get_company_exchanges(self, company_ids: list[int]) -> dict[int, str]:
         if not company_ids:
             return {}
         try:
@@ -31,8 +31,8 @@ class PriceRepository:
             return {}
 
     def get_price_source_preferences(
-        self, company_ids: List[int]
-    ) -> Dict[tuple, str]:
+        self, company_ids: list[int]
+    ) -> dict[tuple, str]:
         if not company_ids:
             return {}
         try:
@@ -42,7 +42,7 @@ class PriceRepository:
                 .in_("company_id", company_ids)
                 .execute()
             )
-            prefs: Dict[tuple, str] = {}
+            prefs: dict[tuple, str] = {}
             for row in result.data or []:
                 prefs[(row["company_id"], row["exchange"])] = row["preferred_source"]
             return prefs
@@ -65,7 +65,7 @@ class PriceRepository:
                     "company_id": company_id,
                     "current_price": price,
                     "source": source,
-                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                    "last_updated": datetime.now(UTC).isoformat(),
                 },
                 on_conflict="company_id",
             ).execute()
@@ -75,7 +75,7 @@ class PriceRepository:
                 company_id, e,
             )
 
-    def get_all_active_holdings(self) -> List[Dict[str, Any]]:
+    def get_all_active_holdings(self) -> list[dict[str, Any]]:
         try:
             result = (
                 self.client.table("portfolio_holdings")
@@ -90,13 +90,13 @@ class PriceRepository:
             logger.error("Failed to fetch active holdings: %s", e)
             return []
 
-    def get_all_active_symbols(self) -> List[Dict[str, Any]]:
+    def get_all_active_symbols(self) -> list[dict[str, Any]]:
         """Returns ALL unique (company_id, symbol, exchange) that any user
         cares about — portfolio holdings AND watchlist items combined.
 
         Deduplicates by company_id so a stock in both is only returned once.
         """
-        seen: Dict[int, Dict[str, Any]] = {}
+        seen: dict[int, dict[str, Any]] = {}
 
         # 1) Portfolio holdings (existing path)
         holdings = self.get_all_active_holdings()
@@ -130,7 +130,7 @@ class PriceRepository:
 
         return list(seen.values())
 
-    def get_holdings_for_accounts(self, account_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_holdings_for_accounts(self, account_ids: list[int]) -> list[dict[str, Any]]:
         if not account_ids:
             return []
         try:

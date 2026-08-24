@@ -1,9 +1,9 @@
 """Alerting infrastructure: Slack webhook with retry and circuit breaker."""
 
-import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 
 import httpx
 
@@ -26,9 +26,9 @@ class SlackAlerter:
     """Sends alerts via Slack webhook. Implements retry with exponential backoff
     and a circuit breaker to avoid flooding a dead webhook."""
 
-    def __init__(self, webhook_url: Optional[str] = None):
+    def __init__(self, webhook_url: str | None = None):
         self.webhook_url = webhook_url or getattr(settings, "SLACK_WEBHOOK_URL", None)
-        self._circuit_open_until: Optional[datetime] = None
+        self._circuit_open_until: datetime | None = None
         self._consecutive_failures = 0
 
     def _circuit_is_open(self) -> bool:
@@ -44,8 +44,8 @@ class SlackAlerter:
         self,
         message: str,
         level: str = AlertLevel.INFO,
-        title: Optional[str] = None,
-        blocks: Optional[List[Dict[str, Any]]] = None,
+        title: str | None = None,
+        blocks: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Send an alert to Slack. Returns True if sent successfully."""
         if not self.webhook_url:
@@ -91,22 +91,22 @@ class SlackAlerter:
             )
         return False
 
-    def alert_critical(self, message: str, title: Optional[str] = None) -> bool:
+    def alert_critical(self, message: str, title: str | None = None) -> bool:
         return self.send_alert(message, level=AlertLevel.CRITICAL, title=title)
 
-    def alert_warning(self, message: str, title: Optional[str] = None) -> bool:
+    def alert_warning(self, message: str, title: str | None = None) -> bool:
         return self.send_alert(message, level=AlertLevel.WARNING, title=title)
 
-    def alert_info(self, message: str, title: Optional[str] = None) -> bool:
+    def alert_info(self, message: str, title: str | None = None) -> bool:
         return self.send_alert(message, level=AlertLevel.INFO, title=title)
 
     def _build_payload(
         self,
         message: str,
         level: str,
-        title: Optional[str] = None,
-        blocks: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
+        title: str | None = None,
+        blocks: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         color_map = {
             AlertLevel.CRITICAL: "danger",
             AlertLevel.WARNING: "warning",

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Super Investors Refresh Scheduler
 Runs every N hours to refresh 13F filings for tracked super investors.
@@ -9,11 +8,11 @@ import asyncio
 import logging
 import uuid
 from datetime import date, timedelta
-from shared.time_utils import now_utc, parse_db_timestamp
-from typing import Dict, Any, Optional
+from typing import Any
 
+from application.services.super_investors_service import SUPER_INVESTORS, SuperInvestorsService
 from config import settings
-from application.services.super_investors_service import SuperInvestorsService, SUPER_INVESTORS
+from shared.time_utils import now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +27,13 @@ class SuperInvestorsRefreshScheduler:
     - Continue on individual errors, alert if ALL fail (potential bug)
     """
 
-    def __init__(self, service: Optional[SuperInvestorsService] = None):
+    def __init__(self, service: SuperInvestorsService | None = None):
         from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 
         self.service = service or SuperInvestorsService()
         self.financial_repo = SupabaseFinancialRepository()
         self.is_running = False
-        self.task: Optional[asyncio.Task] = None
+        self.task: asyncio.Task | None = None
         self.owner_lock_id = f"super_investors:{uuid.uuid4()}"
         self.lock_ttl_seconds = 3600  # 1 hour lock
 
@@ -133,7 +132,7 @@ class SuperInvestorsRefreshScheduler:
     # ========================================================================
     # CORE LOGIC
     # ========================================================================
-    async def _refresh_all_investors(self) -> Dict[str, Any]:
+    async def _refresh_all_investors(self) -> dict[str, Any]:
         """Main refresh logic for all super investors."""
         logger.info("📊 Starting Super Investors refresh cycle")
 
@@ -166,7 +165,7 @@ class SuperInvestorsRefreshScheduler:
         logger.info(f"Cycle complete: {results}")
         return results
 
-    async def _refresh_single_investor(self, cik: str, info: Dict) -> bool:
+    async def _refresh_single_investor(self, cik: str, info: dict) -> bool:
         """
         Refresh single investor's holdings.
 
@@ -201,7 +200,7 @@ class SuperInvestorsRefreshScheduler:
         fetched = await self._fetch_new_filing(cik, info, last_period)
         return fetched
 
-    async def _create_investor_record(self, cik: str, info: Dict) -> None:
+    async def _create_investor_record(self, cik: str, info: dict) -> None:
         """Create new investor record in DB."""
         insert_data = {
             "cik": cik,
@@ -218,7 +217,7 @@ class SuperInvestorsRefreshScheduler:
         logger.info(f"Created investor record: {info['name']}")
 
     async def _fetch_historical_data(
-        self, cik: str, info: Dict, quarters: int
+        self, cik: str, info: dict, quarters: int
     ) -> bool:
         """Fetch historical data (20 quarters on first run)."""
         from edgar import get_filings
@@ -231,7 +230,7 @@ class SuperInvestorsRefreshScheduler:
             all_filings = []
             current_year = now_utc().year
             years_to_fetch = list(range(current_year - 5, current_year + 1))
-            
+
             for year in years_to_fetch:
                 try:
                     filings = get_filings(year=year, form="13F-HR").filter(cik=cik)
@@ -239,7 +238,7 @@ class SuperInvestorsRefreshScheduler:
                         all_filings.extend(list(filings))
                 except Exception:
                     continue
-            
+
             if not all_filings:
                 logger.warning(f"No filings found for {investor_name}")
                 return False
@@ -298,7 +297,7 @@ class SuperInvestorsRefreshScheduler:
             return False
 
     async def _fetch_new_filing(
-        self, cik: str, info: Dict, last_period: Optional[date]
+        self, cik: str, info: dict, last_period: date | None
     ) -> bool:
         """Fetch single new filing (only if newer than last_period)."""
         from edgar import get_filings
@@ -350,7 +349,7 @@ class SuperInvestorsRefreshScheduler:
     async def _save_holdings_to_db(
         self,
         cik: str,
-        info: Dict,
+        info: dict,
         holdings_df,
         period: date,
         filing_date: str,

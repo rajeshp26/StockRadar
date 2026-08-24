@@ -1,6 +1,7 @@
 import asyncio
 from collections import defaultdict
-from typing import Any, Callable, Generic, List, Optional, TypeVar
+from collections.abc import Callable
+from typing import Generic, TypeVar
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -9,9 +10,9 @@ V = TypeVar("V")
 class DataLoader(Generic[K, V]):
     def __init__(
         self,
-        batch_load_fn: Callable[[List[K]], List[Optional[V]]],
+        batch_load_fn: Callable[[list[K]], list[V | None]],
         cache: bool = True,
-        max_batch_size: Optional[int] = None,
+        max_batch_size: int | None = None,
     ):
         self._batch_load_fn = batch_load_fn
         self._cache_enabled = cache
@@ -68,7 +69,7 @@ class DataLoader(Generic[K, V]):
                 if not future.done():
                     future.set_exception(e)
 
-    def clear(self, key: Optional[K] = None) -> None:
+    def clear(self, key: K | None = None) -> None:
         if key is None:
             self._cache.clear()
         elif key in self._cache:

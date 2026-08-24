@@ -1,5 +1,6 @@
 import sys; sys.path.insert(0, '.')
-from datetime import date, datetime
+from datetime import date
+
 from database import supabase
 
 res = supabase.table("portfolio_snapshots").select(

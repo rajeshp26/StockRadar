@@ -14,8 +14,8 @@ All structures are bounded; overhead is O(1) per sample.
 import asyncio
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from typing import Any, Callable, DefaultDict, Deque, Dict, Optional
+from dataclasses import dataclass
+from typing import Any
 
 logger = __import__("logging").getLogger("stockerpro.tracing")
 
@@ -26,7 +26,7 @@ class _RingBuffer:
     """Bounded buffer of float samples with percentile/stat queries."""
 
     def __init__(self, maxlen: int = _MAX_SAMPLES):
-        self._buf: Deque[float] = deque(maxlen=maxlen)
+        self._buf: deque[float] = deque(maxlen=maxlen)
 
     def add(self, value: float) -> None:
         self._buf.append(value)
@@ -37,14 +37,14 @@ class _RingBuffer:
     def count(self) -> int:
         return len(self._buf)
 
-    def percentile(self, p: float) -> Optional[float]:
+    def percentile(self, p: float) -> float | None:
         if not self._buf:
             return None
         arr = self._sorted()
         k = max(0, min(len(arr) - 1, int(len(arr) * p / 100.0)))
         return arr[k]
 
-    def max(self) -> Optional[float]:
+    def max(self) -> float | None:
         return max(self._buf) if self._buf else None
 
     def total(self) -> float:
@@ -66,7 +66,7 @@ class Tracer:
         self.loop_lag_ms = _RingBuffer()
         self.execute_ms = _RingBuffer()
         self.request_ms = _RingBuffer()
-        self.execute_by_table: DefaultDict[str, _Counter] = defaultdict(_Counter)
+        self.execute_by_table: defaultdict[str, _Counter] = defaultdict(_Counter)
         self.active_requests: int = 0
         self.started_at = time.monotonic()
 
@@ -89,8 +89,8 @@ class Tracer:
         self.request_ms.add(duration_ms)
 
     # -------------------------------------------------------------- summary
-    def summary(self) -> Dict[str, Any]:
-        def _pct(ring: _RingBuffer) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
+        def _pct(ring: _RingBuffer) -> dict[str, Any]:
             return {
                 "samples": ring.count(),
                 "p50": round(ring.percentile(50) or 0, 2),

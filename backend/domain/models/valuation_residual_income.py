@@ -1,10 +1,12 @@
 # domain/models/valuation_residual_income.py
 from __future__ import annotations
-from typing import Any, List, Optional
+
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator
 
 # Reuse shared primitives from Rule #1 (keeps FE behaviour consistent)
-from domain.models.valuation_rule1 import Applicability, DataQuality  # noqa: E402
+from domain.models.valuation_rule1 import Applicability, DataQuality
 
 
 class ResidualIncomeRequestOverrides(BaseModel):
@@ -20,30 +22,30 @@ class ResidualIncomeRequestOverrides(BaseModel):
     """
 
     # Cost-of-equity inputs (CAPM path; mirrors DDM overrides)
-    requiredReturn: Optional[float] = Field(
+    requiredReturn: float | None = Field(
         default=None,
         description="Direct cost of equity override. Bypasses CAPM when provided.",
     )
-    beta: Optional[float] = Field(default=None, description="Equity beta override.")
-    riskFreeRate: Optional[float] = Field(default=None, description="Risk-free rate override.")
-    equityRiskPremium: Optional[float] = Field(default=None, description="ERP override.")
+    beta: float | None = Field(default=None, description="Equity beta override.")
+    riskFreeRate: float | None = Field(default=None, description="Risk-free rate override.")
+    equityRiskPremium: float | None = Field(default=None, description="ERP override.")
 
     # Growth inputs
-    riGrowthRate: Optional[float] = Field(
+    riGrowthRate: float | None = Field(
         default=None,
         description="Annual growth rate for Residual Income stream (accepts percent or fraction).",
     )
-    terminalGrowthRate: Optional[float] = Field(
+    terminalGrowthRate: float | None = Field(
         default=None,
         description="Perpetual growth rate for terminal RI value (accepts percent or fraction).",
     )
 
     # Forecast horizon
-    forecastYears: Optional[int] = Field(default=None, ge=1, le=20)
+    forecastYears: int | None = Field(default=None, ge=1, le=20)
 
     # Meta
-    analystName: Optional[str] = None
-    notes: Optional[str] = None
+    analystName: str | None = None
+    notes: str | None = None
 
     @field_validator("requiredReturn", "riGrowthRate", "terminalGrowthRate",
                      "riskFreeRate", "equityRiskPremium", mode="before")
@@ -78,36 +80,36 @@ class ResidualIncomeValuation(BaseModel):
     # Inputs used
     forecastYears: int
     costOfEquityUsed: float
-    betaUsed: Optional[float] = None
-    rfUsed: Optional[float] = None
-    erpUsed: Optional[float] = None
-    riGrowthRateUsed: Optional[float] = None
-    terminalGrowthRateUsed: Optional[float] = None
+    betaUsed: float | None = None
+    rfUsed: float | None = None
+    erpUsed: float | None = None
+    riGrowthRateUsed: float | None = None
+    terminalGrowthRateUsed: float | None = None
 
     # Base values
-    eps0: Optional[float] = None                 # Latest annual EPS (NI-to-common / shares)
-    bvPerShare: Optional[float] = None           # Book value per share at t=0
-    roe0: Optional[float] = None                 # ROE at t=0 = NI / Equity
-    ri0PerShare: Optional[float] = None          # RI₀/share = EPS₀ − k_e × BV₀/share
-    bvFiscalYear: Optional[int] = None
+    eps0: float | None = None                 # Latest annual EPS (NI-to-common / shares)
+    bvPerShare: float | None = None           # Book value per share at t=0
+    roe0: float | None = None                 # ROE at t=0 = NI / Equity
+    ri0PerShare: float | None = None          # RI₀/share = EPS₀ − k_e × BV₀/share
+    bvFiscalYear: int | None = None
 
     # Forecast stream
-    forecastRiPerShare: List[float] = Field(default_factory=list)
-    pvRiPerShare: List[float] = Field(default_factory=list)
-    discountFactors: Optional[List[float]] = None
+    forecastRiPerShare: list[float] = Field(default_factory=list)
+    pvRiPerShare: list[float] = Field(default_factory=list)
+    discountFactors: list[float] | None = None
     totalPvRiPerShare: float = 0.0
 
     # Terminal value
-    terminalRiPerShare: Optional[float] = None   # RI_{n+1}/share
-    terminalValueRi: Optional[float] = None      # TV = RI_{n+1} / (k_e − g_terminal)
-    pvTerminalRiPerShare: Optional[float] = None
+    terminalRiPerShare: float | None = None   # RI_{n+1}/share
+    terminalValueRi: float | None = None      # TV = RI_{n+1} / (k_e − g_terminal)
+    pvTerminalRiPerShare: float | None = None
 
     # Intrinsic value
-    intrinsicValuePerShare: Optional[float] = None
+    intrinsicValuePerShare: float | None = None
 
     # Read-time market comparison
-    currentPrice: Optional[float] = None
-    upsideDownsidePct: Optional[float] = None    # fraction, consistent with DDM convention
+    currentPrice: float | None = None
+    upsideDownsidePct: float | None = None    # fraction, consistent with DDM convention
 
 
 class ResidualIncomeResponse(BaseModel):

@@ -2,34 +2,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from shared.time_utils import now_utc, now_iso, parse_db_timestamp
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from application.services.portfolio_service import PortfolioService
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from shared.portfolio_stats import (
-    TRADING_DAYS,
-    compute_alpha,
-    compute_annualized_return,
-    compute_annualized_volatility,
-    compute_beta,
-    compute_conditional_var,
-    compute_daily_returns,
-    compute_drawdown_series,
-    compute_downside_deviation,
-    compute_information_ratio,
-    compute_max_drawdown,
-    compute_rolling_sharpe as _rolling_sharpe,
-    compute_sharpe_ratio,
-    compute_sortino_ratio,
-    compute_tracking_error,
-    compute_value_at_risk,
-    _safe_metric,
-)
-from shared.price_data_provider import PriceDataProvider
 from schemas_portfolio import (
     CovarianceResponse,
     DrawdownResponse,
@@ -40,12 +19,35 @@ from schemas_portfolio import (
     RiskMetricsResponse,
     RollingSharpeResponse,
 )
+from shared.portfolio_stats import (
+    TRADING_DAYS,
+    _safe_metric,
+    compute_alpha,
+    compute_annualized_return,
+    compute_annualized_volatility,
+    compute_beta,
+    compute_conditional_var,
+    compute_daily_returns,
+    compute_downside_deviation,
+    compute_drawdown_series,
+    compute_information_ratio,
+    compute_max_drawdown,
+    compute_sharpe_ratio,
+    compute_sortino_ratio,
+    compute_tracking_error,
+    compute_value_at_risk,
+)
+from shared.portfolio_stats import (
+    compute_rolling_sharpe as _rolling_sharpe,
+)
+from shared.price_data_provider import PriceDataProvider
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
 RISK_FREE_RATE = 0.02
 
-_PERIOD_MAP: Dict[str, int] = {
+_PERIOD_MAP: dict[str, int] = {
     "1M": 30, "3M": 90, "6M": 180, "1Y": 365,
     "2Y": 730, "3Y": 1095, "5Y": 1825, "MAX": 9999,
 }
@@ -63,16 +65,16 @@ def _safe_date_add_years(d: date, years: int) -> date:
         return d.replace(year=d.year + years, day=d.day - 1)
 
 
-def _error_dict(error: str, error_code: str, **extra: Any) -> Dict[str, Any]:
+def _error_dict(error: str, error_code: str, **extra: Any) -> dict[str, Any]:
     return {"success": False, "error": error, "error_code": error_code, **extra}
 
 
 class PortfolioRiskService:
     def __init__(
         self,
-        portfolio_repo: Optional[PortfolioRepository] = None,
-        portfolio_service: Optional[PortfolioService] = None,
-        price_provider: Optional[PriceDataProvider] = None,
+        portfolio_repo: PortfolioRepository | None = None,
+        portfolio_service: PortfolioService | None = None,
+        price_provider: PriceDataProvider | None = None,
     ):
         self.portfolio_repo = portfolio_repo or PortfolioRepository()
         self.portfolio_service = portfolio_service or PortfolioService(
@@ -81,8 +83,8 @@ class PortfolioRiskService:
         self.price_provider = price_provider or PriceDataProvider()
 
     async def _get_snapshot_series(
-        self, user_id: int, period: str, account_ids: Optional[List[int]] = None
-    ) -> Tuple[List[Dict[str, Any]], str, Optional[str], Optional[str]]:
+        self, user_id: int, period: str, account_ids: list[int] | None = None
+    ) -> tuple[list[dict[str, Any]], str, str | None, str | None]:
         try:
             perf = await self.portfolio_service.get_portfolio_performance(
                 user_id, period=period, account_ids=account_ids
@@ -98,14 +100,14 @@ class PortfolioRiskService:
         return snapshots, perf.get("period", period), None, None
 
     def _returns_from_snapshots(
-        self, snapshots: List[Dict[str, Any]]
-    ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        self, snapshots: list[dict[str, Any]]
+    ) -> tuple[np.ndarray, np.ndarray, list[str]]:
         values = np.array([s["value"] for s in snapshots], dtype=np.float64)
         dates = [s["date"] for s in snapshots]
         daily_returns = compute_daily_returns(values)
         return values, daily_returns, dates
 
-    def _periods_per_year(self, snapshots: List[Dict[str, Any]]) -> int:
+    def _periods_per_year(self, snapshots: list[dict[str, Any]]) -> int:
         """Compute periods per year from snapshot date intervals."""
         if len(snapshots) < 2:
             return TRADING_DAYS
@@ -121,8 +123,8 @@ class PortfolioRiskService:
         return max(1, min(TRADING_DAYS, round(365 / avg_interval)))
 
     async def _get_aligned_benchmark_returns(
-        self, snapshots: List[Dict[str, Any]]
-    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        self, snapshots: list[dict[str, Any]]
+    ) -> tuple[np.ndarray, np.ndarray] | None:
         """Fetch SPY prices aligned to portfolio snapshot dates.
 
         Returns (portfolio_returns, benchmark_returns) as equal-length arrays.
@@ -171,7 +173,7 @@ class PortfolioRiskService:
         self,
         user_id: int,
         period: str,
-        account_ids: Optional[List[int]] = None,
+        account_ids: list[int] | None = None,
     ) -> RiskMetricsResponse:
         snapshots, resolved_period, error, error_code = await self._get_snapshot_series(
             user_id, period, account_ids
@@ -234,7 +236,7 @@ class PortfolioRiskService:
         return _validate_risk_metrics_response(result)
 
     async def compute_drawdown(
-        self, user_id: int, period: str, account_ids: Optional[List[int]] = None
+        self, user_id: int, period: str, account_ids: list[int] | None = None
     ) -> DrawdownResponse:
         snapshots, resolved_period, error, error_code = await self._get_snapshot_series(
             user_id, period, account_ids
@@ -276,8 +278,8 @@ class PortfolioRiskService:
         return result
 
     async def _get_holdings_symbols(
-        self, user_id: int, account_ids: Optional[List[int]] = None
-    ) -> Tuple[List[str], Optional[str], Optional[str]]:
+        self, user_id: int, account_ids: list[int] | None = None
+    ) -> tuple[list[str], str | None, str | None]:
         try:
             holdings = self.portfolio_repo.get_user_all_holdings(user_id)
         except Exception as e:
@@ -291,8 +293,8 @@ class PortfolioRiskService:
         return symbols, None, None
 
     async def _fetch_holding_prices(
-        self, symbols: List[str], period: str,
-    ) -> Tuple[Optional[pd.DataFrame], Optional[str], Optional[str]]:
+        self, symbols: list[str], period: str,
+    ) -> tuple[pd.DataFrame | None, str | None, str | None]:
         end = now_utc().date()
         n_days = _parse_period(period)
         start = end - timedelta(days=n_days * 2)
@@ -310,7 +312,7 @@ class PortfolioRiskService:
             return None, str(e), "computation_failed"
 
     async def compute_covariance_matrix(
-        self, user_id: int, period: str, account_ids: Optional[List[int]] = None
+        self, user_id: int, period: str, account_ids: list[int] | None = None
     ) -> CovarianceResponse:
         symbols, error, error_code = await self._get_holdings_symbols(user_id, account_ids)
         if error:
@@ -342,7 +344,7 @@ class PortfolioRiskService:
         )
 
     async def compute_efficient_frontier(
-        self, user_id: int, account_ids: Optional[List[int]] = None, points: int = 50,
+        self, user_id: int, account_ids: list[int] | None = None, points: int = 50,
     ) -> EfficientFrontierResponse:
         symbols, error, error_code = await self._get_holdings_symbols(user_id, account_ids)
         if error:
@@ -433,7 +435,7 @@ class PortfolioRiskService:
         )
 
     async def compute_rolling_sharpe(
-        self, user_id: int, window: int = 252, account_ids: Optional[List[int]] = None,
+        self, user_id: int, window: int = 252, account_ids: list[int] | None = None,
     ) -> RollingSharpeResponse:
         snapshots, resolved_period, error, error_code = await self._get_snapshot_series(
             user_id, "MAX", account_ids
@@ -470,7 +472,7 @@ class PortfolioRiskService:
         )
 
     async def compute_risk_contribution(
-        self, user_id: int, account_ids: Optional[List[int]] = None,
+        self, user_id: int, account_ids: list[int] | None = None,
     ) -> RiskContributionResponse:
         try:
             holdings = self.portfolio_repo.get_user_all_holdings(user_id)
@@ -486,8 +488,8 @@ class PortfolioRiskService:
                 error="no_holdings", error_code="no_holdings",
             )
 
-        symbols: List[str] = []
-        raw_weights: List[float] = []
+        symbols: list[str] = []
+        raw_weights: list[float] = []
         for h in holdings:
             sym = h.get("symbol")
             w = float(h.get("current_value") or 0)
@@ -563,7 +565,7 @@ class PortfolioRiskService:
         )
 
     async def compute_market_exposure(
-        self, user_id: int, account_ids: Optional[List[int]] = None,
+        self, user_id: int, account_ids: list[int] | None = None,
     ) -> FactorExposureResponse:
         snapshots, _, error, error_code = await self._get_snapshot_series(
             user_id, "1Y", account_ids
@@ -623,7 +625,7 @@ class PortfolioRiskService:
 
 
 def _validate_risk_metrics_response(response: RiskMetricsResponse) -> RiskMetricsResponse:
-    checks: List[str] = []
+    checks: list[str] = []
 
     if response.value_at_risk_99 is not None and response.value_at_risk_95 is not None:
         if response.value_at_risk_99 > response.value_at_risk_95:

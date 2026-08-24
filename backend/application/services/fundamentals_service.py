@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-import math
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
+from infrastructure.repositories.fundamentals_repository import FundamentalsRepository
 from schemas_fundamentals import (
     DataQuality,
     FundamentalsResponse,
@@ -16,25 +16,24 @@ from schemas_fundamentals import (
     QuarterDataPoint,
     SectionStatus,
 )
-from infrastructure.repositories.fundamentals_repository import FundamentalsRepository
 
 logger = logging.getLogger(__name__)
 
 
-def _f(v: Any) -> Optional[float]:
+def _f(v: Any) -> float | None:
     try:
         return float(v) if v is not None else None
     except (ValueError, TypeError):
         return None
 
 
-def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
+def _safe_div(a: float | None, b: float | None) -> float | None:
     if a is None or b is None or b == 0:
         return None
     return a / b
 
 
-def _quarter_label(fy: int, fq: Optional[int]) -> str:
+def _quarter_label(fy: int, fq: int | None) -> str:
     if fq is None:
         return str(fy)
     return f"Q{fq} {fy}"
@@ -43,9 +42,9 @@ def _quarter_label(fy: int, fq: Optional[int]) -> str:
 def _align_ttm_components(
     fiscal_year: int,
     fiscal_quarter: int,
-    eps_lookup: Dict[Tuple[int, int], float],
-) -> Tuple[Optional[float], List[MetricComponent]]:
-    components: List[MetricComponent] = []
+    eps_lookup: dict[tuple[int, int], float],
+) -> tuple[float | None, list[MetricComponent]]:
+    components: list[MetricComponent] = []
     ttm_sum = 0.0
     has_any = False
     found_all = True
@@ -70,7 +69,7 @@ def _align_ttm_components(
     return ttm_sum, components
 
 
-def _quarters_chronological(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _quarters_chronological(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         rows,
         key=lambda x: (
@@ -83,8 +82,8 @@ def _quarters_chronological(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ── Trend direction helpers ──────────────────────────────────────────────
 
 def _determine_trend(
-    values: List[Optional[float]], higher_is_better: bool
-) -> Tuple[str, Optional[float], str]:
+    values: list[float | None], higher_is_better: bool
+) -> tuple[str, float | None, str]:
     clean = [v for v in values if v is not None]
     if len(clean) < 2:
         return ("stable", None, "stable")
@@ -104,22 +103,22 @@ def _build_quarter_series(
     metric_id: str,
     label: str,
     unit: str,
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     value_key: str,
     higher_is_better: bool,
-    buy_idx: Optional[int] = None,
-    narrative_key: Optional[str] = None,
+    buy_idx: int | None = None,
+    narrative_key: str | None = None,
     is_annual: bool = False,
 ) -> MetricQuarterSeries:
     sorted_rows = _quarters_chronological(rows)
-    quarters: List[QuarterDataPoint] = []
-    vals: List[Optional[float]] = []
+    quarters: list[QuarterDataPoint] = []
+    vals: list[float | None] = []
     for r in sorted_rows:
         fy = r.get("fiscal_year")
         fq = r.get("fiscal_quarter")
         v = _f(r.get(value_key))
         vals.append(v)
-        fq_val: Optional[int] = int(fq) if fq is not None else None
+        fq_val: int | None = int(fq) if fq is not None else None
         qp = QuarterDataPoint(
             fiscal_year=int(fy) if fy else 0,
             fiscal_quarter=fq_val if fq_val is not None else 0,
@@ -141,7 +140,7 @@ def _build_quarter_series(
     )
 
 
-def _compute_section_status(score: Optional[float]) -> SectionStatus:
+def _compute_section_status(score: float | None) -> SectionStatus:
     if score is None:
         return SectionStatus(label="Watch")
     if score >= 70:
@@ -154,7 +153,7 @@ def _compute_section_status(score: Optional[float]) -> SectionStatus:
 # ── Quality Section ──────────────────────────────────────────────────────
 
 def _compute_quality_metrics(
-    ratios: List[Dict[str, Any]], buy_idx: Optional[int] = None,
+    ratios: list[dict[str, Any]], buy_idx: int | None = None,
     is_annual: bool = False,
 ) -> MetricSection:
     if not ratios:
@@ -225,18 +224,18 @@ def _compute_quality_metrics(
 # ── Growth Section — YoY% computed on-the-fly ────────────────────────────
 
 def _compute_growth_metrics(
-    income_stmts: List[Dict[str, Any]],
-    cash_flows: List[Dict[str, Any]],
-    buy_idx: Optional[int] = None,
+    income_stmts: list[dict[str, Any]],
+    cash_flows: list[dict[str, Any]],
+    buy_idx: int | None = None,
     is_annual: bool = False,
 ) -> MetricSection:
     def yoy_series(
-        metric_id: str, label: str, rows: List[Dict[str, Any]],
-        compute_val: callable, buy_idx: Optional[int] = None,
+        metric_id: str, label: str, rows: list[dict[str, Any]],
+        compute_val: callable, buy_idx: int | None = None,
         is_annual: bool = False,
     ) -> MetricQuarterSeries:
         sorted_rows = _quarters_chronological(rows)
-        yoy_map: Dict[Tuple[int, int], Tuple[int, int, float]] = {}
+        yoy_map: dict[tuple[int, int], tuple[int, int, float]] = {}
         for r in sorted_rows:
             fy = r.get("fiscal_year")
             fq = r.get("fiscal_quarter")
@@ -245,7 +244,7 @@ def _compute_growth_metrics(
             if fy is not None and v is not None:
                 yoy_map[(int(fy), key_fq)] = (int(fy), key_fq, v)
 
-        quarters: List[QuarterDataPoint] = []
+        quarters: list[QuarterDataPoint] = []
         ordered = sorted(yoy_map.keys())
         for fy, fq_key in ordered:
             _, _, val = yoy_map[(fy, fq_key)]
@@ -259,7 +258,7 @@ def _compute_growth_metrics(
                     yoy_pct = None
             else:
                 yoy_pct = None
-            fq_label: Optional[int] = None if is_annual else fq_key
+            fq_label: int | None = None if is_annual else fq_key
             quarters.append(QuarterDataPoint(
                 fiscal_year=fy,
                 fiscal_quarter=fq_key,
@@ -329,15 +328,15 @@ def _compute_growth_metrics(
 
 # ── Moat Signals Section ─────────────────────────────────────────────────
 
-def _compute_sparkline(quarters: List[QuarterDataPoint], max_points: int = 8) -> Optional[List[Optional[float]]]:
+def _compute_sparkline(quarters: list[QuarterDataPoint], max_points: int = 8) -> list[float | None] | None:
     if not quarters:
         return None
     return [q.value for q in quarters[-max_points:]]
 
 
 def _compute_moat_gauge(
-    metric_id: str, quarters: List[QuarterDataPoint],
-) -> Optional[GaugeConfig]:
+    metric_id: str, quarters: list[QuarterDataPoint],
+) -> GaugeConfig | None:
     vals = [q.value for q in quarters if q.value is not None]
     if not vals:
         return None
@@ -382,7 +381,7 @@ def _compute_moat_gauge(
 
 
 def _compute_moat_metrics(
-    ratios: List[Dict[str, Any]], buy_idx: Optional[int] = None,
+    ratios: list[dict[str, Any]], buy_idx: int | None = None,
     is_annual: bool = False,
 ) -> MetricSection:
     if not ratios:
@@ -435,7 +434,7 @@ def _compute_moat_metrics(
 
 # ── Sector-aware valuation thresholds ──────────────────────────────────
 
-SECTOR_THRESHOLDS: Dict[str, Dict[str, Optional[float]]] = {
+SECTOR_THRESHOLDS: dict[str, dict[str, float | None]] = {
     "Technology":                     {"pe": 28, "ev_ebitda": 20, "pfcf": 28},
     "Communication Services":        {"pe": 22, "ev_ebitda": 15, "pfcf": 22},
     "Consumer Cyclical":             {"pe": 18, "ev_ebitda": 12, "pfcf": 18},
@@ -448,10 +447,10 @@ SECTOR_THRESHOLDS: Dict[str, Dict[str, Optional[float]]] = {
     "Real Estate":                   {"pe": 18, "ev_ebitda": 17, "pfcf": 18},
     "Utilities":                     {"pe": 19, "ev_ebitda": 12, "pfcf": 19},
 }
-DEFAULT_THRESHOLDS: Dict[str, Optional[float]] = {"pe": 15, "ev_ebitda": 10, "pfcf": 15}
+DEFAULT_THRESHOLDS: dict[str, float | None] = {"pe": 15, "ev_ebitda": 10, "pfcf": 15}
 
 
-def _median_of_recent(values: List[Optional[float]], n: int = 4) -> Optional[float]:
+def _median_of_recent(values: list[float | None], n: int = 4) -> float | None:
     clean = [v for v in values[-n:] if v is not None and v > 0]
     if not clean:
         return None
@@ -462,7 +461,7 @@ def _median_of_recent(values: List[Optional[float]], n: int = 4) -> Optional[flo
 
 # ── Gauge Config Decision Tree ───────────────────────────────────────────
 
-def _coeff_of_variation(values: List[Optional[float]]) -> Optional[float]:
+def _coeff_of_variation(values: list[float | None]) -> float | None:
     clean = [v for v in values if v is not None and v > 0]
     if len(clean) < 3:
         return None
@@ -473,25 +472,25 @@ def _coeff_of_variation(values: List[Optional[float]]) -> Optional[float]:
     return (variance ** 0.5) / abs(mean)
 
 
-def _most_recent_positive(quarters: List[QuarterDataPoint]) -> Optional[float]:
+def _most_recent_positive(quarters: list[QuarterDataPoint]) -> float | None:
     for q in reversed(quarters):
         if q.value is not None and q.value > 0:
             return q.value
     return None
 
 
-def _positive_values(quarters: List[QuarterDataPoint]) -> List[float]:
+def _positive_values(quarters: list[QuarterDataPoint]) -> list[float]:
     return [q.value for q in quarters if q.status == "normal" and q.value is not None and q.value > 0]
 
 
-def _na_count(quarters: List[QuarterDataPoint]) -> int:
+def _na_count(quarters: list[QuarterDataPoint]) -> int:
     return sum(1 for q in quarters if q.status == "not_applicable")
 
 
 def _compute_sparkline_values(
-    quarters: List[QuarterDataPoint],
+    quarters: list[QuarterDataPoint],
     max_points: int = 8,
-) -> Optional[List[Optional[float]]]:
+) -> list[float | None] | None:
     if not quarters:
         return None
     recent = quarters[-max_points:]
@@ -499,9 +498,9 @@ def _compute_sparkline_values(
 
 
 def _compute_percentile(
-    positive_values: List[float],
-    current: Optional[float],
-) -> Optional[int]:
+    positive_values: list[float],
+    current: float | None,
+) -> int | None:
     if current is None or len(positive_values) < 12:
         return None
     sorted_vals = sorted(positive_values)
@@ -512,9 +511,9 @@ def _compute_percentile(
 
 
 def _find_recent_positive_label(
-    quarters: List[QuarterDataPoint],
-    raw_current: Optional[float],
-) -> Optional[str]:
+    quarters: list[QuarterDataPoint],
+    raw_current: float | None,
+) -> str | None:
     if not quarters:
         return None
     if raw_current is not None and raw_current > 0:
@@ -527,10 +526,10 @@ def _find_recent_positive_label(
 
 def _compute_metric_gauge_config(
     metric_id: str,
-    quarters: List[QuarterDataPoint],
-    sector: Optional[str] = None,
+    quarters: list[QuarterDataPoint],
+    sector: str | None = None,
     security_type: str = "stock",
-    sector_stats: Optional[Dict[str, Any]] = None,
+    sector_stats: dict[str, Any] | None = None,
 ) -> GaugeConfig:
     positive = _positive_values(quarters)
     pos_count = len(positive)
@@ -542,7 +541,7 @@ def _compute_metric_gauge_config(
     min_v = min(positive) if positive else None
     max_v = max(positive) if positive else None
     avg_v = sum(positive) / pos_count if pos_count > 0 else None
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     # ── Design 4: Sparkline / Percentile / Delta ──
     sparkline_values = _compute_sparkline_values(quarters)
@@ -552,9 +551,9 @@ def _compute_metric_gauge_config(
     recent_quarter_label = _find_recent_positive_label(quarters, raw_current)
 
     # ── Sector benchmark stats ─────────────────────────────────────────
-    sector_p05: Optional[float] = None
-    sector_p50: Optional[float] = None
-    sector_p95: Optional[float] = None
+    sector_p05: float | None = None
+    sector_p50: float | None = None
+    sector_p95: float | None = None
     sector_sample_size: int = 0
     if sector_stats and metric_id in sector_stats:
         row = sector_stats[metric_id]
@@ -584,7 +583,7 @@ def _compute_metric_gauge_config(
                 warnings.append(f"Recent losses — {metric_id.upper()} based on {q.label}")
                 break
 
-    sector_threshold = DEFAULT_THRESHOLDS.get(metric_id, None)
+    sector_threshold = DEFAULT_THRESHOLDS.get(metric_id)
     if sector and sector in SECTOR_THRESHOLDS and metric_id in SECTOR_THRESHOLDS[sector]:
         sector_threshold = SECTOR_THRESHOLDS[sector][metric_id]
 
@@ -780,16 +779,16 @@ def _compute_metric_gauge_config(
 # ── Valuation Section ────────────────────────────────────────────────────
 
 def _compute_valuation_metrics(
-    company_summary: Optional[Dict[str, Any]],
-    valuation_snapshots: Optional[Dict[str, Any]],
-    current_price: Optional[float],
-    fcf_data: List[Dict[str, Any]],
-    qratios: Optional[List[Dict[str, Any]]] = None,
-    income_data: Optional[List[Dict[str, Any]]] = None,
-    buy_idx: Optional[int] = None,
+    company_summary: dict[str, Any] | None,
+    valuation_snapshots: dict[str, Any] | None,
+    current_price: float | None,
+    fcf_data: list[dict[str, Any]],
+    qratios: list[dict[str, Any]] | None = None,
+    income_data: list[dict[str, Any]] | None = None,
+    buy_idx: int | None = None,
     security_type: str = "stock",
-    sector: Optional[str] = None,
-    sector_stats: Optional[Dict[str, Any]] = None,
+    sector: str | None = None,
+    sector_stats: dict[str, Any] | None = None,
 ) -> MetricSection:
     if security_type != "stock":
         return MetricSection(
@@ -802,7 +801,7 @@ def _compute_valuation_metrics(
 
     ev_ebitda_current = _f(company_summary.get("enterprise_to_ebitda")) if company_summary else None
 
-    eps_lookup: Dict[Tuple[int, int], float] = {}
+    eps_lookup: dict[tuple[int, int], float] = {}
     if income_data:
         for row in income_data:
             fy = row.get("fiscal_year")
@@ -812,9 +811,9 @@ def _compute_valuation_metrics(
             if fy is not None and fq is not None and eps is not None:
                 eps_lookup[(int(fy), int(fq))] = eps
 
-    pe_quarters: List[QuarterDataPoint] = []
-    ev_quarters: List[QuarterDataPoint] = []
-    pfcf_quarters: List[QuarterDataPoint] = []
+    pe_quarters: list[QuarterDataPoint] = []
+    ev_quarters: list[QuarterDataPoint] = []
+    pfcf_quarters: list[QuarterDataPoint] = []
 
     if qratios:
         for r in qratios:
@@ -914,7 +913,7 @@ def _compute_valuation_metrics(
         gauge_config=_compute_metric_gauge_config("pfcf", pfcf_quarters, sector, security_type, sector_stats),
     )
 
-    intrinsic_valuations: List[Dict[str, Any]] = []
+    intrinsic_valuations: list[dict[str, Any]] = []
     if valuation_snapshots:
         METHOD_KEYS = {
             "dcf":              ["valuation", "intrinsicValuePerShare"],
@@ -951,7 +950,7 @@ def _compute_valuation_metrics(
         avg_iv = sum(v["intrinsic_value"] for v in intrinsic_valuations) / len(intrinsic_valuations)
         price_vs_intrinsic = round(((current_price - avg_iv) / avg_iv) * 100, 2)
 
-    def _flat_series(mid: str, label: str, unit: str, val: Optional[float], higher_is_better: bool) -> MetricQuarterSeries:
+    def _flat_series(mid: str, label: str, unit: str, val: float | None, higher_is_better: bool) -> MetricQuarterSeries:
         q = QuarterDataPoint(fiscal_year=0, fiscal_quarter=0, label="Current", value=val)
         return MetricQuarterSeries(
             metric_id=mid, label=label, unit=unit,
@@ -1035,7 +1034,7 @@ def _compute_valuation_metrics(
 # ── Narrative Section ────────────────────────────────────────────────────
 
 def _compute_narrative_metrics(
-    earnings: List[Dict[str, Any]], buy_idx: Optional[int] = None
+    earnings: list[dict[str, Any]], buy_idx: int | None = None
 ) -> MetricSection:
     if not earnings:
         return MetricSection(
@@ -1046,7 +1045,7 @@ def _compute_narrative_metrics(
             score=None,
         )
 
-    def _surprise_label(v: Optional[float]) -> Optional[str]:
+    def _surprise_label(v: float | None) -> str | None:
         if v is None:
             return None
         if v > 0.1:
@@ -1055,9 +1054,9 @@ def _compute_narrative_metrics(
             return "miss"
         return "inline"
 
-    def _build_components(r: Dict[str, Any]) -> List[MetricComponent]:
+    def _build_components(r: dict[str, Any]) -> list[MetricComponent]:
         """Build actual-vs-estimate component pairs for a quarter."""
-        comps: List[MetricComponent] = []
+        comps: list[MetricComponent] = []
         eps_actual = _f(r.get("eps_reported_diluted"))
         eps_est = _f(r.get("eps_estimate"))
         rev_actual = _f(r.get("revenue_reported"))
@@ -1074,8 +1073,8 @@ def _compute_narrative_metrics(
 
     sorted_earnings = _quarters_chronological(earnings)
 
-    eps_quarters: List[QuarterDataPoint] = []
-    rev_quarters: List[QuarterDataPoint] = []
+    eps_quarters: list[QuarterDataPoint] = []
+    rev_quarters: list[QuarterDataPoint] = []
     for r in sorted_earnings:
         fy, fq = r.get("fiscal_year"), r.get("fiscal_quarter")
         if not fy or fq is None or fq == 0:
@@ -1101,7 +1100,7 @@ def _compute_narrative_metrics(
     beat_count = sum(1 for v in eps_vals if v > 0)
     beat_rate = round((beat_count / len(eps_vals)) * 100, 1) if eps_vals else None
 
-    beat_quarters: List[QuarterDataPoint] = []
+    beat_quarters: list[QuarterDataPoint] = []
     for r in sorted_earnings:
         fy, fq = r.get("fiscal_year"), r.get("fiscal_quarter")
         if not fy or fq is None or fq == 0:
@@ -1156,7 +1155,7 @@ def _compute_narrative_metrics(
 
 def _simple_slider_config(
     metric_id: str,
-    quarters: List[QuarterDataPoint],
+    quarters: list[QuarterDataPoint],
     unit: str,
 ) -> GaugeConfig:
     """Build a minimal slider GaugeConfig for a narrative metric."""
@@ -1186,7 +1185,7 @@ def _simple_slider_config(
 
 # ── Composite score ──────────────────────────────────────────────────────
 
-def _compute_composite(scores: List[Optional[float]]) -> Optional[float]:
+def _compute_composite(scores: list[float | None]) -> float | None:
     weights = [0.30, 0.15, 0.25, 0.20, 0.10]
     total_w = 0.0
     weighted_sum = 0.0
@@ -1206,7 +1205,7 @@ class FundamentalsService:
         self.repo = repo
 
     async def get_fundamentals(
-        self, symbol: str, user_id: Optional[str] = None,
+        self, symbol: str, user_id: str | None = None,
         frequency: str = "quarterly",
     ) -> FundamentalsResponse:
         company = await self.repo.get_company_by_symbol(symbol)
@@ -1222,7 +1221,7 @@ class FundamentalsService:
         sector = company.get("sector")
 
         # ── Sector benchmark stats ─────────────────────────────────────
-        sector_stats: Dict[str, Any] = {}
+        sector_stats: dict[str, Any] = {}
         if sector:
             try:
                 from database import supabase

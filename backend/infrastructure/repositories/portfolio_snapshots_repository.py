@@ -1,7 +1,7 @@
 import json as _json
 import logging
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import date, timedelta
+from typing import Any
 
 from database import supabase
 from supabase import Client
@@ -15,10 +15,10 @@ class PortfolioSnapshotsRepository:
 
     def get_portfolio_snapshots(
         self,
-        account_ids: List[int],
+        account_ids: list[int],
         start_date: date,
         end_date: date,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not account_ids:
             return []
         PAGE_SIZE = 1000
@@ -51,7 +51,7 @@ class PortfolioSnapshotsRepository:
             logger.error(f"Failed to fetch portfolio snapshots: {e}")
             return []
 
-    def upsert_snapshot(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    def upsert_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         # Strip field that may not exist in DB schema yet
         safe = {k: v for k, v in snapshot.items() if k != "validation_warnings"}
         self._validate_holdings_consistency(safe)
@@ -68,7 +68,7 @@ class PortfolioSnapshotsRepository:
             logger.error(f"Failed to upsert snapshot: {e}")
             raise
 
-    def upsert_snapshots_batch(self, snapshots: List[Dict[str, Any]], batch_size: int = 500) -> int:
+    def upsert_snapshots_batch(self, snapshots: list[dict[str, Any]], batch_size: int = 500) -> int:
         """Upsert multiple snapshots in batches for better performance.
 
         Validates holdings_json consistency before writing: the sum of
@@ -99,7 +99,7 @@ class PortfolioSnapshotsRepository:
         return total
 
     @staticmethod
-    def _validate_holdings_consistency(snapshot: Dict[str, Any]) -> None:
+    def _validate_holdings_consistency(snapshot: dict[str, Any]) -> None:
         """Ensure holdings_json sum matches holdings_market_value.
 
         If mismatch detected, logs a warning and nullifies holdings_json
@@ -140,7 +140,7 @@ class PortfolioSnapshotsRepository:
             logger.error(f"Failed to check snapshots for account {account_id}: {e}")
             return False
 
-    def get_latest_snapshot(self, account_id: int) -> Optional[Dict[str, Any]]:
+    def get_latest_snapshot(self, account_id: int) -> dict[str, Any] | None:
         try:
             res = (
                 self.client.table("portfolio_snapshots")
@@ -155,7 +155,7 @@ class PortfolioSnapshotsRepository:
             logger.error(f"Failed to get latest snapshot for account {account_id}: {e}")
             return None
 
-    def get_account_snapshots(self, account_id: int) -> List[Dict[str, Any]]:
+    def get_account_snapshots(self, account_id: int) -> list[dict[str, Any]]:
         PAGE_SIZE = 1000
         all_data = []
         try:
@@ -184,7 +184,7 @@ class PortfolioSnapshotsRepository:
 
     def get_previous_snapshot(
         self, account_id: int, before_date: date
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         try:
             res = (
                 self.client.table("portfolio_snapshots")
@@ -204,7 +204,7 @@ class PortfolioSnapshotsRepository:
             )
             return None
 
-    def get_last_snapshot_date(self, account_id: int) -> Optional[date]:
+    def get_last_snapshot_date(self, account_id: int) -> date | None:
         try:
             res = (
                 self.client.table("portfolio_snapshots")
@@ -228,7 +228,7 @@ class PortfolioSnapshotsRepository:
 
     def get_missing_dates(
         self, account_id: int, start_date: date, end_date: date
-    ) -> List[date]:
+    ) -> list[date]:
         try:
             res = (
                 self.client.table("portfolio_snapshots")
@@ -259,8 +259,8 @@ class PortfolioSnapshotsRepository:
             )
             return []
 
-    def validate_snapshot_invariants(self, account_id: int) -> List[str]:
-        errors: List[str] = []
+    def validate_snapshot_invariants(self, account_id: int) -> list[str]:
+        errors: list[str] = []
         rows = self.get_account_snapshots(account_id)
         for row in rows:
             tv = float(row["total_value"])

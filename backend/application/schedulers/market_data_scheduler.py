@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Market Data Refresh Scheduler
 Responsibilities
@@ -30,16 +29,13 @@ NEW
 import asyncio
 import logging
 import uuid
-
 from datetime import date, datetime, timedelta
-from shared.time_utils import now_utc
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from providers.defeat_beta_provider import DefeatBetaProvider
 
 import pandas as pd
-
-from config import settings
-from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
-from database import supabase
 
 # Derived metrics jobs
 from application.jobs.derived_financial_metrics_job import (
@@ -48,6 +44,10 @@ from application.jobs.derived_financial_metrics_job import (
     compute_and_upsert_quarterly_health_scores,
     compute_and_upsert_quarterly_valuation_metrics,
 )
+from config import settings
+from database import supabase
+from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 stockdex_semaphore = asyncio.Semaphore(1)
 
 
-def _as_date(value: Any) -> Optional[date]:
+def _as_date(value: Any) -> date | None:
     """Parse a date value from Supabase (ISO string or date object)."""
     if value is None:
         return None
@@ -75,7 +75,7 @@ def _as_date(value: Any) -> Optional[date]:
 def estimate_next_ex_date(
     company_id: int,
     financial_repo: SupabaseFinancialRepository,
-) -> Optional[date]:
+) -> date | None:
     """Estimate next ex-dividend date from historical payment pattern.
 
     Reads actuals only (dividend_amount IS NOT NULL, ex_date <= today)
@@ -213,7 +213,7 @@ class MarketDataRefreshScheduler:
 
     def __init__(
         self,
-        financial_repo: Optional[SupabaseFinancialRepository] = None,
+        financial_repo: SupabaseFinancialRepository | None = None,
         defeat_beta_provider: Optional["DefeatBetaProvider"] = None,
     ):
         # Repos & Providers
@@ -221,11 +221,11 @@ class MarketDataRefreshScheduler:
         self.defeat_beta_provider = defeat_beta_provider
         if self.defeat_beta_provider is None:
             try:
-                from providers.yfinance_provider import YFinanceProvider
                 from providers.defeat_beta_provider import DefeatBetaProvider
+                from providers.yfinance_provider import YFinanceProvider
                 yf_provider = YFinanceProvider()
-                from providers.stockdex_provider import StockdexMacrotrendsProvider
                 from providers.edgar_provider import EdgarToolsProvider
+                from providers.stockdex_provider import StockdexMacrotrendsProvider
                 self.defeat_beta_provider = DefeatBetaProvider(
                     yfinance_provider=yf_provider,
                     stockdex_provider=StockdexMacrotrendsProvider(),
@@ -238,7 +238,7 @@ class MarketDataRefreshScheduler:
         self.interval_hours: int = int(getattr(settings, "MARKET_DATA_REFRESH_INTERVAL_HOURS", 24))
         self.lookback_days: int = int(getattr(settings, "MARKET_DATA_PRICE_LOOKBACK_DAYS", 45))
         self.max_concurrency: int = int(getattr(settings, "MARKET_DATA_MAX_CONCURRENCY", 5))
-        self.company_statuses: List[str] = getattr(
+        self.company_statuses: list[str] = getattr(
             settings,
             "MARKET_DATA_COMPANY_STATUSES",
             ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"],
@@ -247,19 +247,19 @@ class MarketDataRefreshScheduler:
         self.lock_ttl_seconds: int = int(getattr(settings, "SCHEDULER_COMPANY_LOCK_TTL_SECONDS", 1800))
 
         # FX Service for currency conversion
-        self.fx_service: Optional[Any] = None
+        self.fx_service: Any | None = None
         if settings.ENABLE_FX_CONVERSION:
             from shared.fx_service import FXService
             self.fx_service = FXService(supabase)
 
         # Runtime
         self._is_running: bool = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
         # Status (surfaced by /status endpoints)
-        self.last_run_at: Optional[datetime] = None
-        self.next_run_at: Optional[datetime] = None
-        self.last_result: Optional[Dict[str, Any]] = None
+        self.last_run_at: datetime | None = None
+        self.next_run_at: datetime | None = None
+        self.last_result: dict[str, Any] | None = None
 
         self.owner_lock_id: str = f"market_data:{uuid.uuid4()}"
 
@@ -338,7 +338,7 @@ class MarketDataRefreshScheduler:
     # Public manual trigger
     # -------------------------------------------------------------------------
 
-    async def trigger_immediate_run(self) -> Dict[str, Any]:
+    async def trigger_immediate_run(self) -> dict[str, Any]:
         """Public manual trigger for one full refresh cycle (dev/admin/testing)."""
         logger.info("🔄 Manual trigger: Market Data refresh cycle")
         result = await self._refresh_cycle()
@@ -373,7 +373,7 @@ class MarketDataRefreshScheduler:
     # Single Cycle
     # -------------------------------------------------------------------------
 
-    async def _refresh_cycle(self) -> Dict[str, Any]:
+    async def _refresh_cycle(self) -> dict[str, Any]:
         logger.info("📊 Market data refresh cycle started")
 
         # Process only active companies (in ANY user's portfolio or watchlist)
@@ -386,14 +386,14 @@ class MarketDataRefreshScheduler:
         logger.info("Found %d companies for market-data refresh", total)
 
         sem = asyncio.Semaphore(self.max_concurrency)
-        results: Dict[str, Any] = {
+        results: dict[str, Any] = {
             "companies_found": total,
             "companies_succeeded": 0,
             "companies_failed": 0,
             "detail": [],
         }
 
-        async def _worker(company: Dict[str, Any]) -> None:
+        async def _worker(company: dict[str, Any]) -> None:
             async with sem:
                 cid = company["company_id"]
                 sym = company["ticker_symbol"]
@@ -473,8 +473,8 @@ class MarketDataRefreshScheduler:
         symbol: str,
         company_id: int,
         security_type: str = "stock",
-        exchange: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        exchange: str | None = None,
+    ) -> dict[str, Any]:
         """
         Steps:
           1) Price history (monthly EOM compression; bootstrap or incremental)
@@ -507,14 +507,14 @@ class MarketDataRefreshScheduler:
             await self.financial_repo.upsert_splits(split_rows)
 
         # 3) REVENUE FORECAST — stocks only
-        rev_fcst_rows: List[Dict[str, Any]] = []
+        rev_fcst_rows: list[dict[str, Any]] = []
         if is_stock:
             rev_fcst_rows = await self.defeat_beta_provider.fetch_revenue_forecast(symbol, company_id)
             if rev_fcst_rows:
                 await self.financial_repo.upsert_revenue_forecast(rev_fcst_rows)
 
         # 4) EARNINGS FORECAST — stocks only
-        eps_fcst_rows: List[Dict[str, Any]] = []
+        eps_fcst_rows: list[dict[str, Any]] = []
         if is_stock:
             eps_fcst_rows = await self.defeat_beta_provider.fetch_earnings_forecast(symbol, company_id)
             if eps_fcst_rows:
@@ -591,7 +591,7 @@ class MarketDataRefreshScheduler:
         # 6) DERIVED FINANCIAL RATIOS — stocks only
         # Version-gated internally: only writes rows whose source data changed.
         # Safe to call unconditionally every cycle.
-        ratios_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
+        ratios_result: dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
         if is_stock:
             try:
                 ratios_result = await compute_and_upsert_derived_financial_metrics(
@@ -626,7 +626,7 @@ class MarketDataRefreshScheduler:
         # 6c) QUARTERLY VALUATION METRICS — trailing P/E, EV/EBITDA, P/FCF per quarter
         # Pre-computes from income_statements + balance_sheets + cash_flow_statements + price_history.
         # Version-gated: only writes when source data changed.
-        vpe_result: Dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
+        vpe_result: dict[str, Any] = {"rows_changed": 0, "count": 0, "upserted": False}
         if is_stock:
             try:
                 vpe_result = await compute_and_upsert_quarterly_valuation_metrics(
@@ -645,7 +645,7 @@ class MarketDataRefreshScheduler:
         # 7) DIVIDEND METRICS — stocks only
         # Exits early with no DB writes if no dividend_history rows exist.
         # Safe to call unconditionally for every company.
-        div_result: Dict[str, Any] = {"rows_changed": 0, "upserted": False}
+        div_result: dict[str, Any] = {"rows_changed": 0, "upserted": False}
         if is_stock:
             try:
                 div_result = await compute_and_upsert_dividend_metrics(company_id=company_id)
@@ -678,9 +678,9 @@ class MarketDataRefreshScheduler:
         # 8) RI VALUATION — stocks only
         if is_stock:
             try:
-                from infrastructure.repositories.valuation_repository import ValuationRepository
                 from application.services.recompute_guard import RecomputeGuard
                 from application.services.valuation_service import ValuationService
+                from infrastructure.repositories.valuation_repository import ValuationRepository
                 valuation_repo = ValuationRepository()
                 vs = ValuationService(repo=valuation_repo, guard=RecomputeGuard(valuation_repo))
                 await vs.compute_residual_income_if_stale(symbol=symbol, user_id=None, force=True)
@@ -704,7 +704,7 @@ class MarketDataRefreshScheduler:
     # Price History helpers (with rolling retention)
     # -------------------------------------------------------------------------
 
-    async def _upsert_monthly_price_history(self, symbol: str, company_id: int, exchange: Optional[str] = None) -> int:
+    async def _upsert_monthly_price_history(self, symbol: str, company_id: int, exchange: str | None = None) -> int:
         """
         Bootstrap path  — no existing rows: fetch full daily history, compress to
                           monthly EOM, upsert all (respects retention window).
@@ -785,7 +785,7 @@ class MarketDataRefreshScheduler:
             return True
 
     @staticmethod
-    def _compress_daily_to_monthly_eom(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Convert daily OHLCV rows to monthly EOM rows:
           - Group by (year, month)
@@ -799,13 +799,16 @@ class MarketDataRefreshScheduler:
             return []
         df["price_date"] = pd.to_datetime(df["price_date"], utc=True, errors="coerce")
         df = df.dropna(subset=["price_date"])
+        # Drop null-OHLC rows (delisted/suspended days report null prices);
+        # close_price is NOT NULL in price_history.
+        df = df.dropna(subset=["close_price"])
         if df.empty:
             return []
         df["year"] = df["price_date"].dt.year
         df["month"] = df["price_date"].dt.month
         idx = df.groupby(["year", "month"])["price_date"].idxmax()
         last_trading_rows = df.loc[idx].copy()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for _, r in last_trading_rows.iterrows():
             out.append({
                 "company_id":  int(r.get("company_id")),
@@ -817,11 +820,13 @@ class MarketDataRefreshScheduler:
                 "volume":      int(r.get("volume")) if pd.notna(r.get("volume")) else None,
                 "data_source": str(r.get("data_source") or "defeatbeta"),
             })
+        # Final guard: never emit a monthly row without a close price.
+        out = [r for r in out if r["close_price"] is not None]
         out.sort(key=lambda x: x["price_date"])
         return out
 
     @staticmethod
-    def _safe_num(v: Any) -> Optional[float]:
+    def _safe_num(v: Any) -> float | None:
         if v is None:
             return None
         try:
