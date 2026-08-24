@@ -31,7 +31,7 @@ def debug_user_sync():
         print("Please ensure your Python backend is running and accessible.")
         print(f"Details: {e}")
     except requests.exceptions.RequestException as e:
-        print(f"\nError: An HTTP request error occurred.")
+        print("\nError: An HTTP request error occurred.")
         print(f"Status Code: {response.status_code if 'response' in locals() else 'N/A'}")
         print(f"Response Body: {response.text if 'response' in locals() else 'N/A'}")
         print(f"Details: {e}")

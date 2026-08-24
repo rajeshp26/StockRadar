@@ -21,7 +21,10 @@ def generate_supabase_token(email: str):
         from supabase import create_client
         client = create_client(supabase_url, anon_key)
 
-        password = os.environ.get("E2E_TEST_PASSWORD", "StockerPro123!")
+        password = os.environ.get("E2E_TEST_PASSWORD")
+        if not password:
+            print("\033[91mError: E2E_TEST_PASSWORD must be set in backend/.env\033[0m")
+            sys.exit(1)
         result = client.auth.sign_in_with_password({
             "email": email,
             "password": password,
@@ -31,7 +34,7 @@ def generate_supabase_token(email: str):
         print("-" * 70)
         print(f"Email: {email}")
         print(f"User ID: {result.user.id}")
-        print(f"\n\033[1mAccess Token:\033[0m")
+        print("\n\033[1mAccess Token:\033[0m")
         print(f"\033[1m{result.session.access_token}\033[0m")
         print("-" * 70)
         print("\nUse the token as: Authorization: Bearer <token>")
