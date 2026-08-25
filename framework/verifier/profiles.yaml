@@ -3,7 +3,7 @@ profiles:
   functional:
     always: true
     evidence: [unit_test, integration_test]
-    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh"]
+    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh", "./framework/gates/g9_scope.sh"]
 
   contract:
     when: {contract_change: true}
@@ -54,10 +54,10 @@ profiles:
 # g6 is appended by the Verifier whenever a requirement's shape is visible_behaviour,
 # regardless of impact class — a local CSS change can still break visible behaviour.
 impact_to_gates:
-  local:            [g2, g4]
-  component:        [g2, g4, g5]
-  cross_component:  [g1, g2, g3, g4, g5]
-  system:           [g1, g2, g3, g4, g5]
+  local:            [g2, g4, g9]
+  component:        [g2, g4, g5, g9]
+  cross_component:  [g1, g2, g3, g4, g5, g9]
+  system:           [g1, g2, g3, g4, g5, g9]
 
 shape_to_gates:
   visible_behaviour: [g6]

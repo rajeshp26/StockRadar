@@ -13,6 +13,7 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G6 browser    | specs ran and passed | specs ran and failed | **NEVER EMITTED** | UNVERIFIABLE | — |
 | G7 retro      | retros complete, no recurrence | incomplete or recurrence | BLOCKED (python3/pyyaml absent) | — | NOT_APPLICABLE (no escape trigger) |
 | G8 blockers  | no open blockers | open blockers listed | BLOCKED (python3/pyyaml absent) | — | — |
+| G9 scope      | within declared scope (or SKIP: no plan / no changes) | undeclared files listed | — | — | — |
 
 ## G6 emits ONLY 0, 1, 3
 
@@ -34,6 +35,12 @@ A non-complete stop (CONTEXT_INSUFFICIENT, BLOCKED, UNKNOWN_IMPACT, ...) recorde
 exists, G8 returns exit 1 and completion is refused -- the same enforcement shape G7
 applies to retrospectives. Exit 0 means zero open records; exit 2 means the store could
 not be read (python3/pyyaml absent or unparsable state), which is never read as zero.
+
+## G9 skips are not silent passes
+
+G9 judges changed source files against the plan's declared files_or_components. With no plan
+context or no source changes it logs SKIP and exits 0 -- that is "nothing was judged", not
+"scope respected". A skip must be reported as skipped, never counted as a passed check.
 
 ## Exit 3 is the most important code in the framework
 

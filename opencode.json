@@ -7,12 +7,18 @@
     ".opencode/rules/*.md"
   ],
   "permission": {
-    "*": "ask",
     "read": "allow",
     "glob": "allow",
     "grep": "allow",
     "list": "allow",
     "lsp": "allow",
+    "todowrite": "allow",
+    "question": "allow",
+    "websearch": "allow",
+    "skill": "allow",
+    "task": {
+      "*": "allow"
+    },
     "edit": "deny",
     "webfetch": "deny",
     "bash": {
@@ -21,9 +27,33 @@
       "git diff*": "allow",
       "git log*": "allow",
       "git show*": "allow",
-      "rm -rf*": "deny",
+      "npm test*": "allow",
+      "npm run build*": "allow",
+      "npm run lint*": "allow",
+      "pytest*": "allow",
+      "tsc*": "allow",
+      "eslint*": "allow",
+      "ruff*": "allow",
+      "mypy*": "allow",
+      "python3 framework/*": "allow",
+      "./framework/*": "allow",
+      "Get-ChildItem*": "allow",
+      "Get-Content*": "allow",
+      "Get-Item*": "allow",
+      "Test-Path*": "allow",
+      "Remove-Item*": "deny",
+      "rm *": "deny",
+      "del *": "deny",
+      "rmdir*": "deny",
+      "rd *": "deny",
       "git push*": "deny",
-      "git reset --hard*": "deny"
+      "git reset*": "deny",
+      "git clean*": "deny",
+      "git checkout*": "deny",
+      "git restore*": "deny",
+      "git rebase*": "deny",
+      "git merge*": "deny",
+      "git cherry-pick*": "deny"
     }
   },
   "agent": {
@@ -40,13 +70,24 @@
           "git status*": "allow",
           "git diff*": "allow",
           "git log*": "allow",
-          "./framework/gates/*": "allow",
-          "./framework/adapters/gsd_state.py*": "allow",
+          "git show*": "allow",
+          "./framework/*": "allow",
+          "python3 framework/*": "allow",
+          "mkdir -p*retro/triggers*": "allow",
           "python3 framework/adapters/gsd_state.py*": "allow",
-          "./framework/frontend/*": "allow",
-          "python3 framework/retro/ledger.py analyse*": "allow",
-          "python3 framework/retro/escape_path.py*": "allow",
-          "mkdir -p*retro/triggers*": "allow"
+          "Get-ChildItem*": "allow",
+          "Test-Path*": "allow",
+          "Remove-Item*": "deny",
+          "rm *": "deny",
+          "del *": "deny",
+          "git push*": "deny",
+          "git reset*": "deny",
+          "git clean*": "deny",
+          "git checkout*": "deny",
+          "git restore*": "deny",
+          "git rebase*": "deny",
+          "git merge*": "deny",
+          "git cherry-pick*": "deny"
         }
       },
       "tools": {
@@ -66,6 +107,11 @@
           "*": "deny"
         },
         "bash": {
+          "*": "ask",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "git show*": "allow",
           "python3 framework/adapters/gsd_state.py*": "allow"
         }
       },
@@ -88,6 +134,11 @@
           "*": "deny"
         },
         "bash": {
+          "*": "ask",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "git show*": "allow",
           "python3 framework/adapters/gsd_state.py*": "allow",
           "python3 framework/architecture/checklist_check.py*": "allow"
         }
@@ -108,6 +159,11 @@
           "*": "deny"
         },
         "bash": {
+          "*": "ask",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "git show*": "allow",
           "python3 framework/adapters/gsd_state.py*": "allow"
         }
       },
@@ -131,6 +187,7 @@
           "git status*": "allow",
           "git diff*": "allow",
           "git log*": "allow",
+          "git show*": "allow",
           "npm test*": "allow",
           "npm run build*": "allow",
           "pytest*": "allow",
@@ -141,8 +198,24 @@
           "npx shadcn@latest add*": "ask",
           "npm run lint*": "allow",
           "node_modules/.bin/playwright*": "allow",
-          "python3 framework/retro/*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow"
+          "python3 framework/adapters/gsd_state.py*": "allow",
+          "python3 framework/*": "allow",
+          "Get-ChildItem*": "allow",
+          "Get-Content*": "allow",
+          "Test-Path*": "allow",
+          "Remove-Item*": "deny",
+          "rm *": "deny",
+          "del *": "deny",
+          "rmdir*": "deny",
+          "rd *": "deny",
+          "git push*": "deny",
+          "git reset*": "deny",
+          "git clean*": "deny",
+          "git checkout*": "deny",
+          "git restore*": "deny",
+          "git rebase*": "deny",
+          "git merge*": "deny",
+          "git cherry-pick*": "deny"
         }
       },
       "tools": {
@@ -198,16 +271,32 @@
           "eslint*": "allow",
           "git diff*": "allow",
           "git status*": "allow",
-          "./framework/gates/*": "allow",
+          "git log*": "allow",
+          "git show*": "allow",
+          "./framework/*": "allow",
           "npm audit*": "allow",
           "pip-audit*": "allow",
-          "./framework/frontend/stack_check.py*": "allow",
           "node_modules/.bin/playwright*": "allow",
           "npm run test:e2e*": "allow",
           "npm ci*": "ask",
-          "./framework/gates/g7_retro.sh*": "allow",
-          "python3 framework/retro/*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow"
+          "./framework/gates/*": "allow",
+          "python3 framework/adapters/gsd_state.py*": "allow",
+          "python3 framework/*": "allow",
+          "Get-ChildItem*": "allow",
+          "Test-Path*": "allow",
+          "Remove-Item*": "deny",
+          "rm *": "deny",
+          "del *": "deny",
+          "rmdir*": "deny",
+          "rd *": "deny",
+          "git push*": "deny",
+          "git reset*": "deny",
+          "git clean*": "deny",
+          "git checkout*": "deny",
+          "git restore*": "deny",
+          "git rebase*": "deny",
+          "git merge*": "deny",
+          "git cherry-pick*": "deny"
         }
       },
       "tools": {
