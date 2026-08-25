@@ -40,7 +40,12 @@ def detect() -> dict:
 
     if found:
         root, dist, mode = found[0]
-        m = {"distribution": dist, "state_root": str(cwd / root), "mode": mode,
+        # Store RELATIVE, never absolute: an absolute path bakes in one shell's mount
+        # flavour (/mnt/c vs C:\), so a gate run under WSL poisons the cache for Windows
+        # and validate fails with 'cache belongs to another checkout'. Detection is
+        # cwd-anchored and every call site invokes the adapter from the repo root, so the
+        # bare root name resolves identically under both shells.
+        m = {"distribution": dist, "state_root": root, "mode": mode,
              "version": _version(), "detected_at": _now(),
              "supported": dist in SUPPORTED}
         if dist not in SUPPORTED:
@@ -51,7 +56,7 @@ def detect() -> dict:
                 f"deliverable. Implement it in THIS adapter and nowhere else."
             )
         return m
-    return {"distribution": "none", "state_root": str(cwd / ".planning"),
+    return {"distribution": "none", "state_root": ".planning",
             "mode": "files", "version": None, "detected_at": _now(),
             "warning": "No GSD state found. Run GSD project init before using the framework."}
 
