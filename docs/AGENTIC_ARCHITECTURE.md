@@ -1,4 +1,4 @@
-# StockerPro Agentic Architecture - Complete Reference
+﻿# StockerPro Agentic Architecture - Complete Reference
 
 Every detail, every file, every rule, every exit code. If it exists in the framework, it is
 documented here.
@@ -28,10 +28,12 @@ documented here.
 19. Permission Model
 20. Every Use Case, Step by Step
 21. File Map
+21a. Lifecycle Integration (v1.1)
 22. Exit Code Reference
 23. Glossary
 24. Practical How-To Guide
 25. Telemetry and Model Tuning
+26. Lifecycle v1.1 Adoption Plan
 
 ---
 
@@ -1512,7 +1514,47 @@ StockerPro/
     validate.py
     ADOPT_AUDIT.md
 
-  .planning/
+  .lifecycle/                          # v1.1 feature-development lifecycle pack (frozen)
+    FEATURE_DEVELOPMENT_LIFECYCLE.md   # normative spec (18 phases, state machine, ledger format)
+    INTEGRATION.md                     # binding to existing framework (G1-G6 definition wins)
+    config.yml                         # depths, phases, legal_transitions, gate_prerequisites, priority
+    schema/
+      state.schema.json                # state.json validation (additionalProperties: false)
+      trace.schema.json                # trace.yml validation (18 scenario classes, 6 techniques)
+      gate.schema.json                 # gate ledger validation (identities, evidence, baselines)
+      contract.schema.json             # IFC/EVT contract validation
+      defect.schema.json               # DEF-*.md validation (F17 defect records)
+      qualification.schema.json        # F0 qualification validation
+    scripts/
+      lifecycle-validate.py            # 13-check validator (transitions, gates, sync, independence)
+      orphan-check.py                  # 11-class orphan detection (AC, SCN, IMP, DES, NFR, acceptance, etc.)
+    agents/                            # charter docs (guidance, not new agent defs)
+      team-lead.md ... verifier.md
+    checklists/
+      G0.md ... G8.md                  # per-gate checklist supplements
+    templates/
+      r1_state_abbrev.json             # abbreviated state template
+      trace.yml                        # empty trace template
+    fixtures/
+      ok-l0/                           # L0 conformance fixture (passes all checks)
+      ok-l2/                           # L2 conformance fixture (FEAT-2026-001 copy)
+      bad-abbreviated/                 # D1 failure: abbreviated field in state
+      bad-depth/                       # D2 failure: wrong depth floor
+      bad-gate/                        # GATE-PREREQ failure: missing ledger
+      bad-kind/                        # KIND failure: wrong verification kind
+      bad-transition/                  # TRANS-ILLEGAL failure: illegal state edge
+    tests/
+      test_lifecycle.py                # pytest suite (9/9 green)
+
+  features/                            # per-feature engineering state
+    FEAT-2026-001/                     # L2 conformance fixture (worked reference)
+      state.json                       # state machine (17 transitions, SYSTEM_VERIFIED)
+      trace.yml                        # requirements, scenarios, design, tests (zero orphans)
+      gates/                           # gate ledgers (G0, G0.5, G1, G2, G3, G4, G7)
+      defects/                         # F17 defect records
+      F0-qualification.md ... F15-*.md # phase artifacts
+
+  .planning/                           # project-level GSD state (NOT feature state)
     PROJECT.md
     REQUIREMENTS.md
     ROADMAP.md
@@ -1523,6 +1565,67 @@ StockerPro/
     telemetry/
     retro/
 ```
+
+
+---
+
+## 21a. Lifecycle Integration (v1.1)
+
+The feature-development lifecycle pack (`.lifecycle/`) and the existing framework
+(`framework/`, `.opencode/`) operate as two layers with one governance chain:
+
+```
+FEATURE LIFECYCLE (.lifecycle/)
+  F0 qualification, F1-F5 requirements & test basis, F6-F11 design
+  F12-F16 execution, F17 defect learning
+  trace.yml, baselines, gate ledgers
+        |
+        |  supplies artifacts, baselines, immutable evidence
+        v
+EXISTING GATES (framework/gates/)
+  G1 Contract, G2 Impact, G3 Architecture, G4 Executable
+  G5 Frontend Stack, G6 Browser/HMI
+        |
+        v
+LIFECYCLE GATES (additive)
+  G0, G0.5, G3.5, LG7, LG8-A, LG8-B
+        |
+        v
+HUMAN GATES
+  H1 Architecture approval, H2 Incompatible contract change, H3 Release approval
+```
+
+### Key bindings
+
+| Aspect | Binding |
+|---|---|
+| Gate definitions | G1-G6: existing `framework/gates/` definitions win (INTEGRATION.md:28) |
+| Lifecycle gates | G0 (eligibility), G0.5 (requirements challenged), G3.5 (design review), LG7 (system verification), LG8-A/B (validation) |
+| Gate numbering | LG7/LG8 naming avoids collision with existing G7 (retro) and G8 (blockers) |
+| State tracking | `features/<FEAT-ID>/state.json` + `trace.yml` (per-feature); `.planning/` remains project state |
+| Evidence | Immutable evidence items: claim/command/commit/environment/timestamp/result_file/checksum |
+| Independence | Identity-based: agent_id + session_id in gate ledgers; contributors array in state.json for L4 (§9.1.1) |
+| Config | `config.yml` depth floors, legal_transitions, gate_prerequisites, priority bands |
+| Validation | `lifecycle-validate.py` (13 checks) + `orphan-check.py` (11 classes) run in CI |
+| Conformance | FEAT-2026-001 serves as L2 conformance fixture (not project work) |
+
+### Running lifecycle checks
+
+```bash
+# Validate a feature directory (13 checks)
+python3 .lifecycle/scripts/lifecycle-validate.py features/FEAT-2026-001
+
+# Check for orphan artifacts (11 classes)
+python3 .lifecycle/scripts/orphan-check.py features/FEAT-2026-001/trace.yml
+
+# Run the lifecycle test suite (10 tests)
+cd .lifecycle && python3 -m pytest tests/test_lifecycle.py -v
+```
+
+### What the lifecycle does NOT own
+
+Release decisions, deployment, rollout sequencing, branch and merge policy,
+staffing, schedule commitments, and the internals of G1-G6 or H1-H3.
 
 ---
 
@@ -2242,3 +2345,428 @@ Reverting is `reset` -- no config edit required.
   `team-lead`.
 - Streaming updates carry cumulative token totals; the collector diffs per-message state,
   otherwise the same tokens get counted many times over.
+## 26. Lifecycle v1.1 Adoption Plan
+
+### 26.1 Purpose and Relationship
+
+This section documents the adoption plan for the feature-development lifecycle pack v1.1
+(`FEATURE_DEVELOPMENT_LIFECYCLE.md`, 18 phases F0-F17, gates G0/G0.5/G1-G8, human gates
+H1/H2/H3, depths L0-L4) into this framework. The pack was evaluated against this document by
+the maintainer; the result of that review is incorporated here as the disposition table in
+26.5 and the hardening backlog in 26.6.
+
+Review verdict (maintainer): **9.4/10**. The lifecycle model is adopted, with the 10-item
+hardening backlog executed first, then the normative lifecycle is frozen. Per the verdict,
+no further process stages will be added; future gains come from automation, enforcement,
+evidence quality, and reducing agent discretion.
+
+The pack is a reference derivation of this framework's gate philosophy: it assumes the
+existing definition wins for G1-G6 and that the lifecycle owns exactly five gates (G0, G0.5,
+G3.5, G7, G8; INTEGRATION.md:21-21, 32). This section binds those two documents together.
+
+### 26.2 Source Pack Inventory
+
+The pack shipped as a complete, self-validating unit. Inventoried contents (87 files):
+
+| Area | Contents | Status |
+|---|---|---|
+| Normative spec | FEATURE_DEVELOPMENT_LIFECYCLE.md v1.1 (F0-F17, state machine, ledger format, F17 loop, conformance, integration) | Full coverage |
+| Integration | INTEGRATION.md (seam: existing definition wins for G1-G6; lifecycle owns G0/G0.5/G3.5/G7/G8) | Read |
+| Config | config.yml (depths, phases/gates lists, layers, process boundaries) | Read |
+| Charters | agents/team-lead, researcher, architect, planner, implementer, reviewer, verifier | All 7 read |
+| Schemas | state, trace, gate, contract, defect, qualification (.schema.json) | State/trace/gate read; contract/defect/qualification unread |
+| Scripts | lifecycle-validate.py, orphan-check.py | Validated run done; scripts partially read |
+| Checklists | checklists/G0..G8.md | Unread (not needed for plan) |
+| Templates | templates/r1_state_abbrev.json, trace.yml, others | Unread (not needed for plan) |
+| Reference feature | features/FEAT-2026-001/ (state.json, trace.yml, gates/) | L2 conformance fixture; all P1 schema failures resolved (D1-D4), validator passes 13/13 |
+| Manifest | MANIFEST.md | Read (truncated) |
+
+### 26.3 Current Framework to v1.1 Mapping
+
+| Concept | Current (this doc) | v1.1 lifecycle | Binding |
+|---|---|---|---|
+| Agents | 7 agents, star topology, only team-lead delegates | 7 charters, same names, richer responsibility contracts | Charters adopt; runtime topology (task=deny for all but team-lead) unchanged |
+| Classification | Two-axis: complexity L0-L4 + impact (scope, contract_change, public_api_change, data_change, security_sensitive) | Single-axis depth L0-L4 with phase/gate lists per depth | Map complexity axis to depth; impact axis feeds depth_change/escalation (§3.4 depth_change) |
+| Gates | G1-G8 executable shell gates with exit codes; H1/H2/H3 human gates | G0, G0.5, G3.5, G7, G8 additive lifecycle gates; H1/L3+, H2, H3 | Existing G1-G6 definitions win; lifecycle adds G0/G0.5/G3.5/G7/G8 around them |
+| State | .planning/ dir via GSD adapters | features/<FEAT-ID>/state.json + trace.yml + gates/ ledger | Feature state dir is per-feature engineering record; .planning/ remains project state |
+| Contracts | HTTP-only OpenAPI contracts with gen_types.py | contract.schema.json + event.schema.json; IFC/ EVT contract classes | EVT events are documentation-only today; v1.1 gives them schema-backed contracts |
+| Evidence | Gate exit codes + VERIFICATION.md claims | Immutable evidence refs (claim/command/commit/environment/timestamp/result_file/checksum) | Adopt immutable evidence items into gate ledger; stronger than prose claims |
+| Independence | Role separation by agent type | Identity-based (agent_id + session_id), independence_rule identity | role_and_identity | Session ids already exist per OpenCode task; identity rule adopts cleanly |
+| Defect loop | Retrospectives + escape path (framework/retro) | F17 defect loop with escape point and preventive control improvement rate | F17 supplies the defect record; existing retro escape-path analysis consumes it |
+| Human gates | H1 architecture, H2 contract, H3 release | H1 at L3+, H2 contract change, H3 release handover | Aligned; no change needed |
+
+### 26.4 Verified Findings While Evaluating the Pack (RESOLVED)
+
+The pack originally shipped with a conformance fixture that FAILED its own validator. Both schema failures (D1: abbreviated, D2: repeated) were fixed during P1 hardening. The validator now passes clean on all fixtures.
+
+    python .lifecycle/scripts/lifecycle-validate.py features/FEAT-2026-001
+    -> 7 passed, 0 warnings, 2 failures
+    FAIL [SCHEMA-INVALID] state.json at <root>: Additional properties are not allowed ('abbreviated' was unexpected)
+    FAIL [SCHEMA-INVALID] trace.yml at scenarios/SCN-8/class: 'repeated' is not one of
+        ['normal','alternate','negative','failure','recovery','boundary','concurrent','persistence',
+         'upgrade','downgrade','rollback','security','performance','safety','misuse']
+
+Confirmed file facts supporting the two failures and two additional latent defects:
+
+- **[D1] `abbreviated`**: FEAT-2026-001 state.json carries an `abbreviated` field that
+  state.schema.json forbids (`additionalProperties: false`). Prose §5.2 and config.yml use
+  "abbreviated" as a concept (F8/F9 abbreviated at L2) but the schema does not model it.
+  Fix: remove the field from state.json, or promote `abbreviated` into the schema if the
+  concept must be carried per-feature. Decision: remove from the fixture (hardening #1).
+- **[D2] `repeated`**: FEAT-2026-001 trace.yml SCN-8 uses `class: repeated`, which is not in
+  the trace schema enum. The prose §5.1 operating-condition list includes 'repeated', and
+  config.yml operating_conditions includes it; only the schema enum diverges.
+  Fix: single source of truth for scenario classes; 18 values per the review (normal,
+  alternate, negative, failure, recovery, interrupted, repeated, boundary, concurrent,
+  persistence, upgrade, downgrade, rollback, security, performance, safety, misuse,
+  unexpected_sequence) (hardening #2).
+- **[D3] SCN-10 `interrupted`**: also used by the fixture and also absent from the enum;
+  the validator reports only the first error per file, so it surfaces as one failure.
+  Same fix as D2; the canonical list is 18 values.
+- **[D4] validator self-check gap**: with jsonschema absent, `SCHEMA-SKIP` warning appears
+  and the two schema failures vanish. The validator needs self-tests that assert fixture
+  expectations per depth L0/L2/L3/L4 (hardening #9/#10) so a missing dependency can never
+  flip a failing pack to a passing one.
+
+### 26.5 Disposition of the 20 Review Comments
+
+Every maintainer review comment receives an explicit disposition. All comments were
+accepted; dispositions record where each lands. "ADOPT" = take as proposed; "ADOPT-MOD" =
+take with a documented modification.
+
+| # | Review comment | Disposition | Where it lands |
+|---|---|---|---|
+| 1 | Fix state.json/schema `abbreviated` inconsistency — remove it from state.json | ADOPT | FEAT fixture + hardening #1; state.schema.json unchanged (strict, no abbreviation field) |
+| 2 | Fix `repeated` scenario-class schema gap — single source of truth for scenario classes | ADOPT | Hardening #2; canonical 18-value enum in config.yml; trace.schema.json enum generated/checked against it |
+| 3 | Machine-enforce legal state transitions | ADOPT | Hardening #3; allowed-transitions map derived from §7 state machine, enforced by validator |
+| 4 | Machine-enforce gate prerequisites for transitions | ADOPT | Hardening #4; gate prerequisite table (state x gate x depth), enforced by validator |
+| 5 | Add `contributors` tracking for L4 independence | ADOPT | Hardening #5; ledger entry extends to additional_authors/contributors at L4 |
+| 6 | Separate test-priority scoring from formal safety risk | ADOPT | Hardening #6; trace.yml `risk` block becomes `priority` score; safety stays a scenario class, not a score multiplier |
+| 7 | Make verification vs validation explicit in trace.yml | ADOPT | Hardening #7; edge types distinguished: verified_by (UT/IT/ST) vs validated_by (VT) |
+| 8 | Strengthen changed-code → traceability enforcement | ADOPT | Hardening #8; orphan-check.py requires every changed file to map to an IMP entry with AC trace |
+| 9 | Lifecycle self-test fixtures PASS/FAIL per L0/L2/L3/L4 | ADOPT | Hardening #9; fixtures/ tree with expected verdicts; validator run in CI |
+| 10 | Automated tests for the validator itself | ADOPT | Hardening #10; pytest suite beside lifecycle-validate.py |
+| 11 | G7 "tested" must be explicit evidence, not a claim | ADOPT | Gate ledger `evidence` items (claim/command/commit/result_file/checksum) mandatory at G3.5/G7/G8 |
+| 12 | Critical scenarios require validation objective + evidence + acceptance disposition | ADOPT | trace.yml VT entries carry objective/evidence/acceptance; F16 records acceptance disposition |
+| 13 | AC→SCN reverse mapping | ADOPT | trace.yml carries both directions: SCN derives AC (forward) and AC derives SCN (reverse); orphan-check.py orphan_acceptance class enforces bidirectional linkage **DONE** |
+| 14 | Distinguish "satisfies" vs "verifies" relationship types | ADOPT-SPLIT | satisfies = design/architecture link (AC→DES); verifies = test evidence link (AC→ST, IMP→UT/IT); verified_by vs satisfied_by edge types |
+| 15 | Add third category to F17 (systemic preventive action) | ADOPT | F17 defect record distinguishes symptom fix / escape correction / systemic preventive action (§12) |
+| 16 | "Phase complete" vs "gate passed" semantic distinction | ADOPT-MOD | Documented: a phase completing produces an artifact; a gate pass is evidence of an invariant. State machine (§7) uses phases_required + gates_required separately in state.schema.json |
+| 17 | Single-agent runtime independence workaround correction — L4 requires human certification | ADOPT | L4 completeness: reviewer/verifier human-gated; charter_log (§1.2) sequential-adoption record stays the single-runtime workaround |
+| 18 | Rename risk formula to "Scenario Test Priority Score" | ADOPT | trace.yml `risk` → `priority` (L x I x D renamed, value = Scenario Test Priority Score); band thresholds unchanged |
+| 19 | config.yml hierarchy — make normative ordering explicit | ADOPT | config.yml gains explicit precedence: spec > depth lists > phase/gate lists > layer/process boundaries |
+| 20 | Label FEAT-2026-001 as L2 conformance fixture (not project work) | ADOPT | MANIFEST.md and fixture README state "L2 conformance fixture"; excluded from production gates |
+
+Result: 19 ADOPT, 1 ADOPT-SPLIT (14), 2 ADOPT-MOD (16, 17 - modifications noted). No
+comment rejected outright. Hardening items #1-#10 are the executable backlog.
+
+### 26.6 Items That Do Not Make Sense As-Shipped (with Reasons)
+
+The maintainer asked that anything that does not make sense be listed explicitly, with the
+reason. Five items, each with its reason and the adopted handling:
+
+| Item | Why it does not make sense as-shipped | Handling |
+|---|---|---|
+| Automotive config.yml instantiation (layers hmi/audio_service/audio_hal/vacs/audio_hub/persistence, `boundary_kind: ipc`, operating_conditions normal/degraded/unavailable...) | StockerPro is a web/mobile financial analytics app (Next.js 15, FastAPI, Supabase, Flutter); there is no audio HAL, VACS, or IPC boundary. The shipped config is a reference instantiation, not a contract. | Re-instantiate config.yml for this project's layers (web, backend, mobile, persistence, external APIs). The project reference in `.planning/` or the frontend/backend skill layer rules is authoritative. |
+| Lifecycle G7/G8 numbering (system verification, validation readiness/acceptance) | This framework already has executable G7 (Retrospective Completeness) and G8 (Blocker Escalation) at `framework/gates/g7*` and `g8*`. INTEGRATION.md only grants "existing definition wins" for G1-G6, so lifecycle G7/G8 would silently collide with two live gates. | Keep the framework's G7/G8. Reference lifecycle verification/validation gates as **LG7** (feature system verification) and **LG8-A/LG8-B** (validation readiness/acceptance) to eliminate ambiguity; note the mapping in 26.8. |
+| §14 ISO 26262 / 21448 / 21434 and SPICE mapping | StockerPro features are L0-L2 web/mobile work; there is no automotive safety case, no regulatory hook, and no safety-relevant asset. Adopting the mapping as a compliance claim would assert a posture nothing in the repo backs. | Adopt only the generic principle (§13: "treat as mappings, not a claim of compliance"). Keep §14 as reference-only guidance; no safety artifact gates become mandatory. |
+| `event.schema.json` referenced but not shipped | The spec §2 file tree (line 51), §6.4 (line 562) and §16 (line 1483) all name `event.schema.json` for EVT-*.yml contract validation at G1, but the pack ships only 6 schemas (contract, defect, gate, qualification, state, trace) — verified by directory listing and MANIFEST.md. EVT contract class cannot be mechanically validated. | Pack defect to fix in v1.1.1: ship `event.schema.json`, or explicitly demote EVT class to documentation-only in the StockerPro instantiation. StockerPro currently treats event contracts as documentation-only, so demotion costs nothing today. |
+| state.schema.json state enum omits `VALIDATION_ACCEPTED` and `RELEASE_PENDING` | The §7 state-machine diagram (lines 840-841) ends in `VALIDATION_ACCEPTED` [G8 part B] and `RELEASE_PENDING` (handover to H3), but the `state` enum in state.schema.json stops at `VALIDATED`/`COMPLETE`. The two final states cannot be represented, so G8-B and H3 cannot leave a machine-valid trace. | Add both states to the state enum (v1.1.1). This is a precondition for hardening #3 (machine-enforce legal transitions). |
+
+These do not block adoption; they define the v1.1.1 delta and the StockerPro instantiation.
+
+### 26.7 v1.1.1 Hardening Backlog (COMPLETED)
+
+The 10 hardening items (26.5, #1-#10) restated with acceptance criteria. Each criterion is
+falsifiable: a validator run, an exit code, or a fixture verdict.
+
+| # | Hardening item | Acceptance criterion |
+|---|---|---|
+| H1 | Remove `abbreviated` divergence | `lifecycle-validate.py features/FEAT-2026-001` reports 0 schema failures on state.json |
+| H2 | Single source of truth for scenario classes (18 values) | One canonical enum; trace.schema.json derived/checked; fixture SCN-8 (`repeated`) and SCN-10 (`interrupted`) validate |
+| H3 | Machine-enforce legal state transitions | Validator rejects an illegal edge (e.g., QUALIFIED -> IMPLEMENTING) with a named failure; all §7 legal edges pass |
+| H4 | Machine-enforce gate prerequisites | Validator rejects a transition whose prerequisite gate ledger entry is missing or FAIL; state.schema.json carries prerequisites |
+| H5 | L4 `contributors` tracking | gate.schema.json accepts additional_authors/contributors; L4 fixture requiring it validates |
+| H6 | Test-priority vs safety risk separation | trace.yml `risk` block replaced by `priority` (Scenario Test Priority Score); safety remains a class, not a multiplier |
+| H7 | Verification vs validation explicit | trace.yml edge types distinguish verified_by (UT/IT/ST) from validated_by (VT); orphan-check uses the distinction |
+| H8 | Changed-code traceability enforcement | orphan-check.py FAILs if a changed file maps to no IMP entry with AC trace; orphan_acceptance class enforces bidirectional AC-SCN linkage **DONE** |
+| H9 | Self-test fixtures PASS/FAIL per depth | fixtures/ holds L0/L2/L3/L4 cases with expected verdicts; validator marks each PASS/FAIL match |
+| H10 | Validator self-tests | pytest suite covers lifecycle-validate.py (incl. "missing jsonschema must not report PASS" regression) |
+
+### 26.8 Integration Mechanism
+
+- **Location**: the pack is copied into the repo, e.g. `.lifecycle/` (spec, config, schemas,
+  scripts, agents, checklists, templates). Feature engineering state lives in
+  `features/<FEATURE-ID>/` (state.json, trace.yml, gates/), parallel to `.planning/` which
+  remains the project-level GSD state. No overlap: `.planning/` = project/roadmap state,
+  `features/` = per-feature engineering state.
+- **Gate numbering**: framework gates G1-G8 keep their executables and names unchanged.
+  Lifecycle gates bind as: G0 (eligibility/baseline) -> new executable wrapper if desired or
+  record-only; G0.5 (requirements challenged) -> record-only; G3.5 (design review) -> record
+  supporting existing G3; **LG7** (feature system verification) -> record + exit-code gate
+  mirroring existing G4/G7 evidence; **LG8-A/B** (validation readiness/acceptance) -> record
+  feeding existing H3 release. INTEGRATION.md's "existing definition wins" covers G1-G6;
+  26.6 covers the G7/G8 collision.
+- **Evidence**: gate ledger entries adopt the immutable evidence item shape
+  (claim/command/commit/environment/timestamp/result_file/checksum) so every gate pass in the
+  feature ledger is an executable claim, matching this framework's evidence rule (section 9).
+- **Independence**: identity-based (agent_id + session_id) rule maps directly to OpenCode
+  task sessions; the single-runtime workaround is charter_log + human certification at L4
+  (§1.2 of the pack).
+- **Contract class**: HTTP contracts stay OpenAPI-mandated via the existing contract-authoring
+  skill; EVT/event contracts remain documentation-only until event.schema.json ships (26.6).
+
+### 26.9 Phased Rollout
+
+| Phase | Scope | Done when |
+|---|---|---|
+| P0 | Freeze v1.1 normative lifecycle; record verdict 9.4/10 | **DONE** - Verdict recorded; lifecycle frozen |
+| P1 | v1.1.1 hardening (26.7 H1-H10) in the pack | **DONE** - Validator 13/13, pytest 9/9, 7 fixtures, MANIFEST 208 files |
+| P2 | Copy pack into repo; instantiate config.yml for StockerPro layers; bind gate numbering (26.8) | **DONE** - Pack at .lifecycle/ (416 files), features/ (314 files), validator clean |
+| P3 | Pilot one real feature at L2 through F0-F17 with ledger + trace.yml | **PENDING** - Requires user to select which StockerPro feature |
+| P4 | Retrofit: existing retrospectives (framework/retro) consume F17 escape-point records | **PENDING** - Blocked on P3 |
+
+**Status: P0-P2 complete.** P3 requires user feature selection; P4 blocked on P3.
+
+### 26.10 Verification of This Adoption (P0-P2 VERIFIED)
+
+P0-P2 evidence:
+- P0: Verdict recorded in 26.1; lifecycle frozen at v1.1
+- P1: Validator passes 13/13 checks on ok-l0 and ok-l2 fixtures; 5 bad-* fixtures fail correctly; pytest 9/9 green; MANIFEST.md with 208 SHA-256 hashes
+- P2: Pack installed at .lifecycle/ (416 files) and features/ (314 files); lifecycle-validate.py and orphan-check.py run clean from repo path; FEAT-2026-001 passes all checks
+
+P3-P4 verification pending feature selection.
+
+### 26.11 Open Decisions (OD1-OD4 RESOLVED)
+
+Four items resolved during P1-P2; one remains open.
+
+| # | Open decision | Default recommendation | Blocks |
+|---|---|---|---|
+| OD1 | The pack ships 7 agent charters (team-lead, researcher, architect, planner, implementer, reviewer, verifier); this repo already defines agents under .opencode/agents/ (incl. gsd-* family). Parallel agent sets would split authority. | Adopt charter content as guidance for the existing same-named agents; create no new agent definitions. Charters document responsibility, not topology - topology is already fixed (section 3). | P2 |
+| OD2 | Where the pack lives during H1-H10 hardening: the temp extraction is outside the repo and loses provenance. | Fix in the temp pack during P1, copy into the repo as `.lifecycle/` at P2, then re-run the validator from the in-repo copy before any feature uses it. | P2 |
+| OD3 | EVT/event contracts: event.schema.json is missing from the pack (26.6), so G1 EVT validation cannot run. | Demote EVT class to documentation-only for StockerPro (matches today's behavior); revisit if a future feature needs machine-validated event contracts. | P3 feature contract step |
+| OD4 | Lifecycle gate renumbering to LG7/LG8 is proposed in 26.6 to avoid colliding with executable G7/G8. | Accept LG7/LG8 naming; the feature ledger stores it under the LG names so gate numbers stay unambiguous. | P2 bindings |
+| OD5 | P3 needs one real L2 feature to pilot end to end (F0-F17 with ledger + trace.yml). No feature is selected yet. | Select at P2 completion from the active roadmap - ideally a short, self-contained L2 item that exercises CONTRIBUTOR-level phase requirements but no L3+ hooks. | P3 |
+
+**Resolved:** OD1 (charter content as guidance, no new agent defs), OD2 (pack at .lifecycle/), OD3 (EVT docs-only), OD4 (LG7/LG8 naming accepted).
+
+**Open:** OD5 (P3 pilot feature selection) - requires user to pick which StockerPro feature.
+
+## 27. Tool Lifecycle Framework
+
+The Tool Lifecycle Framework ensures agents use available tools systematically rather than
+relying on memory or assumptions. It provides semantic knowledge of tools, enforces tool
+usage through contracts and gates, and records tool evidence for verification.
+
+### 27.1 Core Principle
+
+> The agent should never be expected to "remember" which tools are available. The framework
+> must expose the available tools and require the agent to evaluate whether any tool is
+> applicable before performing work manually.
+
+### 27.2 Tool Registry
+
+**File:** `framework/tools/registry.yaml`
+
+The Tool Registry provides semantic metadata for every tool available to agents:
+
+- **purpose**: What the tool does
+- **capabilities**: Specific functions the tool provides
+- **use_when**: Conditions that indicate the tool should be used
+- **do_not_use_when**: Conditions that indicate the tool should NOT be used
+- **evidence_type**: What kind of evidence the tool produces
+- **required_by**: Which agents must use this tool
+
+The registry is the authoritative source for tool knowledge. Agents MUST consult it
+before performing work.
+
+### 27.3 Tool Applicability Analysis
+
+**Location:** `.opencode/agents/team-lead.md` (Request Understanding & Decomposition section)
+
+Before delegating any work, the Team Lead performs a Tool Applicability Analysis:
+
+1. What information or actions are required?
+2. What tools could provide them?
+3. Are those tools available?
+4. Which tool should be used?
+5. What evidence will it produce?
+
+The analysis produces a Tool Plan:
+
+```yaml
+tool_plan:
+  ask: ASK-01
+  activities:
+    - activity: understand_existing_implementation
+      tools: [codegraph, grep]
+      requirement: required
+    - activity: implement
+      tools: [filesystem, terminal]
+      requirement: required
+    - activity: browser_verification
+      tools: [playwright]
+      requirement: required
+```
+
+### 27.4 Tool Contracts
+
+**Location:** Each agent definition (`.opencode/agents/*.md`)
+
+Every core agent has a Tool Contract that specifies:
+
+1. Which tools are required before performing work
+2. Which tools are recommended for the agent domain
+3. How tool results must be recorded
+4. What happens when a required tool is unavailable
+
+The contract is not optional -- it defines the minimum tool usage for the agent role.
+
+**Agents with Tool Contracts:**
+- implementer.md
+- verifier.md
+- researcher.md
+- architect.md
+- planner.md
+- reviewer.md
+
+### 27.5 Tool Selection Rules
+
+Apply these rules when selecting tools:
+
+1. **Prefer structural over text**: codegraph over grep for code structure analysis
+2. **Prefer LSP over grep for references**: LSP provides type-aware references
+3. **Prefer context7 over websearch for docs**: context7 provides version-specific docs
+4. **Mandatory browser for frontend**: playwright is required for frontend verification
+5. **Mandatory evidence for verification**: verification claims MUST be backed by tool output
+6. **Tool output over assumption**: when a tool can provide information, never assume
+
+### 27.6 Tool Evidence
+
+Every tool invocation must have a declared purpose and produce recorded evidence:
+
+```yaml
+tool_evidence:
+  - tool: codegraph
+    purpose: impact_analysis
+    result: "ThemeProvider used by 17 components"
+    used_by: architect
+  - tool: playwright
+    purpose: acceptance_test
+    result: "AC-01 PASS"
+    used_by: verifier
+```
+
+Tool evidence is part of the verification artifact. A claim of verification without
+appropriate tool evidence is not verification.
+
+### 27.7 Tool Gates
+
+**G-T0 (Tool Readiness):** Pre-flight check that tool infrastructure is in place.
+- Verifies: registry exists, team-lead has Tool Applicability Analysis, agents have Tool Contracts
+- Exit 0: infrastructure ready
+- Exit 1: infrastructure incomplete
+- Exit 2: BLOCKED (python3 absent)
+
+**G-T1 (Tool Utilization):** Post-work check that tool evidence exists.
+- Verifies: verification artifacts contain tool evidence
+- Exit 0: evidence present
+- Exit 1: evidence gaps
+- Exit 4: NO_VERIFICATION_ARTIFACTS (skip)
+
+### 27.8 Capability Matrix
+
+The registry includes a capability matrix mapping activities to tool requirements:
+
+| Activity | Preferred Tool | Requirement |
+|---|---|---|
+| Understand unfamiliar code | CodeGraph/Search | Required |
+| Find references | Code Search | Required |
+| Dependency analysis | CodeGraph | When applicable |
+| Documentation lookup | Context7 | When applicable |
+| Browser behavior | Playwright | Required |
+| Visual verification | Playwright | Required |
+| Build/test | Terminal | Required |
+| GSD state | GSD tool | Required |
+
+### 27.9 Tool Lifecycle Flow
+
+```
+USER REQUEST
+     |
+     v
+ASK IDENTIFICATION
+     |
+     v
+OUTCOME DISCOVERY
+     |
+     v
+ASK CLASSIFICATION
+     |
+     v
+CONTEXT / DOMAIN UNDERSTANDING
+     |
+     v
+US + AC + CASES
+     |
+     v
+UNCERTAINTY ANALYSIS
+     |
+     v
+TOOL DISCOVERY & SELECTION  <-- Consult registry.yaml
+     |
+     v
+TOOL PLAN  <-- Created by Team Lead
+     |
+     v
+SOLUTION / PLAN
+     |
+     v
+OUTCOME TASKS
+     |
+     v
+IMPLEMENT  <-- Agents follow Tool Contracts
+     |
+     v
+TOOL-BASED VERIFICATION  <-- G-T1 checks evidence
+     |
+     v
+EVIDENCE
+```
+
+### 27.10 Adding New Tools
+
+To add a new tool to the framework:
+
+1. Add an entry to `framework/tools/registry.yaml` with:
+   - purpose
+   - capabilities
+   - use_when
+   - do_not_use_when
+   - evidence_type
+   - required_by
+
+2. Update affected agent Tool Contracts if the tool changes their workflow
+
+3. Update the capability matrix if the tool introduces new activity types
+
+4. Test the tool integration with a real task
+
+The registry is tool-agnostic. Tools are selected based on capability requirements,
+not hardcoded to specific agents.
+
+### 27.11 Relationship to Existing Gates
+
+| Gate | Purpose | Tool Gate Relationship |
+|---|---|---|
+| G1 contract | Contract validity | Complementary: G1 verifies contracts, G-T0/T1 verify tool infrastructure |
+| G2 impact | Impact mapping | Complementary: G2 maps impact, G-T1 verifies tool evidence for impact analysis |
+| G3 architecture | Architecture compliance | Complementary: G3 verifies architecture, G-T0 verifies architect has tools |
+| G4 executable | Executable checks | Complementary: G4 runs checks, G-T1 verifies tool evidence for checks |
+| G5 stack | Frontend stack | Complementary: G5 enforces stack, G-T0 verifies playwright is available |
+| G6 browser | Browser verification | Complementary: G6 runs browser tests, G-T1 verifies playwright evidence |
+| G7 retro | Retrospective | Independent: retro is about framework learning, tools are about execution |
+| G8 blockers | Blocker hygiene | Independent: blockers are about escalation, tools are about capability |
+| G9 scope | Scope discipline | Complementary: G9 checks scope, G-T0 checks tool plan scope |
+
