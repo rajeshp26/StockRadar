@@ -14,6 +14,7 @@ import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from itertools import islice
+import hashlib
 from typing import Any
 
 from application.validators.financial_data_validator import (
@@ -72,6 +73,12 @@ class DatabaseSerializer:
 # ============================================================================
 # FINANCIAL REPOSITORY
 # ============================================================================
+def _deterministic_id(*parts: Any) -> int:
+    """Generate a deterministic positive integer ID from composite key parts."""
+    key = "|".join(str(p) for p in parts)
+    return int(hashlib.sha256(key.encode()).hexdigest()[:15], 16)
+
+
 class SupabaseFinancialRepository:
     """
     Repository for all financial data operations with Supabase.
@@ -540,6 +547,25 @@ class SupabaseFinancialRepository:
         if not valid_rows:
             return {"count": 0}
         rows = valid_rows
+
+        # Defensive clamp: numeric(12,4) limit is 99,999,999.9999
+        _PRICE_MAX = 99_999_999.9999
+        _PRICE_FIELDS = ("open_price", "close_price", "high_price", "low_price")
+        clamped = 0
+        for r in rows:
+            for f in _PRICE_FIELDS:
+                val = r.get(f)
+                if val is not None:
+                    try:
+                        fval = float(val)
+                        if abs(fval) >= _PRICE_MAX:
+                            r[f] = round(_PRICE_MAX if fval > 0 else -_PRICE_MAX, 4)
+                            clamped += 1
+                    except (TypeError, ValueError):
+                        pass
+        if clamped:
+            logger.warning("[PRICE] Clamped %d overflow price values to numeric(12,4) limit", clamped)
+
         try:
             # Optional conflict detection (row-by-row check)
             if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
@@ -726,6 +752,13 @@ class SupabaseFinancialRepository:
                                     pct_diff=pct,
                                 )
 
+            for r in rows:
+                if r.get("forecast_id") is None:
+                    r["forecast_id"] = _deterministic_id(
+                        r.get("company_id"), r.get("report_date"),
+                        r.get("period_type"), r.get("provider") or "defeatbeta",
+                    )
+
             seen = {}
             for r in rows:
                 key = (r.get("company_id"), r.get("report_date"), r.get("period_type"), r.get("provider") or "defeatbeta")
@@ -793,6 +826,13 @@ class SupabaseFinancialRepository:
                                     new_source=r.get("provider") or "unknown",
                                     pct_diff=pct,
                                 )
+
+            for r in rows:
+                if r.get("earnings_forecast_id") is None:
+                    r["earnings_forecast_id"] = _deterministic_id(
+                        r.get("company_id"), r.get("report_date"),
+                        r.get("period_type"), r.get("provider") or "defeatbeta",
+                    )
 
             seen = {}
             for r in rows:

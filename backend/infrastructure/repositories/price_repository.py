@@ -109,6 +109,20 @@ class PriceRepository:
                     "exchange_override": h.get("exchange_override") or "UNKNOWN",
                 }
 
+
+        # When exchange_override is NULL (defaulted to UNKNOWN above), fall back
+        # to the company's canonical exchange from the companies table.
+        missing_cids = [
+            seen[cid]["company_id"]
+            for cid in seen
+            if seen[cid]["exchange_override"] == "UNKNOWN"
+        ]
+        if missing_cids:
+            company_exchanges = self.get_company_exchanges(missing_cids)
+            for cid in seen:
+                if seen[cid]["exchange_override"] == "UNKNOWN" and cid in company_exchanges:
+                    seen[cid]["exchange_override"] = company_exchanges[cid]
+
         # 2) Watchlist items (new path)
         try:
             wl_result = (

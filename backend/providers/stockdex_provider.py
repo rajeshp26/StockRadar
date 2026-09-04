@@ -97,6 +97,7 @@ class StockdexMacrotrendsProvider:
         self._ticker_cache: dict[str, Any] = {}
         self._cooldown_until: float = 0.0
         self._finviz_cooldown_until: float = 0.0
+        self._consecutive_429: int = 0
         logger.info("StockdexMacrotrendsProvider initialized")
 
     def is_rate_limited(self) -> bool:
@@ -173,6 +174,11 @@ class StockdexMacrotrendsProvider:
         Fetch a financial statement from stockdex Macrotrends and return in
         yfinance-compatible wide format.
         """
+        if self.is_rate_limited():
+            logger.debug(
+                "[STOCKDEX][%s] Macrotrends rate-limited, skipping", symbol,
+            )
+            return pd.DataFrame()
         try:
             raw_df = self._get_raw_dataframe(period, statement, symbol)
             if raw_df is None or raw_df.empty:
@@ -182,6 +188,9 @@ class StockdexMacrotrendsProvider:
                 return pd.DataFrame()
 
             result = self._normalise(raw_df)
+            # Reset backoff on success
+            if self._consecutive_429 > 0:
+                self._consecutive_429 = 0
             logger.debug(
                 "[STOCKDEX][%s] %s %s: %d labels x %d periods",
                 symbol, period, statement, len(result.index), len(result.columns),
@@ -196,10 +205,12 @@ class StockdexMacrotrendsProvider:
         except Exception as e:
             estr = str(e)
             if "429" in estr or "Too Many Requests" in estr:
-                cool_secs = 300
+                self._consecutive_429 += 1
+                cool_secs = min(300 * (2 ** (self._consecutive_429 - 1)), 1800)
                 self._cooldown_until = time.monotonic() + cool_secs
                 logger.warning(
-                    "[STOCKDEX][%s] 429 rate-limited – cooling off %ds", symbol, cool_secs
+                    "[STOCKDEX][%s] 429 rate-limited (attempt #%d) – cooling off %ds",
+                    symbol, self._consecutive_429, cool_secs,
                 )
             logger.warning(
                 "[STOCKDEX][%s] %s %s failed: %s", symbol, period, statement, e

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     # 🤖 AI & External Providers
     # ============================================
     OPEN_ROUTER_KEY: str | None = Field(default=None, description="OpenRouter API key for AI stock analysis")
-    OPEN_ROUTER_MODEL: str = Field(default="openai/gpt-oss-120b:free", description="OpenRouter model for suitability summaries")
+    OPEN_ROUTER_MODEL: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for suitability summaries")
     # EdgarTools Provider (SEC EDGAR filings)
     EDGAR_IDENTITY: str = Field(
         default="StockerPro stockerpro@example.com",
