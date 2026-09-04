@@ -14,6 +14,8 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G7 retro      | retros complete, no recurrence | incomplete or recurrence | BLOCKED (python3/pyyaml absent) | — | NOT_APPLICABLE (no escape trigger) |
 | G8 blockers  | no open blockers | open blockers listed | BLOCKED (python3/pyyaml absent) | — | — |
 | G9 scope      | within declared scope (or SKIP: no plan / no changes) | undeclared files listed | — | — | — |
+| G-T0 tool_readiness | tool plan exists, registry present, contracts in place | tool plan missing or tools unavailable | BLOCKED (python3 absent) | — | — |
+| G-T1 tool_utilization | tool evidence present in verification artifacts | tool evidence gaps found | BLOCKED (python3 absent) | — | NO_VERIFICATION_ARTIFACTS |
 
 ## G6 emits ONLY 0, 1, 3
 
@@ -41,6 +43,27 @@ not be read (python3/pyyaml absent or unparsable state), which is never read as 
 G9 judges changed source files against the plan's declared files_or_components. With no plan
 context or no source changes it logs SKIP and exits 0 -- that is "nothing was judged", not
 "scope respected". A skip must be reported as skipped, never counted as a passed check.
+
+
+## G-T0 verifies tool readiness before work
+
+G-T0 checks that the tool lifecycle infrastructure is in place: the tool registry exists,
+team-lead.md has Tool Applicability Analysis, and core agents have Tool Contracts. This
+is a pre-flight check, not a tool usage check. Exit 0 means the infrastructure is ready;
+exit 1 means pieces are missing; exit 2 means python3 is unavailable.
+
+## G-T1 verifies tool utilization after work
+
+G-T1 checks that verification artifacts contain tool evidence. It looks for tool_evidence,
+tool, exit_code, or command patterns in verification files. Exit 0 means evidence is present;
+exit 1 means evidence gaps exist; exit 4 means no verification artifacts to check (skip).
+A skip is not a pass -- it means there was nothing to judge.
+
+## Tool gates are infrastructure gates
+
+G-T0 and G-T1 are infrastructure gates, not code quality gates. They verify that the
+framework's tool lifecycle is operational, not that the code is correct. They complement
+G1-G9 which verify code quality and correctness.
 
 ## Exit 3 is the most important code in the framework
 

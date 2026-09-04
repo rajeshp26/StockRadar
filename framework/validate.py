@@ -687,6 +687,105 @@ check("telemetry tracks escapes and recurrences",
 check("g7 in the authoritative exit code table",
       "G7 retro" in Path("framework/gates/EXIT_CODES.md").read_text())
 
+
+
+# -- 15b. Validation campaign infrastructure --
+print("\n[15b] Validation campaign infrastructure")
+
+_ip = _rd / "injection_protocol.yaml"
+check("injection protocol exists", _ip.exists(),
+      "controlled falsification needs defined challenges")
+if _ip.exists():
+    try:
+        _ipc = yaml.safe_load(_ip.read_text())
+        check("injection protocol parseable", isinstance(_ipc, dict))
+        check("has challenges", isinstance(_ipc.get("challenges"), list))
+        check("has scoring", isinstance(_ipc.get("scoring"), dict))
+        check("has rules", isinstance(_ipc.get("rules"), list))
+        for _ch in _ipc.get("challenges", []):
+            check("  " + _ch["id"] + " has evidence_required", "evidence_required" in _ch)
+            check("  " + _ch["id"] + " has failure_if", "failure_if" in _ch)
+    except Exception as e:
+        check("injection protocol parseable", False, str(e)[:100])
+
+_mt = _rd / "maturity.yaml"
+check("maturity levels exist", _mt.exists())
+if _mt.exists():
+    try:
+        _mtd = yaml.safe_load(_mt.read_text())
+        check("maturity parseable", isinstance(_mtd, dict))
+        check("has levels", isinstance(_mtd.get("levels"), dict))
+        check("has advancement rules", isinstance(_mtd.get("advancement"), dict))
+        for _ln, _lv in _mtd.get("levels", {}).items():
+            check("  " + _ln + " has exit_criteria",
+                  isinstance(_lv.get("exit_criteria"), list) and len(_lv["exit_criteria"]) > 0)
+    except Exception as e:
+        check("maturity parseable", False, str(e)[:100])
+
+_st = _rd / "smoke_test.py"
+check("smoke test exists", _st.exists())
+if _st.exists():
+    _stc = _st.read_text()
+    check("smoke test covers containment_map", "containment_map" in _stc)
+    check("smoke test covers escape_path", "escape_path" in _stc)
+    check("smoke test covers ledger", "ledger" in _stc)
+    check("smoke test covers g7", "g7_retro" in _stc)
+    check("smoke test covers injection_protocol", "injection_protocol" in _stc)
+    check("smoke test covers maturity", "maturity" in _stc)
+
+_dr = _rd / "dry_run.md"
+check("dry run scenario exists", _dr.exists())
+
+_skill_v2 = Path(".opencode/skills/retrospective/SKILL.md").read_text()
+check("skill has counterfactual analysis", "counterfactual" in _skill_v2.lower())
+check("skill has human-correction path", "human_correction" in _skill_v2)
+check("skill has gap type classification", "gap_type" in _skill_v2)
+check("skill has earliest prevention point",
+      "earliest" in _skill_v2.lower() and "prevent" in _skill_v2.lower())
+
+
+
+# -- 15c. Background task pub/sub contract --
+print("\n[15c] Background task pub/sub contract")
+
+# The polling anti-pattern: calling background_output on a bg_xxx task BEFORE the
+# system-reminder notification, or with block=true as a proxy for waiting. The contract
+# is fire -> END RESPONSE -> wait for notification -> collect. Telemetry measures it;
+# this section proves the enforcement surface exists.
+_bgr = Path(".opencode/rules/background-tasks.md")
+check("background task contract rule exists", _bgr.exists(),
+      "a contract that is not declared cannot be enforced")
+if _bgr.exists():
+    _bgt = _bgr.read_text()
+    check("rule declares the correct flow", "END YOUR RESPONSE" in _bgt,
+          "fire-and-wait must be the primary path")
+    check("rule defines a poll", "still running" in _bgt.lower() or "pending" in _bgt.lower(),
+          "a poll must be named to be recognisable")
+    check("rule defines a collect", "AFTER the system-reminder" in _bgt,
+          "the legal path must be explicit")
+    check("rule names enforcement", "bg_poll_total" in _bgt,
+          "telemetry measurement must be declared in the rule")
+
+_tel = Path(".opencode/plugin/telemetry.ts").read_text()
+check("telemetry tracks bg_poll_total", "bg_poll_total" in _tel,
+      "sessions that poll must be measurable")
+check("telemetry classifies polls vs collects",
+      "polls" in _tel and "collects" in _tel,
+      "a call after notification is legal; classification is required")
+check("telemetry registers launched bg ids",
+      "bg_tasks" in _tel and "launched" in _tel,
+      "launch count anchors the ratio")
+
+# Agent instructions must carry the contract so the primary agent sees it before
+# launching anything in background.
+_lead = Path(".opencode/agents/team-lead.md").read_text()
+if "background" in _lead.lower() or "background-tasks" in _lead:
+    check("team-lead carries background task contract", True)
+else:
+    check("team-lead carries background task contract",
+          "background" in Path("opencode.json").read_text().lower(),
+          "the orchestrator must know the pub/sub contract before it delegates")
+
 print("\n[16] Detection cache portability")
 _mf = Path("framework/.manifest/gsd.json")
 if _mf.exists():

@@ -70,6 +70,26 @@ No retrospective on every task. A defect caught at the first checkpoint capable 
 is the framework working. Recording that produces paperwork and trains everyone to ignore the
 ledger, which is how this kind of subsystem usually dies.
 
+## Runtime ownership of the background-task contract
+
+The `task` and `background_output` tools are provided by the OpenCode runtime
+(oh-my-opencode), not by this repository. The runtime still allows the polling
+anti-pattern: calling `background_output` on a `bg_xxx` task before the
+`<system-reminder>` notification, or using `block=true` as a proxy for waiting.
+
+This framework cannot remove those paths from the tool. What it can do, and does:
+
+* `.opencode/rules/background-tasks.md` declares the contract: fire -> END RESPONSE
+  -> wait for system-reminder -> collect.
+* `.opencode/plugin/telemetry.ts` measures `bg_poll_total` per session, classifying
+  every background_output call as poll or collect.
+* `framework/validate.py` section 15c checks the rule, the telemetry field, and the
+  agent instruction surface all exist.
+
+Upstream improvements (removing `block=false`, adding a task-level timeout) belong
+in oh-my-opencode. Until they land, measurement + declaration is the enforceable
+surface, and a rising `bg_poll_total` in the telemetry report is the failure signal.
+
 ## Honest limits
 
 `injected_at` and `defect_class` are human or agent judgements. Everything downstream is
