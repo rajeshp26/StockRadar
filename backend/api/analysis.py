@@ -60,37 +60,23 @@ def _get_magic_formula_service():
 
 def _get_canslim_service():
     from application.services.canslim_service import CANSlimService
+    from dependencies import get_defeat_beta_provider, get_yfinance_provider
     from infrastructure.repositories.analysis_repository import AnalysisRepository
     from infrastructure.repositories.valuation_repository import ValuationRepository
-    from providers.defeat_beta_provider import DefeatBetaProvider
-    from providers.edgar_provider import EdgarToolsProvider
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
-    from providers.yfinance_provider import YFinanceProvider
     repo = ValuationRepository()
     arepo = AnalysisRepository(repo)
-    yf = YFinanceProvider()
-    dbeta = DefeatBetaProvider(
-        yfinance_provider=yf,
-        stockdex_provider=StockdexMacrotrendsProvider(),
-        edgar_provider=EdgarToolsProvider(),
-    )
+    yf = get_yfinance_provider()
+    dbeta = get_defeat_beta_provider()
     return CANSlimService(repo, arepo, dbeta, yf)
 
 
 def _get_technical_service():
     from application.services.technical_analysis_service import TechnicalAnalysisService
+    from dependencies import get_defeat_beta_provider, get_yfinance_provider
     from infrastructure.repositories.valuation_repository import ValuationRepository
-    from providers.defeat_beta_provider import DefeatBetaProvider
-    from providers.edgar_provider import EdgarToolsProvider
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
-    from providers.yfinance_provider import YFinanceProvider
     repo = ValuationRepository()
-    yf = YFinanceProvider()
-    dbeta = DefeatBetaProvider(
-        yfinance_provider=yf,
-        stockdex_provider=StockdexMacrotrendsProvider(),
-        edgar_provider=EdgarToolsProvider(),
-    )
+    yf = get_yfinance_provider()
+    dbeta = get_defeat_beta_provider()
     return TechnicalAnalysisService(repo, dbeta, yf)
 
 

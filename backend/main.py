@@ -20,7 +20,7 @@ from database import supabase
 from dependencies import get_current_user_dep, limiter
 
 # Canadian exchange suffixes for yfinance (matches yfinance_provider.EXCHANGE_SUFFIX_MAP)
-_YF_SUFFIXES = [".TO", ".V"]
+_YF_SUFFIXES = [".TO", ".V", ".NE"]
 
 # -----------------------------------------------------------------------------
 # Logging

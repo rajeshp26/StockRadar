@@ -1,4 +1,5 @@
 
+import asyncio
 import logging
 from datetime import UTC, date, datetime
 from typing import Any
@@ -14,11 +15,11 @@ from .base import StockDataProvider, StockDetails, TickerInfo
 logger = logging.getLogger(__name__)
 
 
-# Exchange codes known to be Canadian TSX/TSXV — yfinance requires .TO /.V suffix
+# Exchange codes known to be Canadian TSX/TSXV/NEO — yfinance requires .TO /.V suffix
 EXCHANGE_SUFFIX_MAP: dict[str, str] = {
     "TOR": ".TO", "TSX": ".TO", "TO": ".TO",
     "VAN": ".V", "TSXV": ".V", "V": ".V",
-    "CNQ": ".V", "NEO": ".V",
+    "CNQ": ".V", "NEO": ".NE",
 }
 
 
@@ -401,6 +402,80 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         except Exception as e:
             logger.debug("[YF] get_upcoming_ex_date(%s) failed: %s", symbol, e)
             return None
+
+    # ---------------------------
+    # Analyst consensus forecasts (revenue / EPS)
+    # ---------------------------
+    async def fetch_revenue_forecast(self, symbol: str, company_id: int) -> list[dict[str, Any]]:
+        """Annual analyst revenue consensus via yfinance.
+
+        Replaces the dead DefeatBeta path: defeatbeta-api ships no forecast
+        accessors in any release. report_date anchors relative yfinance
+        periods ('0y', '+1y') to an approximate Dec-31 fiscal year-end.
+        """
+        return await asyncio.to_thread(self._fetch_estimate_rows, symbol, company_id, 'revenue')
+
+    async def fetch_earnings_forecast(self, symbol: str, company_id: int) -> list[dict[str, Any]]:
+        """Annual analyst EPS consensus via yfinance (see fetch_revenue_forecast).
+
+        The *_days_ago EPS-revision fields stay None: yfinance models those
+        in a separate eps_trend frame, which is out of scope here.
+        """
+        return await asyncio.to_thread(self._fetch_estimate_rows, symbol, company_id, 'earnings')
+
+    def _fetch_estimate_rows(self, symbol: str, company_id: int, kind: str) -> list[dict[str, Any]]:
+        rows_out: list[dict[str, Any]] = []
+        try:
+            tkr = yf.Ticker(symbol.upper())
+            df = tkr.revenue_estimate if kind == 'revenue' else tkr.earnings_estimate
+            if df is None or df.empty:
+                return []
+            this_year = now_utc().year
+            for label, row in df.iterrows():
+                label_str = str(label).strip()
+                if label_str not in ('0y', '+1y'):
+                    continue
+                avg = self._safe_float(row.get('avg'))
+                if avg is None:
+                    continue
+                offset = 0 if label_str == '0y' else int(''.join(ch for ch in label_str if ch.isdigit()))
+                analysts = row.get('numberOfAnalysts')
+                try:
+                    analysts = int(analysts) if analysts is not None else None
+                except (ValueError, TypeError):
+                    analysts = None
+                record: dict[str, Any] = {
+                    'company_id': company_id,
+                    'report_date': date(this_year + offset, 12, 31),
+                    'period_type': 'annual',
+                    'number_of_analysts': analysts,
+                    'currency': 'USD',
+                    'provider': 'yfinance',
+                }
+                if kind == 'revenue':
+                    record.update({
+                        'estimate_revenue_growth': self._safe_float(row.get('growth')),
+                        'estimate_avg_revenue': avg,
+                        'estimate_high_revenue': self._safe_float(row.get('high')),
+                        'estimate_low_revenue': self._safe_float(row.get('low')),
+                        'year_ago_estimate_avg_revenue': self._safe_float(row.get('yearAgoRevenue')),
+                    })
+                else:
+                    record.update({
+                        'estimate_eps_growth': self._safe_float(row.get('growth')),
+                        'estimate_avg_eps': avg,
+                        'estimate_high_eps': self._safe_float(row.get('high')),
+                        'estimate_low_eps': self._safe_float(row.get('low')),
+                        'thirty_days_ago_estimate_avg_eps': None,
+                        'sixty_days_ago_estimate_avg_eps': None,
+                        'ninety_days_ago_estimate_avg_eps': None,
+                        'year_ago_estimate_avg_eps': self._safe_float(row.get('yearAgoEps')),
+                    })
+                rows_out.append(record)
+            return rows_out
+        except Exception as e:
+            logger.warning(f'Failed to fetch {kind} forecast for {symbol}: {e}')
+            return []
 
     @staticmethod
     def _safe_float(val) -> float | None:

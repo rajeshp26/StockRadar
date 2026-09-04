@@ -15,11 +15,11 @@ class PriceDataProvider:
 
     _cache: dict[str, tuple[pd.DataFrame, date, date]] = {}
 
-    # Exchange suffixes for yfinance — matches yfinance_provider.EXCHANGE_SUFFIX_MAP
+    # Exchange suffixes for yfinance (TSX/TSXV/NEO) — matches yfinance_provider.EXCHANGE_SUFFIX_MAP
     _EXCHANGE_SUFFIX_MAP: dict[str, str] = {
         "TOR": ".TO", "TSX": ".TO", "TO": ".TO",
         "VAN": ".V", "TSXV": ".V", "V": ".V",
-        "CNQ": ".V", "NEO": ".V",
+        "CNQ": ".V", "NEO": ".NE",
     }
 
     def __init__(self, timeout: int = 15):
