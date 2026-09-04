@@ -1,0 +1,89 @@
+# Framework Maturity Levels - exit criteria per level.
+# The framework must prove each level before advancing.
+
+levels:
+  level_0_plumbing:
+    name: Plumbing
+    purpose: Validate scripts, state, telemetry, gates, ledger, escape-path machinery
+    exit_criteria:
+      - validate.py passes with exit 0
+      - escape_path.py accepts valid input and returns structured JSON
+      - ledger.py append and analyse round-trips correctly
+      - g7_retro.sh executes and reports exit code
+      - telemetry report.py parses records
+      - every framework component executes in isolation
+    evidence: validate.py output, manual smoke test results
+
+  level_0b_dry_run:
+    name: Dry Run
+    purpose: One trivial task through the complete lifecycle
+    exit_criteria:
+      - one task runs through full lifecycle
+      - telemetry record produced in records.jsonl with all expected fields
+      - gates execute and record results
+      - no framework errors during execution
+    evidence: records.jsonl entry, gate results
+
+  level_1_observe:
+    name: Observe
+    purpose: Run representative real tasks and controlled challenges
+    exit_criteria:
+      - 10 tasks completed through the lifecycle
+      - at least 5 meaningful retro or observation records
+      - injection protocol challenges scored (pass/fail)
+      - telemetry data collected for all tasks
+    evidence: retro ledger entries, injection scores, telemetry report
+
+  level_2_diagnose:
+    name: Diagnose
+    purpose: Validate counterfactual analysis, escape paths, containment mapping
+    exit_criteria:
+      - at least 3 defect escapes diagnosed correctly
+      - counterfactual analysis completed for each
+      - escape path computation verified against known escapes
+      - synthetic recurrence test passes
+      - containment_map.yaml fix targets validated
+    evidence: diagnosis reports, synthetic test results
+
+  level_3_recommend:
+    name: Recommend
+    purpose: Framework can identify what should change
+    exit_criteria:
+      - corrective actions mapped to containment_map.yaml targets
+      - every recommendation names a specific file and verification command
+      - none_human_judgement rate measured and below 50%
+      - unfalsifiable recommendations rejected by the system
+    evidence: ledger entries with fix_target and fix_verified_by
+
+  level_4_validate_improvement:
+    name: Validate Improvement
+    purpose: Promote changes and prove they help
+    exit_criteria:
+      - at least 2 framework changes promoted from recommendations
+      - rework rate measurably decreased after promotion
+      - defect escape rate decreased for the addressed class
+      - regression test confirms promoted change does not break existing behavior
+    evidence: before/after telemetry comparison
+
+  level_5_retrieve:
+    name: Retrieve
+    purpose: Use accumulated ledger as engineering knowledge
+    exit_criteria:
+      - sufficient corpus exists (at least 20 retro entries)
+      - retrieval returns relevant lessons for new tasks
+      - retrieved lessons measurably influence task execution
+    evidence: retrieval hit rate, behavioral change measurement
+
+  level_6_self_improve:
+    name: Self-Improve
+    purpose: Automated framework modification
+    exit_criteria:
+      - levels 0-5 all proven
+      - automated modification mechanism exists and is validated
+      - regression suite covers framework changes
+    evidence: full validation suite passing
+
+advancement:
+  rule: each level must pass all exit criteria before the next level begins
+  exception: level 0 and 0b can be combined into a single validation session
+  evidence: results recorded in .planning/phases/{phase}/VALIDATION.md
