@@ -1,0 +1,44 @@
+# features/FEAT-2026-001/F7-contracts/EVT-1-zone-offset-changed.yml
+# Spec: §6.4.2 — full event semantics; at_least_once without consumer
+# idempotency is an incomplete contract and fails G1.
+id: EVT-1
+event: ZoneOffsetChanged
+publisher: CMP-02
+subscribers: [CMP-01]
+boundary: ipc
+version: 1.0.0
+baseline: BL-CON-001
+
+delivery: at_least_once
+ordering: per_zone
+
+duplication:
+  possible: true
+  reason: "at_least_once delivery across the IPC boundary"
+
+consumer_idempotency:
+  required: true
+  mechanism: "HMI renders from the payload value, not from a delta; a duplicate is a no-op"
+
+replay:
+  supported: false
+  reason: "HMI queries getZoneOffset on attach instead of replaying history"
+
+retention:
+  duration: none
+  reason: "transient notification; authoritative value lives in CMP-02 state"
+
+dead_letter:
+  applicable: false
+  reason: "single in-vehicle subscriber; a dropped notification is recovered by the attach-time query"
+
+payload:
+  zoneId: string
+  offsetDb: number
+  requesterRole: string
+  timestamp: iso8601
+  schemaVersion: integer
+
+compatibility: backward
+traces: [UC-001, AC-001-1, AC-001-9]
+tests: [IT-5, IT-6]

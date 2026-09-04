@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gm.com/lifecycle/v1.1/contract.schema.json",
+  "title": "Interface and event contract (spec §6.4, §6.4.1, §6.4.2)",
+  "oneOf": [
+    { "$ref": "#/definitions/interface" },
+    { "$ref": "#/definitions/event" }
+  ],
+  "definitions": {
+    "semantic": {
+      "type": "object",
+      "description": "§6.4.1 — declared, not universal. applicable:false needs a reason.",
+      "required": ["applicable"],
+      "properties": {
+        "applicable": { "type": "boolean" },
+        "reason": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "applicable": { "const": false } } },
+          "then": { "required": ["applicable", "reason"] }
+        }
+      ]
+    },
+    "interface": {
+      "type": "object",
+      "required": ["id", "interface", "owner", "consumers", "version",
+                   "boundary", "operations", "traces"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^IFC-[0-9]+$" },
+        "interface": { "type": "string" },
+        "owner": { "type": "string", "pattern": "^CMP-[0-9]+$" },
+        "consumers": {
+          "type": "array", "items": { "pattern": "^CMP-[0-9]+$" }, "minItems": 1
+        },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "boundary": { "enum": ["in_process", "ipc", "network"] },
+        "baseline": { "type": "string", "pattern": "^BL-" },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "kind", "errors", "timeout", "retry", "idempotency"],
+            "properties": {
+              "name": { "type": "string" },
+              "kind": {
+                "enum": ["request_response", "async_command", "query", "callback",
+                         "subscription", "persistence", "external_api",
+                         "state_exposure"]
+              },
+              "input": { "type": "object" },
+              "output": { "type": "object" },
+              "errors": { "type": "array", "items": { "type": "string" } },
+              "timeout": {
+                "allOf": [{ "$ref": "#/definitions/semantic" }],
+                "properties": { "timeout_ms": { "type": "integer", "minimum": 1 } }
+              },
+              "retry": {
+                "allOf": [{ "$ref": "#/definitions/semantic" }],
+                "properties": {
+                  "attempts": { "type": "integer", "minimum": 0 },
+                  "backoff": { "enum": ["none", "fixed", "linear", "exponential"] }
+                }
+              },
+              "idempotency": {
+                "allOf": [{ "$ref": "#/definitions/semantic" }],
+                "properties": { "idempotent": { "type": "boolean" } }
+              },
+              "preconditions": { "type": "array", "items": { "type": "string" } },
+              "postconditions": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "traces": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "event": {
+      "type": "object",
+      "description": "§6.4.2 — all eight semantics required; at_least_once without consumer idempotency fails G1",
+      "required": ["id", "event", "publisher", "subscribers", "delivery",
+                   "ordering", "duplication", "consumer_idempotency", "replay",
+                   "retention", "dead_letter", "compatibility", "payload", "traces"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^EVT-[0-9]+$" },
+        "event": { "type": "string" },
+        "publisher": { "type": "string", "pattern": "^CMP-[0-9]+$" },
+        "subscribers": {
+          "type": "array", "items": { "pattern": "^CMP-[0-9]+$" }, "minItems": 1
+        },
+        "version": { "type": "string" },
+        "boundary": { "enum": ["in_process", "ipc", "network"] },
+        "baseline": { "type": "string", "pattern": "^BL-" },
+        "delivery": { "enum": ["at_most_once", "at_least_once", "exactly_once"] },
+        "ordering": { "type": "string" },
+        "duplication": {
+          "type": "object",
+          "required": ["possible"],
+          "properties": { "possible": { "type": "boolean" } }
+        },
+        "consumer_idempotency": {
+          "type": "object",
+          "required": ["required"],
+          "properties": {
+            "required": { "type": "boolean" },
+            "mechanism": { "type": "string" }
+          }
+        },
+        "replay": {
+          "type": "object",
+          "required": ["supported"],
+          "properties": {
+            "supported": { "type": "boolean" },
+            "window": { "type": "string" }
+          }
+        },
+        "retention": {
+          "type": "object",
+          "required": ["duration"],
+          "properties": { "duration": { "type": "string" } }
+        },
+        "dead_letter": {
+          "type": "object",
+          "required": ["applicable"],
+          "properties": {
+            "applicable": { "type": "boolean" },
+            "destination": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        },
+        "compatibility": { "enum": ["backward", "forward", "full", "none"] },
+        "payload": { "type": "object" },
+        "traces": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "delivery": { "const": "at_least_once" } },
+            "required": ["delivery"]
+          },
+          "then": {
+            "properties": {
+              "consumer_idempotency": {
+                "properties": { "required": { "const": true } }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

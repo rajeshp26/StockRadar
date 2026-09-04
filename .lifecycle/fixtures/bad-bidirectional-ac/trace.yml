@@ -1,0 +1,24 @@
+feature: FEAT-TEST-AC
+spec_version: "1.1"
+depth: L2
+
+stories:
+  US-100:
+    use_case: UC-100
+    criteria: [AC-100-1, AC-100-2]
+    scenarios: []           # empty -- AC-100-1 and AC-100-2 have no SCN linkage
+  US-101:
+    use_case: UC-100
+    criteria: [AC-100-3]
+    scenarios: [SCN-101]    # this one is fine
+
+scenarios:
+  SCN-101: { title: "basic happy path", class: normal }
+
+use_cases:
+  UC-100:
+    scenarios: [SCN-101]
+    components: [CMP-01]
+
+components:
+  CMP-01: { responsibility: "test component", layer: api }

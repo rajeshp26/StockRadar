@@ -1,0 +1,19 @@
+$ ./tools/run_integration.sh --suite zone_offset
+commit 1f4b8c3   env: service_harness (GM Audio Service, stubbed repository + stubbed zone gain)
+2026-08-29T13:40:00-04:00
+
+IT-1 IFC-1 setZoneOffset contract conformance          PASS
+     - all 5 declared error codes returned as declared
+     - timeout honoured at 800 ms (declared applicable, ipc boundary)
+     - retry: declared not applicable; harness asserts NO retry is issued
+     - idempotency: same zoneId+offsetDb twice -> identical state    PASS
+IT-2 STORAGE_UNAVAILABLE mapping, no leak of repo error type        PASS
+IT-3 reapply authoritative over partially applied value            PASS
+IT-4 concurrent driver+rear write, driver precedence                PASS
+     - 500 interleavings, single winner every time, loser SUPERSEDED
+IT-5 EVT-1 payload schema + ordering per_zone                       PASS
+IT-6 EVT-1 duplicate delivery is a no-op at the consumer            PASS
+     - consumer_idempotency declared required; verified by injecting
+       duplicate deliveries. at_least_once without this would fail G1.
+
+6 of 6 integration cases pass.

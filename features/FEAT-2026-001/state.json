@@ -1,0 +1,49 @@
+{
+  "feature": "FEAT-2026-001",
+  "spec_version": "1.1",
+  "depth": "L2",
+  "state": "SYSTEM_VERIFIED",
+  "phases_required": ["F0","F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F12","F13","F14","F15"],
+  "gates_required": ["G0","G0.5","G1","G2","G3","G4","G7"],
+  "transitions": [
+    { "from": "-",                       "to": "QUALIFIED",              "timestamp": "2026-08-24T09:40:00-04:00", "charter": "team-lead",   "agent_id": "tl-1a03",  "session_id": "s-2026-08-24-a", "authorized_by": "-",        "reason": "F0 complete, depth L2" },
+    { "from": "QUALIFIED",               "to": "UNDERSTANDING",          "timestamp": "2026-08-24T11:40:00-04:00", "charter": "researcher",  "agent_id": "res-9b41", "session_id": "s-2026-08-24-b", "authorized_by": "-",        "reason": "F1 started" },
+    { "from": "UNDERSTANDING",           "to": "SCENARIOS_MODELLED",     "timestamp": "2026-08-24T15:05:00-04:00", "charter": "researcher",  "agent_id": "res-9b41", "session_id": "s-2026-08-24-b", "authorized_by": "-",        "reason": "F2 complete, 15 SCN risk-scored" },
+    { "from": "SCENARIOS_MODELLED",      "to": "REQUIREMENTS_DRAFTED",   "timestamp": "2026-08-25T10:00:00-04:00", "charter": "researcher",  "agent_id": "res-9b41", "session_id": "s-2026-08-24-b", "authorized_by": "-",        "reason": "F3 first draft" },
+    { "from": "REQUIREMENTS_DRAFTED",    "to": "REQUIREMENTS_CHALLENGED","timestamp": "2026-08-25T17:30:00-04:00", "charter": "verifier",    "agent_id": "ver-2e88", "session_id": "s-2026-08-25-c", "authorized_by": "-",        "reason": "F4 six blocking findings, F5 first pass, three MSF raised" },
+    { "from": "REQUIREMENTS_CHALLENGED", "to": "REQUIREMENTS_DRAFTED",   "timestamp": "2026-08-26T10:15:00-04:00", "charter": "researcher",  "agent_id": "res-9b41", "session_id": "s-2026-08-24-b", "authorized_by": "-",        "reason": "reverse transition per §7 — MSF-2 forced AC-001-9 amendment, BL-REQ-001 superseded" },
+    { "from": "REQUIREMENTS_DRAFTED",    "to": "REQUIREMENTS_CHALLENGED","timestamp": "2026-08-26T11:30:00-04:00", "charter": "verifier",    "agent_id": "ver-2e88", "session_id": "s-2026-08-25-c", "authorized_by": "-",        "reason": "F5 re-derived against BL-REQ-002, zero open MSF" },
+    { "from": "REQUIREMENTS_CHALLENGED", "to": "REQUIREMENTS_BASELINED", "timestamp": "2026-08-26T12:20:00-04:00", "charter": "team-lead",   "agent_id": "tl-1a03",  "session_id": "s-2026-08-24-a", "authorized_by": "gates/G0.md, gates/G0.5.md", "reason": "G0 PASS + G0.5 PASS — fork point" },
+    { "from": "REQUIREMENTS_BASELINED",  "to": "DECOMPOSED",             "timestamp": "2026-08-26T09:15:00-04:00", "charter": "architect",   "agent_id": "arch-4c19","session_id": "s-2026-08-26-b", "authorized_by": "-",        "reason": "F6 complete, ownership register written" },
+    { "from": "DECOMPOSED",              "to": "CONTRACTED",             "timestamp": "2026-08-27T09:40:00-04:00", "charter": "architect",   "agent_id": "arch-4c19","session_id": "s-2026-08-26-b", "authorized_by": "gates/G1.md", "reason": "F7 complete, G1 PASS, BL-CON-001 created" },
+    { "from": "CONTRACTED",              "to": "ARCHITECTED",            "timestamp": "2026-08-27T14:30:00-04:00", "charter": "architect",   "agent_id": "arch-4c19","session_id": "s-2026-08-26-b", "authorized_by": "gates/G3.md", "reason": "F8 abbreviated, concurrency model + reuse search, G3 PASS" },
+    { "from": "ARCHITECTED",             "to": "DESIGNED",               "timestamp": "2026-08-27T16:20:00-04:00", "charter": "architect",   "agent_id": "arch-4c19","session_id": "s-2026-08-26-b", "authorized_by": "-",        "reason": "F9 abbreviated, state machine with error transitions" },
+    { "from": "DESIGNED",                "to": "IMPACT_ASSESSED",        "timestamp": "2026-08-28T10:05:00-04:00", "charter": "architect",   "agent_id": "arch-4c19","session_id": "s-2026-08-26-b", "authorized_by": "gates/G2.md", "reason": "F10 both directions, four impacted paths, G2 PASS" },
+    { "from": "IMPACT_ASSESSED",         "to": "IMPLEMENTING",           "timestamp": "2026-08-28T13:00:00-04:00", "charter": "implementer", "agent_id": "imp-5d70", "session_id": "s-2026-08-28-a", "authorized_by": "-",        "reason": "F12 started; G3.5 not required at L2" },
+    { "from": "IMPLEMENTING",            "to": "UNIT_VERIFIED",          "timestamp": "2026-08-29T09:20:00-04:00", "charter": "verifier",    "agent_id": "ver-2e88", "session_id": "s-2026-08-29-a", "authorized_by": "gates/G4.md", "reason": "F13 complete, G4 PASS with captured output" },
+    { "from": "UNIT_VERIFIED",           "to": "INTEGRATION_VERIFIED",   "timestamp": "2026-08-29T14:10:00-04:00", "charter": "verifier",    "agent_id": "ver-2e88", "session_id": "s-2026-08-29-a", "authorized_by": "-",        "reason": "F14 complete, IFC-1 and EVT-1 conformance incl. idempotency" },
+    { "from": "INTEGRATION_VERIFIED",    "to": "SYSTEM_VERIFIED",        "timestamp": "2026-08-29T18:45:00-04:00", "charter": "verifier",    "agent_id": "ver-2e88", "session_id": "s-2026-08-29-a", "authorized_by": "gates/G7.md", "reason": "F15 complete, G7 PASS, zero orphans, all impacted paths executed" }
+  ],
+  "depth_change": [],
+  "charter_log": [
+    { "charter": "team-lead",   "agent_id": "tl-1a03",  "session_id": "s-2026-08-24-a", "from": "2026-08-24T09:10:00-04:00", "to": "2026-08-26T12:20:00-04:00" },
+    { "charter": "researcher",  "agent_id": "res-9b41", "session_id": "s-2026-08-24-b", "from": "2026-08-24T11:40:00-04:00", "to": "2026-08-26T10:15:00-04:00" },
+    { "charter": "verifier",    "agent_id": "ver-2e88", "session_id": "s-2026-08-25-c", "from": "2026-08-25T13:00:00-04:00", "to": "2026-08-26T11:30:00-04:00" },
+    { "charter": "reviewer",    "agent_id": "rev-7f2a", "session_id": "s-2026-08-26-a", "from": "2026-08-26T08:00:00-04:00", "to": "2026-08-28T11:00:00-04:00" },
+    { "charter": "architect",   "agent_id": "arch-4c19","session_id": "s-2026-08-26-b", "from": "2026-08-26T09:15:00-04:00", "to": "2026-08-28T10:05:00-04:00" },
+    { "charter": "planner",     "agent_id": "pln-3c55", "session_id": "s-2026-08-28-p", "from": "2026-08-28T11:30:00-04:00", "to": "2026-08-28T12:45:00-04:00" },
+    { "charter": "implementer", "agent_id": "imp-5d70", "session_id": "s-2026-08-28-a", "from": "2026-08-28T13:00:00-04:00", "to": "2026-08-29T08:30:00-04:00" },
+    { "charter": "verifier",    "agent_id": "ver-2e88", "session_id": "s-2026-08-29-a", "from": "2026-08-29T09:00:00-04:00", "to": "2026-08-29T18:45:00-04:00" }
+  ],
+  "defect_loop": [
+    {
+      "defect": "DEF-001",
+      "entered": "2026-08-29T15:30:00-04:00",
+      "exited": "2026-08-29T17:50:00-04:00",
+      "escape_phase": "F12",
+      "reentry_state": "IMPLEMENTING",
+      "process_originated": false,
+      "note": "implementation-only escape; symptom correction plus a new concurrency test. No checklist change required per §12.2."
+    }
+  ]
+}

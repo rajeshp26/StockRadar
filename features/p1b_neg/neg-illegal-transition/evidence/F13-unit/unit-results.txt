@@ -1,0 +1,23 @@
+$ bazel test //src/audio:zone_offset_test //src/hmi:zone_offset_control_test //src/settings:seat_offset_store_test
+commit 1f4b8c3   env: host_unit (linux-x86_64, gcc-12)
+2026-08-29T09:05:00-04:00
+
+//src/audio:zone_offset_test                    PASSED  (9 tests)
+    UT-1 offset_applied_to_target_zone_only     PASSED
+    UT-2 seat_isolation_front_value_unchanged   PASSED
+    UT-3 offset_at_max_and_min_exact            PASSED
+    UT-4 offset_out_of_range_rejected           PASSED
+    UT-6 concurrent_write_deterministic_winner  PASSED
+    UT-7 reapply_precedes_first_output          PASSED
+//src/settings:seat_offset_store_test           PASSED  (2 tests)
+    UT-5 repository_unavailable_retains_value   PASSED
+    UT-8 zone_not_present_rejected              PASSED
+//src/hmi:zone_offset_control_test              PASSED  (1 test)
+    UT-9 driver_reset_returns_zero_db           PASSED
+
+Executed 12 out of 12 tests: 12 tests pass.
+
+$ bazel coverage --combined_report=lcov //src/audio:all //src/settings:all
+error-path coverage      100%  (5/5 declared error codes exercised)
+decision coverage         94%  (threshold 90%)
+state-transition coverage 100% (11/11 transitions incl. all error transitions)

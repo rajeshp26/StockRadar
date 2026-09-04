@@ -1,0 +1,239 @@
+# features/FEAT-2026-001/trace.yml
+# Schema: .lifecycle/schema/trace.schema.json   Spec: §8.3
+feature: FEAT-2026-001
+spec_version: "1.1"
+depth: L2
+
+customers:
+  CUS-1: { name: rear-seat occupant }
+  CUS-2: { name: driver }
+  CUS-3: { name: service technician }
+
+journeys:
+  JRN-1: { customer: CUS-1, title: "discover, set and retain a rear zone offset" }
+  JRN-2: { customer: CUS-2, title: "inspect and reset a rear zone offset" }
+
+use_cases:
+  UC-001:
+    journeys: [JRN-1]
+    scenarios: [SCN-1, SCN-2, SCN-3, SCN-4, SCN-5, SCN-6, SCN-7, SCN-8, SCN-9, SCN-10, SCN-11, SCN-12, SCN-13, SCN-15]
+    components: [CMP-01, CMP-02, CMP-05]
+  UC-002:
+    journeys: [JRN-2]
+    scenarios: [SCN-14]
+    components: [CMP-01, CMP-02, CMP-05]
+
+scenarios:
+  SCN-1:  { title: "offset applied and audible",           class: normal,      technique: equivalence,      priority: { likelihood: 5, impact: 3, detectability: 4, priority: 30, band: medium },   cases: [UT-1, ST-1] }
+  SCN-2:  { title: "offset at +max and -max",              class: boundary,    technique: boundary,         priority: { likelihood: 3, impact: 3, detectability: 3, priority: 27, band: medium }, cases: [UT-3, UT-4] }
+  SCN-3:  { title: "persists across power cycle",          class: persistence, technique: state_transition,  priority: { likelihood: 4, impact: 4, detectability: 3, priority: 48, band: high },   cases: [ST-2] }
+  SCN-4:  { title: "repository unavailable at write",      class: failure,     technique: state_transition,   priority: { likelihood: 3, impact: 4, detectability: 2, priority: 48, band: high },   cases: [UT-5, IT-2, ST-3] }
+  SCN-5:  { title: "repository recovers, write reconciled",class: recovery,    technique: state_transition,  priority: { likelihood: 2, impact: 4, detectability: 2, priority: 32, band: medium },   cases: [IT-3, ST-5] }
+  SCN-6:  { title: "concurrent driver and rear write",     class: concurrent,  technique: pairwise,         priority: { likelihood: 2, impact: 4, detectability: 1, priority: 40, band: medium },   cases: [UT-6, IT-4, ST-6] }
+  SCN-7:  { title: "alert and chime level unchanged",      class: safety,      technique: domain_mandatory, priority: { likelihood: 2, impact: 5, detectability: 2, priority: 40, band: medium },   cases: [ST-4] }
+  SCN-8:  { title: "rapid repeated writes coalesce",       class: repeated,    technique: equivalence,      priority: { likelihood: 4, impact: 2, detectability: 3, priority: 24, band: medium }, cases: [UT-7, IT-6] }
+  SCN-9:  { title: "write on variant with no rear zone",   class: negative,    technique: pairwise,         priority: { likelihood: 2, impact: 3, detectability: 4, priority: 12, band: low },    cases: [UT-8] }
+  SCN-10: { title: "power loss mid-write",                 class: interrupted, technique: state_transition,   priority: { likelihood: 2, impact: 4, detectability: 1, priority: 40, band: medium }, cases: [IT-5] }
+  SCN-11: { title: "upgrade from schema without column",   class: upgrade,     technique: state_transition,  priority: { likelihood: 3, impact: 3, detectability: 2, priority: 36, band: medium },   cases: [ST-7] }
+  SCN-12: { title: "downgrade and rollback discard",       class: rollback,    technique: state_transition,  priority: { likelihood: 2, impact: 4, detectability: 2, priority: 32, band: medium },   cases: [ST-8] }
+  SCN-13: { title: "seat isolation, front value unchanged",class: normal,      technique: pairwise,         priority: { likelihood: 4, impact: 4, detectability: 3, priority: 48, band: high },   cases: [UT-2, ST-1] }
+  SCN-14: { title: "driver resets rear offset",            class: alternate,   technique: equivalence,      priority: { likelihood: 3, impact: 2, detectability: 4, priority: 12, band: low },    cases: [UT-9] }
+  SCN-15: { title: "offset below audible floor, misuse",   class: misuse,      technique: boundary,   priority: { likelihood: 2, impact: 4, detectability: 3, priority: 24, band: medium }, cases: [UT-4, ST-4] }
+
+stories:
+  US-001:
+    use_case: UC-001
+    criteria: [AC-001-1, AC-001-4, AC-001-5, AC-001-7, AC-001-8, AC-001-9, AC-001-11, AC-001-12]
+    scenarios: [SCN-1, SCN-2, SCN-3, SCN-4, SCN-5, SCN-6, SCN-7, SCN-8, SCN-9, SCN-10, SCN-11, SCN-12, SCN-13, SCN-15]
+  US-002:
+    use_case: UC-002
+    criteria: [AC-002-1]
+    scenarios: [SCN-14]
+
+nfrs:
+  NFR-1: { statement: "offset applied promptly", threshold: "<= 200 ms p95 HMI commit to audible change", method: "timestamped log pair, 100 trials, bench_hu", measured_value: "168 ms p95", design: [DES-1], conditions: [TC-14], baseline: BL-REQ-002 }
+  NFR-2: { statement: "repository write does not stall UI", threshold: "<= 50 ms p95", method: "service-side timer, 200 trials", measured_value: "31 ms p95", design: [DES-1], conditions: [TC-15], baseline: BL-REQ-002 }
+  NFR-3: { statement: "reapply does not delay audio start", threshold: "<= 120 ms added first-output", method: "first-output timestamp, 50 cycles", measured_value: "74 ms", design: [DES-1], conditions: [TC-16], baseline: BL-REQ-002 }
+  NFR-4: { statement: "failed writes diagnosable", threshold: "every rejected write logs reason code and requested value", method: "log inspection on each negative case", measured_value: "9/9 rejected writes logged", design: [DES-1], conditions: [TC-13], baseline: BL-REQ-002 }
+
+states:
+  activeZoneOffset:
+    owner: CMP-02
+    readers: [CMP-01, CMP-02]
+    writers: [CMP-02]
+    persistence: CMP-05
+    synchronization: EVT-1
+    control_scope: seat
+    concurrency:
+      consistency_model: "single-writer sequential consistency within CMP-02"
+      serialization_mechanism: "per-zone command queue"
+      conflict_resolution: "driver precedence, then queue arrival order"
+      deterministic_winner: "requesterRole == driver wins; ties by total per-zone arrival sequence"
+      ordering: "per-zone FIFO after precedence"
+      atomicity: "store-then-apply; failed apply does not report Applied"
+      race_prevention: "no shared mutable offset outside CMP-02"
+      reentrancy: "non-reentrant handler; nested call rejected APPLY_FAILED"
+      thread_safety: "one dispatch thread per zone queue; repository I/O off-thread, result posted back"
+
+components:
+  CMP-01: { responsibility: "render the rear zone offset control and commit user intent", layer: hmi }
+  CMP-02: { responsibility: "own the zone offset value, arbitrate writes, apply to zone gain", layer: audio_service }
+  CMP-05: { responsibility: "store and retrieve seat-scoped setting values", layer: persistence }
+
+design:
+  DES-1:
+    component: CMP-02
+    satisfies: [AC-001-1, AC-001-4, AC-001-5, AC-001-7, AC-001-8, AC-001-9, AC-001-11, AC-001-12, AC-002-1]
+    contracts: [IFC-1, EVT-1]
+    units: [IMP-1, IMP-2]
+    baseline: BL-DES-001
+  DES-2:
+    component: CMP-01
+    satisfies: [AC-001-1, AC-002-1]
+    contracts: [IFC-1, EVT-1]
+    units: [IMP-3]
+    baseline: BL-DES-001
+  DES-3:
+    component: CMP-05
+    satisfies: [AC-001-4, AC-001-12]
+    contracts: []
+    units: [IMP-4]
+    baseline: BL-DES-001
+
+contracts:
+  IFC-1:
+    owner: CMP-02
+    consumers: [CMP-01]
+    boundary: ipc
+    version: 1.1.0
+    tests: [IT-1, IT-2, IT-3, IT-4]
+    baseline: BL-CON-001
+  EVT-1:
+    publisher: CMP-02
+    subscribers: [CMP-01]
+    boundary: ipc
+    version: 1.0.0
+    tests: [IT-5, IT-6]
+    baseline: BL-CON-001
+
+units:
+  IMP-1: { path: "src/audio/zone_offset_owner.cpp",   satisfies: [AC-001-1, AC-001-8, AC-001-9], tests: [UT-1, UT-3, UT-4, UT-6] }
+  IMP-2: { path: "src/audio/zone_offset_apply.cpp",   satisfies: [AC-001-7, AC-001-11],          tests: [UT-2, UT-7] }
+  IMP-3: { path: "src/hmi/zone_offset_control.kt",    satisfies: [AC-001-1, AC-002-1],           tests: [UT-9] }
+  IMP-4: { path: "src/settings/seat_offset_store.cpp",satisfies: [AC-001-4, AC-001-12, AC-001-5],tests: [UT-5, UT-8] }
+
+tests:
+  TC-1:  { covers: [AC-001-1],  technique: equivalence }
+  TC-3:  { covers: [AC-001-7],  technique: boundary }
+  TC-4:  { covers: [AC-001-8],  technique: boundary }
+  TC-5:  { covers: [AC-001-4],  technique: error_guessing }
+  TC-6:  { covers: [AC-001-9],  technique: concurrency }
+  TC-8:  { covers: [AC-001-11], technique: state_transition }
+  TC-9:  { covers: [AC-001-12], technique: state_transition }
+  TC-11: { covers: [AC-001-7],  technique: domain }
+  TC-12: { covers: [AC-001-5],  technique: equivalence }
+  TC-13: { covers: [NFR-4],     technique: observability }
+  TC-14: { covers: [NFR-1],     technique: performance }
+  TC-15: { covers: [NFR-2],     technique: performance }
+  TC-16: { covers: [NFR-3],     technique: performance }
+  TC-17: { covers: [AC-001-11], technique: error_guessing, independent: true }
+  TC-18: { covers: [AC-001-1],  technique: error_guessing, independent: true }
+  TC-19: { covers: [AC-001-12], technique: error_guessing, independent: true }
+  TC-20: { covers: [AC-001-1],  technique: pairwise,       independent: true }
+  TC-21: { covers: [AC-001-7],  technique: state_transition, independent: true }
+
+  UT-1: { covers: [AC-001-1],  type: positive, surface: host_unit,       result: pass, kind: verified_by }
+  UT-2: { covers: [AC-001-1],  type: positive, surface: host_unit,       result: pass, kind: verified_by }
+  UT-3: { covers: [AC-001-7],  type: boundary, surface: host_unit,       result: pass, kind: verified_by }
+  UT-4: { covers: [AC-001-8],  type: boundary, surface: host_unit,       result: pass, kind: verified_by }
+  UT-5: { covers: [AC-001-4],  type: negative, surface: host_unit,       result: pass, kind: verified_by }
+  UT-6: { covers: [AC-001-9],  type: negative, surface: host_unit,       result: pass, kind: verified_by }
+  UT-7: { covers: [AC-001-11], type: positive, surface: host_unit,       result: pass, kind: verified_by }
+  UT-8: { covers: [AC-001-5],  type: negative, surface: host_unit,       result: pass, kind: verified_by }
+  UT-9: { covers: [AC-002-1],  type: positive, surface: host_unit,       result: pass, kind: verified_by }
+
+  IT-1: { covers: [IFC-1],     type: contract, surface: service_harness, result: pass, kind: verified_by }
+  IT-2: { covers: [IFC-1, AC-001-4],  type: error,   surface: service_harness, result: pass, kind: verified_by }
+  IT-3: { covers: [IFC-1, AC-001-11], type: recovery, surface: service_harness, result: pass, kind: verified_by }
+  IT-4: { covers: [IFC-1, AC-001-9],  type: concurrency, surface: service_harness, result: pass, kind: verified_by }
+  IT-5: { covers: [EVT-1],     type: contract, surface: service_harness, result: pass, kind: verified_by }
+  IT-6: { covers: [EVT-1],     type: idempotency, surface: service_harness, result: pass, kind: verified_by }
+
+  ST-1: { covers: [AC-001-1, NFR-1],  type: end_to_end,   surface: bench_hu, audible_outcome: true,  result: pass, kind: verified_by }
+  ST-2: { covers: [AC-001-11],        type: persistence,  surface: bench_hu, audible_outcome: true,  result: pass, kind: verified_by }
+  ST-3: { covers: [AC-001-4],         type: failure,      surface: bench_hu, audible_outcome: false, result: pass, kind: verified_by }
+  ST-4: { covers: [AC-001-7],         type: safety,       surface: bench_hu, audible_outcome: true,  result: pass, kind: verified_by }
+  ST-5: { covers: [AC-001-11],        type: recovery,     surface: bench_hu, audible_outcome: true,  result: pass, kind: verified_by }
+  ST-6: { covers: [AC-001-9],         type: concurrency,  surface: bench_hu, audible_outcome: true,  result: pass, kind: verified_by }
+  ST-7: { covers: [AC-001-12],        type: upgrade,      surface: bench_hu, audible_outcome: false, result: pass, kind: verified_by }
+  ST-8: { covers: [AC-001-12],        type: rollback,     surface: bench_hu, audible_outcome: false, result: pass, kind: verified_by }
+  ST-9: { covers: [NFR-2, NFR-3],     type: performance,  surface: bench_hu, audible_outcome: false, result: pass, kind: verified_by }
+
+  ST-101: { covers: [IFC-1], type: regression, surface: bench_hu, result: pass, kind: verified_by }
+  ST-102: { covers: [IFC-1], type: regression, surface: bench_hu, result: pass, kind: verified_by }
+  ST-110: { covers: [AC-001-12], type: regression, surface: bench_hu, result: pass, kind: verified_by }
+  ST-111: { covers: [AC-001-12], type: regression, surface: bench_hu, result: pass, kind: verified_by }
+  ST-120: { covers: [AC-001-7], type: regression, surface: bench_hu, audible_outcome: true, result: pass, kind: verified_by }
+  ST-121: { covers: [AC-001-7], type: regression, surface: bench_hu, audible_outcome: true, result: pass, kind: verified_by }
+  ST-122: { covers: [AC-001-7], type: regression, surface: bench_hu, audible_outcome: true, result: pass, kind: verified_by }
+  ST-130: { covers: [EVT-1], type: regression, surface: bench_hu, result: pass, kind: verified_by }
+
+changed_files:
+  - "src/audio/zone_offset_owner.cpp"
+  - "src/audio/zone_offset_apply.cpp"
+  - "src/hmi/zone_offset_control.kt"
+  - "src/settings/seat_offset_store.cpp"
+
+impacted_paths:
+  - { changed: IFC-1,                       dependents: [CMP-09], regression: [ST-101, ST-102], executed: true }
+  - { changed: seat_settings_table,         dependents: [CMP-11], regression: [ST-110, ST-111], executed: true }
+  - { changed: zone_gain_apply_path,        dependents: [CMP-12], regression: [ST-120, ST-121, ST-122], executed: true }
+  - { changed: settings_event_publisher,    dependents: [CMP-13], regression: [ST-130], executed: true }
+
+baselines:
+  BL-REQ-001:
+    kind: requirements
+    created: "2026-08-26T09:00:00-04:00"
+    approved_by: "rev-7f2a"
+    git_commit: "4a1c9e2"
+    status: superseded
+    superseded_by: BL-REQ-002
+  BL-REQ-002:
+    kind: requirements
+    created: "2026-08-26T11:30:00-04:00"
+    approved_by: "rev-7f2a"
+    git_commit: "9d3f7b1"
+    status: current
+  BL-CON-001:
+    kind: contracts
+    created: "2026-08-27T09:40:00-04:00"
+    approved_by: "rev-7f2a"
+    git_commit: "c22e408"
+    status: current
+  BL-DES-001:
+    kind: design
+    created: "2026-08-27T15:10:00-04:00"
+    approved_by: "rev-7f2a"
+    git_commit: "e7b1a55"
+    status: current
+
+element_baselines:
+  AC-001-1:  BL-REQ-002
+  AC-001-4:  BL-REQ-002
+  AC-001-5:  BL-REQ-002
+  AC-001-7:  BL-REQ-002
+  AC-001-8:  BL-REQ-002
+  AC-001-9:  BL-REQ-002
+  AC-001-11: BL-REQ-002
+  AC-001-12: BL-REQ-002
+  AC-002-1:  BL-REQ-002
+
+changes:
+  - baseline: BL-REQ-001
+    changed: AC-001-9
+    before: "the last write shall win"
+    after: "the winner shall be determined by the documented rule - driver precedence"
+    reason: "G0.5 finding MSF-2 - last write wins is not deterministic across the IPC boundary"
+    impact: [DES-1, IFC-1, UT-6, IT-4, ST-6]
+    gates_reopened: [G0, "G0.5"]
+    new_baseline: BL-REQ-002

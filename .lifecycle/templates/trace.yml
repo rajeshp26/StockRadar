@@ -1,0 +1,129 @@
+# features/<FEATURE-ID>/trace.yml
+# Schema: .lifecycle/schema/trace.schema.json   Spec: §8.3
+# Updated in the SAME change that creates or modifies any requirement,
+# contract, design element, code unit or test.
+
+feature: FEAT-2026-000
+spec_version: "1.1"
+
+customers:
+  CUS-1: { name: driver }
+
+journeys:
+  JRN-1: { customer: CUS-1, title: "..." }
+
+use_cases:
+  UC-001:
+    journeys: [JRN-1]
+    scenarios: [SCN-1]
+    components: [CMP-01, CMP-02, CMP-05]
+
+# §5.2.2 — risk is mandatory. An unscored SCN is an orphan risk.
+scenarios:
+  SCN-1:
+    title: "..."
+    class: normal
+    technique: equivalence
+    priority: { likelihood: 3, impact: 4, detectability: 3, priority: 36, band: medium }
+    cases: [IT-1]
+
+stories:
+  US-001:
+    use_case: UC-001
+    criteria: [AC-001-1, AC-001-4, AC-001-7]
+    scenarios: [SCN-1]
+
+nfrs:
+  NFR-1:
+    statement: "..."
+    threshold: "... measurable ..."
+    method: "... how measured ..."
+    measured_value: ""            # recorded at G7 / G8 Part B
+    design: [DES-1]
+    conditions: [TC-1]
+    baseline: BL-REQ-001
+
+# §6.5 ownership register — exactly one owner or it is an orphan state
+states:
+  exampleSetting:
+    owner: CMP-02
+    readers: [CMP-01, CMP-03]
+    writers: [CMP-02]
+    persistence: CMP-05
+    synchronization: EVT-1
+    control_scope: seat
+    concurrency:
+      consistency_model: "..."
+      serialization_mechanism: "..."
+      conflict_resolution: "..."
+      deterministic_winner: "..."
+      ordering: "..."
+      atomicity: "..."
+      race_prevention: "..."
+      reentrancy: "..."
+      thread_safety: "..."
+
+components:
+  CMP-01: { responsibility: "...", layer: hmi }
+  CMP-02: { responsibility: "...", layer: audio_service }
+  CMP-05: { responsibility: "... persistence ...", layer: persistence }
+
+design:
+  DES-1:
+    component: CMP-02
+    satisfies: [AC-001-1, AC-001-4, AC-001-7]
+    contracts: [IFC-1]
+    units: [IMP-1]
+    baseline: BL-DES-001
+
+contracts:
+  IFC-1:
+    owner: CMP-02
+    consumers: [CMP-01]
+    boundary: ipc
+    tests: [IT-1]
+    baseline: BL-CON-001
+
+units:
+  IMP-1:
+    path: "src/..."
+    satisfies: [AC-001-1, AC-001-4, AC-001-7]
+    tests: [UT-1, UT-2, UT-3]
+
+tests:
+  TC-1: { covers: [AC-001-1], technique: equivalence }
+  UT-1: { covers: [AC-001-1], type: positive, surface: host_unit, result: not_run, kind: verified_by }
+  UT-2: { covers: [AC-001-4], type: negative, surface: host_unit, result: not_run, kind: verified_by }
+  UT-3: { covers: [AC-001-7], type: boundary, surface: host_unit, result: not_run, kind: verified_by }
+  IT-1: { covers: [IFC-1], type: contract, surface: service_harness, result: not_run, kind: verified_by }
+  ST-1:
+    covers: [AC-001-1, NFR-1]
+    type: end_to_end
+    surface: bench_hu
+    audible_outcome: true
+    result: not_run
+    kind: verified_by
+
+changed_files: []
+
+impacted_paths:
+  - changed: IFC-1
+    dependents: [CMP-09]
+    regression: [ST-1]
+    executed: false
+
+# §8.6 — created at G0 (requirements), G1 (contracts), G3.5 (design)
+baselines:
+  BL-REQ-001:
+    kind: requirements
+    created: "2026-01-01T00:00:00-05:00"
+    approved_by: "<certifier agent_id>"
+    git_commit: "<sha>"
+    status: current
+
+element_baselines:
+  AC-001-1: BL-REQ-001
+  AC-001-4: BL-REQ-001
+  AC-001-7: BL-REQ-001
+
+changes: []

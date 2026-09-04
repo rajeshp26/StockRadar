@@ -1,0 +1,268 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gm.com/lifecycle/v1.1/state.schema.json",
+  "title": "Feature lifecycle state machine (spec §7)",
+  "type": "object",
+  "required": [
+    "feature",
+    "spec_version",
+    "depth",
+    "state",
+    "transitions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "feature": {
+      "type": "string",
+      "pattern": "^[A-Z]+-[0-9]{4}-[0-9]+$"
+    },
+    "spec_version": {
+      "const": "1.1"
+    },
+    "depth": {
+      "enum": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ]
+    },
+    "state": {
+      "enum": [
+        "QUALIFIED",
+        "UNDERSTANDING",
+        "SCENARIOS_MODELLED",
+        "REQUIREMENTS_DRAFTED",
+        "REQUIREMENTS_CHALLENGED",
+        "REQUIREMENTS_BASELINED",
+        "DECOMPOSED",
+        "CONTRACTED",
+        "ARCHITECTED",
+        "DESIGNED",
+        "IMPACT_ASSESSED",
+        "DESIGN_REVIEWED",
+        "IMPLEMENTING",
+        "UNIT_VERIFIED",
+        "INTEGRATION_VERIFIED",
+        "SYSTEM_VERIFIED",
+        "TEST_ANALYSED",
+        "TEST_DESIGNED",
+        "REGRESSION_SELECTED",
+        "EXECUTION_READY",
+        "VALIDATION_READY",
+        "VALIDATED",
+        "VALIDATION_ACCEPTED",
+        "RELEASE_PENDING",
+        "COMPLETE",
+        "DEFECT_LOOP"
+      ]
+    },
+    "phases_required": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "gates_required": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "timestamp",
+          "charter"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "charter": {
+            "enum": [
+              "team-lead",
+              "researcher",
+              "architect",
+              "planner",
+              "implementer",
+              "reviewer",
+              "verifier",
+              "human"
+            ]
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "authorized_by": {
+            "type": "string",
+            "description": "gate ledger entry that authorized this transition"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "depth_change": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "reason",
+          "timestamp",
+          "charter"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3",
+              "L4"
+            ]
+          },
+          "to": {
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3",
+              "L4"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "charter": {
+            "type": "string"
+          },
+          "reviewer_concurrence": {
+            "type": "string",
+            "description": "required for de-escalation (§3.4); ledger entry reference"
+          }
+        }
+      }
+    },
+    "charter_log": {
+      "type": "array",
+      "description": "§1.2 sequential-adoption record for runtimes with no subagents",
+      "items": {
+        "type": "object",
+        "required": [
+          "charter",
+          "agent_id",
+          "session_id",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "charter": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "defect_loop": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "defect",
+          "entered",
+          "escape_phase"
+        ],
+        "properties": {
+          "defect": {
+            "type": "string",
+            "pattern": "^DEF-"
+          },
+          "entered": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escape_phase": {
+            "type": "string"
+          },
+          "process_originated": {
+            "type": "boolean"
+          },
+          "reentry_state": {
+            "type": "string"
+          },
+          "exited": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "contributors": {
+      "type": "array",
+      "description": "§9.1.1 L4 independence — record all contributors beyond the primary author and certifier",
+      "items": {
+        "type": "object",
+        "required": [
+          "agent_id",
+          "role",
+          "session_id",
+          "contribution"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "contribution": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

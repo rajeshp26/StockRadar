@@ -1,0 +1,72 @@
+# features/FEAT-2026-001/F7-contracts/IFC-1-zone-offset.yml
+# Schema: .lifecycle/schema/contract.schema.json   Spec: §6.4, §6.4.1
+id: IFC-1
+interface: ZoneOffsetControl
+owner: CMP-02
+consumers: [CMP-01]
+version: 1.1.0                  # minor bump: operation added, no break
+boundary: ipc                   # §6.4.1 — ipc cannot mark timeout inapplicable
+baseline: BL-CON-001
+
+operations:
+  - name: setZoneOffset
+    kind: command
+    input:  { zoneId: string, offsetDb: number, requesterRole: string }
+    output: { appliedOffsetDb: number, supersededBy: string }
+    errors: [OFFSET_OUT_OF_RANGE, ZONE_NOT_PRESENT, STORAGE_UNAVAILABLE, SUPERSEDED, APPLY_FAILED]
+    reliability:
+      timeout:
+        applicable: true
+        value_ms: 800
+        reason: "crosses an IPC boundary; caller must not block the settings UI"
+      retry:
+        applicable: false
+        reason: "user-initiated write; a silent retry could re-apply a superseded value. HMI re-offers the action instead."
+      idempotency:
+        applicable: true
+        reason: "same zoneId and offsetDb applied twice yields the same state"
+    preconditions:  ["zone enumeration complete", "requester authorized for that seat scope"]
+    postconditions: ["activeZoneOffset[zoneId] equals appliedOffsetDb", "value durably stored or STORAGE_UNAVAILABLE returned"]
+    traces: [UC-001, AC-001-1, AC-001-4, AC-001-5, AC-001-8, AC-001-9]
+
+  - name: getZoneOffset
+    kind: query
+    input:  { zoneId: string }
+    output: { offsetDb: number }
+    errors: [ZONE_NOT_PRESENT]
+    reliability:
+      timeout:
+        applicable: true
+        value_ms: 300
+        reason: "IPC boundary"
+      retry:
+        applicable: true
+        value: { attempts: 2, backoff: exponential }
+        reason: "read-only and side-effect free"
+      idempotency:
+        applicable: true
+        reason: "no state mutated"
+    preconditions:  ["zone enumeration complete"]
+    postconditions: ["no state mutated"]
+    traces: [UC-002, AC-002-1]
+
+  - name: validateOffset
+    kind: query
+    input:  { offsetDb: number }
+    output: { valid: boolean, reason: string }
+    errors: []
+    reliability:
+      timeout:
+        applicable: false
+        reason: "in-process synchronous call within CMP-02; no boundary crossed"
+      retry:
+        applicable: false
+        reason: "pure function; caller does not retry"
+      idempotency:
+        applicable: true
+        reason: "pure function"
+    preconditions:  []
+    postconditions: ["no state mutated"]
+    traces: [AC-001-8]
+
+tests: [IT-1, IT-2, IT-3, IT-4]
