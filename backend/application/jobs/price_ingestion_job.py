@@ -7,6 +7,7 @@ from typing import Any
 from config import settings
 from infrastructure.repositories.price_repository import PriceRepository
 from providers.yfinance_provider import YFinanceProvider
+from shared.constants import get_effective_skipped_symbols
 
 logger = logging.getLogger("stockerpro.price.ingestion")
 
@@ -29,6 +30,15 @@ def timed(logger=logger):
 @timed()
 async def refresh_all_prices():
     symbols = repo.get_all_active_symbols()
+
+    # Drop delisted/renamed symbols (WBA, CMA, NYCB, CS, ...) before hitting
+    # the provider — they 404 on yfinance every cycle and only add retry noise.
+    skipped = get_effective_skipped_symbols()
+    symbols = [
+        s for s in symbols
+        if (s.get("symbol") or "").upper() not in skipped
+    ]
+
     company_ids = {s["company_id"] for s in symbols if s.get("company_id")}
     if not company_ids:
         logger.info("[PRICE-INGEST] no active symbols, skipping")

@@ -47,6 +47,7 @@ from application.jobs.derived_financial_metrics_job import (
 from config import settings
 from database import supabase
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from shared.constants import get_effective_skipped_symbols
 from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
@@ -215,24 +216,21 @@ class MarketDataRefreshScheduler:
         self,
         financial_repo: SupabaseFinancialRepository | None = None,
         defeat_beta_provider: Optional["DefeatBetaProvider"] = None,
+        yfinance_provider: Optional["YFinanceProvider"] = None,
     ):
         # Repos & Providers
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
         self.defeat_beta_provider = defeat_beta_provider
-        if self.defeat_beta_provider is None:
+        self.yfinance_provider = yfinance_provider
+        if self.defeat_beta_provider is None or self.yfinance_provider is None:
             try:
-                from providers.defeat_beta_provider import DefeatBetaProvider
-                from providers.yfinance_provider import YFinanceProvider
-                yf_provider = YFinanceProvider()
-                from providers.edgar_provider import EdgarToolsProvider
-                from providers.stockdex_provider import StockdexMacrotrendsProvider
-                self.defeat_beta_provider = DefeatBetaProvider(
-                    yfinance_provider=yf_provider,
-                    stockdex_provider=StockdexMacrotrendsProvider(),
-                    edgar_provider=EdgarToolsProvider(),
-                )
+                from dependencies import get_defeat_beta_provider, get_yfinance_provider
+                if self.yfinance_provider is None:
+                    self.yfinance_provider = get_yfinance_provider()
+                if self.defeat_beta_provider is None:
+                    self.defeat_beta_provider = get_defeat_beta_provider()
             except Exception as import_err:
-                logger.warning("Failed to initialize DefeatBetaProvider: %s", import_err)
+                logger.warning("Failed to initialize providers via DI: %s", import_err)
 
         # Config (with safe defaults)
         self.interval_hours: int = int(getattr(settings, "MARKET_DATA_REFRESH_INTERVAL_HOURS", 24))
@@ -245,6 +243,11 @@ class MarketDataRefreshScheduler:
         )
         self.retention_years: int = int(getattr(settings, "PRICE_HISTORY_RETENTION_YEARS", 10))
         self.lock_ttl_seconds: int = int(getattr(settings, "SCHEDULER_COMPANY_LOCK_TTL_SECONDS", 1800))
+        # Delisted / renamed symbols to skip (env var + hardcoded canonical set)
+        self.skipped_symbols: set[str] = get_effective_skipped_symbols()
+        self.max_price_failures: int = int(
+            getattr(settings, "MAX_CONSECUTIVE_PRICE_FAILURES", 10)
+        )
 
         # FX Service for currency conversion
         self.fx_service: Any | None = None
@@ -289,6 +292,12 @@ class MarketDataRefreshScheduler:
             companies = await self.financial_repo.get_active_companies_for_market_data()
         except Exception:
             companies = []
+        # Never enqueue company_refresh jobs for delisted/renamed symbols —
+        # they 404 on the provider and would only spin retries.
+        companies = [
+            c for c in (companies or [])
+            if (c.get("ticker_symbol") or "").upper() not in self.skipped_symbols
+        ]
         jobs = []
         for c in companies or []:
             jobs.append({
@@ -384,6 +393,20 @@ class MarketDataRefreshScheduler:
             return {"companies_found": 0, "companies_succeeded": 0, "companies_failed": 0, "detail": []}
 
         logger.info("Found %d companies for market-data refresh", total)
+
+        # Filter out delisted/skipped symbols and repeatedly-failing companies
+        before_count = len(companies or [])
+        companies = [
+            c for c in (companies or [])
+            if c.get("ticker_symbol", "").upper() not in self.skipped_symbols
+            and (c.get("consecutive_price_failures") or 0) < self.max_price_failures
+        ]
+        if before_count - len(companies):
+            logger.info(
+                "[FILTER] Skipped %d delisted/failing companies from %d total",
+                before_count - len(companies), before_count,
+            )
+        total = len(companies)
 
         sem = asyncio.Semaphore(self.max_concurrency)
         results: dict[str, Any] = {
@@ -492,11 +515,44 @@ class MarketDataRefreshScheduler:
          """
         is_stock = (security_type == "stock")
 
+        # Delisted / renamed symbols (WBA, CMA, NYCB, CS, ...) are permanently
+        # dead on the quote provider — skip before any provider call. This
+        # guards the planner->worker path (company_refresh jobs call
+        # _process_company directly, bypassing the cycle-level filter).
+        if symbol.upper() in self.skipped_symbols:
+            logger.info(
+                "[MARKET_DATA] %s skipped — delisted/renamed symbol", symbol,
+            )
+            return {
+                "price_history_monthly": 0,
+                "security_type": security_type,
+                "splits": 0,
+                "revenue_forecast": 0,
+                "earnings_forecast": 0,
+                "company_summary": 0,
+                "ratios_changed": 0,
+                "dividend_metrics": 0,
+                "valuation_pe": 0,
+                "skipped_delisted": True,
+            }
+
         if not is_stock:
-            logger.debug(
-                "[MARKET_DATA] %s security_type=%s — running price+splits only",
+            logger.info(
+                "[MARKET_DATA] %s security_type=%s — skipping (ETF/index/fund)",
                 symbol, security_type,
             )
+            return {
+                "price_history_monthly": 0,
+                "security_type": security_type,
+                "splits": 0,
+                "revenue_forecast": 0,
+                "earnings_forecast": 0,
+                "company_summary": 0,
+                "ratios_changed": 0,
+                "dividend_metrics": 0,
+                "valuation_pe": 0,
+                "skipped_etf": True,
+            }
 
         # 1) PRICE HISTORY — all security types
         price_rows_written = await self._upsert_monthly_price_history(symbol, company_id, exchange=exchange)
@@ -509,14 +565,14 @@ class MarketDataRefreshScheduler:
         # 3) REVENUE FORECAST — stocks only
         rev_fcst_rows: list[dict[str, Any]] = []
         if is_stock:
-            rev_fcst_rows = await self.defeat_beta_provider.fetch_revenue_forecast(symbol, company_id)
+            rev_fcst_rows = await self.yfinance_provider.fetch_revenue_forecast(symbol, company_id)
             if rev_fcst_rows:
                 await self.financial_repo.upsert_revenue_forecast(rev_fcst_rows)
 
         # 4) EARNINGS FORECAST — stocks only
         eps_fcst_rows: list[dict[str, Any]] = []
         if is_stock:
-            eps_fcst_rows = await self.defeat_beta_provider.fetch_earnings_forecast(symbol, company_id)
+            eps_fcst_rows = await self.yfinance_provider.fetch_earnings_forecast(symbol, company_id)
             if eps_fcst_rows:
                 await self.financial_repo.upsert_earnings_forecast(eps_fcst_rows)
 

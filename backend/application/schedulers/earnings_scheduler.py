@@ -55,20 +55,14 @@ class EarningsRefreshScheduler:
         """
         self.financial_repo = financial_repo or SupabaseFinancialRepository()
 
-        # Lazy imports to avoid SSL calls at module import time
+        # Lazy imports to avoid SSL calls at module import time.
+        # Use the DI singleton so the StockdexMacrotrendsProvider (and its 429
+        # backoff state) is shared with the market-data scheduler and API layer.
         self.defeat_beta_provider = defeat_beta_provider
         if self.defeat_beta_provider is None:
             try:
-                from providers.defeat_beta_provider import DefeatBetaProvider
-                from providers.yfinance_provider import YFinanceProvider
-                yf_provider = YFinanceProvider()
-                from providers.edgar_provider import EdgarToolsProvider
-                from providers.stockdex_provider import StockdexMacrotrendsProvider
-                self.defeat_beta_provider = DefeatBetaProvider(
-                    yfinance_provider=yf_provider,
-                    stockdex_provider=StockdexMacrotrendsProvider(),
-                    edgar_provider=EdgarToolsProvider(),
-                )
+                from dependencies import get_defeat_beta_provider
+                self.defeat_beta_provider = get_defeat_beta_provider()
             except Exception as import_err:
                 logger.warning("Failed to initialize DefeatBetaProvider: %s", import_err)
                 self.defeat_beta_provider = None
