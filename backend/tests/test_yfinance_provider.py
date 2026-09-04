@@ -71,3 +71,19 @@ class TestResolveSymbolSuffixIdempotency:
 
     def test_unknown_exchange_returns_uppercase(self):
         assert YFinanceProvider()._resolve_symbol("aapl") == "AAPL"
+
+    def test_neo_exchange_appends_ne_suffix(self):
+        """NEO Exchange uses .NE suffix in yfinance (e.g. YTSL.NE)."""
+        assert YFinanceProvider()._resolve_symbol("YTSL", "NEO") == "YTSL.NE"
+
+    def test_neo_suffix_idempotent(self):
+        """Symbols already carrying .NE must not get a double suffix."""
+        assert YFinanceProvider()._resolve_symbol("YTSL.NE", "NEO") == "YTSL.NE"
+
+    def test_all_canadian_suffixes_resolve(self):
+        """The six Canadian exchanges must map to yfinance-compatible suffixes."""
+        p = YFinanceProvider()
+        assert p._resolve_symbol("BEP-UN", "TOR") == "BEP-UN.TO"
+        assert p._resolve_symbol("ETHY", "TSX") == "ETHY.TO"
+        assert p._resolve_symbol("XXXX", "VAN") == "XXXX.V"
+        assert p._resolve_symbol("XXXX", "CNQ") == "XXXX.V"

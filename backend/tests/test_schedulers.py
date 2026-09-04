@@ -156,12 +156,18 @@ class TestEarningsSchedulerCheckAndRefresh:
 class TestMarketDataSchedulerInit:
     async def test_init_stores_repos_and_providers(self, mock_financial_repo, mock_defeat_beta_provider):
         from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
+        mock_yf = SimpleNamespace(
+            fetch_revenue_forecast=AsyncMock(return_value=[]),
+            fetch_earnings_forecast=AsyncMock(return_value=[]),
+        )
         scheduler = MarketDataRefreshScheduler(
             financial_repo=mock_financial_repo,
             defeat_beta_provider=mock_defeat_beta_provider,
+            yfinance_provider=mock_yf,
         )
         assert scheduler.financial_repo is mock_financial_repo
         assert scheduler.defeat_beta_provider is mock_defeat_beta_provider
+        assert scheduler.yfinance_provider is mock_yf
         assert scheduler.is_running is False
 
     async def test_start_stop_lifecycle(self, mock_financial_repo, mock_defeat_beta_provider):
@@ -182,12 +188,18 @@ class TestMarketDataProcessCompany:
     @pytest.fixture(autouse=True)
     def _setup_scheduler(self, mock_financial_repo, mock_defeat_beta_provider):
         from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
+        mock_yfinance = SimpleNamespace(
+            fetch_revenue_forecast=AsyncMock(return_value=[]),
+            fetch_earnings_forecast=AsyncMock(return_value=[]),
+        )
         self.scheduler = MarketDataRefreshScheduler(
             financial_repo=mock_financial_repo,
             defeat_beta_provider=mock_defeat_beta_provider,
+            yfinance_provider=mock_yfinance,
         )
         self.mock_repo = mock_financial_repo
         self.mock_provider = mock_defeat_beta_provider
+        self.mock_yfinance = mock_yfinance
         patch_obj = patch.object(self.scheduler, "_upsert_monthly_price_history", return_value=0)
         self._internal_patch = patch_obj
         self._internal_patch.start()
