@@ -40,7 +40,6 @@
       "python framework/*": "allow",
       "bash framework/*": "allow",
       "Select-String*": "allow",
-      "New-Item*": "allow",
       "Get-ChildItem*": "allow",
       "Get-Content*": "allow",
       "Get-Item*": "allow",

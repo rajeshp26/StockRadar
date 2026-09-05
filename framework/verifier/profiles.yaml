@@ -27,8 +27,8 @@ profiles:
 
   security:
     when: {security_sensitive: true}
-    evidence: [dependency_scan, authz_integration_test, secret_scan]
-    commands: ["npm audit --audit-level=high", "pip-audit"]
+    evidence: [dependency_scan, authz_integration_test, secret_scan, permission_policy_invariants]
+    commands: ["npm audit --audit-level=high", "pip-audit", "./framework/gates/g10_permission.sh"]
 
   performance:
     when: {scope: [cross_component, system], hot_path: true}

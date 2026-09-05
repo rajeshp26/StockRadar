@@ -14,6 +14,7 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G7 retro      | retros complete, no recurrence | incomplete or recurrence | BLOCKED (python3/pyyaml absent) | — | NOT_APPLICABLE (no escape trigger) |
 | G8 blockers  | no open blockers | open blockers listed | BLOCKED (python3/pyyaml absent) | — | — |
 | G9 scope      | within declared scope (or SKIP: no plan / no changes) | undeclared files listed | — | — | — |
+| G10 permission | policy conformant | violations found | BLOCKED (python3 absent) | — | NOT_APPLICABLE (opencode.json absent) |
 | G-T0 tool_readiness | tool plan exists, registry present, contracts in place | tool plan missing or tools unavailable | BLOCKED (python3 absent) | — | — |
 | G-T1 tool_utilization | tool evidence present in verification artifacts | tool evidence gaps found | BLOCKED (python3 absent) | — | NO_VERIFICATION_ARTIFACTS |
 
@@ -44,6 +45,25 @@ G9 judges changed source files against the plan's declared files_or_components. 
 context or no source changes it logs SKIP and exits 0 -- that is "nothing was judged", not
 "scope respected". A skip must be reported as skipped, never counted as a passed check.
 
+
+## G10 asserts policy structure, not interactive behaviour
+
+G10 checks that opencode.json expresses the risk-tiered permission model: catch-all "ask"
+first (last-match-wins ordering), the allow families (git read, test/build/lint, trusted
+framework scripts), the deny families (destructive fs, git history mutation, push), and the
+negative invariants (no `backend/scripts/` path trust, no arbitrary python allow, no
+`New-Item`). A gate cannot drive opencode's interactive ask/allow engine, so it asserts the
+policy structure that produces those behaviours; the behavioural smoke test is manual. Run
+G10 whenever a permission rule changes:
+
+    bash framework/gates/g10_permission.sh   # expect exit 0 (conformant)
+    git status                                # expect no prompt (allow)
+    python -c "print(1)"                      # expect prompt (ask)
+    Remove-Item somefile                      # expect denied (deny)
+    git push                                  # expect denied (deny)
+
+A skipped G10 (exit 4, no opencode.json to judge) must be reported as skipped, never as
+conformant.
 
 ## G-T0 verifies tool readiness before work
 
