@@ -5,23 +5,30 @@
 #   source framework/models/profiles.sh tiered      # cost-tiered by reasoning demand
 #   source framework/models/profiles.sh cheap       # aggressive; expect rework to rise
 #
-# WHY ENV VARS: opencode.json reads {env:OC_MODEL_*}. Unset yields "", and "" means inherit,
-# so an unset variable is a safe no-op. That makes every profile reversible with `unset`
-# rather than a config edit -- which matters because you must be able to revert instantly
-# when rework rate moves.
+# WHAT THIS LAYER IS: exporting OC_MODEL_* gives resolution diagnostics -- the
+# engine (framework/models/resolve.py) and validate.py --models read them to
+# attribute each agent's model source and prove every profile maps all seven
+# agents. The runtime model ids stay fixed in opencode.json, deliberately: a
+# regressed {env:X} reference resolves an unset var to "" and stalls every
+# subagent for the inactivity timeout, so the config remains concrete and this
+# layer stays diagnostic -- a ready-to-use switch, not the switch. It becomes
+# the switch only if {env:VAR:-default} substitution support is ever proven
+# and the config is wired to it. Profiles are reversible with unset.
 #
-# MEASUREMENT PROTOCOL: run `baseline` for ~20 tasks, record the report, then run `tiered`
-# for ~20 more on comparable work. Compare tokens per session AND rework rate together.
-# A token saving with higher rework is a loss.
+# MEASUREMENT PROTOCOL: once wired, run `baseline` for ~20 tasks, record the
+# report, then `tiered` for ~20 more on comparable work. Compare tokens per
+# session AND rework rate together. A token saving with higher rework is a loss.
 
 _p() { export OC_MODEL_DEFAULT="$1" OC_MODEL_SMALL="$2" OC_MODEL_LEAD="$3" \
        OC_MODEL_RESEARCH="$4" OC_MODEL_ARCHITECT="$5" OC_MODEL_PLANNER="$6" \
        OC_MODEL_IMPLEMENT="$7" OC_MODEL_REVIEW="$8" OC_MODEL_VERIFY="$9"; }
 
+
 # Replace these identifiers with models your provider actually exposes: `opencode models`.
-BIG="${OC_BIG:-anthropic/claude-sonnet-4-5}"
-MID="${OC_MID:-anthropic/claude-sonnet-4-5}"
-SML="${OC_SML:-anthropic/claude-haiku-4-5}"
+BIG="${OC_BIG:-opencode/big-pickle}"
+MID="${OC_MID:-opencode/big-pickle}"
+SML="${OC_SML:-opencode/big-pickle}"
+
 
 case "${1:-}" in
   baseline)

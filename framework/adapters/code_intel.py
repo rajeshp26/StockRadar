@@ -24,8 +24,13 @@ CAPABILITIES = ["symbol_search", "relationships", "impact", "affected_tests",
                 "freshness", "reindex", "edit_context", "locate"]
 
 # Candidate provider CLIs, probed in order. Names deliberately live in ONE place.
+# The OMO harness installs CodeGraph under ~/.omo/codegraph/bin (node CLI). Probe
+# PATH installs by name first, the harness location second.
+_OMO_CG = os.path.expanduser(os.path.join("~", ".omo", "codegraph", "bin",
+                                          "codegraph.cmd" if os.name == "nt" else "codegraph"))
 PROVIDERS = [
     {"bin": "codegraph",      "probe": ["status"]},
+    {"bin": _OMO_CG,          "probe": ["status"]},
     {"bin": "code-graph-mcp", "probe": ["health-check"]},
     {"bin": "symgraph",       "probe": ["status"]},
 ]
