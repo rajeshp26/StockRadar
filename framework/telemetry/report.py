@@ -12,8 +12,9 @@ is derived from recorded facts only.
 
 Exit codes:
   0  report produced
-  3  no telemetry yet (not an error -- nothing has run)
+  1  report produced but session(s) never finalized OR the model-resolution snapshot records failures (both named in the output)
   2  records exist but none are parseable
+  3  no telemetry yet (not an error -- nothing has run)
 """
 import argparse
 import json
@@ -48,14 +49,61 @@ def load(path):
     if not os.path.exists(path):
         return recs, bad
     for line in open(path, encoding="utf-8"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                recs.append(json.loads(line))
-            except Exception:
-                bad += 1
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            recs.append(json.loads(line))
+        except Exception:
+            bad += 1
     return recs, bad
+
+
+def collapse(recs):
+    """Lifecycle records: one record per session, last wins.
+
+    The plugin now emits started/heartbeat/final per session; aggregating the whole
+    series would triple-count every metric. Records without session_id (pre-lifecycle
+    fixtures and legacy data) are kept verbatim."""
+    out, by_sid = [], {}
+    for r in recs:
+        sid = r.get("session_id")
+        if sid:
+            by_sid[sid] = r
+        else:
+            out.append(r)
+    return out + list(by_sid.values())
+
+
+def stale_bg_tasks(recs):
+    """Background tasks launched but never collected or cancelled per session."""
+    stale = 0
+    for r in recs:
+        for t in (r.get("bg_tasks") or {}).values():
+            if isinstance(t, dict):
+                launched = t.get("launched", 0) or 0
+                closed = (t.get("collects", 0) or 0) + (t.get("cancelled", 0) or 0)
+                if launched > closed:
+                    stale += 1
+    return stale
+
+
+def load_models(path=None):
+    """Read the resolve snapshot written by `validate.py --models`.
+
+    Returns None when the snapshot has never been written (preflight not run) --
+    absence must not be read as a pass. A corrupt file is reported, not swallowed.
+    """
+    if path is None:
+        path = os.environ.get("MODEL_RESOLUTION_JSON") or os.path.join(
+            ROOT, "framework", "telemetry", "models-resolved.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception as e:  # corrupt snapshot: surface, never silently skip
+        return {"_unreadable": str(e)}
 
 
 def tot(d):
@@ -83,6 +131,8 @@ def analyse(recs):
     tok = defaultdict(int)
     dur, mat, exp, trunc, fb = [], 0, 0, 0, 0
     esc = retro = recur = 0
+    poll = 0
+    wreg = wev = wstall = 0
     tiers = defaultdict(int)
     rework_tasks = 0
     fix_targets = defaultdict(int)
@@ -129,6 +179,10 @@ def analyse(recs):
         esc += r.get("defect_escapes", 0) or 0
         retro += r.get("retros_recorded", 0) or 0
         recur += r.get("retro_recurrences", 0) or 0
+        poll += r.get("bg_poll_total", 0) or 0
+        wreg += r.get("worker_tasks_registered", 0) or 0
+        wev += r.get("worker_events_written", 0) or 0
+        wstall += r.get("worker_stalls_detected", 0) or 0
         if r.get("provider_tier") is not None:
             tiers[r["provider_tier"]] += 1
         for t in r.get("retro_fix_targets") or []:
@@ -136,7 +190,8 @@ def analyse(recs):
 
     return dict(n=n, tok=tok, agents=agents, tools=tools, gates=gates, gate_ms=gate_ms,
                 models=models, retries=retries, dur=dur, mat=mat, exp=exp, trunc=trunc,
-                fb=fb, esc=esc, retro=retro, recur=recur, tiers=tiers,
+                fb=fb, esc=esc, retro=retro, recur=recur, poll=poll, tiers=tiers,
+                wreg=wreg, wev=wev, wstall=wstall,
                 rework_tasks=rework_tasks, fix_targets=fix_targets)
 
 
@@ -239,6 +294,36 @@ def render(d, verbose=False):
         L.append(f"  median {st.median(d['dur']):.0f}s   mean {st.mean(d['dur']):.0f}s   max {max(d['dur'])}s")
 
     L.append("")
+    L.append("-- TELEMETRY HEALTH ------------------------------------------------")
+    L.append(f"  unfinalized sessions  {len(d.get('unfinalized') or [])}"
+             + ("   <- session died before a final record" if d.get("unfinalized") else ""))
+    L.append(f"  bg poll total         {d.get('poll', 0)}"
+             + ("   <- polling anti-pattern recorded" if d.get('poll') else ""))
+    L.append(f"  stale bg tasks        {d.get('stale', 0)}"
+             + ("   <- launched but never collected or cancelled" if d.get('stale') else ""))
+    L.append(f"  tasks registered      {d.get('wreg', 0)}")
+    L.append(f"  stalls detected       {d.get('wstall', 0)}"
+             + ("   <- supervision caught a silent worker" if d.get('wstall') else ""))
+
+    if d.get("models_resolution") is not None:
+        mr = d["models_resolution"]
+        L.append("")
+        L.append("-- MODEL RESOLUTION (validate.py --models snapshot) ---------------")
+        if "_unreadable" in mr:
+            L.append(f"  snapshot unreadable: {mr['_unreadable']}")
+        else:
+            L.append(f"  active profile   {mr.get('active_profile') or '(none)'}")
+            L.append(f"  {'agent/slot':13s} {'model':38s} source")
+            for name in sorted(mr.get("agents") or {}):
+                a = mr["agents"][name]
+                flag = "  <- RESOLUTION FAILURE" if a.get("source") == "error" else ""
+                L.append(f"  {name:13s} {a.get('model') or '(none)':38s} {a.get('source')}{flag}")
+            fails = mr.get("failures") or []
+            if fails:
+                L.append(f"  !! {len(fails)} resolution failure(s): {', '.join(fails)}")
+                L.append("  !! an unresolved model stalls the subagent at spawn; fix before use")
+
+    L.append("")
     L.append("-- READING THIS ---------------------------------------------------")
     if n < 20:
         L.append(f"  {n} session(s). Under ~20 these numbers are indicative, not decisive.")
@@ -257,6 +342,7 @@ def main():
 
     path = a.path or os.path.join(state_root(), "telemetry", "records.jsonl")
     recs, bad = load(path)
+    recs = collapse(recs)
 
     if not recs and not bad:
         print(f"[telemetry] no records at {path}")
@@ -267,18 +353,38 @@ def main():
         return 2
 
     d = analyse(recs)
+    d["unfinalized"] = sorted({r["session_id"] for r in recs
+                               if r.get("session_id") and (r.get("kind") or "final") != "final"})
+    d["stale"] = stale_bg_tasks(recs)
+    d["models_resolution"] = load_models()
     if a.json:
         out = {k: (dict(v) if isinstance(v, defaultdict) else v) for k, v in d.items()}
         out["agents"] = {k: {**v, "models": sorted(v["models"])} for k, v in d["agents"].items()}
         out["tools"] = {k: dict(v) for k, v in d["tools"].items()}
         out["gates"] = {k: dict(v) for k, v in d["gates"].items()}
         out["rework_rate_pct"] = pct(d["rework_tasks"], d["n"])
+        out["unfinalized_sessions"] = d["unfinalized"]
+        out["stale_bg_tasks"] = d["stale"]
+        out["model_resolution"] = d["models_resolution"]
         print(json.dumps(out, indent=2, default=str))
     else:
         print(render(d, a.verbose))
         if bad:
             print(f"[telemetry] warning: skipped {bad} unparseable line(s)")
-    return 0
+    rc = 0
+    if d["unfinalized"]:
+        _head = ", ".join(d["unfinalized"][:5])
+        if len(d["unfinalized"]) > 5:
+            _head += f" +{len(d['unfinalized']) - 5} more"
+        print(f"[telemetry] {len(d['unfinalized'])} session(s) have no final record "
+              f"(died before SESSION_FINALIZED): {_head}")
+        rc = 1
+    mr = d.get("models_resolution")
+    if mr and not mr.get("_unreadable") and (mr.get("failures") or []):
+        print(f"[telemetry] {len(mr['failures'])} model resolution failure(s): "
+              f"{', '.join(mr['failures'])} -- an unresolved model stalls subagent spawn")
+        rc = 1
+    return rc
 
 
 if __name__ == "__main__":
