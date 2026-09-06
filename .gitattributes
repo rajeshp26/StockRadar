@@ -1,0 +1,23 @@
+# Line-ending invariant for the StockerPro repository.
+#
+# The machine-global git config sets core.autocrlf=true
+# (C:/Software/Git/etc/gitconfig), which rewrites LF -> CRLF on checkout and
+# would leak CRLF into committed files on this host.  This file overrides
+# that globally: all text files are stored and checked out as LF, no BOM.
+* text=auto eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff2 binary
+*.pdf binary
