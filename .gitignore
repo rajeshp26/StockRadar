@@ -99,3 +99,13 @@ framework/telemetry/browser/
 
 # Local agent planning/session state (never publish)
 .planning/
+
+# Ad-hoc PoC / audit outputs (may contain raw financial data)
+backend/poc_out*.txt
+backend/reconcile_dryrun.txt
+
+# Ad-hoc PoC scripts (not part of application)
+backend/scripts/poc_*.py
+
+# Generated model-resolution snapshot
+framework/telemetry/models-resolved.json
