@@ -8,7 +8,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+try:
+    sys.path.insert(0, "framework")
+    from models import resolve as _res
+    _RES_OK = True
+except Exception as _e:  # pragma: no cover - fail loud, never silent
+    _RES_OK = False
+    _RES_ERR = repr(_e)
 
 FAILS, WARNS = [], []
 
@@ -99,6 +108,41 @@ print("\n[1] Agent definitions and permissions")
 cfg = json.loads(Path("opencode.json").read_text())
 agents = cfg["agent"]
 EXPECTED = ["team-lead", "researcher", "architect", "planner", "implementer", "reviewer", "verifier"]
+
+
+
+def _models_preflight() -> int:
+    """--models: resolve every agent/slot from the live environment.
+
+    Reads the same sources the runtime sees (OC_MODEL_* env vars plus the
+    opencode.json fallbacks) through framework/models/resolve.py, prints the
+    per-agent source attribution table, and writes the JSON snapshot that
+    telemetry attaches to the next session record. Failures exit 1 (fail
+    closed) and still write the snapshot so the cause is visible.
+    """
+    _script = Path("framework/models/profiles.sh")
+    _text = _script.read_text(encoding="utf-8") if _script.exists() else ""
+    _r = _res.preflight(cfg, os.environ, _text)
+    _out = Path(os.environ.get("MODEL_RESOLUTION_JSON",
+                                "framework/telemetry/models-resolved.json"))
+    _out.parent.mkdir(parents=True, exist_ok=True)
+    _out.write_text(json.dumps(_r, indent=2) + "\n", encoding="utf-8")
+    print("active profile: %s" % (_r["active_profile"] or "(none)"))
+    print("%-20s %-40s %s" % ("agent/slot", "model", "source"))
+    for _n in sorted(_r["agents"]):
+        _a = _r["agents"][_n]
+        print("%-20s %-40s %s" % (_n, _a["model"] or "(none)", _a["source"]))
+    if _r["failures"]:
+        print("FAILURES: %s" % ", ".join(_r["failures"]))
+        return 1
+    return 0
+
+
+if "--models" in sys.argv:
+    if not _RES_OK:
+        print("--models unavailable: resolve engine import failed: %s" % _RES_ERR)
+        sys.exit(2)
+    sys.exit(_models_preflight())
 check("seven agents defined", sorted(agents) == sorted(EXPECTED), f"got {sorted(agents)}")
 for a in EXPECTED:
     check(f"{a} markdown exists", Path(f".opencode/agents/{a}.md").exists())
@@ -775,6 +819,21 @@ check("telemetry classifies polls vs collects",
 check("telemetry registers launched bg ids",
       "bg_tasks" in _tel and "launched" in _tel,
       "launch count anchors the ratio")
+check("telemetry emits a started record on session.created",
+      'emit("started")' in _tel and "session.created" in _tel,
+      "a killed session must leave at least one record behind")
+check("telemetry heartbeats are emitted periodically",
+      "setInterval" in _tel and 'emit("heartbeat")' in _tel,
+      "heartbeat covers sessions killed before idle/deleted")
+check("telemetry emits one idempotent final record",
+      'emit("final")' in _tel and "rec.flushed" in _tel,
+      "a double idle must not double-count the session")
+check("a poll is made loud in the output it returns",
+      "POLL_VIOLATION" in _tel,
+      "counting alone lets the violating call pass silently")
+check("compaction feeds the heartbeat",
+      "session.compacted" in _tel and "heartbeat()" in _tel,
+      "long sessions must keep writing after compaction")
 
 # Agent instructions must carry the contract so the primary agent sees it before
 # launching anything in background.
@@ -1027,6 +1086,8 @@ check("empty telemetry exits 3 not 0", _rc == 3, f"exit={_rc}")
 _good = Path("_val_good.jsonl")
 _bad = Path("_val_bad.jsonl")
 _unv = Path("_val_unv.jsonl")
+_val_ded = Path("_val_ded.jsonl")
+_val_unf = Path("_val_unf.jsonl")
 try:
     _bad.write_text("garbage\n{oops\n", encoding="utf-8")
     _rc, _o = sh("python3 framework/telemetry/report.py --path _val_bad.jsonl")
@@ -1055,24 +1116,54 @@ try:
     _rc, _o = sh("python3 framework/telemetry/report.py --path _val_unv.jsonl")
     check("unverifiable reported separately from pass",
           "UNVERIFIABLE result(s)" in _o and "claim nothing" in _o, _o[-200:])
+    # Lifecycle series must collapse to one record per session; three emits for one
+    # session would otherwise triple-count every metric.
+    _val_ded.write_text("\n".join(
+        json.dumps(r) for r in (
+            {"record_version": 2, "session_id": "s_ded", "kind": "started",
+             "tokens": {"input": 100}, "agents": {}, "tools": {}},
+            {"record_version": 2, "session_id": "s_ded", "kind": "heartbeat",
+             "tokens": {"input": 100}, "agents": {}, "tools": {}},
+            {"record_version": 2, "session_id": "s_ded", "kind": "final",
+             "tokens": {"input": 100}, "agents": {}, "tools": {}})) + "\n",
+        encoding="utf-8")
+    _rc, _o = sh("python3 framework/telemetry/report.py --json --path _val_ded.jsonl")
+    check("lifecycle records dedupe to one per session",
+          _rc == 0 and '"n": 1' in _o and '"input": 100' in _o and '"input": 300' not in _o,
+          f"exit={_rc}; {_o[-200:]}")
+    # A session that only ever wrote started (killed before final) is a health failure.
+    _val_unf.write_text(json.dumps({
+        "record_version": 2, "session_id": "ses_never_finalized", "kind": "started",
+        "tokens": {"input": 50}, "agents": {}, "tools": {}}) + "\n", encoding="utf-8")
+    _rc, _o = sh("python3 framework/telemetry/report.py --path _val_unf.jsonl")
+    check("unfinalized session exits 1 and names the session",
+          _rc == 1 and "ses_never_finalized" in _o and "no final record" in _o,
+          f"exit={_rc}; {_o[-200:]}")
 finally:
-    for _fx in (_good, _bad, _unv):
+    for _fx in (_good, _bad, _unv, _val_ded, _val_unf):
         if _fx.exists():
             _fx.unlink()
 
 print("\n[20] Per-agent model configuration")
-_novar = [a for a in EXPECTED
-          if not str(agents[a].get("model", "")).startswith("{env:")]
-check("every agent has an env-indirected model", not _novar, f"missing: {_novar}")
+def _resolvable(m):
+    """Usable at spawn: non-empty and structural per the resolve engine.
+
+    Deferring to the engine (not re-deriving a pattern here) is the point:
+    Section 20 must judge *resolvability*, and the engine owns that judgement.
+    A leftover {env:...} reference, an empty id, or invalid characters all fail
+    structural_ok, so a regression surfaces here instead of as a spawn stall."""
+    if not _RES_OK:
+        return False  # engine unavailable -> nothing is provably resolvable
+    return _res.structural_ok(m)
+
+_novar = [a for a in EXPECTED if not _resolvable(agents[a].get("model", ""))]
+check("every agent has a resolvable model id", not _novar, f"missing: {_novar}")
 _norat = [a for a in EXPECTED if not agents[a].get("_model_rationale")]
 check("every agent model choice has a rationale", not _norat, f"missing: {_norat}")
 _notemp = [a for a in EXPECTED if "temperature" not in agents[a]]
 check("every agent has an explicit temperature", not _notemp, f"missing: {_notemp}")
-check("distinct env var per agent",
-      len({agents[a]["model"] for a in EXPECTED}) == len(EXPECTED),
-      "agents share a variable; they cannot be tuned independently")
-check("top-level model is env-indirected",
-      str(cfg.get("model", "")).startswith("{env:"), f"model={cfg.get('model')}")
+check("top-level model resolves to something real",
+      _resolvable(cfg.get("model", "")), f"model={cfg.get('model')}")
 _prof = Path("framework/models/profiles.sh")
 check("model profiles exist", _prof.exists())
 if _prof.exists():
@@ -1080,7 +1171,7 @@ if _prof.exists():
     for _name in ("baseline", "tiered", "cheap", "reset"):
         check(f"profile '{_name}' defined",
               re.search(rf"^\s*(?:\w+\|)*{_name}(?:\|\w+)*\)", _ps, re.M) is not None)
-    _rc, _o = sh("bash -c 'source framework/models/profiles.sh tiered >/dev/null && "
+    _rc, _o = sh("OC_BIG=sentinel-big OC_MID=sentinel-mid OC_SML=sentinel-small bash -c 'source framework/models/profiles.sh tiered >/dev/null && "
                  "echo $OC_MODEL_IMPLEMENT/$OC_MODEL_VERIFY'")
     _parts = _o.strip().split("/")
     check("tiered profile differentiates implementer from verifier",
@@ -1091,6 +1182,229 @@ if _prof.exists():
     check("reset restores inheritance", "[unset]" in _o, _o[:120])
     _rc, _o = sh("bash -c 'source framework/models/profiles.sh bogus >/dev/null 2>&1'")
     check("unknown profile is rejected", _rc != 0, f"exit={_rc}")
+
+    # --- behaviour of framework/models/resolve.py (fail-closed resolution) ---
+    def _scrubbed_env():
+        _e = dict(os.environ)
+        for _k in list(_e):
+            if _k.startswith("OC_MODEL_") or _k in ("OC_BIG", "OC_MID", "OC_SML"):
+                del _e[_k]
+        return _e
+
+    _s1 = _res.preflight(cfg, _scrubbed_env(), _ps)
+    check("S1 no OC_MODEL_* env -> all agents resolve to default",
+          _s1["failures"] == []
+          and all(_a["source"] == "default" for _a in _s1["agents"].values()),
+          str({_k: _v["source"] for _k, _v in _s1["agents"].items()})[:120])
+
+    _env2 = _scrubbed_env()
+    _env2.update({_v: "anthropic/claude-4-5-sonnet" for _v in _res.ENV_BY_AGENT.values()})
+    _env2[_res.SMALL_ENV] = "opencode/big-pickle"
+    _s2 = _res.preflight(cfg, _env2, _ps)
+    check("S2 all nine OC_MODEL_* set -> every agent sourced 'override'",
+          _s2["failures"] == []
+          and all(_a["source"] == "override" for _a in _s2["agents"].values()),
+          str(_s2["active_profile"])[:120])
+
+    _env3 = _scrubbed_env()
+    _env3["OC_MODEL_LEAD"] = "anthropic/claude-4-5-sonnet"
+    _s3 = _res.preflight(cfg, _env3, _ps)
+    check("S3 one OC_MODEL_* set -> team-lead 'override', rest 'default'",
+          _s3["agents"]["team-lead"] == {"model": "anthropic/claude-4-5-sonnet", "source": "override"}
+          and all(_a["source"] == "default" for _n, _a in _s3["agents"].items() if _n != "team-lead"),
+          str({_k: _v["source"] for _k, _v in _s3["agents"].items()})[:120])
+
+    _env4 = _scrubbed_env()
+    _env4["OC_MODEL_LEAD"] = ""
+    _s4 = _res.preflight(cfg, _env4, _ps)
+    check("S4 set-but-empty OC_MODEL_LEAD -> fail closed as 'error'",
+          _s4["agents"]["team-lead"] == {"model": "", "source": "error"}
+          and "team-lead" in _s4["failures"],
+          str(_s4["failures"])[:120])
+
+    _env4b = _scrubbed_env()
+    _env4b["OC_MODEL_LEAD"] = "bad;rm -rf /"
+    _s4b = _res.preflight(cfg, _env4b, _ps)
+    check("S4b malformed OC_MODEL_LEAD -> fail closed as 'error'",
+          _s4b["agents"]["team-lead"]["source"] == "error", str(_s4b["failures"])[:120])
+
+    _real = _res.realized_profiles(_ps, _scrubbed_env())
+    check("S5 every profile maps all seven agents",
+          {"baseline", "tiered", "cheap"}.issubset(_real)
+          and all(_real[_p].get(_a) not in (None, _res.MISSING)
+                  for _p in _real for _a in _res.AGENTS),
+          str(sorted(_real))[:120])
+
+    _parsed = _res.parse_profile_script(_ps)
+    check("S6 raw profile cells are refs or model ids",
+          bool(_parsed)
+          and all(_res.dep_ok(_c) for _cells in _parsed.values() for _c in _cells.values()),
+          str(sorted(_parsed))[:120])
+
+    _inv = _res.inventory(timeout=10)
+    if _inv["ok"]:
+        _cfg_ids = {cfg.get("model")} | {
+            _ag.get("model") for _ag in cfg["agent"].values()
+            if isinstance(_ag.get("model"), str)}
+        _cfg_ids = {_m for _m in _cfg_ids if _res.structural_ok(_m)}
+        _inv_ids = {_m for _m in _inv["models"] if _res.structural_ok(_m)}
+        check("S7 configured ids present in `opencode models` inventory",
+              _cfg_ids.issubset(_inv_ids),
+              "missing: %s" % sorted(_cfg_ids - _inv_ids)[:120])
+    else:
+        check("S7 configured ids verifiable in `opencode models` inventory",
+              True, "unverifiable: %s" % _inv["note"], warn_only=True)
+
+    _s8 = _res.preflight(cfg, {}, _ps)
+    check("S8 fresh session resolves exactly as S1",
+          _s8["agents"] == _s1["agents"] and _s8["failures"] == _s1["failures"],
+          str({_k: _v["source"] for _k, _v in _s8["agents"].items()})[:120])
+
+    _smk = Path("framework/tools/spawn_smoke.sh")
+    _smk_text = _smk.read_text(encoding="utf-8") if _smk.exists() else ""
+    _r9, _o9 = sh("bash framework/tools/spawn_smoke.sh --help")
+    check("S9 spawn smoke test exists, bounded, usage path exits 0",
+          bool(_smk_text) and 'TMO="180"' in _smk_text
+          and "Reply with exactly: SMOKE_OK" in _smk_text
+          and "set -euo pipefail" in _smk_text and _r9 == 0,
+          f"exit={_r9}; {_o9[-80:]}" if _r9 != 0 else "ok")
+
+# ── §21 delegated task execution protocol ────────────────────────────────────
+_gsd_src = Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8")
+for _tok, _lbl in [("TASK_NEXT", "TASK_NEXT transition table"),
+                   ("TASK_TERMINAL", "TASK_TERMINAL final states"),
+                   ("def register_task", "register_task"),
+                   ("def task_event", "task_event"),
+                   ("def cancel_task", "cancel_task"),
+                   ("def task_status", "task_status"),
+                   ("def list_tasks", "list_tasks"),
+                   ('"task-register"', "task-register CMDS entry"),
+                   ('"task-event"', "task-event CMDS entry"),
+                   ('"task-cancel"', "task-cancel CMDS entry")]:
+    check(f"S10 adapter exposes {_lbl}", _tok in _gsd_src, f"missing: {_tok}")
+
+_tt21 = Path("framework/tasks/task_types.yaml")
+_tt21_text = _tt21.read_text(encoding="utf-8") if _tt21.exists() else ""
+check("S11 task_types.yaml declares type budgets",
+      _tt21.exists() and "task_types" in _tt21_text and "defaults" in _tt21_text
+      and "progress_timeout_s" in _tt21_text,
+      "framework/tasks/task_types.yaml missing or malformed")
+
+_rp21 = Path("framework/retry_policy.yaml").read_text(encoding="utf-8")
+check("S12 retry_policy declares worker_stalled count and WORKER_STALLED route",
+      "worker_stalled" in _rp21 and "WORKER_STALLED" in _rp21
+      and "apply_recovery_ladder" in _rp21,
+      "add worker_stalled: 1 and WORKER_STALLED -> team_lead apply_recovery_ladder")
+
+_dp21 = Path(".opencode/rules/delegation-protocol.md")
+_dp21_text = _dp21.read_text(encoding="utf-8") if _dp21.exists() else ""
+check("S13 delegation-protocol.md rule file present and complete",
+      _dp21.exists() and "## Lifecycle" in _dp21_text and "## Health" in _dp21_text
+      and "task-register" in _dp21_text and "background-tasks.md" in _dp21_text,
+      ".opencode/rules/delegation-protocol.md missing or incomplete")
+
+_bt21 = Path(".opencode/rules/background-tasks.md").read_text(encoding="utf-8")
+check("S14 background-tasks.md cross-references the protocol",
+      "delegation-protocol.md" in _bt21 and "task-register" in _bt21,
+      "append a Supervision section naming the task-* commands")
+
+_tl21 = Path(".opencode/agents/team-lead.md").read_text(encoding="utf-8")
+check("S15 team-lead.md liveness policy names the task-* commands",
+      "task-register" in _tl21 and "task-status" in _tl21 and "task-event" in _tl21,
+      "liveness section must name task-register / task-status / task-event")
+
+_tel21 = Path(".opencode/plugin/telemetry.ts").read_text(encoding="utf-8")
+check("S16 telemetry.ts collects worker supervision counters",
+      "worker_tasks_registered" in _tel21 and "worker_events_written" in _tel21
+      and "worker_stalls_detected" in _tel21,
+      "telemetry must collect the three supervision counters")
+
+_rp21b = Path("framework/telemetry/report.py").read_text(encoding="utf-8")
+check("S17 report.py aggregates the supervision counters",
+      "worker_tasks_registered" in _rp21b and "worker_stalls_detected" in _rp21b,
+      "report.py must accumulate the supervision counters")
+
+# behavioral: drive the adapter against an isolated copy of the state root
+_bd21 = Path(tempfile.mkdtemp(prefix="val21_super_"))
+shutil.copytree("framework", _bd21 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd21 / ".planning").mkdir()
+
+def _wsh21(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd21)), cmd), timeout=timeout)
+
+_ADP = "python3 framework/adapters/gsd_state.py"
+
+_reg = '{"agent":"explore","type":"explore","objective":"find x","expected_artifact":"r.md"}'
+_r, _o = _wsh21("%s task-register --id V21-001 --json '%s'" % (_ADP, _reg))
+check("S18 task-register creates a SPAWNED, HEALTHY contract",
+      _r == 0 and '"state": "SPAWNED"' in _o and '"health": "HEALTHY"' in _o
+      and '"progress_timeout_s": 20' in _o and '"max_duration_s": 90' in _o,
+      (_o or "")[-200:])
+
+_r, _o = _wsh21("%s task-register --id V21-001 --json '%s'" % (_ADP, _reg))
+check("S18 duplicate register refused (EXISTS - immutable contract)",
+      _r != 0 and "EXISTS" in _o, (_o or "")[-200:])
+
+_lc = ('{"state":"ACK"}', '{"state":"STARTED"}',
+       '{"state":"PROGRESS","checkpoint":"c1"}',
+       '{"state":"BLOCKED","detail":"d"}',
+       '{"state":"PROGRESS"}', '{"state":"COMPLETED"}')
+_lc_ok = all(_wsh21("%s task-event --id V21-001 --json '%s'" % (_ADP, _e))[0] == 0 for _e in _lc)
+_r, _o = _wsh21("%s task-status --id V21-001" % _ADP)
+check("S18 lifecycle ACK..COMPLETED accepted, status COMPLETE",
+      _lc_ok and _r == 0 and '"state": "COMPLETED"' in _o and '"health": "COMPLETE"' in _o,
+      (_o or "")[-200:])
+
+_r, _o = _wsh21("%s task-event --id V21-001 --json '{\"state\":\"ACK\"}'" % _ADP)
+check("S18 post-terminal event refused (TERMINAL_STATE)",
+      _r != 0 and "TERMINAL_STATE" in _o, (_o or "")[-200:])
+
+_r, _o = _wsh21("%s task-event --id V21-002 --json '{\"state\":\"ACK\"}'" % _ADP)
+check("S18 event on unregistered task refused (NOT_FOUND)",
+      _r != 0 and "NOT_FOUND" in _o, (_o or "")[-200:])
+
+_r, _o = _wsh21("%s task-register --id V21-003 --json '{\"agent\":\"quick\",\"type\":\"default\",\"objective\":\"o\",\"expected_artifact\":\"a\"}'" % _ADP)
+_wsh21("%s task-event --id V21-003 --json '{\"state\":\"STARTED\"}'" % _ADP)
+_r2, _o2 = _wsh21("%s task-event --id V21-003 --json '{\"state\":\"ACK\"}'" % _ADP)
+check("S18 illegal transition refused (INVALID_TRANSITION)",
+      _r == 0 and _r2 != 0 and "INVALID_TRANSITION" in _o2, (_o2 or "")[-200:])
+
+_wsh21("%s task-register --id V21-004 --json '{\"agent\":\"deep\",\"type\":\"explore\",\"objective\":\"o\",\"expected_artifact\":\"a\",\"progress_timeout_s\":1}'" % _ADP)
+time.sleep(1.4)
+_r, _o = _wsh21("%s task-status --id V21-004" % _ADP)
+check("S19 silent past budget escalates to WARNING",
+      _r == 0 and '"health": "WARNING"' in _o and '"recovery_level": 1' in _o, (_o or "")[-200:])
+
+_wsh21("%s task-register --id V21-005 --json '{\"agent\":\"deep\",\"type\":\"explore\",\"objective\":\"o\",\"expected_artifact\":\"a\",\"progress_timeout_s\":1}'" % _ADP)
+time.sleep(2.5)
+_r, _o = _wsh21("%s task-status --id V21-005" % _ADP)
+check("S19 prolonged silence escalates to STALLED",
+      _r == 0 and '"health": "STALLED"' in _o and '"recovery_level": 2' in _o, (_o or "")[-200:])
+
+_wsh21("%s task-register --id V21-006 --json '{\"agent\":\"deep\",\"type\":\"explore\",\"objective\":\"o\",\"expected_artifact\":\"a\",\"progress_timeout_s\":1,\"max_duration_s\":1}'" % _ADP)
+time.sleep(1.5)
+_r, _o = _wsh21("%s task-status --id V21-006" % _ADP)
+check("S19 hard deadline expiry escalates to OVERDUE",
+      _r == 0 and '"health": "OVERDUE"' in _o and '"recovery_level": 3' in _o, (_o or "")[-200:])
+
+_r, _o = _wsh21("%s task-register --id V21-007 --json '{\"agent\":\"verifier\",\"type\":\"verify\",\"objective\":\"o\",\"expected_artifact\":\"a\"}'" % _ADP)
+check("S19 verify-type without contract budgets refused (TASK_INCOMPLETE)",
+      _r != 0 and "TASK_INCOMPLETE" in _o and "progress_timeout_s" in _o, (_o or "")[-200:])
+
+_r, _o = _wsh21("%s task-register --id V21-008 --json '{\"agent\":\"reviewer\",\"type\":\"review\",\"objective\":\"o\",\"expected_artifact\":\"a\"}'" % _ADP)
+_wsh21("%s task-event --id V21-008 --json '{\"state\":\"STARTED\",\"emitter\":\"team-lead\"}'" % _ADP)
+_r2, _o2 = _wsh21("%s task-cancel --id V21-008 --json '{\"emitter\":\"team-lead\"}'" % _ADP)
+check("S19 supervisor cancel records CANCELLED with emitter",
+      _r == 0 and _r2 == 0 and '"health": "CANCELLED"' in _o2 and '"emitter": "team-lead"' in _o2,
+      (_o2 or "")[-200:])
+
+_r, _o = _wsh21("%s task-list" % _ADP)
+check("S19 task-list surfaces the registered tasks",
+      _r == 0 and "V21-001" in _o and "V21-005" in _o, (_o or "")[-200:])
+
+shutil.rmtree(_bd21, ignore_errors=True)
+
 
 print("\n" + "=" * 60)
 if WARNS:
