@@ -80,8 +80,10 @@ and the gates it requires. Unknown impact is never no impact.
 Contracts cover HTTP APIs only. Event, database, and service-interface contracts are
 documentation-only and no gate enforces them. The GSD adapter supports the installed distribution
 only; a second distribution is a conformance target proven by `gsd_state.py selftest`. There is no
-project memory system, no orchestration layer, no graph store, no task tracker, and no second
-context manager — GSD, Git, and the provider already own those.
+project memory system, no orchestration layer, no graph store, and no second context
+manager — GSD, Git, and the provider already own those. Delegated-task supervision
+(`task-register`/`task-event`/`task-status`) tracks worker liveness only; it is not a
+project task tracker, which GSD phases and plans own.
 
 ## Rollout
 

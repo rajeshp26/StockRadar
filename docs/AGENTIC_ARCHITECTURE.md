@@ -1,4 +1,4 @@
-﻿# StockerPro Agentic Architecture - Complete Reference
+# StockerPro Agentic Architecture - Complete Reference
 
 Every detail, every file, every rule, every exit code. If it exists in the framework, it is
 documented here.
@@ -34,6 +34,7 @@ documented here.
 24. Practical How-To Guide
 25. Telemetry and Model Tuning
 26. Lifecycle v1.1 Adoption Plan
+26a. Delegated Task Execution Protocol
 
 ---
 
@@ -731,6 +732,11 @@ GSD state, code intelligence, or OpenCode detection.
 | `write-blocker --json Y` | Upserts an open escalation blocker keyed by (task_id, signal); retries = max(existing, incoming) |
 | `resolve-blocker --id X` | Marks one open blocker resolved; unknown id fails loudly |
 | `list-blockers [--text]` | Lists OPEN blockers as JSON; `--text` prints one line each for gate output |
+| `task-register --id X --json Y` | Registers a delegated-task contract; immutable; duplicate id fails with EXISTS |
+| `task-event --id X --json Y` | Appends a lifecycle event; illegal transitions fail with INVALID_TRANSITION; post-terminal fails with TERMINAL_STATE |
+| `task-status --id X` | Derives health from the event stream against the contract deadlines |
+| `task-list` | Lists registered tasks |
+| `task-cancel --id X --json Y` | Supervisor-only cancel; records CANCELLED with the emitter |
 
 **Without GSD:** Returns `{"distribution": "none"}`. Falls back to `.planning/` as a plain
 directory. State-dependent features return empty until populated.
@@ -1009,6 +1015,9 @@ Key points:
 | `blockers_opened` | write-blocker calls that landed (exit 0 or BLOCKER_ id echoed) |
 | `blockers_resolved` | resolve-blocker calls that discharged an open blocker (exit 0 or RESOLVED marker) |
 | `blocker_signals` | Signal names captured from write-blocker payloads |
+| `worker_tasks_registered` | task-register calls that created a contract |
+| `worker_events_written` | task-event calls that appended a lifecycle event |
+| `worker_stalls_detected` | task-status results reporting STALLED or OVERDUE |
 
 **When it flushes:** On the `session.idle` EVENT, delivered through the `event` hook -- registering `session.idle` as a hook key silently collects nothing. Written to `.planning/telemetry/records.jsonl`. Operating guide: section 25.
 
@@ -1247,7 +1256,7 @@ documents as stale and re-run the suite for ground truth.
 | 17. Architecture design checklist | Checklist files exist; structure validates; dispositions resolve per task |
 | 18. Blocker escalation | g8 gate exists and wired (profiles, EXIT_CODES, bootstrap, telemetry, agent duties); behavioural loop proves clean-tree pass, seeded refusal, upsert retries, resolve discharge |
 | 19. Telemetry report tool | report.py exits 0/3/2 correctly; renders a valid record; surfaces rework rate and recurrences; unverifiable never aggregated as pass |
-| 20. Per-agent model configuration | Every agent model is `{env:OC_MODEL_*}` with an explicit temperature and rationale; profiles.sh baseline/tiered/cheap/reset behaviour verified by execution |
+| 20. Per-agent model configuration | Every agent model carries a concrete model id with an explicit temperature and rationale; `{env:OC_MODEL_*}` overrides remain available but an unset override resolves to an EMPTY model id (never inherit) and stalls every subagent |
 
 **Run with:** `python3 framework/validate.py`
 
@@ -2265,7 +2274,7 @@ report reads whatever has accumulated.
 |---|---|---|
 | Collector | `.opencode/plugin/telemetry.ts` | Hooks `chat.params`, `tool.execute.before`, `tool.execute.after`, and `event`; flushes one JSON record per session to `<state-root>/telemetry/records.jsonl` through `gsd_state.py write-telemetry` |
 | Report | `framework/telemetry/report.py` | Aggregates records into cost, rework-rate, and bottleneck views; `--json` for machines, `--verbose` for per-agent models and gate detail |
-| Profiles | `framework/models/profiles.sh` | Sets the `OC_MODEL_*` variables that `opencode.json` consumes via `{env:...}` indirection |
+| Profiles | `framework/models/profiles.sh` | Exports `OC_MODEL_*` overrides on top of the concrete model ids baked into `opencode.json`; unset overrides resolve to an empty model id, so overrides must always be exported for the full set |
 
 Report exit codes: `0` produced, `3` nothing has run yet (not a failure), `2` records exist
 but none parse. Optional: `export TASK_ID=03-02` before a run so each record carries the
@@ -2295,9 +2304,9 @@ prints that the numbers are indicative, not decisive.
 
 ### 25.3 Changing models safely
 
-`opencode.json` points every agent at `{env:OC_MODEL_*}`, carries an explicit `temperature`,
-and records `_model_rationale` per agent so the next reader knows why. An unset variable
-resolves to inherit -- a safe no-op.
+`opencode.json` bakes a concrete model id into every agent, carries an explicit `temperature`,
+and records `_model_rationale` per agent so the next reader knows why. `OC_MODEL_*` exports
+override the baked ids for one session -- but an UNSET override resolves to an empty model id, which fails every subagent spawn; export the full set or none.
 
 ```bash
 source framework/models/profiles.sh baseline   # control: one model everywhere
@@ -2770,3 +2779,71 @@ not hardcoded to specific agents.
 | G8 blockers | Blocker hygiene | Independent: blockers are about escalation, tools are about capability |
 | G9 scope | Scope discipline | Complementary: G9 checks scope, G-T0 checks tool plan scope |
 
+## 26a. Delegated Task Execution Protocol
+
+The protocol turns the `task()` tool's live conversation into executable state. Every
+supervised delegation is registered in `<state_root>/tasks/` as an immutable contract
+plus an append-only lifecycle event stream; health is derived from that stream against
+the contract deadlines. `session_info` is not progress: a session can exist while its
+worker is silent.
+
+### The five commands (section 7.1)
+
+`task-register --id T-01 --json '{...}'` creates `<state_root>/tasks/T-01.json`.
+Contracts are immutable: a second register for the same id fails with EXISTS, and the
+suggested fix is a fresh id carrying `retry_of: T-01`. Required fields are `agent`,
+`objective`, and `expected_artifact`; recommended fields are `type` (task type),
+`session_id`, `checkpoints`, `allowed_tools`, `completion_criteria`,
+`failure_criteria`, `progress_timeout_s`, `max_duration_s`, `retry_of`.
+
+Time budgets come from `framework/tasks/task_types.yaml` (type entry over `defaults`),
+overridable per contract. A type that declares `null` (verify) requires the contract to
+name the budget — it is never inherited from defaults.
+
+### Lifecycle
+
+Events are appended to `<state_root>/tasks/T-01.events.jsonl` by `task-event`:
+
+```
+SPAWNED (implicit on register)
+  -> ACK         worker acknowledged the contract
+  -> STARTED     worker began work
+  -> PROGRESS    named checkpoint reached (or routine heartbeat)
+  -> BLOCKED     worker stopped on a resolvable obstacle; carries a detail
+  -> COMPLETED   worker claims the deliverable
+  -> FAILED      worker is giving up
+CANCELLED        supervisor terminates the task (task-cancel)
+```
+
+Terminal states are final: no event is accepted after COMPLETED, FAILED or CANCELLED.
+Anything outside the legal next states is INVALID_TRANSITION. The `emitter` field
+records who wrote each event: the worker by default, the supervisor when it writes on
+the worker's behalf.
+
+### Health ladder
+
+`task-status` derives health from the last event timestamp against the contract:
+
+| Health | Level | Condition | Recovery action |
+| --- | --- | --- | --- |
+| HEALTHY | 0 | silent_s < progress_timeout_s | continue |
+| WARNING | 1 | silent_s >= progress_timeout_s | query_worker: ask for current checkpoint and blockers |
+| STALLED | 2 | silent_s >= 2 * progress_timeout_s | inspect_session: read the session state; cancel only if frozen |
+| OVERDUE | 3 | elapsed_s >= max_duration_s | cancel_and_retry: cancel the bg task, retry with a narrowed prompt |
+| FAILED | 4 | worker event FAILED | record_blocker: write-blocker WORKER_STALLED, retry once narrower, then take over |
+| COMPLETE | 0 | state COMPLETED | accept only after checking the deliverable |
+| CANCELLED | 0 | supervisor cancel | never quietly forgotten |
+
+### Rules
+
+- Register before you delegate. A task that is never registered cannot be supervised.
+- The supervisor (team-lead) owns the contract; only it may cancel.
+- A silent worker is a blocker with signal WORKER_STALLED (count `worker_stalled: 1`
+  in `framework/retry_policy.yaml`) — a stall that lives only in conversation repeats.
+- Accept nothing without `task-status` health COMPLETE and your own check of the
+  deliverable.
+- Never blanket-cancel a stalled worker's siblings — queued tasks are innocent.
+
+Rule file: `.opencode/rules/delegation-protocol.md`. Enforced by section 21 of the
+validation suite: the behavioural block drives register/event/status against an
+isolated copy of the state root and asserts the health ladder escalates.
