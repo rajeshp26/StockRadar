@@ -159,11 +159,11 @@ def _yaml_mod():
     return yaml
 
 
-def _parse_json(s: str):
+def _parse_json(s: str, ctx: str = "BLOCKER"):
     try:
         return json.loads(s)
     except json.JSONDecodeError as e:
-        raise SystemExit(f"BLOCKER_INVALID_JSON: {e}")
+        raise SystemExit(f"{ctx}_INVALID_JSON: {e}")
 
 
 def _blockers_path() -> Path:
@@ -283,6 +283,283 @@ def list_blockers(as_text: bool = False):
         if b.get("tried"):
             print("      tried:   %s" % b["tried"])
     return None
+
+# ── worker supervision (delegated task execution protocol) ─────────────────
+# A delegated task is an immutable execution contract plus an append-only
+# lifecycle event stream under <state_root>/tasks/. Health is DERIVED from the
+# last event timestamp against the contract deadlines: a task with no events is
+# SPAWNED regardless of what its session label claims. session_info != progress.
+TASKS_REL = "tasks"
+TASK_TERMINAL = ("COMPLETED", "FAILED", "CANCELLED")
+TASK_NEXT = {
+    None: ("ACK", "STARTED", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
+    "ACK": ("STARTED", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
+    "STARTED": ("PROGRESS", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
+    "PROGRESS": ("PROGRESS", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
+    "BLOCKED": ("PROGRESS", "FAILED", "COMPLETED", "CANCELLED"),
+}
+_TASK_REQUIRED = ("agent", "objective", "expected_artifact")
+
+
+def _task_types() -> dict:
+    """Type timeout budgets live in framework/tasks/task_types.yaml. Described
+    in state, never invented in code -- an absent file must not read as
+    'no budget policy' (the same failure class as an absent parser)."""
+    p = Path("framework/tasks/task_types.yaml")
+    if not p.exists():
+        raise SystemExit(
+            "BLOCKED: framework/tasks/task_types.yaml is missing - task type "
+            "timeout budgets must be declared in state, not invented in code."
+        )
+    data = _yaml_mod().safe_load(p.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict) or "defaults" not in data:
+        raise SystemExit(
+            "BLOCKED: framework/tasks/task_types.yaml must declare 'defaults'."
+        )
+    return data
+
+
+def _resolve_budget(payload: dict, tt: str):
+    """(progress_timeout_s, max_duration_s): contract field > type entry >
+    defaults. A type whose entry is null (verify) means task-specific: the
+    field MUST be named in the contract, never inherited from defaults."""
+    budgets = _task_types()
+    entry = (budgets.get("task_types") or {}).get(tt) or {}
+    dflt = budgets.get("defaults") or {}
+
+    def pick(field):
+        if payload.get(field) is not None:
+            v = payload[field]
+        elif entry.get(field) is not None:
+            v = entry[field]
+        elif field in entry and entry[field] is None:
+            raise SystemExit(
+                f"TASK_INCOMPLETE: type '{tt}' declares no {field} - the contract "
+                "must name it explicitly."
+            )
+        else:
+            v = dflt.get(field)
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            raise SystemExit(f"TASK_INVALID: {field} must be an integer, got {v!r}")
+        if v <= 0:
+            raise SystemExit(f"TASK_INVALID: {field} must be positive, got {v}")
+        return v
+
+    pt = pick("progress_timeout_s")
+    md = pick("max_duration_s")
+    if md < pt:
+        raise SystemExit(
+            f"TASK_INVALID: max_duration_s ({md}) must be >= progress_timeout_s ({pt})"
+        )
+    return pt, md
+
+
+def _tasks_dir() -> Path:
+    return root() / TASKS_REL
+
+
+def _task_path(task_id: str) -> Path:
+    return _tasks_dir() / f"{task_id}.json"
+
+
+def _task_events_path(task_id: str) -> Path:
+    return _tasks_dir() / f"{task_id}.events.jsonl"
+
+
+def _task_events(task_id: str) -> list:
+    p = _task_events_path(task_id)
+    if not p.exists():
+        return []
+    out = []
+    for i, line in enumerate(p.read_text().splitlines()):
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            out.append(json.loads(s))
+        except json.JSONDecodeError as e:
+            raise SystemExit(
+                f"TASK_BLOCKED: event stream for {task_id} corrupt at line {i + 1}: {e}"
+            )
+    return out
+
+
+def _task_load(task_id: str):
+    """Contract + events, or a loud refusal. A missing contract is NOT_FOUND;
+    corruption blocks instead of reading as a healthy task."""
+    p = _task_path(task_id)
+    if not p.exists():
+        raise SystemExit(f"NOT_FOUND: task {task_id} is not registered (register first)")
+    try:
+        contract = json.loads(p.read_text())
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"TASK_BLOCKED: contract for {task_id} unreadable: {e}")
+    return contract, _task_events(task_id)
+
+
+def _append_task_event(task_id: str, event: dict):
+    p = _task_events_path(task_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a") as fh:
+        fh.write(json.dumps(event) + "\n")
+
+
+def task_status(task_id: str) -> dict:
+    contract, events = _task_load(task_id)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    created = datetime.datetime.fromisoformat(contract["created_at"])
+    last = events[-1] if events else None
+    state = last["state"] if last else "SPAWNED"
+    last_dt = datetime.datetime.fromisoformat(last["ts"]) if last else created
+    silent_s = max(0, int((now - last_dt).total_seconds()))
+    elapsed_s = max(0, int((now - created).total_seconds()))
+    pt = contract["progress_timeout_s"]
+    md = contract["max_duration_s"]
+    checkpoints = [e.get("checkpoint") for e in events if e.get("checkpoint")]
+
+    if state == "COMPLETED":
+        health, level, action = "COMPLETE", 0, "continue"
+    elif state == "CANCELLED":
+        health, level, action = "CANCELLED", 0, "continue"
+    elif state == "FAILED":
+        health, level, action = "FAILED", 4, "record_blocker: write-blocker WORKER_STALLED, retry once narrower, else take over"
+    elif elapsed_s >= md:
+        health, level, action = "OVERDUE", 3, "cancel_and_retry: cancel the bg task, retry with a narrowed prompt"
+    elif silent_s >= 2 * pt:
+        health, level, action = "STALLED", 2, "inspect_session: read the session state; cancel only if frozen"
+    elif silent_s >= pt:
+        health, level, action = "WARNING", 1, "query_worker: ask for current checkpoint and blockers"
+    else:
+        health, level, action = "HEALTHY", 0, "continue"
+
+    return {
+        "task_id": contract["task_id"],
+        "agent": contract["agent"],
+        "type": contract.get("type") or "default",
+        "session_id": contract.get("session_id") or "",
+        "state": state,
+        "health": health,
+        "recovery_level": level,
+        "recovery_action": action,
+        "checkpoints_reached": checkpoints,
+        "expected_artifact": contract["expected_artifact"],
+        "progress_timeout_s": pt,
+        "max_duration_s": md,
+        "silent_s": silent_s,
+        "elapsed_s": elapsed_s,
+        "created_at": contract["created_at"],
+        "last_activity": last["ts"] if last else contract["created_at"],
+        "recent_events": [
+            {k: e.get(k) for k in ("state", "ts", "emitter", "checkpoint", "detail")}
+            for e in events[-3:]
+        ],
+    }
+
+
+def register_task(task_id: str, payload: dict) -> dict:
+    if _db_mode():
+        _unsupported("task-register")
+    payload = payload or {}
+    for k in _TASK_REQUIRED:
+        if not str(payload.get(k) or "").strip():
+            raise SystemExit(f"TASK_INCOMPLETE: missing required contract field '{k}'")
+    p = _task_path(task_id)
+    if p.exists():
+        raise SystemExit(
+            f"EXISTS: task {task_id} is already registered; contracts are immutable - "
+            f"retry with a fresh id and 'retry_of': '{task_id}'"
+        )
+    tt = str(payload.get("type") or "default")
+    pt, md = _resolve_budget(payload, tt)
+    contract = {
+        "task_id": task_id,
+        "type": tt,
+        "agent": payload["agent"],
+        "objective": payload["objective"],
+        "expected_artifact": payload["expected_artifact"],
+        "session_id": str(payload.get("session_id") or ""),
+        "checkpoints": [str(c) for c in payload.get("checkpoints") or []],
+        "allowed_tools": [str(t) for t in payload.get("allowed_tools") or []],
+        "completion_criteria": [str(c) for c in payload.get("completion_criteria") or []],
+        "failure_criteria": [str(c) for c in payload.get("failure_criteria") or []],
+        "progress_timeout_s": pt,
+        "max_duration_s": md,
+        "retry_of": str(payload.get("retry_of") or ""),
+        "created_at": _now(),
+    }
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("x") as fh:          # exclusive create = the immutability guarantee
+        fh.write(json.dumps(contract, indent=2) + "\n")
+    return task_status(task_id)
+
+
+def task_event(task_id: str, payload: dict) -> dict:
+    if _db_mode():
+        _unsupported("task-event")
+    payload = payload or {}
+    state = str(payload.get("state") or "").strip().upper()
+    if state not in ("ACK", "STARTED", "PROGRESS", "BLOCKED", "FAILED", "COMPLETED"):
+        raise SystemExit(
+            f"TASK_INVALID_STATE: {state!r}; legal event states: "
+            "ACK, STARTED, PROGRESS, BLOCKED, FAILED, COMPLETED"
+        )
+    contract, events = _task_load(task_id)
+    prev = events[-1]["state"] if events else None
+    if prev in TASK_TERMINAL:
+        raise SystemExit(f"TERMINAL_STATE: task {task_id} is already {prev}; no further events")
+    nxt = TASK_NEXT.get(prev, ())
+    if state not in nxt:
+        raise SystemExit(
+            f"INVALID_TRANSITION: {prev or 'SPAWNED'} -> {state}; "
+            f"legal next states: {', '.join(sorted(nxt))}"
+        )
+    event = {
+        "state": state,
+        "ts": _now(),
+        "emitter": str(payload.get("emitter") or contract["agent"]),
+    }
+    if payload.get("checkpoint"):
+        event["checkpoint"] = str(payload["checkpoint"])
+    if payload.get("detail"):
+        event["detail"] = str(payload["detail"])
+    _append_task_event(task_id, event)
+    return task_status(task_id)
+
+
+def cancel_task(task_id: str, payload: dict = None) -> dict:
+    """Supervisor-only terminal event. Emitter defaults to team-lead."""
+    if _db_mode():
+        _unsupported("task-cancel")
+    payload = payload or {}
+    contract, events = _task_load(task_id)
+    prev = events[-1]["state"] if events else None
+    if prev in TASK_TERMINAL:
+        raise SystemExit(f"TERMINAL_STATE: task {task_id} is already {prev}; cannot cancel")
+    _append_task_event(task_id, {
+        "state": "CANCELLED",
+        "ts": _now(),
+        "emitter": str(payload.get("emitter") or "team-lead"),
+    })
+    return task_status(task_id)
+
+
+def list_tasks() -> list:
+    d = _tasks_dir()
+    if not d.is_dir():
+        return []
+    out = []
+    for p in sorted(d.glob("*.json")):
+        tid = p.stem
+        try:
+            h = task_status(tid)
+        except SystemExit:
+            h = {"task_id": tid, "state": "UNREADABLE", "health": "BROKEN", "agent": "?",
+                 "type": "?", "elapsed_s": 0, "silent_s": 0}
+        out.append({k: h[k] for k in ("task_id", "agent", "type", "state", "health",
+                                      "elapsed_s", "silent_s")})
+    return out
 
 # ── reads ────────────────────────────────────────────────────────────────
 def _read(rel: str) -> str:
@@ -412,6 +689,11 @@ CMDS = {
     "write-blocker": lambda a: write_blocker(_parse_json(a.json)),
     "resolve-blocker": lambda a: resolve_blocker(a.id),
     "list-blockers": lambda a: list_blockers(a.text),
+    "task-register": lambda a: register_task(a.id, _parse_json(a.json, "TASK") if a.json else None),
+    "task-event": lambda a: task_event(a.id, _parse_json(a.json, "TASK")),
+    "task-status": lambda a: task_status(a.id),
+    "task-list": lambda a: list_tasks(),
+    "task-cancel": lambda a: cancel_task(a.id, _parse_json(a.json, "TASK") if a.json else None),
 }
 
 if __name__ == "__main__":

@@ -1,0 +1,21 @@
+﻿# Activity-based timeout budgets per delegated task type.
+#
+# A delegated task carries two deadlines (seconds):
+#   progress_timeout_s - how long the worker may be silent with no lifecycle event
+#                        and no tool activity before the supervisor escalates.
+#   max_duration_s     - total wall-clock budget for the task.
+# Contract fields passed to `task-register` override these defaults. Unknown task
+# types fall back to `defaults`. Test-execution tasks (verify) have no framework
+# default: their budgets are task-specific and MUST be named in the contract.
+task_types:
+  explore:      { progress_timeout_s: 20,  max_duration_s: 90 }   # file discovery
+  mapping:      { progress_timeout_s: 30,  max_duration_s: 180 }  # code mapping
+  research:     { progress_timeout_s: 60,  max_duration_s: 300 }  # docs / external sources
+  architecture: { progress_timeout_s: 60,  max_duration_s: 300 }  # design analysis
+  poc:          { progress_timeout_s: 60,  max_duration_s: 600 }  # proof of concept
+  implement:    { progress_timeout_s: 120, max_duration_s: 900 }  # code changes
+  review:       { progress_timeout_s: 60,  max_duration_s: 300 }  # diff judgement
+  verify:       { progress_timeout_s: null, max_duration_s: null } # task-specific, no default
+defaults:
+  progress_timeout_s: 60
+  max_duration_s: 300

@@ -8,6 +8,7 @@ retry_policy:
   architecture_conflict: 0    # immediate escalation
   release_blocked: 0
   retro_recurrence: 0         # a repeated gap signature escalates immediately
+  worker_stalled: 1           # silent delegated worker; retry once narrower, then take over
 on_exhaustion: escalate_to_human
 
 # A retrospective is owed whenever one of these signals fires against work already accepted.
@@ -35,3 +36,4 @@ routes:
   DEFECT_ESCAPED:         {to: team_lead, action: open_retro_trigger, then: gate_g7}
   RETRO_RECURRENCE:       {to: human, action: previous_fix_failed_reassess_gap}
   RETRO_INCOMPLETE:       {to: team_lead, action: complete_retro_before_completion}
+  WORKER_STALLED:         {to: team_lead, action: apply_recovery_ladder}
