@@ -84,6 +84,7 @@
           "rm *": "deny",
           "del *": "deny",
           "git push*": "deny",
+          "git push*": "allow",
           "git reset*": "deny",
           "git clean*": "deny",
           "git checkout*": "deny",
