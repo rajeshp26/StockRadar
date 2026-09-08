@@ -109,3 +109,15 @@ backend/scripts/poc_*.py
 
 # Generated model-resolution snapshot
 framework/telemetry/models-resolved.json
+
+# Ad-hoc reconciliation / audit outputs (may contain raw financial data)
+backend/poc_dryrun*.txt
+backend/reconcile_dryrun_*.txt
+backend/reconcile_write*.txt
+backend/scan_gap*.txt
+backend/count_companies.txt
+backend/verify_db.txt
+
+# One-off operational scripts (superseded by schedulers / not part of application)
+backend/scripts/reconcile_financial_data.py
+backend/scripts/run_earnings_batch.py
