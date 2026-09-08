@@ -42,10 +42,24 @@ auto-assigns `CLM-NNN`, continuing the highest existing number across all record
 | `classification` | yes | `FACT` \| `HYPOTHESIS` \| `ASSUMPTION` \| `UNKNOWN` |
 | `status` | yes | `UNVERIFIED` \| `VERIFIED` \| `REFUTED` \| `PARTIALLY_VERIFIED` |
 | `impact` | yes | `high` \| `medium` \| `low` |
-| `evidence` | no | list of `{id, kind, command, runtime, entry_point, reproduced, expected, actual, result}` |
+| `evidence` | no | list of `{id, kind, command, runtime, entry_point, reproduced, expected, actual, result, env, disconfirmation}` |
 | `verified_by` | no | the command that verified the claim |
 | `independent_check` | no | a second, different verification command (required for high impact) |
 | `created` | auto | ISO-8601 timestamp added by `append` |
+
+Evidence entries may additionally bind a command environment and a disconfirmation
+verdict:
+
+| evidence field | meaning |
+| --- | --- |
+| `env` | canonical command-environment id (`ENV-0001`) that must resolve to a recorded `record-env` row in `<state_root>/contexts/environments.jsonl`; free-form strings (legacy) stay legal |
+| `disconfirmation` | structured refutation verdict: `confirmed` \| `refuted` \| `inconclusive` |
+
+Confidence is **derived, never stored**: `analyse` computes a per-claim confidence
+(LOW / MEDIUM / HIGH / VERY_HIGH) from evidence structure — provenance present, verdict
+present, independent check present — and reports it in `by_confidence`. A record that
+carries a `confidence` field is refused (`CLAIM_STORED_CONFIDENCE`); there is no field
+to game.
 
 ## Validation rules
 
@@ -61,6 +75,10 @@ store is caught exactly like a rejected append:
 | `CLAIM_VERIFIED_NO_PROVENANCE` | status `VERIFIED` without evidence naming runtime + entry_point with `reproduced: true`; `PARTIALLY_VERIFIED` without evidence whose result is pass or fail |
 | `CLAIM_VERIFIED_NO_INDEPENDENT_CHECK` | status `VERIFIED`, impact `high`, no `independent_check` |
 | `CLAIM_REFUTED_NO_EVIDENCE` | status `REFUTED` without evidence with `result: fail` and both `expected` and `actual` |
+| `CLAIM_ENV_UNKNOWN` | an evidence `env` names a canonical `ENV-` id that does not resolve to a recorded command environment |
+| `CLAIM_BAD_DISCONFIRMATION` | an evidence `disconfirmation` is outside `confirmed` \| `refuted` \| `inconclusive` |
+| `CLAIM_DISCONFIRMED_BUT_VERIFIED` | status `VERIFIED` while an evidence entry carries `disconfirmation: refuted` |
+| `CLAIM_STORED_CONFIDENCE` | the record carries a `confidence` field — confidence is derived at analyse, never stored |
 
 `HYPOTHESIS` / `ASSUMPTION` / `UNKNOWN` with status `UNVERIFIED` are legal and need no
 evidence. The default classification for anything not reproduced is `UNKNOWN`.

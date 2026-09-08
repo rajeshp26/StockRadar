@@ -359,6 +359,15 @@ def _resolve_budget(payload: dict, tt: str):
     return pt, md
 
 
+def _resolve_checkpoints(payload: dict, tt: str) -> list:
+    """Contract checkpoints override the type's default progression from
+    task_types.yaml; a type with no declared defaults yields no checkpoints."""
+    if payload.get("checkpoints"):
+        return [str(c) for c in payload["checkpoints"]]
+    entry = (_task_types().get("task_types") or {}).get(tt) or {}
+    return [str(c) for c in entry.get("checkpoints") or []]
+
+
 def _tasks_dir() -> Path:
     return root() / TASKS_REL
 
@@ -509,6 +518,7 @@ def task_status(task_id: str, session_alive=None) -> dict:
         "agent": contract["agent"],
         "type": contract.get("type") or "default",
         "session_id": contract.get("session_id") or "",
+        "background_task_id": contract.get("background_task_id") or "",
         "state": state,
         "health": health,
         "recovery_level": level,
@@ -554,7 +564,8 @@ def register_task(task_id: str, payload: dict) -> dict:
         "objective": payload["objective"],
         "expected_artifact": payload["expected_artifact"],
         "session_id": str(payload.get("session_id") or ""),
-        "checkpoints": [str(c) for c in payload.get("checkpoints") or []],
+        "background_task_id": str(payload.get("background_task_id") or ""),
+        "checkpoints": _resolve_checkpoints(payload, tt),
         "allowed_tools": [str(t) for t in payload.get("allowed_tools") or []],
         "completion_criteria": [str(c) for c in payload.get("completion_criteria") or []],
         "failure_criteria": [str(c) for c in payload.get("failure_criteria") or []],
@@ -644,6 +655,8 @@ def list_tasks() -> list:
         return []
     out = []
     for p in sorted(d.glob("*.json")):
+        if p.name.endswith(".contract.json"):
+            continue
         tid = p.stem
         try:
             h = task_status(tid)
@@ -767,6 +780,11 @@ def write_verification(phase: str, payload: str) -> str:
 
 
 def write_decision(did: str, payload: str) -> str:
+    if not did or not str(did).strip():
+        raise SystemExit(
+            "DECISION_MISSING_ID: write-decision requires --id <decision-id>; "
+            "a decision without an id cannot be referenced or reviewed"
+        )
     return _write(f"decisions/{did}.md",
                   f"# {did}\n\n_created {_now()}_\n\n```yaml\n{payload}\n```\n")
 

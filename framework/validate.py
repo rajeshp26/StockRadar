@@ -1853,6 +1853,240 @@ check("G13 names the failed task and its provider route",
 
 shutil.rmtree(_bd25, ignore_errors=True)
 
+print("\n[26] Provenance control plane (DID-007 delta)")
+# statics: the ENV- capture surface, the ledger's env/disconfirmation/confidence rules,
+# the supervision identity capture, and the C0-C8 vocabulary must all exist
+_ec26 = Path("framework/execution_context.py").read_text(encoding="utf-8")
+check("execution context captures command environments",
+      "record_env" in _ec26 and "check_env" in _ec26 and "environments.jsonl" in _ec26,
+      "ENV- capture must be an executable surface, not a doc")
+check("execution context validates ENV- ids",
+      're.compile(r"^ENV-\\d+$")' in _ec26 and "_next_env_id" in _ec26,
+      "canonical env ids let check-env and the ledger verify references")
+_ecf26 = Path("framework/execution_context.yaml")
+check("canonical execution context yaml exists", _ecf26.exists(),
+      "check-env needs a canonical declaration per scope to compare against")
+if _ecf26.exists():
+    check("canonical yaml declares scopes", "scopes" in _ecf26.read_text(encoding="utf-8"))
+_cl26 = Path("framework/claims/ledger.py").read_text(encoding="utf-8")
+for _tok26, _lbl26 in [("CLAIM_ENV_UNKNOWN", "unresolved ENV- ref refused"),
+                       ("CLAIM_BAD_DISCONFIRMATION", "disconfirmation vocab enforced"),
+                       ("CLAIM_DISCONFIRMED_BUT_VERIFIED", "refuted+VERIFIED refused"),
+                       ("CLAIM_STORED_CONFIDENCE", "stored confidence refused"),
+                       ("def derive_confidence", "confidence derived at analyse"),
+                       ("DISCONFIRMATION_RESULTS", "disconfirmation result vocab")]:
+    check(f"claim ledger {_lbl26}", _tok26 in _cl26, f"missing: {_tok26}")
+_gs26 = Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8")
+for _tok26, _lbl26 in [("background_task_id", "background_task_id captured"),
+                       ("DECISION_MISSING_ID", "write-decision id guard"),
+                       (".contract.json", "contract-peer exclusion")]:
+    check(f"gsd_state {_lbl26}", _tok26 in _gs26, f"missing: {_tok26}")
+_tt26 = Path("framework/tasks/task_types.yaml").read_text(encoding="utf-8")
+check("task_types declares the C0-C8 vocabulary",
+      "checkpoint_vocabulary" in _tt26 and "C0-TASK_ACCEPTED" in _tt26
+      and "C8-HANDOFF_READY" in _tt26,
+      "the shared checkpoint vocabulary must be declared in state, not invented")
+check("task_types declares per-type default checkpoints",
+      "checkpoints:" in _tt26 and "C5-TESTS_GREEN" in _tt26,
+      "each type needs a default progression")
+_dp26 = Path(".opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
+check("delegation-protocol documents C0-C8 and background_task_id",
+      "C0-TASK_ACCEPTED" in _dp26 and "C8-HANDOFF_READY" in _dp26
+      and "background_task_id" in _dp26,
+      "the protocol must carry the vocabulary and the identity capture rule")
+
+# behavioral: isolated copy, real CLI round-trips, no network
+_bd26 = Path(tempfile.mkdtemp(prefix="val26_env_"))
+shutil.copytree("framework", _bd26 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd26 / ".planning").mkdir()
+
+def _wsh26(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd26)), cmd), timeout=timeout)
+
+_EC26 = "python3 framework/execution_context.py"
+_LG26 = "python3 framework/claims/ledger.py"
+_ADP26 = "python3 framework/adapters/gsd_state.py"
+
+# record-env pins the interpreter that actually ran
+_r, _o = _wsh26(_EC26 + " record-env --scope backend")
+check("record-env pins ENV-0001", _r == 0 and '"env_id": "ENV-0001"' in _o, (_o or "")[-200:])
+_env26 = (_bd26 / ".planning" / "contexts" / "environments.jsonl").read_text(encoding="utf-8")
+check("ENV- row captures interpreter/cwd/git/os",
+      '"env_id": "ENV-0001"' in _env26 and '"interpreter_path"' in _env26
+      and '"interpreter_version"' in _env26 and '"cwd"' in _env26
+      and '"git_commit"' in _env26 and '"git_dirty"' in _env26 and '"os"' in _env26,
+      (_env26 or "")[-300:])
+
+# canonical backend scope declares the venv; the recorded interpreter is the global
+# python, so a mismatch is expected (the DBeta incident axis)
+_r, _o = _wsh26(_EC26 + " check-env --scope backend")
+check("check-env flags the venv-vs-global interpreter mismatch",
+      _r == 1 and '"status": "mismatch"' in _o and '"interpreter"' in _o, (_o or "")[-200:])
+_r, _o = _wsh26(_EC26 + " check-env --scope nosuchscope")
+check("check-env with no canonical scope is 3 (never a pass)",
+      _r == 3 and '"status": "no_canonical"' in _o, (_o or "")[-200:])
+
+# canonical yaml written from the recorded row -> match
+_envrow26 = json.loads(_env26.splitlines()[0])
+(_bd26 / "framework" / "execution_context.yaml").write_text(
+    "scopes:\n  backend:\n"
+    "    interpreter: %s\n    cwd: %s\n    os: %s\n" % (
+        _envrow26["interpreter_path"], _envrow26["cwd"], _envrow26["os"]),
+    encoding="utf-8")
+_r, _o = _wsh26(_EC26 + " check-env --scope backend")
+check("check-env matches a recorded env against its canonical declaration",
+      _r == 0 and '"status": "match"' in _o and '"match": true' in _o, (_o or "")[-200:])
+
+# wrong interpreter -> mismatch; unknown env id -> 1; no recorded env -> 3
+(_bd26 / "framework" / "execution_context.yaml").write_text(
+    "scopes:\n  backend:\n"
+    "    interpreter: C:/nonexistent/python.exe\n    cwd: %s\n    os: %s\n" % (
+        _envrow26["cwd"], _envrow26["os"]),
+    encoding="utf-8")
+_r, _o = _wsh26(_EC26 + " check-env --scope backend")
+check("check-env flags a wrong interpreter as mismatch",
+      _r == 1 and '"status": "mismatch"' in _o and '"match": false' in _o, (_o or "")[-200:])
+_r, _o = _wsh26(_EC26 + " check-env --scope backend --env ENV-9999")
+check("check-env with an unknown ENV- id is 1",
+      _r == 1 and '"status": "env_unknown"' in _o, (_o or "")[-200:])
+(_bd26 / ".planning" / "contexts" / "environments.jsonl").unlink()
+_r, _o = _wsh26(_EC26 + " check-env --scope backend")
+check("check-env with no recorded env is 3 (never a pass)",
+      _r == 3 and '"status": "no_recorded"' in _o, (_o or "")[-200:])
+_r, _o = _wsh26(_EC26 + " record-env --scope backend")
+check("record-env re-pins ENV-0001 after store reset",
+      _r == 0 and '"env_id": "ENV-0001"' in _o, (_o or "")[-200:])
+
+# ledger: ENV- refs must resolve, free-form env stays legal, disconfirmation vocab,
+# refuted+VERIFIED is a contradiction, confidence is derived never stored
+_c26a = ('{"claim_id":"CLM-920","task_id":"V26-001","agent":"verifier",'
+         '"statement":"env-bound claim",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl","env":"ENV-0001",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26a)
+check("ledger accepts a claim bound to a recorded ENV- id",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_c26b = ('{"claim_id":"CLM-921","task_id":"V26-002","agent":"verifier",'
+         '"statement":"unrecorded env reference",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl","env":"ENV-9999",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26b)
+check("ledger refuses a claim bound to an unrecorded ENV- id",
+      _r == 1 and "CLAIM_ENV_UNKNOWN" in _o, (_o or "")[-200:])
+_c26c = ('{"claim_id":"CLM-922","task_id":"V26-003","agent":"verifier",'
+         '"statement":"free-form env stays legal",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl","env":"local-wsl",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26c)
+check("free-form env strings remain legal (legacy path)",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_c26d = ('{"claim_id":"CLM-923","task_id":"V26-004","agent":"verifier",'
+         '"statement":"bad disconfirmation vocab",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+         '"disconfirmation":"bogus",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26d)
+check("ledger refuses a disconfirmation outside the result vocab",
+      _r == 1 and "CLAIM_BAD_DISCONFIRMATION" in _o, (_o or "")[-200:])
+_c26e = ('{"claim_id":"CLM-924","task_id":"V26-005","agent":"verifier",'
+         '"statement":"refuted but verified contradiction",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+         '"disconfirmation":"refuted",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26e)
+check("ledger refuses a VERIFIED claim carrying a refuted disconfirmation",
+      _r == 1 and "CLAIM_DISCONFIRMED_BUT_VERIFIED" in _o, (_o or "")[-200:])
+_c26f = ('{"claim_id":"CLM-925","task_id":"V26-006","agent":"verifier",'
+         '"statement":"stored confidence",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh","confidence":"HIGH",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26f)
+check("ledger refuses a stored confidence field",
+      _r == 1 and "CLAIM_STORED_CONFIDENCE" in _o, (_o or "")[-200:])
+
+# confidence derivation: no evidence -> LOW, provenance+verdict -> HIGH,
+# independent check -> VERY_HIGH, provenance without verdict -> MEDIUM
+_c26g = ('{"claim_id":"CLM-926","task_id":"V26-007","agent":"verifier",'
+         '"statement":"no evidence",'
+         '"claim_type":"data","classification":"UNKNOWN","status":"UNVERIFIED","impact":"low"}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26g)
+check("ledger accepts an UNVERIFIED claim with no evidence",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_c26h = ('{"claim_id":"CLM-927","task_id":"V26-008","agent":"verifier",'
+         '"statement":"independently checked",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"high",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh",'
+         '"independent_check":"python3 framework/claims/ledger.py analyse",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26h)
+check("ledger accepts a high-impact claim with an independent check",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_c26i = ('{"claim_id":"CLM-928","task_id":"V26-009","agent":"verifier",'
+         '"statement":"provenance without verdict",'
+         '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+         '"verified_by":"bash framework/gates/g11_evidence.sh",'
+         '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+         '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"inconclusive"}]}')
+_r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26i)
+check("ledger accepts provenance with an inconclusive verdict",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_r, _o = _wsh26(_LG26 + " analyse")
+check("analyse derives confidence from evidence structure",
+      _r == 0 and '"by_confidence"' in _o
+      and '"LOW": 1' in _o and '"MEDIUM": 1' in _o
+      and '"HIGH": 2' in _o and '"VERY_HIGH": 1' in _o, (_o or "")[-300:])
+_ledger26 = (_bd26 / ".planning" / "claims" / "ledger.jsonl").read_text(encoding="utf-8")
+check("confidence is never stored in the ledger",
+      '"confidence"' not in _ledger26, "a stored confidence field is a gaming surface")
+_r, _o = _wsh26("bash framework/gates/g11_evidence.sh")
+check("g11 passes with a valid env-bound ledger",
+      _r == 0 and "PASS" in _o, (_o or "")[-200:])
+
+# supervision: background_task_id captured and surfaced; write-decision id guard;
+# contract peers excluded from task-list; type default checkpoints land in the contract
+_reg26 = ('{"agent":"implementer","type":"implement","objective":"o",'
+          '"expected_artifact":"a","progress_timeout_s":20,"max_duration_s":90,'
+          '"background_task_id":"bg_abc123"}')
+_r, _o = _wsh26(_ADP26 + " task-register --id V26-001 --json '%s'" % _reg26)
+check("task-register stores background_task_id",
+      _r == 0 and '"background_task_id": "bg_abc123"' in _o, (_o or "")[-200:])
+_r, _o = _wsh26(_ADP26 + " task-status --id V26-001")
+check("task-status surfaces background_task_id",
+      _r == 0 and '"background_task_id": "bg_abc123"' in _o, (_o or "")[-200:])
+_r, _o = _wsh26(_ADP26 + " write-decision --json '{\"design\":\"x\"}'")
+check("write-decision without --id is refused and names the arg",
+      _r != 0 and "DECISION_MISSING_ID" in _o and "--id" in _o, (_o or "")[-200:])
+(_bd26 / ".planning" / "tasks").mkdir(parents=True, exist_ok=True)
+(_bd26 / ".planning" / "tasks" / "V26-101.contract.json").write_text(
+    '{"contract_id":"V26-101","owner":"architect"}\n', encoding="utf-8")
+_reg26b = ('{"agent":"explore","type":"explore","objective":"o","expected_artifact":"a"}')
+_r, _o = _wsh26(_ADP26 + " task-register --id V26-002 --json '%s'" % _reg26b)
+_r2, _o2 = _wsh26(_ADP26 + " task-list")
+check("task-list excludes *.contract.json peers",
+      _r == 0 and _r2 == 0 and "V26-002" in _o2 and "V26-101.contract" not in _o2,
+      (_o2 or "")[-200:])
+_contract26 = json.loads((_bd26 / ".planning" / "tasks" / "V26-002.json").read_text(encoding="utf-8"))
+check("type default checkpoints land in the contract",
+      "C0-TASK_ACCEPTED" in _contract26.get("checkpoints", [])
+      and "C8-HANDOFF_READY" in _contract26.get("checkpoints", []),
+      str(_contract26.get("checkpoints"))[:200])
+
+shutil.rmtree(_bd26, ignore_errors=True)
+
 print("\n" + "=" * 60)
 if WARNS:
     print(f"{len(WARNS)} warning(s):")

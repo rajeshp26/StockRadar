@@ -1,4 +1,5 @@
-﻿# Activity-based timeout budgets per delegated task type.
+﻿# Activity-based timeout budgets and default checkpoint progressions per delegated
+# task type.
 #
 # A delegated task carries two deadlines (seconds):
 #   progress_timeout_s - how long the worker may be silent with no lifecycle event
@@ -7,15 +8,54 @@
 # Contract fields passed to `task-register` override these defaults. Unknown task
 # types fall back to `defaults`. Test-execution tasks (verify) have no framework
 # default: their budgets are task-specific and MUST be named in the contract.
+#
+# checkpoint_vocabulary is the shared C0-C8 lifecycle vocabulary documented in
+# .opencode/rules/delegation-protocol.md. Each type declares a default progression;
+# a contract that names its own `checkpoints` overrides the type default.
+checkpoint_vocabulary:
+  - C0-TASK_ACCEPTED
+  - C1-CONTEXT_READ
+  - C2-PLAN_CONFIRMED
+  - C3-IMPLEMENTATION_STARTED
+  - C4-IMPLEMENTATION_COMPLETE
+  - C5-TESTS_GREEN
+  - C6-REVIEW_READY
+  - C7-VERIFICATION_DONE
+  - C8-HANDOFF_READY
 task_types:
-  explore:      { progress_timeout_s: 20,  max_duration_s: 90 }   # file discovery
-  mapping:      { progress_timeout_s: 30,  max_duration_s: 180 }  # code mapping
-  research:     { progress_timeout_s: 60,  max_duration_s: 300 }  # docs / external sources
-  architecture: { progress_timeout_s: 60,  max_duration_s: 300 }  # design analysis
-  poc:          { progress_timeout_s: 60,  max_duration_s: 600 }  # proof of concept
-  implement:    { progress_timeout_s: 120, max_duration_s: 900 }  # code changes
-  review:       { progress_timeout_s: 60,  max_duration_s: 300 }  # diff judgement
-  verify:       { progress_timeout_s: null, max_duration_s: null } # task-specific, no default
+  explore:
+    progress_timeout_s: 20
+    max_duration_s: 90
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C8-HANDOFF_READY]
+  mapping:
+    progress_timeout_s: 30
+    max_duration_s: 180
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C8-HANDOFF_READY]
+  research:
+    progress_timeout_s: 60
+    max_duration_s: 300
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C8-HANDOFF_READY]
+  architecture:
+    progress_timeout_s: 60
+    max_duration_s: 300
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C2-PLAN_CONFIRMED, C8-HANDOFF_READY]
+  poc:
+    progress_timeout_s: 60
+    max_duration_s: 600
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C2-PLAN_CONFIRMED, C8-HANDOFF_READY]
+  implement:
+    progress_timeout_s: 120
+    max_duration_s: 900
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C2-PLAN_CONFIRMED, C3-IMPLEMENTATION_STARTED, C4-IMPLEMENTATION_COMPLETE, C5-TESTS_GREEN, C6-REVIEW_READY, C7-VERIFICATION_DONE, C8-HANDOFF_READY]
+  review:
+    progress_timeout_s: 60
+    max_duration_s: 300
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C6-REVIEW_READY, C8-HANDOFF_READY]
+  verify:
+    progress_timeout_s: null
+    max_duration_s: null
+    checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C7-VERIFICATION_DONE, C8-HANDOFF_READY]
 defaults:
   progress_timeout_s: 60
   max_duration_s: 300
+  checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C8-HANDOFF_READY]

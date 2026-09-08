@@ -1,0 +1,21 @@
+# Canonical execution environment declarations per scope.
+#
+# check-env compares a recorded ENV- row (record-env) against the declaration for its
+# scope and exits 0 (match) / 1 (mismatch) / 3 (no canonical declaration, or no recorded
+# ENV- row to compare). Only fields declared here are compared; a declared field missing
+# from the recorded row is a mismatch.
+#
+#   interpreter - bare name (basename match, e.g. 'python' == 'python.exe') or a path
+#                 resolved against the repo root (e.g. '.venv/Scripts/python.exe').
+#   cwd         - resolved against the repo root ('.' = repo root).
+#   os          - sys.platform of the canonical runtime ('win32', 'linux', ...).
+#   git_dirty   - optional; when declared, the recorded dirty flag must equal it.
+scopes:
+  backend:
+    interpreter: .venv/Scripts/python.exe
+    cwd: .
+    os: win32
+  framework:
+    interpreter: python
+    cwd: .
+    os: win32
