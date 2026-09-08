@@ -1091,6 +1091,290 @@ class SupabaseFinancialRepository:
             logger.error(f"Failed to query companies with upcoming earnings: {e!s}")
             raise
 
+    async def get_stale_financial_companies(
+        self,
+        fresh_cutoff: date,
+        consult_cutoff: date,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Companies that have financial data loaded but whose latest income
+        statement predates fresh_cutoff (i.e. they missed the earnings-window
+        refresh because next_earnings_date was NULL/out-of-window), gated by
+        consult_cutoff so a company consulted very recently is not retried.
+
+        Freshness is judged on income_statements.period_end_date: a company is
+        "fresh" when it has at least one statement row with
+        period_end_date >= fresh_cutoff.
+
+        Two-step approach (income_statements is large; PostgREST caps response
+        size, so the fresh-ID query is paginated):
+          1. Candidates = companies with first_financial_data_loaded_at set,
+             status in (INITIAL, PARTIAL, COMPLETE, CURRENT), and a stock or
+             unspecified security type.
+          2. Fresh IDs  = distinct company_ids in income_statements with
+             period_end_date >= fresh_cutoff (paginated pages of 1000).
+          3. Stale      = candidates minus fresh, where last_financial_refresh_at
+             is NULL or < consult_cutoff. Sorted so never-refreshed companies
+             come first, then oldest refresh, capped at `limit`.
+        """
+        try:
+            # Step 1: candidates with financial data loaded
+            resp = (
+                self.client.table("companies")
+                .select(
+                    "company_id, ticker_symbol, data_completeness_status, "
+                    "first_financial_data_loaded_at, last_financial_refresh_at"
+                )
+                .in_(
+                    "data_completeness_status",
+                    ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"],
+                )
+                .not_.is_("first_financial_data_loaded_at", "null")
+                .or_("security_type.eq.stock,security_type.is.null")
+                .execute()
+            )
+            candidates = resp.data or []
+            if not candidates:
+                return []
+
+            # Step 2: paginate income_statements for fresh company_ids
+            fresh_ids: set = set()
+            page_size = 1000
+            offset = 0
+            while True:
+                page = (
+                    self.client.table("income_statements")
+                    .select("company_id")
+                    .gte("period_end_date", fresh_cutoff.isoformat())
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = page.data or []
+                for r in rows:
+                    cid = r.get("company_id")
+                    if cid is not None:
+                        fresh_ids.add(cid)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+
+            # Step 3: candidates minus fresh, with consult gate
+            consult_cutoff_str = consult_cutoff.isoformat()
+            stale = []
+            for c in candidates:
+                cid = c.get("company_id")
+                if cid is None or cid in fresh_ids:
+                    continue
+                last_refresh = c.get("last_financial_refresh_at")
+                if last_refresh and str(last_refresh) >= consult_cutoff_str:
+                    continue  # consulted very recently; give it more time
+                stale.append(c)
+
+            # Never-refreshed (NULL) first, then oldest refresh — deterministic
+            stale.sort(
+                key=lambda c: (
+                    c.get("last_financial_refresh_at") is not None,
+                    c.get("last_financial_refresh_at") or "",
+                )
+            )
+            return stale[:limit]
+
+        except Exception as e:
+            logger.error(f"Failed to query stale financial companies: {e!s}")
+            raise
+
+    async def get_financial_candidates(self) -> list[dict[str, Any]]:
+        """
+        Companies eligible for the freshness coverage snapshot: financial data
+        loaded (first_financial_data_loaded_at set), status in (INITIAL, PARTIAL,
+        COMPLETE, CURRENT), and a stock or unspecified security type.
+
+        Same candidate predicate as get_stale_financial_companies step 1.
+        """
+        try:
+            resp = (
+                self.client.table("companies")
+                .select("company_id, first_financial_data_loaded_at, data_completeness_status")
+                .in_(
+                    "data_completeness_status",
+                    ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"],
+                )
+                .not_.is_("first_financial_data_loaded_at", "null")
+                .or_("security_type.eq.stock,security_type.is.null")
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            logger.error(f"Failed to query financial candidates: {e!s}")
+            raise
+
+    async def get_fresh_financial_company_ids(self, fresh_cutoff: date) -> set:
+        """
+        Distinct company_ids in income_statements with a period_end_date >=
+        fresh_cutoff (paginated: income_statements is large and PostgREST caps
+        response size). Used by the freshness monitor financial domain.
+        """
+        try:
+            fresh_ids: set = set()
+            page_size = 1000
+            offset = 0
+            while True:
+                page = (
+                    self.client.table("income_statements")
+                    .select("company_id")
+                    .gte("period_end_date", fresh_cutoff.isoformat())
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = page.data or []
+                for r in rows:
+                    cid = r.get("company_id")
+                    if cid is not None:
+                        fresh_ids.add(cid)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+            return fresh_ids
+        except Exception as e:
+            logger.error(f"Failed to query fresh financial company ids: {e!s}")
+            raise
+
+    async def get_financial_periods_in_range(
+        self, start: date, end: date
+    ) -> list[dict[str, Any]]:
+        """
+        (company_id, period_end_date) statement rows within [start, end];
+        used by the reconciliation planner to detect missing periods.
+        """
+        try:
+            rows_out: list[dict[str, Any]] = []
+            page_size = 1000
+            offset = 0
+            while True:
+                page = (
+                    self.client.table("income_statements")
+                    .select("company_id, period_end_date")
+                    .gte("period_end_date", start.isoformat())
+                    .lte("period_end_date", end.isoformat())
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = page.data or []
+                rows_out.extend(rows)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+            return rows_out
+        except Exception as e:
+            logger.error(f"Failed to query financial periods in range: {e!s}")
+            raise
+
+    async def get_tracked_investors(self) -> list[dict[str, Any]]:
+        """Super-investor rows (is_super_investor = true) for coverage + reconciliation."""
+        try:
+            resp = (
+                self.client.table("institutional_investors")
+                .select("investor_id, cik, investor_name, firm_name, investor_tag")
+                .eq("is_super_investor", True)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            logger.error(f"Failed to query tracked investors: {e!s}")
+            raise
+
+    async def get_investor_periods_in_range(
+        self, start: date, end: date
+    ) -> list[dict[str, Any]]:
+        """
+        (investor_id, quarter_end_date) holding rows within [start, end];
+        used by the freshness monitor and reconciliation planner.
+        """
+        try:
+            rows_out: list[dict[str, Any]] = []
+            page_size = 1000
+            offset = 0
+            while True:
+                page = (
+                    self.client.table("institutional_holdings")
+                    .select("investor_id, quarter_end_date")
+                    .gte("quarter_end_date", start.isoformat())
+                    .lte("quarter_end_date", end.isoformat())
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = page.data or []
+                rows_out.extend(rows)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+            return rows_out
+        except Exception as e:
+            logger.error(f"Failed to query investor periods in range: {e!s}")
+            raise
+
+    async def append_freshness_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """Upsert one freshness coverage snapshot row (idempotent per domain+as_of)."""
+        try:
+            self.client.table("freshness_snapshot").upsert(
+                snapshot, on_conflict="domain,as_of"
+            ).execute()
+        except Exception as e:
+            logger.error(f"Failed to upsert freshness snapshot: {e!s}")
+            raise
+
+    async def get_companies_with_financial_data(self) -> list[dict[str, Any]]:
+        """
+        Return companies that have at least one income statement row.
+
+        This is the "tracked" set for earnings-calendar syncing: the active
+        portfolio/watchlist set (~150) misses companies that are tracked for
+        financials but not in any user's portfolio. Every company with loaded
+        financial data needs its next_earnings_date maintained, otherwise it
+        stays invisible to the earnings-window refresh.
+
+        Paginates income_statements (PostgREST caps responses at 1000 rows),
+        then fetches the matching company rows.
+        """
+        try:
+            ids: set = set()
+            page_size = 1000
+            offset = 0
+            while True:
+                page = (
+                    self.client.table("income_statements")
+                    .select("company_id")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = page.data or []
+                for r in rows:
+                    cid = r.get("company_id")
+                    if cid is not None:
+                        ids.add(cid)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+
+            if not ids:
+                return []
+
+            resp = (
+                self.client.table("companies")
+                .select(
+                    "company_id, ticker_symbol, data_completeness_status, "
+                    "security_type, next_earnings_date, exchange"
+                )
+                .in_("company_id", list(ids))
+                .execute()
+            )
+            return resp.data or []
+
+        except Exception as e:
+            logger.error(f"Failed to fetch companies with financial data: {e!s}")
+            raise
+
     async def get_company_refresh_info(
         self, company_id: int
     ) -> CompanyRefreshInfo | None:

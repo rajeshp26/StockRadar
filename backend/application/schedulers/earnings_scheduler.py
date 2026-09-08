@@ -76,6 +76,32 @@ class EarningsRefreshScheduler:
 
     EARNINGS_DATE_STALE_DAYS = 30
     EARNINGS_SYNC_BATCH_SIZE = 20
+    # Stale-financials refresh: target companies whose latest income statement
+    # predates the last completed quarter even when their next_earnings_date is
+    # NULL or outside the ±buffer window.
+    EARNINGS_STALE_CONSULT_WINDOW_DAYS = 7
+    EARNINGS_STALE_BATCH_SIZE = 50
+
+    @staticmethod
+    def _last_completed_quarter_start(today: date) -> date:
+        """First day of the most recently completed quarter (2026-09-04 -> 2026-04-01)."""
+        current_q_start_month = ((today.month - 1) // 3) * 3 + 1
+        if current_q_start_month == 1:
+            return date(today.year - 1, 10, 1)
+        return date(today.year, current_q_start_month - 3, 1)
+
+    @staticmethod
+    def _merge_refresh_targets(window_companies: list, stale_companies: list) -> list:
+        """Merge refresh targets; window (earnings-window) companies win on company_id."""
+        merged: dict = {}
+        for c in stale_companies or []:
+            if isinstance(c, dict) and c.get("company_id"):
+                merged[c["company_id"]] = c
+        for c in window_companies or []:
+            if isinstance(c, dict) and c.get("company_id"):
+                merged[c["company_id"]] = c
+        return list(merged.values())
+
 
     # ========================================================================
     # v3 Planner Integration
@@ -122,6 +148,21 @@ class EarningsRefreshScheduler:
         except Exception:
             companies = []
 
+        # Also target companies whose latest income statement predates the
+        # last completed quarter, so they are refreshed even when their
+        # next_earnings_date is NULL or outside the window.
+        try:
+            fresh_cutoff = self._last_completed_quarter_start(today)
+            consult_cutoff = today - timedelta(days=self.EARNINGS_STALE_CONSULT_WINDOW_DAYS)
+            stale_companies = await self.financial_repo.get_stale_financial_companies(
+                fresh_cutoff=fresh_cutoff,
+                consult_cutoff=consult_cutoff,
+                limit=self.EARNINGS_STALE_BATCH_SIZE,
+            )
+            companies = self._merge_refresh_targets(companies, stale_companies)
+        except Exception:
+            pass
+
         jobs = []
         for c in companies or []:
             jobs.append({
@@ -152,7 +193,7 @@ class EarningsRefreshScheduler:
             return
 
         try:
-            companies = await self.financial_repo.get_active_companies_for_market_data()
+            companies = await self.financial_repo.get_companies_with_financial_data()
         except Exception:
             return
 
@@ -265,6 +306,20 @@ class EarningsRefreshScheduler:
                 end_date=end_date,
             )
 
+            # Merge stale financial companies so the direct check cycle also
+            # catches companies missing recent statements (see plan()).
+            try:
+                fresh_cutoff = self._last_completed_quarter_start(today)
+                consult_cutoff = today - timedelta(days=self.EARNINGS_STALE_CONSULT_WINDOW_DAYS)
+                stale_companies = await self.financial_repo.get_stale_financial_companies(
+                    fresh_cutoff=fresh_cutoff,
+                    consult_cutoff=consult_cutoff,
+                    limit=self.EARNINGS_STALE_BATCH_SIZE,
+                )
+                companies = self._merge_refresh_targets(companies, stale_companies)
+            except Exception:
+                pass
+
             if not companies:
                 logger.info("✅ No companies with upcoming earnings to refresh")
                 return {
@@ -302,13 +357,14 @@ class EarningsRefreshScheduler:
                     continue
 
                 try:
-                    await self._refresh_company_financials_optimized(
+                    detail = await self._refresh_company_financials_optimized(
                         company_id=company_id,
                         symbol=symbol,
                         earnings_date=earnings_date,
                     )
                     results['companies_refreshed'] += 1
                     results['refreshed_companies'].append(symbol)
+                    results['total_rows_upserted'] += detail.get('total_rows', 0) if isinstance(detail, dict) else 0
                 except Exception as e:
                     logger.error(f"Failed to refresh {symbol}: {e!s}")
                     results['companies_failed'] += 1
@@ -386,14 +442,26 @@ class EarningsRefreshScheduler:
             # Step 3: Store (upsert prevents duplicates)
             upsert_results = await self.financial_repo.upsert_all_financials(financials)
 
-            # Step 4: Update metadata
-            latest_fiscal_year = now_utc().year
-            latest_fiscal_quarter = None
+            # Step 4: Update metadata - monotonic watermark. Never regress the
+            # recorded fiscal period below the previously persisted value, even
+            # if this run persisted zero new rows (a filtered provider response
+            # must not rewind tracking to a stale "latest" row).
+            latest_fiscal_year = refresh_info.last_refreshed_fiscal_year or now_utc().year
+            latest_fiscal_quarter = refresh_info.last_refreshed_fiscal_quarter
 
             if financials.income_statements.rows:
-                latest = financials.income_statements.rows[-1]
-                latest_fiscal_year = latest.fiscal_year
-                latest_fiscal_quarter = latest.fiscal_quarter
+                observed_year = 0
+                observed_quarter = 0
+                for row in financials.income_statements.rows:
+                    fy = getattr(row, "fiscal_year", None) or 0
+                    fq = getattr(row, "fiscal_quarter", None) or 0
+                    if (fy, fq) > (observed_year, observed_quarter):
+                        observed_year, observed_quarter = fy, fq
+                current_year = refresh_info.last_refreshed_fiscal_year or 0
+                current_quarter = refresh_info.last_refreshed_fiscal_quarter or 0
+                if (observed_year, observed_quarter) > (current_year, current_quarter):
+                    latest_fiscal_year = observed_year
+                    latest_fiscal_quarter = observed_quarter
 
             await self.financial_repo.update_company_refresh_metadata(
                 company_id=company_id,

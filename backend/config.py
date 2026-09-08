@@ -239,6 +239,22 @@ class Settings(BaseSettings):
         default=49,
         description="Days after quarter end before filing is due"
     )
+    ENABLE_RECONCILIATION_SCHEDULER: bool = Field(
+        default=True,
+        description="Enable the weekly data reconciliation scheduler (gap detection)"
+    )
+    RECONCILIATION_INTERVAL_HOURS: float = Field(
+        default=168.0,
+        description="Hours between reconciliation planner runs (168 = weekly)"
+    )
+    ENABLE_FRESHNESS_MONITOR_SCHEDULER: bool = Field(
+        default=True,
+        description="Enable the daily freshness coverage monitor scheduler"
+    )
+    FRESHNESS_ALERT_THRESHOLD_PCT: float = Field(
+        default=95.0,
+        description="Coverage percentage below which the freshness monitor alerts"
+    )
     PRICE_HISTORY_RETENTION_YEARS: int = Field(
     default=10,
     description="Number of years of price history to retain"

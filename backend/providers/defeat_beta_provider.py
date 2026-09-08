@@ -852,13 +852,12 @@ class DefeatBetaProvider(StockDataProvider):
             ("cf", "get_quarterly_cash_flow_df", self._parse_yf_cash_flow, fin.cash_flows.rows),
             ("is", "get_quarterly_income_statement_df", self._parse_yf_income_statement, fin.income_statements.rows),
         ]:
-            # Compute missing quarterly periods from gaps
+            # Gap periods are periods DefeatBeta returned empty or dropped by the
+            # validation gate. They must ALWAYS be repairable: gating on `only_after`
+            # left old gaps (e.g. FY2022) unrepaired forever on incremental refreshes.
+            # `key not in existing` below dedupes; once healed `missing` empties and
+            # the fetch is skipped (self-limiting).
             missing = {(fy, fq) for (fy, fq, _ped) in gaps.get(gap_key, set()) if fq is not None}
-            if only_after:
-                missing = {
-                    (fy, fq) for (fy, fq) in missing
-                    if self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1])
-                }
             if not missing:
                 continue
 
@@ -1665,7 +1664,7 @@ class DefeatBetaProvider(StockDataProvider):
                 'eps_basic': self._safe_decimal(pd.to_numeric(gv(['Basic EPS', 'BasicEps']), errors='coerce')),
                 'eps_diluted': self._safe_decimal(pd.to_numeric(gv(['Diluted EPS', 'DilutedEps']), errors='coerce')),
             }
-            rows.append(IncomeStatementRow(
+            row = IncomeStatementRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
@@ -1677,7 +1676,15 @@ class DefeatBetaProvider(StockDataProvider):
                 validation_notes=None,
                 field_sources=self._build_field_sources(fv, source),
                 **fv,
-            ))
+            )
+            # Validate before adding to results; skip junk rows (no gaps channel here)
+            validation_result = FinancialDataValidator.validate_income_statement(
+                row=row.model_dump(),
+                symbol=symbol
+            )
+            log_validation_result(validation_result)
+            if not validation_result.has_critical_issues():
+                rows.append(row)
         return rows
 
     def _parse_yf_balance_sheet(
@@ -1726,7 +1733,7 @@ class DefeatBetaProvider(StockDataProvider):
                 'long_term_investments': self._safe_decimal(pd.to_numeric(gv(['Long Term Investments', 'LongTermInvestments']), errors='coerce')),
                 'minority_interest': self._safe_decimal(pd.to_numeric(gv(['Minority Interest', 'MinorityInterest']), errors='coerce')),
             }
-            rows.append(BalanceSheetRow(
+            row = BalanceSheetRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
@@ -1738,7 +1745,15 @@ class DefeatBetaProvider(StockDataProvider):
                 validation_notes=None,
                 field_sources=self._build_field_sources(fv, source),
                 **fv,
-            ))
+            )
+            # Validate before adding to results; skip junk rows (no gaps channel here)
+            validation_result = FinancialDataValidator.validate_balance_sheet(
+                row=row.model_dump(),
+                symbol=symbol
+            )
+            log_validation_result(validation_result)
+            if not validation_result.has_critical_issues():
+                rows.append(row)
         return rows
 
     def _parse_yf_cash_flow(
@@ -1786,7 +1801,7 @@ class DefeatBetaProvider(StockDataProvider):
                 'share_repurchases': self._safe_decimal(pd.to_numeric(gv(['Sale Purchase Of Stock', 'Repurchase Of Capital Stock']), errors='coerce')),
                 'share_issuance': self._safe_decimal(pd.to_numeric(gv(['Sale Of Stock', 'Issuance Of Capital Stock']), errors='coerce')),
             }
-            rows.append(CashFlowRow(
+            row = CashFlowRow(
                 company_id=company_id,
                 fiscal_year=fy,
                 fiscal_quarter=fq,
@@ -1798,7 +1813,15 @@ class DefeatBetaProvider(StockDataProvider):
                 validation_notes=None,
                 field_sources=self._build_field_sources(fv, source),
                 **fv,
-            ))
+            )
+            # Validate before adding to results; skip junk rows (no gaps channel here)
+            validation_result = FinancialDataValidator.validate_cash_flow(
+                row=row.model_dump(),
+                symbol=symbol
+            )
+            log_validation_result(validation_result)
+            if not validation_result.has_critical_issues():
+                rows.append(row)
         return rows
 
     def _build_earnings_rows_from_yf(self, company_id: int, yf_earn: list[dict[str, Any]] | None) -> list[EarningsRow]:

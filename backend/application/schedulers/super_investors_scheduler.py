@@ -49,6 +49,26 @@ class SuperInvestorsRefreshScheduler:
     def grace_days(self) -> int:
         return getattr(settings, "SUPER_INVESTORS_GRACE_DAYS", 49)
 
+    @staticmethod
+    def _ensure_edgar_identity() -> None:
+        """
+        Defensively ensure EDGAR identity/User-Agent is set before any fetch.
+
+        Mirrors SuperInvestorsService._ensure_edgar_identity so standalone
+        scheduler runs (outside the service) never hit an IdentityNotSet
+        rejection from the SEC endpoint.
+        """
+        try:
+            from edgar import set_identity
+        except ImportError:
+            logger.warning("edgar package unavailable; skipping EDGAR identity setup")
+            return
+        identity = getattr(settings, "EDGAR_IDENTITY", "stockerpro@example.com")
+        try:
+            set_identity(identity)
+        except Exception as exc:  # pragma: no cover - environment dependent
+            logger.warning("Could not set EDGAR identity: %s", exc)
+
     # ========================================================================
     # SCHEDULER CONTROL
     # ========================================================================
@@ -220,6 +240,7 @@ class SuperInvestorsRefreshScheduler:
         self, cik: str, info: dict, quarters: int
     ) -> bool:
         """Fetch historical data (20 quarters on first run)."""
+        self._ensure_edgar_identity()
         from edgar import get_filings
 
         investor_name = info["name"]
@@ -253,6 +274,7 @@ class SuperInvestorsRefreshScheduler:
 
             latest_period = None
             latest_date = None
+            any_saved = False
 
             for i in range(num_to_fetch):
                 try:
@@ -262,23 +284,24 @@ class SuperInvestorsRefreshScheduler:
                     if not thirteenf:
                         continue
 
-                    period = str(thirteenf.report_period)
+                    period = self._normalize_period(thirteenf.report_period)
                     filing_date = str(filing.filing_date)
 
                     # Save holdings to DB
                     holdings_df = thirteenf.holdings
                     if holdings_df is not None and not holdings_df.empty:
                         total_val = float(thirteenf.total_value) if thirteenf.total_value else None
-                        await self._save_holdings_to_db(
+                        saved_count = await self._save_holdings_to_db(
                             cik, info, holdings_df, period, filing_date, total_value_dollars=total_val
                         )
-
-                    # Track latest
-                    if not latest_period or (
-                        period and period > latest_period
-                    ):
-                        latest_period = period
-                        latest_date = filing_date
+                        # Only advance tracking to periods that actually persisted rows
+                        if saved_count > 0:
+                            any_saved = True
+                            if not latest_period or (
+                                period and period > latest_period
+                            ):
+                                latest_period = period
+                                latest_date = filing_date
 
                 except Exception as e:
                     logger.error(
@@ -286,9 +309,14 @@ class SuperInvestorsRefreshScheduler:
                     )
                     continue
 
-            # Update last_filed_period/date
+            # Update last_filed_period/date only to the latest period with
+            # persisted rows; never advance tracking on an empty save.
             if latest_period:
                 await self._update_investor_tracking(cik, latest_period, latest_date)
+
+            if not any_saved:
+                logger.warning(f"No holdings saved for {investor_name} historical fetch")
+                return False
 
             return True
 
@@ -300,12 +328,25 @@ class SuperInvestorsRefreshScheduler:
         self, cik: str, info: dict, last_period: date | None
     ) -> bool:
         """Fetch single new filing (only if newer than last_period)."""
+        self._ensure_edgar_identity()
         from edgar import get_filings
 
         investor_name = info["name"]
 
         try:
-            filings = get_filings(form="13F-HR").filter(cik=cik)
+            # SEC requires a year filter; query the current year first, then
+            # fall back to the previous year (e.g. before the first Q1 filing
+            # of a year has been submitted).
+            filings = None
+            current_year = now_utc().year
+            for year in (current_year, current_year - 1):
+                try:
+                    filings = get_filings(year=year, form="13F-HR").filter(cik=cik)
+                except Exception:
+                    filings = None
+                if filings and len(filings) > 0:
+                    break
+
             if not filings or len(filings) == 0:
                 logger.warning(f"No filings found for {investor_name}")
                 return False
@@ -317,25 +358,44 @@ class SuperInvestorsRefreshScheduler:
             if not thirteenf:
                 return False
 
-            period = str(thirteenf.report_period)
+            period = self._normalize_period(thirteenf.report_period)
             filing_date = str(filing.filing_date)
+            last_period_norm = self._normalize_period(last_period)
 
-            # Validate new period > last_period
-            if last_period and period and period <= last_period:
-                logger.debug(
-                    f"No new filing for {investor_name}: period {period} <= last {last_period}"
-                )
-                return False
+            # Validate new period > last_period. If the tracked period itself
+            # has no holdings rows (tracking was advanced without persisting,
+            # a historical bug), self-heal by re-processing that period.
+            if last_period_norm and period and period <= last_period_norm:
+                if period == last_period_norm and not await self._holdings_exist_for_period(
+                    cik, period
+                ):
+                    logger.warning(
+                        f"Self-healing {investor_name}: tracked period {last_period_norm} "
+                        f"has no holdings rows; re-processing {period}"
+                    )
+                else:
+                    logger.debug(
+                        f"No new filing for {investor_name}: period {period} <= last {last_period_norm}"
+                    )
+                    return False
 
             logger.info(f"New filing for {investor_name}: {period}")
 
             # Save holdings to DB
+            saved_count = 0
             holdings_df = thirteenf.holdings
             if holdings_df is not None and not holdings_df.empty:
                 total_val = float(thirteenf.total_value) if thirteenf.total_value else None
-                await self._save_holdings_to_db(
+                saved_count = await self._save_holdings_to_db(
                     cik, info, holdings_df, period, filing_date, total_value_dollars=total_val
                 )
+
+            # Only advance tracking when rows were actually persisted
+            if saved_count == 0:
+                logger.warning(
+                    f"No holdings saved for {investor_name} filing {period}; not advancing tracking"
+                )
+                return False
 
             # Update tracking
             await self._update_investor_tracking(cik, period, filing_date)
@@ -346,16 +406,54 @@ class SuperInvestorsRefreshScheduler:
             logger.error(f"Error fetching new filing for {investor_name}: {e}")
             return False
 
+    async def _holdings_exist_for_period(self, cik: str, period: str) -> bool:
+        """Return True if any institutional_holdings row exists for investor+period."""
+        from database import supabase
+
+        inv_result = (
+            supabase.table("institutional_investors")
+            .select("investor_id")
+            .eq("cik", cik)
+            .limit(1)
+            .execute()
+        )
+        if not inv_result.data:
+            return False
+
+        investor_id = inv_result.data[0]["investor_id"]
+
+        h_result = (
+            supabase.table("institutional_holdings")
+            .select("holding_id")
+            .eq("investor_id", investor_id)
+            .eq("quarter_end_date", period)
+            .limit(1)
+            .execute()
+        )
+        return bool(h_result.data)
+
+    @staticmethod
+    def _normalize_period(value) -> str | None:
+        """Normalize a report period to an ISO 'YYYY-MM-DD' string (or None)."""
+        if value is None:
+            return None
+        if hasattr(value, "date") and hasattr(value, "hour"):
+            value = value.date()  # datetime / Timestamp -> date
+        text = str(value).strip()
+        if not text:
+            return None
+        return text.split(" ")[0][:10]
+
     async def _save_holdings_to_db(
         self,
         cik: str,
         info: dict,
         holdings_df,
-        period: date,
+        period: str,
         filing_date: str,
         total_value_dollars: float = None,
-    ) -> None:
-        """Save holdings to institutional_holdings table."""
+    ) -> int:
+        """Save holdings to institutional_holdings table; returns rows saved."""
         from database import supabase
 
         # Get investor_id
@@ -365,7 +463,7 @@ class SuperInvestorsRefreshScheduler:
 
         if not inv_result.data:
             logger.warning(f"No investor_id found for CIK {cik}")
-            return
+            return 0
 
         investor_id = inv_result.data[0]["investor_id"]
 
@@ -375,6 +473,8 @@ class SuperInvestorsRefreshScheduler:
             total_value = total_value_dollars
         else:
             total_value = float(holdings_df["Value"].sum())
+
+        saved_count = 0
 
         # Process each holding (store all, not just specific ticker)
         for _, row in holdings_df.iterrows():
@@ -442,7 +542,7 @@ class SuperInvestorsRefreshScheduler:
                 "quarter_end_date": str(period),
                 "filing_date": filing_date,
                 "shares_held": int(shares),
-                "position_value": (value_dollars),  # ← Fixed: now in dollars
+                "position_value": (value_dollars),  # Fixed: now in dollars
                 "portfolio_weight": float(weight),
                 "shares_change": shares_change,
                 "shares_change_pct": shares_change_pct,
@@ -454,8 +554,13 @@ class SuperInvestorsRefreshScheduler:
                 supabase.table("institutional_holdings").update(insert_data).eq(
                     "holding_id", existing.data[0]["holding_id"]
                 ).execute()
+                saved_count += 1
             else:
                 supabase.table("institutional_holdings").insert(insert_data).execute()
+                saved_count += 1
+
+        logger.info(f"Saved {saved_count} holdings for {info['name']} period {period}")
+        return saved_count
 
     async def _update_investor_tracking(
         self, cik: str, period: date, filing_date: str

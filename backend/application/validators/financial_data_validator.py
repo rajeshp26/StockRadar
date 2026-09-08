@@ -304,13 +304,16 @@ class FinancialDataValidator:
                     message="Missing important field",
                 ))
 
-        # 3. ACCOUNTING EQUATION: Assets = Liabilities + Equity
+        # 3. ACCOUNTING EQUATION: Assets = Liabilities + Equity (+ Minority Interest)
+        #    US GAAP consolidations carry minority interest between liabilities and
+        #    equity; omitting it flagged valid rows (e.g. DIS FY2022Q2 90/100).
         assets = _safe_float(row.get("total_assets"))
         liabilities = _safe_float(row.get("total_liabilities"))
         equity = _safe_float(row.get("shareholders_equity"))
+        minority = _safe_float(row.get("minority_interest"))
 
         if all(v is not None for v in [assets, liabilities, equity]):
-            expected_assets = liabilities + equity
+            expected_assets = liabilities + equity + (minority if minority is not None else 0)
             diff_pct = abs(assets - expected_assets) / assets if assets != 0 else 0
 
             if diff_pct > 0.02:  # >2% deviation is error

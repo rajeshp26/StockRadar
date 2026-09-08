@@ -40,10 +40,12 @@ from application.jobs.portfolio_snapshot_job import handle_portfolio_snapshot
 from application.jobs.price_ingestion_job import handle_price_ingestion
 from application.schedulers.aggregation_scheduler import AggregationScheduler
 from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
+from application.schedulers.freshness_monitor_scheduler import FreshnessMonitorScheduler, SNAPSHOT_INTERVAL_HOURS
 from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
 from application.schedulers.planner import SchedulerPlanner
 from application.schedulers.portfolio_snapshot_scheduler import PortfolioSnapshotScheduler
 from application.schedulers.price_ingestion_scheduler import PriceIngestionScheduler
+from application.schedulers.reconciliation_scheduler import ReconciliationScheduler
 
 # v2 scheduler classes (used for plan() + data logic)
 from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
@@ -169,6 +171,25 @@ async def handle_investor_refresh(job: dict[str, Any]) -> dict[str, Any]:
     return {"cik": cik, "status": "ok" if result else "skipped"}
 
 
+async def handle_freshness_snapshot(job: dict[str, Any]) -> dict[str, Any]:
+    """Handler for 'freshness_snapshot' jobs - measure + persist coverage snapshot."""
+    payload = job.get("payload", {})
+    as_of_value = payload.get("as_of")
+    today = None
+    if as_of_value:
+        try:
+            today = date.fromisoformat(as_of_value)
+        except ValueError:
+            today = None
+    scheduler = FreshnessMonitorScheduler()
+    result = await scheduler.snapshot(today=today)
+    logger.info(
+        "Freshness snapshot complete for %s: %s",
+        result.get("as_of"),
+        result.get("domains"),
+    )
+    return result
+
 async def handle_aggregation_refresh(job: dict[str, Any]) -> dict[str, Any]:
     """Handler for 'aggregation_refresh' jobs — compute sector/industry percentile stats."""
     payload = job.get("payload", {})
@@ -225,6 +246,7 @@ async def main():
     engine.register_handler("portfolio_snapshot", handle_portfolio_snapshot)
     engine.register_handler("price_ingestion", handle_price_ingestion)
     engine.register_handler("valuation_computation", handle_valuation_computation)
+    engine.register_handler("freshness_snapshot", handle_freshness_snapshot)
 
     # 2. Planner
     planner = SchedulerPlanner()
@@ -270,6 +292,34 @@ async def main():
     else:
         logger.info("Earnings scheduler disabled")
 
+    # Reconciliation (weekly gap detection)
+    if getattr(settings, "ENABLE_RECONCILIATION_SCHEDULER", True):
+        rec_scheduler = ReconciliationScheduler()
+        planner.register(
+            name="reconciliation",
+            plan_fn=rec_scheduler.plan,
+            interval_hours=int(getattr(settings, "RECONCILIATION_INTERVAL_HOURS", 168)),
+            enabled=True,
+        )
+        logger.info(
+            "Registered reconciliation planner (interval=%dh)",
+            settings.RECONCILIATION_INTERVAL_HOURS,
+        )
+    else:
+        logger.info("Reconciliation scheduler disabled")
+
+    # Freshness Monitor (daily coverage snapshot)
+    if getattr(settings, "ENABLE_FRESHNESS_MONITOR_SCHEDULER", True):
+        fm_scheduler = FreshnessMonitorScheduler()
+        planner.register(
+            name="freshness_monitor",
+            plan_fn=fm_scheduler.plan,
+            interval_hours=SNAPSHOT_INTERVAL_HOURS,
+            enabled=True,
+        )
+        logger.info("Registered freshness_monitor planner (interval=%dh)", SNAPSHOT_INTERVAL_HOURS)
+    else:
+        logger.info("Freshness Monitor scheduler disabled")
     # Portfolio Snapshots (daily at 23:00 UTC)
     if getattr(settings, "ENABLE_PORTFOLIO_SNAPSHOT_SCHEDULER", True):
         ps_scheduler = PortfolioSnapshotScheduler()
