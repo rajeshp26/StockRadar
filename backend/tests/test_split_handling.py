@@ -521,3 +521,101 @@ class TestEmitSplitEvents:
         _emit_split_events()
 
         assert not mock_store.append_events_batch.called
+
+    @patch("infrastructure.repositories.event_store.EventStore")
+    @patch("application.jobs.price_ingestion_job.repo")
+    def test_duplicate_key_from_append_is_self_healing(self, mock_repo, MockEventStore):
+        """Regression: duplicate-key (23505) must mark the split processed, not retry forever."""
+        from postgrest.exceptions import APIError
+
+        from application.jobs.price_ingestion_job import _emit_split_events
+
+        splits_data = [{"company_id": 10, "report_date": "2026-06-01", "split_factor": "3:1"}]
+        holdings_data = [{"account_id": 7}]
+
+        mock_repo.client = MagicMock()
+        splits_table = MagicMock()
+        splits_table.select.return_value = splits_table
+        splits_table.eq.return_value = splits_table
+        splits_table.execute.return_value = MagicMock(data=splits_data)
+
+        holdings_table = MagicMock()
+        holdings_table.select.return_value = holdings_table
+        holdings_table.eq.return_value = holdings_table
+        holdings_table.execute.return_value = MagicMock(data=holdings_data)
+
+        update_payloads = []
+        def update_side_effect(payload):
+            update_payloads.append(payload)
+            return splits_table
+
+        splits_table.update.side_effect = update_side_effect
+        splits_table.update.return_value = splits_table
+
+        def table_fn(name):
+            if name == "splits":
+                return splits_table
+            elif name == "portfolio_holdings":
+                return holdings_table
+            return MagicMock()
+
+        mock_repo.client.table.side_effect = table_fn
+
+        mock_store = MagicMock()
+        mock_store.append_events_batch.side_effect = APIError(
+            {"code": "23505", "message": "duplicate key value violates unique constraint", "details": ""}
+        )
+        MockEventStore.return_value = mock_store
+
+        _emit_split_events()
+
+        assert mock_store.append_events_batch.called
+        # Events already existed -> split must still be marked processed (self-heal).
+        assert update_payloads == [{"processed": True}]
+
+    @patch("infrastructure.repositories.event_store.EventStore")
+    @patch("application.jobs.price_ingestion_job.repo")
+    def test_non_duplicate_append_failure_keeps_split_unprocessed(self, mock_repo, MockEventStore):
+        """A genuine append failure must NOT mark the split processed."""
+        from application.jobs.price_ingestion_job import _emit_split_events
+
+        splits_data = [{"company_id": 10, "report_date": "2026-06-01", "split_factor": "3:1"}]
+        holdings_data = [{"account_id": 7}]
+
+        mock_repo.client = MagicMock()
+        splits_table = MagicMock()
+        splits_table.select.return_value = splits_table
+        splits_table.eq.return_value = splits_table
+        splits_table.execute.return_value = MagicMock(data=splits_data)
+
+        holdings_table = MagicMock()
+        holdings_table.select.return_value = holdings_table
+        holdings_table.eq.return_value = holdings_table
+        holdings_table.execute.return_value = MagicMock(data=holdings_data)
+
+        update_payloads = []
+        def update_side_effect(payload):
+            update_payloads.append(payload)
+            return splits_table
+
+        splits_table.update.side_effect = update_side_effect
+        splits_table.update.return_value = splits_table
+
+        def table_fn(name):
+            if name == "splits":
+                return splits_table
+            elif name == "portfolio_holdings":
+                return holdings_table
+            return MagicMock()
+
+        mock_repo.client.table.side_effect = table_fn
+
+        mock_store = MagicMock()
+        mock_store.append_events_batch.side_effect = RuntimeError("provider down")
+        MockEventStore.return_value = mock_store
+
+        _emit_split_events()
+
+        assert mock_store.append_events_batch.called
+        # Not a duplicate-key failure -> split stays unprocessed for the next cycle.
+        assert update_payloads == []

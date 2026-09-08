@@ -260,8 +260,20 @@ def _emit_split_events() -> None:
                     len(events), cid, factor,
                 )
             except Exception as e:
-                logger.error("[SPLIT-EVENT] failed to emit events for company %d: %s", cid, e)
-                continue
+                # Duplicate-key means a previous cycle already emitted these events
+                # (e.g. a crash between append and mark-processed). Not fatal: fall
+                # through and mark the split processed so the cycle self-heals instead
+                # of retrying the same batch on every run.
+                if "duplicate key" in str(e).lower():
+                    logger.warning(
+                        "[SPLIT-EVENT] events for company %d already exist (factor=%s) - marking processed",
+                        cid, factor,
+                    )
+                else:
+                    logger.error(
+                        "[SPLIT-EVENT] failed to emit events for company %d: %s", cid, e,
+                    )
+                    continue
 
         try:
             repo.client.table("splits").update({"processed": True}) \
