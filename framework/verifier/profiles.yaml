@@ -3,7 +3,7 @@ profiles:
   functional:
     always: true
     evidence: [unit_test, integration_test]
-    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh", "./framework/gates/g9_scope.sh"]
+    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh", "./framework/gates/g9_scope.sh", "./framework/gates/g11_evidence.sh"]
 
   contract:
     when: {contract_change: true}

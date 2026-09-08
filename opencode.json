@@ -116,7 +116,8 @@
           "git diff*": "allow",
           "git log*": "allow",
           "git show*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow"
+          "python3 framework/adapters/gsd_state.py*": "allow",
+          "python3 framework/claims/ledger.py*": "allow"
         }
       },
       "tools": {

@@ -1406,6 +1406,453 @@ check("S19 task-list surfaces the registered tasks",
 shutil.rmtree(_bd21, ignore_errors=True)
 
 
+
+print("\n[21] Evidence provenance")
+check("g11 gate exists", Path("framework/gates/g11_evidence.sh").exists(),
+      "an unwritten gate cannot refuse completion on claims without provenance")
+_pf11 = Path("framework/verifier/profiles.yaml").read_text()
+check("functional profile always runs g11",
+      "./framework/gates/g11_evidence.sh" in _pf11,
+      "evidence provenance is checked every task, not when someone remembers")
+check("exit contract documents G11",
+      "| G11 evidence" in Path("framework/gates/EXIT_CODES.md").read_text(),
+      "claims about gate behaviour must cite EXIT_CODES.md")
+_cl = Path("framework/claims/ledger.py").read_text()
+check("claim ledger has append and analyse", "def append" in _cl and "def analyse" in _cl,
+      "a ledger that cannot record or judge claims is decorative")
+check("claim ledger validates provenance", "def _has_provenance" in _cl,
+      "provenance is a code-level check, not a hope")
+check("claim ledger enforces VERIFIED requires command", "CLAIM_VERIFIED_NO_COMMAND" in _cl,
+      "a VERIFIED claim without a verifying command is an opinion")
+check("claim ledger enforces independent check for high impact",
+      "CLAIM_VERIFIED_NO_INDEPENDENT_CHECK" in _cl,
+      "high-impact claims need a second pair of eyes")
+_tl11 = Path(".opencode/agents/team-lead.md").read_text()
+check("team lead references evidence provenance",
+      "evidence provenance" in _tl11.lower() or "claim ledger" in _tl11.lower() or "G-VERIFY" in _tl11,
+      "the gate on findings must be enforced by the team lead, not hoped for")
+_im11 = Path(".opencode/agents/implementer.md").read_text()
+check("implementer references claim ledger",
+      "claim" in _im11.lower() and ("ledger" in _im11.lower() or "evidence provenance" in _im11.lower()),
+      "agents must be told to record claims, not assume they will")
+_vf11 = Path(".opencode/agents/verifier.md").read_text()
+check("verifier runs g11 and reports its verdicts",
+      "g11" in _vf11 and ("claim" in _vf11.lower() or "evidence" in _vf11.lower()),
+      "verifier must reference the evidence gate")
+
+print("\n[22] Evidence provenance -- agent wiring and ledger behaviour")
+# statics: every agent that records claims must be told how; the gate must run
+_rp22 = Path("framework/retry_policy.yaml").read_text()
+check("EVIDENCE_INSUFFICIENT escalation route recorded",
+      "EVIDENCE_INSUFFICIENT" in _rp22 and "gather_provenance_or_downgrade_claim" in _rp22,
+      "a claim without provenance needs a named recovery action")
+_rs22 = Path(".opencode/agents/researcher.md").read_text()
+check("researcher classifies findings and records them",
+      "classification: FACT | HYPOTHESIS | ASSUMPTION | UNKNOWN" in _rs22
+      and "## Claim classification" in _rs22 and "ledger" in _rs22.lower(),
+      "research findings are claims and must be labelled")
+_im22 = Path(".opencode/agents/implementer.md").read_text()
+check("implementer records claim classification",
+      "classification:" in _im22 and "FACT | HYPOTHESIS" in _im22,
+      "a debug-mode diagnosis must carry a claim classification")
+check("implementer knows verification levels",
+      "### Verification levels" in _im22 and "L3 end-to-end" in _im22,
+      "evidence levels L1/L2/L3 must be taught to the agent that records claims")
+_ar22 = Path(".opencode/agents/architect.md").read_text()
+check("architect records ASSUMPTION decisions",
+      "ASSUMPTION claim" in _ar22 and "ledger.py" in _ar22,
+      "an accepted assumption that is never claimed is an unrecorded decision")
+_rv22 = Path(".opencode/agents/reviewer.md").read_text()
+check("reviewer traces conclusions to VERIFIED claims",
+      "VERIFIED claims" in _rv22 and "ledger" in _rv22.lower(),
+      "a review conclusion without a claim is a question, not a finding")
+_tl22 = Path(".opencode/plugin/telemetry.ts").read_text()
+check("telemetry keeps g1-g8 matcher and adds g10/g11",
+      "(g[1-8])" in _tl22 and "g1[01]" in _tl22,
+      "evidence gates must be counted like functional gates")
+check("telemetry counts claim events",
+      "claims_recorded" in _tl22 and "claims_invalid" in _tl22,
+      "claim provenance must be measurable per session")
+_oc22 = json.loads(Path("opencode.json").read_text())
+_rb22 = _oc22["agent"]["researcher"]["permission"]["bash"]
+check("researcher may run the claim ledger",
+      any("claims/ledger.py" in k for k in _rb22),
+      "an agent told to record claims must hold the permission to run the ledger")
+
+# behavioral: drive the ledger and gate against an isolated framework copy
+_bd22 = Path(tempfile.mkdtemp(prefix="val22_claims_"))
+shutil.copytree("framework", _bd22 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd22 / ".planning").mkdir()
+
+def _wsh22(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd22)), cmd), timeout=timeout)
+
+_GL = "bash framework/gates/g11_evidence.sh"
+_LG = "python3 framework/claims/ledger.py"
+
+_r, _o = _wsh22(_GL)
+check("g11 with no claims is NOT_APPLICABLE (4), never a pass",
+      _r == 4 and "NOT_APPLICABLE" in _o, (_o or "")[-200:])
+
+_g1 = ('{"claim_id":"CLM-900","task_id":"V22-001","agent":"verifier",'
+       '"statement":"full-provenance claim",'
+       '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"high",'
+       '"verified_by":"bash framework/gates/g11_evidence.sh",'
+       '"independent_check":"python3 framework/claims/ledger.py analyse",'
+       '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+       '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh22(_LG + " append --json '%s'" % _g1)
+check("ledger accepts a fully-provenanced high-impact claim",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_r, _o = _wsh22(_GL)
+check("g11 passes a valid ledger",
+      _r == 0 and "PASS" in _o, (_o or "")[-200:])
+
+_g2 = ('{"claim_id":"CLM-901","task_id":"V22-002","agent":"verifier",'
+       '"statement":"missing impact",'
+       '"claim_type":"data","classification":"FACT","status":"VERIFIED",'
+       '"verified_by":"bash framework/gates/g11_evidence.sh"}')
+_r, _o = _wsh22(_LG + " append --json '%s'" % _g2)
+check("ledger rejects missing impact (CLAIM_INCOMPLETE)",
+      _r == 1 and "CLAIM_INCOMPLETE" in _o, (_o or "")[-200:])
+
+_g3 = ('{"claim_id":"CLM-902","task_id":"V22-003","agent":"verifier",'
+       '"statement":"unverified fact",'
+       '"claim_type":"data","classification":"FACT","status":"UNVERIFIED","impact":"low"}')
+_r, _o = _wsh22(_LG + " append --json '%s'" % _g3)
+check("ledger rejects FACT that is not VERIFIED (CLAIM_FACT_UNVERIFIED)",
+      _r == 1 and "CLAIM_FACT_UNVERIFIED" in _o, (_o or "")[-200:])
+
+_cor = ('{"claim_id":"CLM-999","task_id":"V22-999","agent":"hand",'
+        '"statement":"corrupt",'
+        '"claim_type":"data","classification":"FACT","status":"VERIFIED","impact":"low"}')
+(_bd22 / ".planning" / "claims").mkdir(parents=True, exist_ok=True)
+(_bd22 / ".planning" / "claims" / "ledger.jsonl").write_text(_cor + "\n", encoding="utf-8")
+_r, _o = _wsh22(_GL)
+check("g11 catches a hand-written corrupt claim and names it",
+      _r == 1 and "CLM-999" in _o and "FAIL" in _o, (_o or "")[-300:])
+
+_gf = ('{"claim_id":"CLM-999","task_id":"V22-999","agent":"hand",'
+       '"statement":"corrupt claim fixed by re-append",'
+       '"claim_type":"data","classification":"FACT","status":"VERIFIED","impact":"low",'
+       '"verified_by":"bash framework/gates/g11_evidence.sh",'
+       '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+       '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh22(_LG + " append --json '%s'" % _gf)
+check("re-append with provenance supersedes the corrupt record (latest wins)",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_r, _o = _wsh22(_GL)
+check("g11 passes after the corrupt claim is superseded",
+      _r == 0 and "PASS" in _o, (_o or "")[-200:])
+
+shutil.rmtree(_bd22, ignore_errors=True)
+
+
+
+print("\n[23] Provider health pre-flight")
+# provider boundary: the taxonomy must exist, name the observed defect, be
+# first-match ordered, and keep worker-level classes out of the blocking set.
+_hc23 = Path("framework/providers/healthcheck.py").read_text(encoding="utf-8")
+check("provider taxonomy names the credit-wall defect",
+      "QUOTA_FAILURE" in _hc23 and "insufficient credits" in _hc23.lower(),
+      "the exact observed OpenRouter error must classify as QUOTA_FAILURE")
+_ix_auth = _hc23.index("AUTH_FAILURE")
+_ix_quota = _hc23.index("QUOTA_FAILURE")
+check("taxonomy is first-match ordered (auth outranks quota)",
+      _ix_auth < _ix_quota,
+      "a 401 with quota wording must classify as AUTH_FAILURE, not QUOTA_FAILURE")
+_bs = _hc23[_hc23.index("BLOCKING_CLASSES"):]
+_bs = _bs[:_bs.index("}") + 1]
+check("blocking set excludes worker-level classes",
+      "QUOTA_FAILURE" in _bs and "AGENT_FAILURE" not in _bs and "SUSPECTED_STALL" not in _bs,
+      "worker classes belong to task supervision, never to the provider boundary")
+
+_g12p = Path("framework/gates/g12_provider.sh")
+check("g12 gate exists", _g12p.exists(),
+      "an unwritten gate cannot refuse an unhealthy dispatch")
+check("G12 registered in the exit-code contract",
+      "| G12 provider" in Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8"),
+      "gate behaviour claims must cite EXIT_CODES.md")
+
+_adp23 = Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8")
+check("adapter refuses unclassified FAILED events",
+      "TASK_INVALID_FAILURE_CLASS" in _adp23
+      and "FAILED requires failure_class" in _adp23,
+      "an unclassified failure cannot be routed; the adapter must refuse it")
+check("adapter routes provider classes to the pre-flight gate",
+      "g12 provider pre-flight" in _adp23 and "no dispatch to" in _adp23,
+      "a blocking provider class must route to g12/nodispatch, not to WORKER_STALLED")
+
+_dp23_text = Path(".opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
+check("delegation-protocol requires failure_class on FAILED",
+      "failure_class" in _dp23_text and "TASK_INVALID_FAILURE_CLASS" in _dp23_text
+      and "g12 provider pre-flight" in _dp23_text and "WORKER_STALLED" in _dp23_text,
+      "the written protocol must carry the routing contract the adapter enforces")
+_tl23_text = Path(".opencode/agents/team-lead.md").read_text(encoding="utf-8")
+check("team-lead runs the provider pre-flight before dispatch",
+      "g12_provider.sh" in _tl23_text and "NO TASK DISPATCH" in _tl23_text
+      and "failure_class" in _tl23_text,
+      "the orchestrator must be told to pre-flight providers before every task() dispatch")
+
+# behavioral: isolated copy, real CLI round-trips, no network
+_bd23 = Path(tempfile.mkdtemp(prefix="val23_prov_"))
+shutil.copytree("framework", _bd23 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd23 / ".planning").mkdir()
+
+def _wsh23(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd23)), cmd), timeout=timeout)
+
+_HC23 = "python3 framework/providers/healthcheck.py"
+_r, _o = _wsh23(_HC23 + " selftest")
+check("healthcheck selftest passes (classify + ledger roundtrip)",
+      _r == 0, (_o or "")[-300:])
+
+_r, _o = _wsh23(_HC23 + ' classify --error "Insufficient credits. This account never purchased credits."')
+check("classify CLI maps the observed error to QUOTA_FAILURE",
+      _r == 0 and '"class": "QUOTA_FAILURE"' in _o, (_o or "")[-200:])
+
+_sp = _wsl_path(str(_bd23 / ".planning" / "providers" / "health.jsonl"))
+_SEED23 = "export PROVIDER_HEALTH_FILE='%s' PROVIDER_HEALTH_WINDOW_MIN=600; " % _sp
+_r, _o = _wsh23(_HC23 + ' record --provider openrouter --model opencode/big-pickle --class NOT_A_CLASS --detail "x" --source validate')
+check("record rejects a class outside the taxonomy",
+      _r == 1 and "BAD_CLASS" in _o, (_o or "")[-200:])
+
+_r, _o = _wsh23(_SEED23 + _HC23 + " record --provider openrouter --model opencode/big-pickle "
+                "--class QUOTA_FAILURE --detail 'validate seed' --source validate")
+check("record accepts a taxonomy class (seed for the pre-flight test)",
+      _r == 0 and "recorded" in _o, (_o or "")[-200:])
+
+# g12 fail-closed: with no resolvable config the gate must report BLOCKED (2),
+# never a clean pass - checked before opencode.json exists in the sandbox.
+_r, _o = _wsh23("unset OC_MODEL_DEFAULT OC_MODEL_SMALL OC_MODEL_LEAD OC_MODEL_RESEARCH "
+                "OC_MODEL_ARCHITECT OC_MODEL_PLANNER OC_MODEL_IMPLEMENT OC_MODEL_REVIEW "
+                "OC_MODEL_VERIFY OC_BIG OC_MID OC_SML PROVIDER_HEALTH_FILE; "
+                "bash framework/gates/g12_provider.sh")
+check("g12 without a resolvable config is BLOCKED, never pass",
+      _r == 2 and "BLOCKED" in _o, "rc=%s out=%s" % (_r, (_o or "")[-200:]))
+
+# config-default resolution (no env, no shim pass-through): the sandbox reads a
+# minimal opencode.json as its model source, then the seeded record must refuse.
+(_bd23 / "opencode.json").write_text(
+    json.dumps({"model": "opencode/big-pickle", "small_model": "opencode/big-pickle"}),
+    encoding="utf-8")
+_r, _o = _wsh23(_SEED23 + _HC23 + " check", timeout=300)
+check("seeded blocking record refuses the pre-flight",
+      _r != 0 and ("QUOTA_FAILURE" in _o or "MODEL_UNAVAILABLE" in _o
+                   or "inventory unavailable" in _o or "BLOCKED" in _o),
+      "a recorded blocking class must refuse dispatch, never read as clean - rc=%s" % _r)
+
+# failure_class contract on the adapter: refused / provider route / worker route
+_reg23 = '{"agent":"implementer","type":"implement","objective":"o","expected_artifact":"a","progress_timeout_s":20,"max_duration_s":90}'
+_wsh23("%s task-register --id V23-001 --json '%s'" % (_ADP, _reg23))
+_r, _o = _wsh23("%s task-event --id V23-001 --json '{\"state\":\"FAILED\"}'" % _ADP)
+check("FAILED without failure_class is refused",
+      _r != 0 and "TASK_INVALID_FAILURE_CLASS" in _o, (_o or "")[-200:])
+
+_wsh23("%s task-register --id V23-002 --json '%s'" % (_ADP, _reg23))
+_r, _o = _wsh23("%s task-event --id V23-002 --json '{\"state\":\"FAILED\",\"failure_class\":\"QUOTA_FAILURE\"}'" % _ADP)
+_r2, _o2 = _wsh23("%s task-status --id V23-002" % _ADP)
+check("FAILED with QUOTA_FAILURE routes to g12 (no dispatch)",
+      _r == 0 and _r2 == 0 and '"failure_class": "QUOTA_FAILURE"' in _o2
+      and "g12 provider pre-flight" in _o2 and "no dispatch to" in _o2,
+      (_o2 or "")[-250:])
+
+_wsh23("%s task-register --id V23-003 --json '%s'" % (_ADP, _reg23))
+_r, _o = _wsh23("%s task-event --id V23-003 --json '{\"state\":\"FAILED\",\"failure_class\":\"AGENT_FAILURE\"}'" % _ADP)
+_r2, _o2 = _wsh23("%s task-status --id V23-003" % _ADP)
+check("FAILED with AGENT_FAILURE routes to WORKER_STALLED (not provider)",
+      _r == 0 and _r2 == 0 and '"failure_class": "AGENT_FAILURE"' in _o2
+      and "WORKER_STALLED" in _o2, (_o2 or "")[-250:])
+
+shutil.rmtree(_bd23, ignore_errors=True)
+
+print("\n[24] Execution context runtime binding")
+# statics: the context artifact must exist and bind provider/model under RT- ids, and the
+# claim ledger must refuse an RT- reference that does not resolve to a recorded context
+_ec24 = Path("framework/execution_context.py").read_text(encoding="utf-8")
+check("execution context artifact exists",
+      "RUNTIME_ID_RE" in _ec24 and "contexts" in _ec24 and "execution.jsonl" in _ec24,
+      "runtime identity must be a recorded artifact, not a free-form string")
+check("execution context binds provider and model",
+      "provider" in _ec24 and "model" in _ec24 and "resolved_by" in _ec24,
+      "the binding must name provider, model and resolution source")
+check("execution context records under RT- ids",
+      're.compile(r"^RT-\\d+$")' in _ec24 and "_next_runtime_id" in _ec24,
+      "canonical runtime ids let the ledger verify references")
+_cl24 = Path("framework/claims/ledger.py").read_text(encoding="utf-8")
+check("claim ledger validates runtime references",
+      "CLAIM_UNKNOWN_RUNTIME" in _cl24 and "execution.jsonl" in _cl24,
+      "an RT- reference that does not resolve must be refused, never assumed")
+
+# behavioral: isolated copy, real CLI round-trips, no network
+_bd24 = Path(tempfile.mkdtemp(prefix="val24_ctx_"))
+shutil.copytree("framework", _bd24 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd24 / ".planning").mkdir()
+# config-default resolution (the deterministic path established in [23])
+(_bd24 / "opencode.json").write_text(
+    '{"model": "opencode/big-pickle", "small_model": "opencode/big-pickle"}',
+    encoding="utf-8")
+
+def _wsh24(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd24)), cmd), timeout=timeout)
+
+_EC24 = "python3 framework/execution_context.py"
+_LG24 = "python3 framework/claims/ledger.py"
+
+_r, _o = _wsh24(_EC24 + " analyse")
+check("execution context analyse on empty store is 3 (never a pass)",
+      _r == 3 and "empty" in _o, (_o or "")[-200:])
+_r, _o = _wsh24(_EC24 + " current")
+check("execution context current on empty store is 3 (never a pass)",
+      _r == 3 and '"status": "none"' in _o, (_o or "")[-200:])
+
+_r, _o = _wsh24(_EC24 + " record")
+check("execution context record pins RT-0001",
+      _r == 0 and '"runtime_id": "RT-0001"' in _o, (_o or "")[-200:])
+_ctx24 = (_bd24 / ".planning" / "contexts" / "execution.jsonl").read_text(encoding="utf-8")
+check("execution context row binds host/provider/model/created_at",
+      '"runtime_id": "RT-0001"' in _ctx24 and '"provider"' in _ctx24
+      and '"model": "opencode/big-pickle"' in _ctx24 and '"created_at"' in _ctx24,
+      (_ctx24 or "")[-300:])
+
+_r, _o = _wsh24(_EC24 + " current")
+check("execution context current returns the pinned runtime",
+      _r == 0 and '"runtime_id": "RT-0001"' in _o, (_o or "")[-200:])
+_r, _o = _wsh24(_EC24 + " analyse")
+check("execution context analyse passes with one pinned runtime",
+      _r == 0 and '"status": "ok"' in _o, (_o or "")[-200:])
+
+_r, _o = _wsh24(_EC24 + " record")
+_r2, _o2 = _wsh24(_EC24 + " analyse")
+check("second record gets RT-0002 and analyse stays ok",
+      _r == 0 and '"runtime_id": "RT-0002"' in _o
+      and _r2 == 0 and '"runtimes"' in _o2 and "RT-0002" in _o2, (_o2 or "")[-200:])
+
+# claim ledger: RT- references must resolve, free-form runtimes stay legal (legacy path)
+_c1 = ('{"claim_id":"CLM-910","task_id":"V24-001","agent":"verifier",'
+       '"statement":"recorded runtime binding",'
+       '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+       '"verified_by":"bash framework/gates/g11_evidence.sh",'
+       '"evidence":[{"kind":"command_run","runtime":"RT-0001",'
+       '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh24(_LG24 + " append --json '%s'" % _c1)
+check("ledger accepts a claim bound to a recorded runtime",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+
+_c2 = ('{"claim_id":"CLM-911","task_id":"V24-002","agent":"verifier",'
+       '"statement":"unrecorded runtime reference",'
+       '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+       '"verified_by":"bash framework/gates/g11_evidence.sh",'
+       '"evidence":[{"kind":"command_run","runtime":"RT-9999",'
+       '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh24(_LG24 + " append --json '%s'" % _c2)
+check("ledger refuses a claim bound to an unrecorded runtime",
+      _r == 1 and "CLAIM_UNKNOWN_RUNTIME" in _o, (_o or "")[-200:])
+
+_c3 = ('{"claim_id":"CLM-912","task_id":"V24-003","agent":"verifier",'
+       '"statement":"free-form legacy runtime stays legal",'
+       '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+       '"verified_by":"bash framework/gates/g11_evidence.sh",'
+       '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+       '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh24(_LG24 + " append --json '%s'" % _c3)
+check("free-form runtime strings remain legal (legacy path)",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+
+_r, _o = _wsh24("bash framework/gates/g11_evidence.sh")
+check("g11 passes with a valid runtime-bound ledger",
+      _r == 0 and "PASS" in _o, (_o or "")[-200:])
+
+# duplicate runtime_id must be refused by analyse, never silently merged
+_ctxp24 = _bd24 / ".planning" / "contexts" / "execution.jsonl"
+_ctxp24.write_text(_ctxp24.read_text(encoding="utf-8")
+                   + '{"runtime_id":"RT-0001","host":"opencode","provider":"x",'
+                     '"model":"m","created_at":"dup"}\n', encoding="utf-8")
+_r, _o = _wsh24(_EC24 + " analyse")
+check("duplicate runtime_id refused by analyse",
+      _r == 1 and "CONTEXT_DUPLICATE_ID" in _o, (_o or "")[-200:])
+
+shutil.rmtree(_bd24, ignore_errors=True)
+
+print("\n[25] Worker observability (task-summary + G13)")
+# statics: the adapter must aggregate worker health from the event stream, and the gate
+# must wrap that command -- observability is a derived fact, never a contract-file guess
+_gs25 = Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8")
+check("adapter exposes task-summary",
+      "def task_summary()" in _gs25 and '"task-summary"' in _gs25,
+      "the gate's data source is an executable aggregate of the task event stream")
+_g1325 = Path("framework/gates/g13_worker.sh").read_text(encoding="utf-8")
+check("G13 wraps task-summary and owns its exit contract",
+      'GATE_NAME="g13_worker"' in _g1325 and "task-summary" in _g1325
+      and "exit $NOT_APPLICABLE" in _g1325,
+      "a gate is a command with an exit code; it must map health to 0/1/2/4")
+_exc25 = Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8")
+check("G13 exit contract documented in EXIT_CODES.md",
+      "| G13 worker" in _exc25 and "NOT_APPLICABLE (no tasks registered)" in _exc25,
+      "generated claims about gate behaviour must cite the authoritative table")
+
+# behavioral: isolated copy, real CLI round-trips, real gate exits, no network
+_bd25 = Path(tempfile.mkdtemp(prefix="val25_worker_"))
+shutil.copytree("framework", _bd25 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd25 / ".planning").mkdir()
+
+def _wsh25(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd25)), cmd), timeout=timeout)
+
+_ADP25 = "python3 framework/adapters/gsd_state.py"
+_G1325 = "bash framework/gates/g13_worker.sh"
+
+# empty store: nothing to observe
+_r, _o = _wsh25(_ADP25 + " task-summary")
+check("task-summary on empty store reports empty",
+      _r == 0 and '"status": "empty"' in _o and '"registered": 0' in _o, (_o or "")[-200:])
+_r, _o = _wsh25(_G1325)
+check("G13 on empty store is NOT_APPLICABLE (never a pass)",
+      _r == 4 and "NOT_APPLICABLE" in _o, (_o or "")[-200:])
+
+# healthy worker: STARTED with generous budgets -> ok
+_reg25 = ('{"agent":"implementer","type":"implement","objective":"o",'
+          '"expected_artifact":"a","progress_timeout_s":20,"max_duration_s":90}')
+_wsh25(_ADP25 + " task-register --id V25-001 --json '%s'" % _reg25)
+_wsh25(_ADP25 + " task-event --id V25-001 --json '{\"state\":\"STARTED\"}'")
+_r, _o = _wsh25(_ADP25 + " task-summary")
+check("task-summary with a healthy worker reports ok",
+      _r == 0 and '"status": "ok"' in _o and '"registered": 1' in _o
+      and '"health": "HEALTHY"' in _o, (_o or "")[-250:])
+_r, _o = _wsh25(_G1325)
+check("G13 passes with all workers healthy",
+      _r == 0 and "PASS" in _o, (_o or "")[-200:])
+
+# stale worker: 1s budgets, wait past max_duration -> OVERDUE escalates
+_reg_stale25 = ('{"agent":"deep","type":"explore","objective":"o",'
+                '"expected_artifact":"a","progress_timeout_s":1,"max_duration_s":1}')
+_wsh25(_ADP25 + " task-register --id V25-002 --json '%s'" % _reg_stale25)
+_wsh25(_ADP25 + " task-event --id V25-002 --json '{\"state\":\"STARTED\"}'")
+_r, _o = _wsh25("sleep 2 && %s task-summary" % _ADP25)
+check("task-summary flags an overdue worker as unhealthy",
+      _r == 0 and '"status": "unhealthy"' in _o and "OVERDUE" in _o, (_o or "")[-250:])
+_r, _o = _wsh25(_G1325)
+check("G13 refuses completion with an overdue worker (exit 1)",
+      _r == 1 and "V25-002" in _o and "OVERDUE" in _o
+      and "cancel_and_retry" in _o, (_o or "")[-300:])
+
+# failed worker with provider class: route surfaced next to the task
+_wsh25(_ADP25 + " task-register --id V25-003 --json '%s'" % _reg25)
+_wsh25(_ADP25 + " task-event --id V25-003 --json '{\"state\":\"FAILED\",\"failure_class\":\"QUOTA_FAILURE\"}'")
+_r, _o = _wsh25(_ADP25 + " task-summary")
+check("task-summary includes FAILED with its recovery route",
+      '"status": "unhealthy"' in _o and "V25-003" in _o
+      and "QUOTA_FAILURE" in _o and "g12" in _o, (_o or "")[-300:])
+_r, _o = _wsh25(_G1325)
+check("G13 names the failed task and its provider route",
+      _r == 1 and "V25-003" in _o and "QUOTA_FAILURE" in _o and "g12" in _o, (_o or "")[-300:])
+
+shutil.rmtree(_bd25, ignore_errors=True)
+
 print("\n" + "=" * 60)
 if WARNS:
     print(f"{len(WARNS)} warning(s):")

@@ -18,9 +18,62 @@ case "$STATE_ROOT" in
 esac
 
 log()  { printf '[%s] %s\n' "$GATE_NAME" "$*"; }
-skip() { log "SKIP  $*"; exit 0; }
-pass() { log "PASS  $*"; exit 0; }
-fail() { log "FAIL  $*"; exit 1; }
+
+# ─── Canonical [gate] protocol (P0-3) ─────────────────────────────────────────
+# Every gate verdict is emitted on the canonical line so the telemetry plugin
+# parses it from output text without filename heuristics:
+#   [gate] <id> result=<pass|fail|unverifiable> exit=<code> ms=<ms>
+# Disposal (an earlier condition prevented reaching the gate):
+#   [gate] <id> result=not_reached
+# The line is the protocol; the plugin's classifier additionally requires a
+# matched launch (GATE_EXECUTION_STARTED) before any EXECUTED_* state.
+
+# Gate start moment, captured at source time. GNU date +%s%N; anything that is
+# not pure digits (macOS %N, missing date) falls back to 0 → ms reports 0.
+GATE_START_MS="$(date +%s%N 2>/dev/null || true)"
+case "$GATE_START_MS" in
+  ''|*[!0-9]*) GATE_START_MS=0 ;;
+esac
+
+# Short gate id: g8_blockers → g8, g5-stack → g5, g_tool_utilization stays.
+gate_id() {
+  case "$GATE_NAME" in
+    g[0-9]*) printf '%s\n' "${GATE_NAME%%[-_]*}" ;;
+    *)       printf '%s\n' "$GATE_NAME" ;;
+  esac
+}
+
+# Milliseconds since the gate started (0 when the clock is unavailable).
+gate_elapsed_ms() {
+  local now
+  now="$(date +%s%N 2>/dev/null || true)"
+  case "$now" in
+    ''|*[!0-9]*) now=0 ;;
+  esac
+  if [ "$GATE_START_MS" = "0" ] || [ "$now" = "0" ]; then
+    printf '0\n'
+  else
+    printf '%s\n' "$(( (now - GATE_START_MS) / 1000000 ))"
+  fi
+}
+
+# Emit the canonical result line. result ∈ pass|fail|unverifiable.
+gate_result() {
+  local result="$1" exit_code="${2:-0}"
+  printf '[gate] %s result=%s exit=%s ms=%s\n' "$(gate_id)" "$result" "$exit_code" "$(gate_elapsed_ms)"
+}
+
+# Emit the explicit NOT_REACHED disposal line (never inferred from absence).
+gate_not_reached() {
+  printf '[gate] %s result=not_reached\n' "$(gate_id)"
+}
+
+# Verdicts emit the canonical line alongside the human log line. skip() is a
+# NON-FAILING verdict (exit 0, result=pass) — the gate was not applicable, not
+# failed; the human SKIP line preserves the distinction for readers.
+skip() { log "SKIP  $*"; gate_result pass 0; exit 0; }
+pass() { log "PASS  $*"; gate_result pass 0; exit 0; }
+fail() { log "FAIL  $*"; gate_result fail 1; exit 1; }
 
 # Persist immediately — OpenCode prunes tool output.
 persist() {

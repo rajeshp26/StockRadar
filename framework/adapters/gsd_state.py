@@ -10,7 +10,10 @@ adapter change and nothing else.
 import argparse
 import json
 import subprocess
+import sys
 import datetime
+import time
+from functools import lru_cache
 from pathlib import Path
 
 MANIFEST = Path("framework/.manifest/gsd.json")
@@ -84,14 +87,14 @@ def manifest() -> dict:
     """
     if MANIFEST.exists():
         try:
-            m = json.loads(MANIFEST.read_text())
+            m = json.loads(MANIFEST.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             m = None
         if m and _cache_valid(m):
             return m
     m = detect()
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST.write_text(json.dumps(m, indent=2))
+    MANIFEST.write_text(json.dumps(m, indent=2), encoding="utf-8")
     return m
 
 
@@ -174,7 +177,7 @@ def _blockers_load() -> list:
     p = _blockers_path()
     if not p.exists():
         return []
-    data = _yaml_mod().safe_load(p.read_text())
+    data = _yaml_mod().safe_load(p.read_text(encoding="utf-8"))
     if data is None:
         return []
     if not isinstance(data, list):
@@ -373,7 +376,7 @@ def _task_events(task_id: str) -> list:
     if not p.exists():
         return []
     out = []
-    for i, line in enumerate(p.read_text().splitlines()):
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines()):
         s = line.strip()
         if not s:
             continue
@@ -393,7 +396,7 @@ def _task_load(task_id: str):
     if not p.exists():
         raise SystemExit(f"NOT_FOUND: task {task_id} is not registered (register first)")
     try:
-        contract = json.loads(p.read_text())
+        contract = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise SystemExit(f"TASK_BLOCKED: contract for {task_id} unreadable: {e}")
     return contract, _task_events(task_id)
@@ -402,11 +405,33 @@ def _task_load(task_id: str):
 def _append_task_event(task_id: str, event: dict):
     p = _task_events_path(task_id)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a") as fh:
+    with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
 
 
-def task_status(task_id: str) -> dict:
+@lru_cache(maxsize=1)
+def _failure_taxonomy():
+    """(ALL_CLASSES, BLOCKING_CLASSES) from the provider boundary. Imported
+    lazily so this adapter never hard-couples at load time; an absent taxonomy
+    must not read as 'no taxonomy' (fail closed, never fail open)."""
+    try:
+        from providers.healthcheck import ALL_CLASSES, BLOCKING_CLASSES
+        return ALL_CLASSES, BLOCKING_CLASSES
+    except ImportError:
+        fw = str(Path(__file__).resolve().parent.parent)  # framework/
+        if fw not in sys.path:
+            sys.path.insert(0, fw)
+        try:
+            from providers.healthcheck import ALL_CLASSES, BLOCKING_CLASSES
+        except ImportError as e:
+            raise SystemExit(
+                "BLOCKED: providers/healthcheck.py is missing - the failure "
+                "taxonomy must come from the provider boundary, not the adapter: " + str(e)
+            )
+        return ALL_CLASSES, BLOCKING_CLASSES
+
+
+def task_status(task_id: str, session_alive=None) -> dict:
     contract, events = _task_load(task_id)
     now = datetime.datetime.now(datetime.timezone.utc)
     created = datetime.datetime.fromisoformat(contract["created_at"])
@@ -424,7 +449,16 @@ def task_status(task_id: str) -> dict:
     elif state == "CANCELLED":
         health, level, action = "CANCELLED", 0, "continue"
     elif state == "FAILED":
-        health, level, action = "FAILED", 4, "record_blocker: write-blocker WORKER_STALLED, retry once narrower, else take over"
+        _, blocking = _failure_taxonomy()
+        fc = last.get("failure_class") or "" if last else ""
+        if fc in blocking:
+            action = ("provider route: run g12 provider pre-flight, record provider "
+                      "health, dispatch via a fallback provider - no dispatch to "
+                      "this provider")
+        else:
+            action = ("record_blocker: write-blocker WORKER_STALLED, retry once "
+                      "narrower, else take over")
+        health, level = "FAILED", 4
     elif elapsed_s >= md:
         health, level, action = "OVERDUE", 3, "cancel_and_retry: cancel the bg task, retry with a narrowed prompt"
     elif silent_s >= 2 * pt:
@@ -433,6 +467,42 @@ def task_status(task_id: str) -> dict:
         health, level, action = "WARNING", 1, "query_worker: ask for current checkpoint and blockers"
     else:
         health, level, action = "HEALTHY", 0, "continue"
+
+    if state in TASK_TERMINAL:
+        liveness = "DEAD"
+    elif session_alive is True:
+        liveness = "ALIVE"
+    elif session_alive is False:
+        liveness = "DEAD"
+    elif silent_s >= pt:
+        liveness = "UNKNOWN"
+    else:
+        liveness = "ALIVE"
+
+    # Supervisor reconcile overrides the silent-based STALLED branch for
+    # non-terminal states: alive -> downgrade to WARNING (OVERDUE deadline is
+    # never suppressed); absent/ended -> force STALLED even before the silence
+    # threshold.
+    if state not in TASK_TERMINAL:
+        if session_alive is True and health == "STALLED":
+            health, level, action = (
+                "WARNING", 1,
+                "query_worker: worker confirmed alive by supervisor reconcile; "
+                "ask for current checkpoint and blockers")
+        elif session_alive is False:
+            health, level, action = (
+                "STALLED", 2,
+                "inspect_session: worker session reported absent/ended by "
+                "supervisor; cancel only if frozen")
+
+    execution = {
+        None: "STARTING", "ACK": "STARTING", "STARTED": "THINKING",
+        "PROGRESS": "WORKING", "BLOCKED": "BLOCKED",
+        "COMPLETED": "IDLE", "FAILED": "IDLE", "CANCELLED": "IDLE",
+    }[last["state"] if last else None]
+
+    progress = "COMPLETED" if state == "COMPLETED" else (
+        "CHECKPOINT_ADVANCED" if checkpoints else "NONE")
 
     return {
         "task_id": contract["task_id"],
@@ -443,6 +513,10 @@ def task_status(task_id: str) -> dict:
         "health": health,
         "recovery_level": level,
         "recovery_action": action,
+        "failure_class": (last.get("failure_class") or "") if last else "",
+        "liveness": liveness,
+        "execution": execution,
+        "progress": progress,
         "checkpoints_reached": checkpoints,
         "expected_artifact": contract["expected_artifact"],
         "progress_timeout_s": pt,
@@ -452,7 +526,7 @@ def task_status(task_id: str) -> dict:
         "created_at": contract["created_at"],
         "last_activity": last["ts"] if last else contract["created_at"],
         "recent_events": [
-            {k: e.get(k) for k in ("state", "ts", "emitter", "checkpoint", "detail")}
+            {k: e.get(k) for k in ("state", "ts", "emitter", "checkpoint", "detail", "failure_class")}
             for e in events[-3:]
         ],
     }
@@ -490,7 +564,7 @@ def register_task(task_id: str, payload: dict) -> dict:
         "created_at": _now(),
     }
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("x") as fh:          # exclusive create = the immutability guarantee
+    with p.open("x", encoding="utf-8") as fh:          # exclusive create = the immutability guarantee
         fh.write(json.dumps(contract, indent=2) + "\n")
     return task_status(task_id)
 
@@ -524,6 +598,25 @@ def task_event(task_id: str, payload: dict) -> dict:
         event["checkpoint"] = str(payload["checkpoint"])
     if payload.get("detail"):
         event["detail"] = str(payload["detail"])
+    fc = str(payload.get("failure_class") or "").strip().upper()
+    if state == "FAILED":
+        if not fc:
+            raise SystemExit(
+                "TASK_INVALID_FAILURE_CLASS: FAILED requires failure_class (e.g. "
+                "AGENT_FAILURE); an unclassified failure cannot be routed."
+            )
+        all_classes, _ = _failure_taxonomy()
+        if fc not in all_classes:
+            raise SystemExit(
+                "TASK_INVALID_FAILURE_CLASS: " + fc + " is not in the failure "
+                "taxonomy; legal classes: " + ", ".join(sorted(all_classes))
+            )
+        event["failure_class"] = fc
+    elif fc:
+        raise SystemExit(
+            "TASK_INVALID_FAILURE_CLASS: failure_class is only legal on FAILED "
+            "events, not " + state
+        )
     _append_task_event(task_id, event)
     return task_status(task_id)
 
@@ -554,17 +647,59 @@ def list_tasks() -> list:
         tid = p.stem
         try:
             h = task_status(tid)
-        except SystemExit:
+        except (SystemExit, KeyError, ValueError, TypeError, IndexError):
+            # malformed persisted contract (missing created_at, bad JSON, bad ts) is an
+            # unreadable task, not a framework crash: read BROKEN and name it.
             h = {"task_id": tid, "state": "UNREADABLE", "health": "BROKEN", "agent": "?",
-                 "type": "?", "elapsed_s": 0, "silent_s": 0}
+                 "type": "?", "elapsed_s": 0, "silent_s": 0, "failure_class": ""}
         out.append({k: h[k] for k in ("task_id", "agent", "type", "state", "health",
-                                      "elapsed_s", "silent_s")})
+                                      "elapsed_s", "silent_s", "failure_class")})
     return out
+
+
+def task_summary() -> dict:
+    """Aggregate worker health across all registered tasks.
+
+    The G13 worker-observability gate's data source: every task's live health plus the
+    escalation route each unhealthy task implies. 'unhealthy' means a supervisor action
+    is owed NOW (recovery_level >= 2, or an unreadable event stream); WARNING (level 1)
+    is probe-and-continue and counts as healthy here.
+    """
+    rows = list_tasks()
+    tasks = []
+    unhealthy = []
+    for slim in rows:
+        tid = slim["task_id"]
+        try:
+            st = task_status(tid)
+        except (SystemExit, KeyError, ValueError, TypeError, IndexError):
+            st = {"task_id": tid, "state": "UNREADABLE", "health": "BROKEN",
+                  "recovery_level": 5,
+                  "recovery_action": "inspect the task contract and event stream manually"}
+        tasks.append(st)
+        if st["health"] in ("STALLED", "OVERDUE", "FAILED", "BROKEN", "UNREADABLE")                 or st.get("recovery_level", 0) >= 2:
+            unhealthy.append({
+                "task_id": st["task_id"],
+                "agent": st.get("agent", "?"),
+                "state": st.get("state"),
+                "health": st["health"],
+                "recovery_level": st.get("recovery_level", 0),
+                "recovery_action": st.get("recovery_action", ""),
+                "failure_class": st.get("failure_class", ""),
+            })
+    if not rows:
+        status = "empty"
+    elif unhealthy:
+        status = "unhealthy"
+    else:
+        status = "ok"
+    return {"status": status, "registered": len(rows), "unhealthy": unhealthy,
+            "tasks": tasks}
 
 # ── reads ────────────────────────────────────────────────────────────────
 def _read(rel: str) -> str:
     p = root() / rel
-    return p.read_text() if p.exists() else ""
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def read_project():        return _read("PROJECT.md")
@@ -605,7 +740,7 @@ def read_contract(cid: str) -> str:
     for ext in ("openapi.yaml", "yaml", "yml", "json"):
         p = root() / "contracts" / f"{cid.lower()}.{ext}"
         if p.exists():
-            return p.read_text()
+            return p.read_text(encoding="utf-8")
     return f"NOT_FOUND: contract {cid}"
 
 
@@ -615,7 +750,7 @@ def _write(rel: str, body: str, append=False):
         _unsupported(f"write {rel}")
     p = root() / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a" if append else "w") as fh:
+    with p.open("a" if append else "w", encoding="utf-8") as fh:
         fh.write(body)
     return str(p)
 
@@ -669,6 +804,98 @@ def selftest() -> dict:
         results["write_verification"] = "pass"
     except SystemExit as e:
         results["write_verification"] = f"unsupported: {e}"
+    # failure_class round trip: FAILED must name a taxonomy class; provider-class
+    # failures route recovery to the provider boundary (g12), worker-class to the
+    # WORKER_STALLED ladder. Tasks are cleaned up so selftest leaves no residue.
+    tid = "selftest-fc"
+    try:
+        _task_path(tid).unlink(missing_ok=True)
+        _task_events_path(tid).unlink(missing_ok=True)
+        register_task(tid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest failure_class routing",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 30, "max_duration_s": 60,
+        })
+        task_event(tid, {"state": "STARTED"})
+        try:
+            task_event(tid, {"state": "FAILED"})
+            results["task_failure_class_required"] = "fail: FAILED without class accepted"
+        except SystemExit:
+            results["task_failure_class_required"] = "pass"
+        try:
+            task_event(tid, {"state": "FAILED", "failure_class": "NOT_A_CLASS"})
+            results["task_failure_class_invalid"] = "fail: unknown class accepted"
+        except SystemExit:
+            results["task_failure_class_invalid"] = "pass"
+        try:
+            task_event(tid, {"state": "STARTED", "failure_class": "QUOTA_FAILURE"})
+            results["task_failure_class_wrong_state"] = "fail: class on non-FAILED accepted"
+        except SystemExit:
+            results["task_failure_class_wrong_state"] = "pass"
+        st = task_event(tid, {"state": "FAILED", "failure_class": "QUOTA_FAILURE",
+                              "detail": "provider side"})
+        ok = (st["failure_class"] == "QUOTA_FAILURE" and st["liveness"] == "DEAD"
+              and st["execution"] == "IDLE" and "g12" in st["recovery_action"])
+        results["task_failure_class_provider_route"] = "pass" if ok else (
+            "fail: " + st["recovery_action"])
+    except SystemExit as e:
+        results["task_failure_class_provider_route"] = "fail: " + str(e)
+    finally:
+        _task_path(tid).unlink(missing_ok=True)
+        _task_events_path(tid).unlink(missing_ok=True)
+
+    # Supervisor reconcile: a silent worker is unproven-alive (UNKNOWN), never
+    # assumed dead. session_alive=True downgrades silent-based STALLED to
+    # WARNING; session_alive=False forces STALLED/DEAD; OVERDUE deadline is
+    # never suppressed by reconcile.
+    rtid = "selftest-reconcile"
+    try:
+        _task_path(rtid).unlink(missing_ok=True)
+        _task_events_path(rtid).unlink(missing_ok=True)
+        register_task(rtid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest supervisor reconcile",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 2, "max_duration_s": 60,
+        })
+        task_event(rtid, {"state": "STARTED"})
+        time.sleep(3)
+        st = task_status(rtid)
+        results["reconcile_default_unknown"] = "pass" if (
+            st["liveness"] == "UNKNOWN" and st["health"] == "WARNING") else (
+            "fail: " + st["health"] + "/" + st["liveness"])
+        st = task_status(rtid, session_alive=True)
+        results["reconcile_alive_downgrade"] = "pass" if (
+            st["liveness"] == "ALIVE" and st["health"] == "WARNING"
+            and st["recovery_level"] == 1) else (
+            "fail: " + st["health"] + "/" + st["liveness"])
+        st = task_status(rtid, session_alive=False)
+        results["reconcile_dead_stalled"] = "pass" if (
+            st["liveness"] == "DEAD" and st["health"] == "STALLED"
+            and st["recovery_level"] == 2) else (
+            "fail: " + st["health"] + "/" + st["liveness"])
+        # OVERDUE is a real budget and is never suppressed by reconcile.
+        _task_path(rtid).unlink(missing_ok=True)
+        _task_events_path(rtid).unlink(missing_ok=True)
+        register_task(rtid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest reconcile overdue",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 1, "max_duration_s": 1,
+        })
+        task_event(rtid, {"state": "STARTED"})
+        time.sleep(1.1)
+        st = task_status(rtid, session_alive=True)
+        results["reconcile_overdue_not_suppressed"] = "pass" if (
+            st["health"] == "OVERDUE" and st["recovery_level"] == 3) else (
+            "fail: " + st["health"])
+    except SystemExit as e:
+        results["reconcile_default_unknown"] = "fail: " + str(e)
+    finally:
+        _task_path(rtid).unlink(missing_ok=True)
+        _task_events_path(rtid).unlink(missing_ok=True)
+
     results["read_requirements"] = "pass" if read_requirements() or True else "fail"
     results["detect"] = manifest()["distribution"]
     return results
@@ -691,8 +918,9 @@ CMDS = {
     "list-blockers": lambda a: list_blockers(a.text),
     "task-register": lambda a: register_task(a.id, _parse_json(a.json, "TASK") if a.json else None),
     "task-event": lambda a: task_event(a.id, _parse_json(a.json, "TASK")),
-    "task-status": lambda a: task_status(a.id),
+    "task-status": lambda a: task_status(a.id, {"true": True, "false": False}.get(a.session_alive.lower(), None)),
     "task-list": lambda a: list_tasks(),
+    "task-summary": lambda a: task_summary(),
     "task-cancel": lambda a: cancel_task(a.id, _parse_json(a.json, "TASK") if a.json else None),
 }
 
@@ -702,6 +930,7 @@ if __name__ == "__main__":
     ap.add_argument("--id"); ap.add_argument("--task"); ap.add_argument("--phase")
     ap.add_argument("--json", default="")
     ap.add_argument("--text", action="store_true")
+    ap.add_argument("--session-alive", default="unknown")
     a = ap.parse_args()
     out = CMDS[a.command](a)
     if out is not None:

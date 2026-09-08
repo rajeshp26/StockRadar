@@ -17,6 +17,9 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G10 permission | policy conformant | violations found | BLOCKED (python3 absent) | — | NOT_APPLICABLE (opencode.json absent) |
 | G-T0 tool_readiness | tool plan exists, registry present, contracts in place | tool plan missing or tools unavailable | BLOCKED (python3 absent) | — | — |
 | G-T1 tool_utilization | tool evidence present in verification artifacts | tool evidence gaps found | BLOCKED (python3 absent) | — | NO_VERIFICATION_ARTIFACTS |
+| G11 evidence | claims valid, provenance present | invalid claims listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no claims recorded) |
+| G12 provider | healthy — dispatch allowed | unhealthy — NO TASK DISPATCH | BLOCKED (cannot verify provider health) | — | NOT_APPLICABLE (no model resolved) |
+| G13 worker | all workers healthy or terminal | unhealthy worker(s) listed | BLOCKED (cannot read task state) | — | NOT_APPLICABLE (no tasks registered) |
 
 ## G6 emits ONLY 0, 1, 3
 
@@ -84,6 +87,35 @@ A skip is not a pass -- it means there was nothing to judge.
 G-T0 and G-T1 are infrastructure gates, not code quality gates. They verify that the
 framework's tool lifecycle is operational, not that the code is correct. They complement
 G1-G9 which verify code quality and correctness.
+
+## G11 validates claims, not prose
+
+G11 does not judge whether a conclusion is true; it judges whether conclusions were recorded
+as ledger claims with sufficient, reproducible provenance. Claims without provenance are
+failures, not caveated passes.
+
+## G12 is a pre-flight gate — it refuses dispatch, it does not report it
+
+G12 runs BEFORE any task() dispatch. A model that has not passed a lightweight invocation
+health check during the current execution context has no dispatch right: the first dispatch
+in a window is the probe, its outcome is recorded, and a blocking outcome (QUOTA_FAILURE,
+AUTH_FAILURE, MODEL_UNAVAILABLE, PROVIDER_TIMEOUT, PROVIDER_NETWORK_FAILURE) refuses the NEXT
+dispatch with exit 1 and NO TASK DISPATCH. Exit 4 means no model resolved — nothing to
+dispatch; it is a skip, not a pass. Exit 2 means provider health could not be verified
+(missing python3, unreadable inventory, unparsable report) — never read as pass. G12 has no
+exit 3: every cannot-verify condition is a toolchain failure (2), and an absent model to
+judge is NOT_APPLICABLE (4), so the two capabilities exit 3 exists to separate are already
+distinct.
+
+## G13 is an observability gate — it refuses completion on an unhealthy worker
+
+G13 judges the task event stream, not the contract file. A registered task whose worker
+has gone silent past its budgets (STALLED, OVERDUE), failed unresolved, or left an
+unreadable event stream is a supervision debt; exit 1 names each task WITH its recovery
+route, and the gate keeps failing until the supervisor acts. Exit 4 means no tasks were
+registered — nothing to observe; a skip, not a pass. Exit 2 means task state could not be
+read (missing python3, unparsable summary) — never a pass. WARNING (silent past the
+progress timeout, probe-and-continue) is healthy; only recovery_level >= 2 escalates.
 
 ## Exit 3 is the most important code in the framework
 

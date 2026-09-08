@@ -17,12 +17,16 @@ Exit codes:
   3  no telemetry yet (not an error -- nothing has run)
 """
 import argparse
+import glob
 import json
 import os
+import re
 import statistics as st
 import subprocess
 import sys
 from collections import defaultdict
+
+import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -30,6 +34,70 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 # Rework = a task that needed correction after review or verification. This is the framework's
 # primary decision metric: if narrow context is costing correctness, it shows up here first.
 REWORK_SIGNALS = ("review_rejection", "test_failure", "integration_failure")
+
+# P0-1 (§3): canonical taxonomy vocabulary and the rework subset. The vocabulary is frozen in
+# .opencode/plugin/taxonomy.mjs (EVENTS); this tuple mirrors it for the report's aggregation.
+TAXONOMY_EVENTS = (
+    "WORK_ATTEMPTED", "TEST_FAILED", "REVIEW_REJECTED", "VERIFICATION_FAILED",
+    "INTEGRATION_FAILED", "BLOCKER_DETECTED", "CONTEXT_INSUFFICIENT",
+    "TASK_REOPENED", "RETRY", "TASK_COMPLETED",
+)
+REWORK_EVENTS = ("TEST_FAILED", "REVIEW_REJECTED", "INTEGRATION_FAILED", "TASK_REOPENED")
+
+GATE_EVENTS_TUPLE = ("GATE_REQUIRED", "GATE_NOT_REACHED", "GATE_EXECUTION_STARTED", "GATE_RESULT")
+GATE_STATES_TUPLE = ("NOT_REACHED", "EXECUTED_PASS", "EXECUTED_UNVERIFIABLE", "UNOBSERVED")
+
+
+def load_profiles():
+    path = os.path.join(ROOT, "framework", "verifier", "profiles.yaml")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except Exception:
+        return {}
+
+
+def gate_inventory():
+    gates_dir = os.path.join(ROOT, "framework", "gates")
+    result = []
+    for p in sorted(glob.glob(os.path.join(gates_dir, "g*.sh"))):
+        base = os.path.basename(p)
+        if base == "_lib.sh":
+            continue
+        stem = re.sub(r"\.sh$", "", base)
+        if re.match(r"^g[0-9]", stem):
+            gid = re.split(r"[-_]", stem)[0]
+        else:
+            gid = stem
+        result.append(gid)
+    return sorted(set(result))
+
+
+def gate_state_classifier(required_name, events):
+    evs = [e for e in events if e.get("detail", {}).get("gate") == required_name]
+    for e in evs:
+        if e.get("event") == "GATE_NOT_REACHED":
+            return "NOT_REACHED"
+    started = any(e.get("event") == "GATE_EXECUTION_STARTED" for e in evs)
+    result_event = None
+    for e in evs:
+        if e.get("event") == "GATE_RESULT":
+            result_event = e
+    if started and result_event:
+        if result_event.get("detail", {}).get("result") == "pass":
+            return "EXECUTED_PASS"
+        return "EXECUTED_UNVERIFIABLE"
+    return "UNOBSERVED"
+
+
+def legacy_gate_state(result_str):
+    if result_str == "pass":
+        return "EXECUTED_PASS"
+    if result_str in ("fail", "unverifiable"):
+        return "EXECUTED_UNVERIFIABLE"
+    return "UNOBSERVED"
 
 
 def state_root() -> str:
@@ -136,6 +204,18 @@ def analyse(recs):
     tiers = defaultdict(int)
     rework_tasks = 0
     fix_targets = defaultdict(int)
+    taxonomy = defaultdict(int)
+    attempt_events = defaultdict(set)
+    rework_events = 0
+    completed_work_attempts = 0
+    work_attempted_seen = False
+    legacy_sessions = 0
+    # P0-3: four-state gate accounting. Per (task, gate) we collect the GATE_*
+    # taxonomy events and classify into the four states. Legacy rec.gates raw
+    # results are mapped through legacy_gate_state and merged per gate.
+    task_gate_events = defaultdict(list)
+    gate_state_counts = defaultdict(lambda: defaultdict(int))
+    gate_required_seen = defaultdict(set)
 
     for r in recs:
         for k, v in (r.get("tokens") or {}).items():
@@ -163,13 +243,38 @@ def analyse(recs):
                 gates[gid][str(gv)] += 1
         for m, c in (r.get("models_seen") or {}).items():
             models[m] += c
-        rw = False
-        for k, v in (r.get("retries") or {}).items():
-            retries[k] += v
-            if k in REWORK_SIGNALS and v:
-                rw = True
-        if rw:
-            rework_tasks += 1
+        # §8 record-version gate: only v<3 records carry the legacy retries
+        # field. A v3 record's retries:{} is never read as zero rework.
+        ver = r.get("record_version", 2)
+        if ver < 3:
+            legacy_sessions += 1
+            rw = False
+            for k, v in (r.get("retries") or {}).items():
+                retries[k] += v
+                if k in REWORK_SIGNALS and v:
+                    rw = True
+            if rw:
+                rework_tasks += 1
+        # P0-1 (§3): raw taxonomy events → derived rework metrics. Each event
+        # occurrence counts; attempt identity is (task_id, attempt_id).
+        for ev in r.get("taxonomy_events") or []:
+            if not isinstance(ev, dict):
+                continue
+            name = ev.get("event")
+            if not name:
+                continue
+            taxonomy[name] += 1
+            attempt_events[(str(ev.get("task_id") or ""), ev.get("attempt_id"))].add(name)
+            if name == "WORK_ATTEMPTED":
+                work_attempted_seen = True
+            elif name in REWORK_EVENTS:
+                rework_events += 1
+            if name in GATE_EVENTS_TUPLE:
+                gid = ev.get("detail", {}).get("gate")
+                if gid:
+                    task_gate_events[(str(ev.get("task_id") or ""), gid)].append(ev)
+                    if name == "GATE_REQUIRED":
+                        gate_required_seen[gid].add(str(ev.get("task_id") or ""))
         if r.get("duration_s"):
             dur.append(r["duration_s"])
         mat += r.get("materialised_chars", 0) or 0
@@ -188,11 +293,75 @@ def analyse(recs):
         for t in r.get("retro_fix_targets") or []:
             fix_targets[t] += 1
 
+    completed_work_attempts = sum(
+        1 for evs in attempt_events.values()
+        if "WORK_ATTEMPTED" in evs and "TASK_COMPLETED" in evs)
+    no_observations = [ev for ev in TAXONOMY_EVENTS if taxonomy.get(ev, 0) == 0]
+
+    # P0-3: classify each (task, gate) into the four states from its GATE_*
+    # events, then aggregate per gate. Legacy rec.gates raw results (pre-canonical
+    # records) are mapped through legacy_gate_state and merged per gate so the
+    # report reconciles both eras.
+    #
+    # Per-task coverage (§5 lines 176-179): required(impact(task)) is the set of
+    # gates recorded as GATE_REQUIRED for that task (impact-derived at
+    # orchestration time). The denominator universe is seeded from
+    # framework/verifier/profiles.yaml impact_to_gates so a gate in the mapping
+    # that is never seen across lifetime still appears in the UNOBSERVED section
+    # (liveness self-check, plan line 162 intent).
+    profiles = load_profiles()
+    impact_to_gates = profiles.get("impact_to_gates") or {}
+    mapped_gates = sorted({g for gl in impact_to_gates.values() for g in gl})
+
+    task_required = defaultdict(set)   # task_id -> set of required gates (GATE_REQUIRED)
+    task_states = {}                   # (task_id, gate) -> four-state classification
+    for (task_id, gid), evs in task_gate_events.items():
+        state = gate_state_classifier(gid, evs)
+        task_states[(task_id, gid)] = state
+        gate_state_counts[gid][state] += 1
+        if any(e.get("event") == "GATE_REQUIRED" for e in evs):
+            task_required[task_id].add(gid)
+    for gid, gv in gates.items():
+        if isinstance(gv, dict):
+            for result_str, cnt in gv.items():
+                gate_state_counts[gid][legacy_gate_state(result_str)] += cnt
+
+    inventory = gate_inventory()
+    required_gates = sorted(set(gate_required_seen.keys()) | set(gate_state_counts.keys())
+                            | set(inventory) | set(mapped_gates))
+    gate_coverage = {}
+    for gid in required_gates:
+        counts = dict(gate_state_counts.get(gid, {}))
+        for st_ in GATE_STATES_TUPLE:
+            counts.setdefault(st_, 0)
+        gate_coverage[gid] = counts
+
+    # Per-task execution vs pass coverage. Execution = EXECUTED_* ∩ required;
+    # pass = EXECUTED_PASS ∩ required. The two are never merged (§5 line 179).
+    task_coverage = {}
+    for task_id, req in task_required.items():
+        req = sorted(req)
+        executed = sum(1 for g in req if task_states.get((task_id, g)) in
+                       ("EXECUTED_PASS", "EXECUTED_UNVERIFIABLE"))
+        passed = sum(1 for g in req if task_states.get((task_id, g)) == "EXECUTED_PASS")
+        task_coverage[task_id] = {
+            "required": req,
+            "executed": executed,
+            "passed": passed,
+            "execution_coverage": pct(executed, len(req)),
+            "pass_coverage": pct(passed, len(req)),
+        }
+
     return dict(n=n, tok=tok, agents=agents, tools=tools, gates=gates, gate_ms=gate_ms,
                 models=models, retries=retries, dur=dur, mat=mat, exp=exp, trunc=trunc,
                 fb=fb, esc=esc, retro=retro, recur=recur, poll=poll, tiers=tiers,
                 wreg=wreg, wev=wev, wstall=wstall,
-                rework_tasks=rework_tasks, fix_targets=fix_targets)
+                rework_tasks=rework_tasks, fix_targets=fix_targets,
+                taxonomy=dict(taxonomy), no_observations=no_observations,
+                rework_events=rework_events, completed_work_attempts=completed_work_attempts,
+                work_attempted_seen=work_attempted_seen, legacy_sessions=legacy_sessions,
+                gate_coverage=gate_coverage, gate_inventory=inventory,
+                task_coverage=task_coverage, impact_to_gates=impact_to_gates)
 
 
 def render(d, verbose=False):
@@ -261,6 +430,46 @@ def render(d, verbose=False):
     else:
         L.append("  no gate results recorded")
 
+    # P0-3: four-state gate coverage. Execution vs pass coverage split (§5
+    # lines 176-177): execution coverage = EXECUTED_* / required; pass coverage
+    # = EXECUTED_PASS / required. UNOBSERVED and NOT_REACHED are never pass.
+    L.append("")
+    L.append("-- GATE COVERAGE (four-state) -------------------------------------")
+    gc = d.get("gate_coverage") or {}
+    if gc:
+        L.append(f"  {'gate':6s} {'UNOBS':>6s} {'N_REACH':>7s} {'EXEC_PASS':>9s} {'EXEC_UNV':>8s}  exec%  pass%")
+        for gid in sorted(gc):
+            c = gc[gid]
+            req = sum(c.values())
+            execd = c.get("EXECUTED_PASS", 0) + c.get("EXECUTED_UNVERIFIABLE", 0)
+            L.append(f"  {gid:6s} {c.get('UNOBSERVED',0):>6} {c.get('NOT_REACHED',0):>7} "
+                     f"{c.get('EXECUTED_PASS',0):>9} {c.get('EXECUTED_UNVERIFIABLE',0):>8} "
+                     f"{pct(execd, req):>5}% {pct(c.get('EXECUTED_PASS',0), req):>5}%")
+        unobs = sum(c.get("UNOBSERVED", 0) for c in gc.values())
+        if unobs:
+            L.append(f"  !! {unobs} UNOBSERVED gate-task(s) -- no execution evidence; never a pass")
+    else:
+        L.append("  no gate coverage recorded")
+
+    # P0-3: per-task execution vs pass coverage (§5 lines 176-179). The two
+    # numbers are never merged — execution coverage can be 100% while pass
+    # coverage is lower, and neither is ever read as "passed everything".
+    tc = d.get("task_coverage") or {}
+    if tc:
+        L.append("")
+        L.append("-- GATE COVERAGE PER TASK (execution vs pass, never merged) --------")
+        L.append(f"  {'task':14s} {'req':>3s} {'exec':>5s} {'pass':>5s}  exec%  pass%")
+        for task_id in sorted(tc):
+            t = tc[task_id]
+            L.append(f"  {task_id:14s} {len(t['required']):>3} {t['executed']:>5} {t['passed']:>5} "
+                     f"{t['execution_coverage']:>5}% {t['pass_coverage']:>5}%")
+            if verbose:
+                L.append(f"      required: {', '.join(t['required'])}")
+    else:
+        L.append("")
+        L.append("-- GATE COVERAGE PER TASK ----------------------------------------")
+        L.append("  no per-task coverage recorded (no GATE_REQUIRED events)")
+
     L.append("")
     L.append("-- CONTEXT --------------------------------------------------------")
     L.append(f"  materialised chars   {d['mat']:>10,}   ({round(d['mat']/n) if n else 0:,} per session)")
@@ -274,19 +483,42 @@ def render(d, verbose=False):
 
     L.append("")
     L.append("-- QUALITY: REWORK RATE (primary decision metric) -----------------")
-    L.append(f"  sessions with rework   {d['rework_tasks']} / {n}  = {pct(d['rework_tasks'], n)}%")
-    if d["retries"]:
-        for k, v in sorted(d["retries"].items(), key=lambda kv: -kv[1]):
-            flag = "  <- rework" if k in REWORK_SIGNALS else ""
-            L.append(f"    {k:22s} {v:>4}{flag}")
+    if d["legacy_sessions"]:
+        L.append(f"  sessions with rework (legacy v<3)  {d['rework_tasks']} / {d['legacy_sessions']}  = {pct(d['rework_tasks'], d['legacy_sessions'])}%")
+        if d["retries"]:
+            for k, v in sorted(d["retries"].items(), key=lambda kv: -kv[1]):
+                flag = "  <- rework" if k in REWORK_SIGNALS else ""
+                L.append(f"    {k:22s} {v:>4}{flag}")
+        else:
+            L.append("    no legacy retries recorded")
     else:
-        L.append("    no retries recorded")
+        L.append("  no legacy rework measurement (v3 records carry taxonomy events, not retries)")
+    # P0-1 (§3/§6): taxonomy-derived rework rate, liveness-gated on WORK_ATTEMPTED
+    # sightings. No WORK_ATTEMPTED ever recorded → no measurement, never zero rework.
+    if d["work_attempted_seen"]:
+        rate = pct(d["rework_events"], d["completed_work_attempts"]) if d["completed_work_attempts"] else None
+        rate_s = f"{rate}%" if rate is not None else "n/a (no completed attempts)"
+        L.append(f"  taxonomy rework events   {d['rework_events']}")
+        L.append(f"  completed work attempts  {d['completed_work_attempts']}")
+        L.append(f"  taxonomy rework rate     {rate_s}")
+    else:
+        L.append("  taxonomy rework rate     no measurement (no WORK_ATTEMPTED recorded -- never zero rework)")
     L.append(f"  defect escapes         {d['esc']}")
     L.append(f"  retrospectives         {d['retro']}")
     L.append(f"  recurrences            {d['recur']}"
              + ("   <- a fix did not close the gap" if d["recur"] else ""))
     if d["fix_targets"]:
         L.append(f"  fix targets            {dict(sorted(d['fix_targets'].items(), key=lambda kv: -kv[1]))}")
+
+    L.append("")
+    L.append("-- TAXONOMY (P0-1 canonical events) ------------------------------")
+    if d["taxonomy"]:
+        for ev in TAXONOMY_EVENTS:
+            L.append(f"  {ev:22s} {d['taxonomy'].get(ev, 0):>6}")
+        if d["no_observations"]:
+            L.append(f"  NO_OBSERVATIONS (informational, never a liveness verdict): {', '.join(d['no_observations'])}")
+    else:
+        L.append("  no taxonomy events recorded")
 
     if d["dur"]:
         L.append("")
@@ -362,7 +594,16 @@ def main():
         out["agents"] = {k: {**v, "models": sorted(v["models"])} for k, v in d["agents"].items()}
         out["tools"] = {k: dict(v) for k, v in d["tools"].items()}
         out["gates"] = {k: dict(v) for k, v in d["gates"].items()}
-        out["rework_rate_pct"] = pct(d["rework_tasks"], d["n"])
+        out["gate_coverage"] = d.get("gate_coverage") or {}
+        out["gate_inventory"] = d.get("gate_inventory") or []
+        out["rework_rate_pct"] = pct(d["rework_tasks"], d["legacy_sessions"]) if d["legacy_sessions"] else None
+        out["taxonomy"] = d["taxonomy"]
+        out["no_observations"] = d["no_observations"]
+        out["rework_events"] = d["rework_events"]
+        out["completed_work_attempts"] = d["completed_work_attempts"]
+        out["taxonomy_rework_rate_pct"] = (
+            pct(d["rework_events"], d["completed_work_attempts"])
+            if d["work_attempted_seen"] and d["completed_work_attempts"] else None)
         out["unfinalized_sessions"] = d["unfinalized"]
         out["stale_bg_tasks"] = d["stale"]
         out["model_resolution"] = d["models_resolution"]

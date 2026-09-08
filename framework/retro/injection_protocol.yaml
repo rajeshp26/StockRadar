@@ -76,6 +76,20 @@ challenges:
       - codegraph_not_invoked
     severity: medium
 
+  - id: CH-006
+    type: challenge
+    description: Agent reports a conclusion without evidence meeting the VERIFIED standard.
+    expected_detection: verifier or team-lead
+    pass_criteria: Before accepting a verifier's conclusion, check it rests on a reproduced claim recorded in the claim ledger with provenance under the canonical runtime.
+    evidence_required:
+      - claim_recorded_in_ledger
+      - provenance_under_canonical_runtime
+      - runtime_and_command_named
+    failure_if:
+      - conclusion_reported_without_verified_standard_evidence
+      - runtime_or_command_not_named
+    severity: high
+
 scoring:
   pass: ALL evidence_required present AND zero failure_if
   fail: ANY failure_if present OR evidence_required missing

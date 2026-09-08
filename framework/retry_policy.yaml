@@ -37,3 +37,4 @@ routes:
   RETRO_RECURRENCE:       {to: human, action: previous_fix_failed_reassess_gap}
   RETRO_INCOMPLETE:       {to: team_lead, action: complete_retro_before_completion}
   WORKER_STALLED:         {to: team_lead, action: apply_recovery_ladder}
+  EVIDENCE_INSUFFICIENT:  {to: same_agent, action: gather_provenance_or_downgrade_claim}
