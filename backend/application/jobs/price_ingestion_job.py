@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import time
 from datetime import date
 from typing import Any
@@ -62,7 +63,7 @@ async def refresh_all_prices():
             yf_results = await _fetch_yfinance_batch(
                 syms, exchange,
                 per_symbol_timeout=getattr(settings, "YFINANCE_SINGLE_TIMEOUT_SECONDS", 10),
-                max_concurrent=5,
+                max_concurrent=2,
             )
 
             symbol_to_cid = {item[1]: item[0] for item in items}
@@ -273,10 +274,18 @@ def _emit_split_events() -> None:
 
 async def _fetch_yfinance_batch(
     symbols: list[str], exchange: str,
-    per_symbol_timeout: int = 10, max_concurrent: int = 5,
+    per_symbol_timeout: int = 10, max_concurrent: int = 2,
     max_retries: int = 2,
 ) -> dict[str, dict]:
     sem = asyncio.Semaphore(max_concurrent)
+
+    def _backoff_delay(attempt: int) -> float:
+        """Jittered exponential backoff: base 2.5s * 2^(attempt-1), jitter x0.75-1.25.
+
+        Slows the instantaneous request rate to keep yfinance under its 429
+        threshold; jitter prevents synchronized thundering-herd retries."""
+        delay = 2.5 * (2 ** (attempt - 1))
+        return delay * random.uniform(0.75, 1.25)
 
     async def fetch_one(sym: str) -> tuple:
         for attempt in range(1, max_retries + 2):
@@ -291,12 +300,12 @@ async def _fetch_yfinance_batch(
                     return sym, {"price": sd.price if sd else None, "error": None}
                 except TimeoutError:
                     if attempt <= max_retries:
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(_backoff_delay(attempt))
                     else:
                         return sym, {"price": None, "error": "timeout"}
                 except Exception as e:
                     if attempt <= max_retries:
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(_backoff_delay(attempt))
                     else:
                         return sym, {"price": None, "error": str(e)}
         return sym, {"price": None, "error": "max retries exceeded"}

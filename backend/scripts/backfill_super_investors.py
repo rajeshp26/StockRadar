@@ -20,6 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from application.services.super_investors_service import SUPER_INVESTORS
+from application.services.watchlist_service import _map_quote_type
 from providers.yfinance_provider import YFinanceProvider
 
 
@@ -88,6 +89,9 @@ def get_or_create_company(supabase, ticker: str, stock_provider: YFinanceProvide
         "currency": sd.currency,
         "description": sd.description,
         "website": sd.website,
+        # Prevents the DB default ('stock') stamping ETFs/funds from bulk
+        # backfills — same mapping the watchlist add-flow uses (watchlist_service._map_quote_type).
+        "security_type": _map_quote_type(sd.quote_type),
     }
 
     insert_result = supabase.table("companies").insert(payload).execute()
