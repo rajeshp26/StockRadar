@@ -157,6 +157,49 @@ class TestEarningsPlan:
         jobs = await scheduler.plan()
         assert jobs == []
 
+    async def test_plan_merges_stale_companies(self):
+        repo = AsyncMock()
+        repo.get_companies_with_upcoming_earnings.return_value = []
+        repo.get_companies_with_financial_data.return_value = []
+        repo.get_stale_financial_companies.return_value = [
+            {"company_id": 11, "ticker_symbol": "STALE1"},
+            {"company_id": 12, "ticker_symbol": "STALE2"},
+        ]
+        scheduler = self._make_scheduler(repo)
+        jobs = await scheduler.plan()
+        assert len(jobs) == 2
+        assert {j["payload"]["company_id"] for j in jobs} == {11, 12}
+        assert all(j["payload"]["earnings_date"] is None for j in jobs)
+
+    async def test_plan_dedupes_window_and_stale_window_wins(self):
+        repo = AsyncMock()
+        repo.get_companies_with_upcoming_earnings.return_value = [
+            {"company_id": 11, "ticker_symbol": "WIN", "next_earnings_date": "2026-07-20"},
+        ]
+        repo.get_companies_with_financial_data.return_value = []
+        repo.get_stale_financial_companies.return_value = [
+            {"company_id": 11, "ticker_symbol": "DUP"},
+            {"company_id": 12, "ticker_symbol": "STALE2"},
+        ]
+        scheduler = self._make_scheduler(repo)
+        jobs = await scheduler.plan()
+        assert len(jobs) == 2
+        job_win = next(j for j in jobs if j["payload"]["company_id"] == 11)
+        assert job_win["payload"]["ticker_symbol"] == "WIN"
+        assert job_win["payload"]["earnings_date"] == "2026-07-20"
+
+    async def test_plan_tolerates_stale_query_failure(self):
+        repo = AsyncMock()
+        repo.get_companies_with_upcoming_earnings.return_value = [
+            {"company_id": 10, "ticker_symbol": "TSLA", "next_earnings_date": "2026-07-20"},
+        ]
+        repo.get_companies_with_financial_data.return_value = []
+        repo.get_stale_financial_companies.side_effect = Exception("stale query failed")
+        scheduler = self._make_scheduler(repo)
+        jobs = await scheduler.plan()
+        assert len(jobs) == 1
+        assert jobs[0]["payload"]["company_id"] == 10
+
 
 class TestAggregationPlan:
     """AggregationScheduler.plan() has no DB or provider dependencies."""

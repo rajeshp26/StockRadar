@@ -177,3 +177,109 @@ class TestUpsertPriceHistoryNullCloseFilter:
 
         assert result == {"count": 0}
         self.client.table.assert_not_called()
+
+class TestGetStaleFinancialCompanies:
+    """Verify candidate-minus-fresh pagination, consult gate, and sort."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, mock_supabase_client):
+        self.client = mock_supabase_client
+        self.table = self.client.table.return_value
+
+    def _make_repo(self):
+        from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+        return SupabaseFinancialRepository(client=self.client)
+
+    @staticmethod
+    def _candidate(cid, ticker, last_refresh=None):
+        return {
+            "company_id": cid,
+            "ticker_symbol": ticker,
+            "data_completeness_status": "COMPLETE",
+            "first_financial_data_loaded_at": "2025-01-10T00:00:00",
+            "last_financial_refresh_at": last_refresh,
+        }
+
+    async def test_returns_stale_only_excluding_fresh(self):
+        repo = self._make_repo()
+        self.table.execute.side_effect = [
+            MagicMock(data=[
+                self._candidate(1, "STALE1"),
+                self._candidate(2, "FRESH1", "2026-08-01T00:00:00"),
+            ]),
+            MagicMock(data=[{"company_id": 2}]),
+        ]
+        result = await repo.get_stale_financial_companies(
+            fresh_cutoff=date(2026, 4, 1),
+            consult_cutoff=date(2026, 8, 28),
+        )
+        assert [r["company_id"] for r in result] == [1]
+        self.table.gte.assert_any_call("period_end_date", "2026-04-01")
+        self.table.not_.is_.assert_called_once_with("first_financial_data_loaded_at", "null")
+
+    async def test_consult_gate_skips_recently_refreshed(self):
+        repo = self._make_repo()
+        self.table.execute.side_effect = [
+            MagicMock(data=[self._candidate(1, "STALE-A", "2026-08-30T00:00:00")]),
+            MagicMock(data=[]),
+        ]
+        result = await repo.get_stale_financial_companies(
+            fresh_cutoff=date(2026, 4, 1),
+            consult_cutoff=date(2026, 8, 28),
+        )
+        assert result == []
+
+    async def test_nulls_first_then_oldest_then_limit(self):
+        repo = self._make_repo()
+        self.table.execute.side_effect = [
+            MagicMock(data=[
+                self._candidate(1, "OLD", "2026-06-01T00:00:00"),
+                self._candidate(2, "NEVER", None),
+                self._candidate(3, "OLDER", "2026-05-01T00:00:00"),
+                self._candidate(4, "NEWER", "2026-08-01T00:00:00"),
+            ]),
+            MagicMock(data=[]),
+        ]
+        result = await repo.get_stale_financial_companies(
+            fresh_cutoff=date(2026, 4, 1),
+            consult_cutoff=date(2026, 8, 28),
+            limit=2,
+        )
+        assert [r["company_id"] for r in result] == [2, 3]
+
+    async def test_empty_candidates_returns_empty(self):
+        repo = self._make_repo()
+        self.table.execute.return_value = MagicMock(data=[])
+        result = await repo.get_stale_financial_companies(
+            fresh_cutoff=date(2026, 4, 1),
+            consult_cutoff=date(2026, 8, 28),
+        )
+        assert result == []
+        self.table.gte.assert_not_called()
+
+    async def test_paginates_fresh_ids_past_1000(self):
+        repo = self._make_repo()
+        page_full = MagicMock(data=[{"company_id": 2}] * 1000)
+        page_partial = MagicMock(data=[{"company_id": 2}] * 50)
+        self.table.execute.side_effect = [
+            MagicMock(data=[self._candidate(1, "STALE1")]),
+            page_full,
+            page_full,
+            page_partial,
+        ]
+        result = await repo.get_stale_financial_companies(
+            fresh_cutoff=date(2026, 4, 1),
+            consult_cutoff=date(2026, 8, 28),
+        )
+        assert [r["company_id"] for r in result] == [1]
+        assert self.table.range.call_count == 3
+        assert [c.args for c in self.table.range.call_args_list] == [(0, 999), (1000, 1999), (2000, 2999)]
+
+    async def test_propagates_exception(self):
+        repo = self._make_repo()
+        self.table.execute.side_effect = Exception("DB connection failed")
+        with pytest.raises(Exception, match="DB connection failed"):
+            await repo.get_stale_financial_companies(
+                fresh_cutoff=date(2026, 4, 1),
+                consult_cutoff=date(2026, 8, 28),
+            )

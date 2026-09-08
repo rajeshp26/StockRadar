@@ -30,6 +30,8 @@ def mock_supabase_client():
     table.in_.return_value = table
     table.or_.return_value = table
     table.is_.return_value = table
+    table.not_.return_value = table
+    table.not_.is_.return_value = table
     table.order.return_value = table
     table.range.return_value = table
     table.limit.return_value = table
@@ -46,6 +48,8 @@ def mock_financial_repo(mock_supabase_client):
     repo = MagicMock()
     repo.client = mock_supabase_client
     repo.get_companies_with_upcoming_earnings = AsyncMock()
+    repo.get_companies_with_financial_data = AsyncMock(return_value=[])
+    repo.get_stale_financial_companies = AsyncMock(return_value=[])
     repo.get_company_refresh_info = AsyncMock()
     repo.upsert_all_financials = AsyncMock(return_value={"income_statements": 0, "balance_sheets": 0, "cash_flows": 0, "earnings": 0, "dividends": 0})
     repo.update_company_refresh_metadata = AsyncMock()

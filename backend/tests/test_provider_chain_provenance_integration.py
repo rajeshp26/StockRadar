@@ -123,8 +123,9 @@ class TestYFinanceFallbackProvenance:
 
     def test_yf_income_source_label(self, provider):
         df = self._make_yf_df(
-            ["Total Revenue", "Net Income"],
-            values={"Total Revenue": 100000.0, "Net Income": 15000.0},
+            ["Total Revenue", "Gross Profit", "Operating Income", "Net Income"],
+            values={"Total Revenue": 100000.0, "Gross Profit": 50000.0,
+                    "Operating Income": 20000.0, "Net Income": 15000.0},
         )
         rows = provider._parse_yf_income_statement(
             df, company_id=1, is_quarterly=False, symbol="AAPL",
@@ -138,8 +139,9 @@ class TestYFinanceFallbackProvenance:
 
     def test_yf_balance_source_label(self, provider):
         df = self._make_yf_df(
-            ["Total Assets"],
-            values={"Total Assets": 500000.0},
+            ["Total Assets", "Total Liabilities", "Stockholders' Equity"],
+            values={"Total Assets": 500000.0, "Total Liabilities": 300000.0,
+                    "Stockholders' Equity": 200000.0},
         )
         rows = provider._parse_yf_balance_sheet(
             df, company_id=1, is_quarterly=False, symbol="AAPL",
@@ -151,8 +153,11 @@ class TestYFinanceFallbackProvenance:
 
     def test_yf_cashflow_source_label(self, provider):
         df = self._make_yf_df(
-            ["Operating Cash Flow"],
-            values={"Operating Cash Flow": 30000.0},
+            ["Operating Cash Flow", "Total Cash From Investing Activities",
+             "Total Cash From Financing Activities"],
+            values={"Operating Cash Flow": 30000.0,
+                    "Total Cash From Investing Activities": -10000.0,
+                    "Total Cash From Financing Activities": -5000.0},
         )
         rows = provider._parse_yf_cash_flow(
             df, company_id=1, is_quarterly=False, symbol="AAPL",
@@ -164,8 +169,9 @@ class TestYFinanceFallbackProvenance:
 
     def test_stockdex_source_label(self, provider):
         df = self._make_yf_df(
-            ["Total Revenue", "Net Income"],
-            values={"Total Revenue": 100000.0, "Net Income": 15000.0},
+            ["Total Revenue", "Gross Profit", "Operating Income", "Net Income"],
+            values={"Total Revenue": 100000.0, "Gross Profit": 50000.0,
+                    "Operating Income": 20000.0, "Net Income": 15000.0},
         )
         rows = provider._parse_yf_income_statement(
             df, company_id=1, is_quarterly=False, symbol="TD.TO",

@@ -152,6 +152,26 @@ class TestEarningsSchedulerCheckAndRefresh:
 
         mock_derived.assert_not_called()
 
+    async def test_check_refresh_merges_stale_companies(self):
+        self.mock_repo.get_companies_with_upcoming_earnings.return_value = [
+            {"company_id": 1, "ticker_symbol": "WIN1", "next_earnings_date": "2026-09-10"},
+        ]
+        self.mock_repo.get_stale_financial_companies.return_value = [
+            {"company_id": 2, "ticker_symbol": "STALE1"},
+        ]
+        with patch.object(
+            self.scheduler, "_refresh_company_financials_optimized", AsyncMock()
+        ) as mock_refresh:
+            result = await self.scheduler._check_and_refresh_earnings()
+
+        assert result["companies_found"] == 2
+        assert result["companies_refreshed"] == 2
+        assert result["companies_failed"] == 0
+        assert mock_refresh.await_count == 2
+        calls = {c.kwargs["symbol"]: c.kwargs.get("earnings_date") for c in mock_refresh.await_args_list}
+        assert calls["WIN1"] == "2026-09-10"
+        assert calls["STALE1"] is None
+
 
 class TestMarketDataSchedulerInit:
     async def test_init_stores_repos_and_providers(self, mock_financial_repo, mock_defeat_beta_provider):

@@ -152,16 +152,19 @@ class TestWorkerMain:
         mocks = await self._run_main_quick()
         assert mocks["planner"].register.called
 
-    async def test_registers_three_handlers(self, mock_db_env):
+    async def test_registers_all_handlers(self, mock_db_env):
         mocks = await self._run_main_quick()
         handler_types = [
             call[0][0] for call in mocks["engine"].register_handler.call_args_list
         ]
-        assert len(handler_types) == 4
+        assert len(handler_types) == 7
         assert "company_refresh" in handler_types
         assert "investor_refresh" in handler_types
         assert "aggregation_refresh" in handler_types
         assert "portfolio_snapshot" in handler_types
+        assert "price_ingestion" in handler_types
+        assert "valuation_computation" in handler_types
+        assert "freshness_snapshot" in handler_types
 
     async def test_registers_schedulers_when_enabled(self, mock_db_env):
         mocks = await self._run_main_quick(enable_all_schedulers=True)

@@ -77,7 +77,7 @@ def _make_yf_income_df(revenue, net_income, gross_profit=None, operating_income=
     )
 
 
-def _make_yf_balance_df(total_assets, current_assets=None, total_liabilities=None):
+def _make_yf_balance_df(total_assets, current_assets=None, total_liabilities=None, shareholders_equity=None):
     """Build yfinance-format balance sheet DataFrame (DatetimeIndex columns, row labels as index)."""
     index_labels = ["Total Assets"]
     values = [total_assets]
@@ -87,6 +87,9 @@ def _make_yf_balance_df(total_assets, current_assets=None, total_liabilities=Non
     if total_liabilities is not None:
         index_labels.append("Total Liabilities")
         values.append(total_liabilities)
+    if shareholders_equity is not None:
+        index_labels.append("Stockholders' Equity")
+        values.append(shareholders_equity)
     return pd.DataFrame(
         {pd.to_datetime("2024-09-30"): values},
         index=index_labels,
@@ -140,7 +143,7 @@ class TestCanadianBankProviderChain:
     def _parse_via_yf_balance(self, provider, symbol, company_id=1):
         df = _make_yf_balance_df(
             total_assets=2000000, current_assets=500000,
-            total_liabilities=1800000,
+            total_liabilities=1800000, shareholders_equity=200000,
         )
         return provider._parse_yf_balance_sheet(
             df, company_id=company_id, is_quarterly=False,
@@ -215,10 +218,10 @@ class TestCanadianBankProviderChain:
 
     @pytest.mark.parametrize("ticker", CANADIAN_TICKERS)
     def test_yfinance_partial_coverage_provenance(self, provider, ticker):
-        """YFinance with incomplete data — only revenue available."""
+        """YFinance with all required fields but missing important (non-required) fields."""
         df = pd.DataFrame(
-            {pd.to_datetime("2024-09-30"): [500000.0]},
-            index=["Total Revenue"],
+            {pd.to_datetime("2024-09-30"): [500000.0, 250000.0, 120000.0, 80000.0]},
+            index=["Total Revenue", "Gross Profit", "Operating Income", "Net Income"],
         )
         rows = provider._parse_yf_income_statement(
             df, company_id=1, is_quarterly=False, symbol=ticker,
@@ -228,8 +231,10 @@ class TestCanadianBankProviderChain:
         fs = rows[0].field_sources
         assert fs is not None
         assert fs["revenue"] == ["yfinance"]
-        assert "net_income" not in fs
-        assert "gross_profit" not in fs
+        assert "net_income" in fs
+        assert "gross_profit" in fs
+        assert "cost_of_goods_sold" not in fs
+        assert "ebitda" not in fs
 
     def test_td_to_yfinance_income_has_all_core_fields(self, provider):
         rows = self._parse_via_yf_income(provider, "TD.TO")
@@ -241,8 +246,8 @@ class TestCanadianBankProviderChain:
 
     def test_ry_to_yfinance_balance_has_equity(self, provider):
         df = pd.DataFrame(
-            {pd.to_datetime("2024-09-30"): [2000000.0, 150000.0]},
-            index=["Total Assets", "Stockholders' Equity"],
+            {pd.to_datetime("2024-09-30"): [2000000.0, 1800000.0, 150000.0]},
+            index=["Total Assets", "Total Liabilities", "Stockholders' Equity"],
         )
         rows = provider._parse_yf_balance_sheet(
             df, company_id=1, is_quarterly=False, symbol="RY.TO",
