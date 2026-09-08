@@ -1,361 +1,383 @@
 {
-  "$schema": "https://opencode.ai/config.json",
-  "model": "opencode/big-pickle",
-  "small_model": "opencode/big-pickle",
-  "instructions": [
-    "AGENTS.md",
-    ".opencode/rules/*.md"
-  ],
-  "permission": {
-    "read": "allow",
-    "glob": "allow",
-    "grep": "allow",
-    "list": "allow",
-    "lsp": "allow",
-    "todowrite": "allow",
-    "question": "allow",
-    "websearch": "allow",
-    "skill": "allow",
-    "task": {
-      "*": "allow"
-    },
-    "edit": "deny",
-    "webfetch": "deny",
-    "bash": {
-      "*": "ask",
-      "git status*": "allow",
-      "git diff*": "allow",
-      "git log*": "allow",
-      "git show*": "allow",
-      "npm test*": "allow",
-      "npm run build*": "allow",
-      "npm run lint*": "allow",
-      "pytest*": "allow",
-      "tsc*": "allow",
-      "eslint*": "allow",
-      "ruff*": "allow",
-      "mypy*": "allow",
-      "python3 framework/*": "allow",
-      "./framework/*": "allow",
-      "python framework/*": "allow",
-      "bash framework/*": "allow",
-      "Select-String*": "allow",
-      "Get-ChildItem*": "allow",
-      "Get-Content*": "allow",
-      "Get-Item*": "allow",
-      "Test-Path*": "allow",
-      "Remove-Item*": "deny",
-      "rm *": "deny",
-      "del *": "deny",
-      "rmdir*": "deny",
-      "rd *": "deny",
-      "git push*": "deny",
-      "git reset*": "deny",
-      "git clean*": "deny",
-      "git checkout*": "deny",
-      "git restore*": "deny",
-      "git rebase*": "deny",
-      "git merge*": "deny",
-      "git cherry-pick*": "deny"
-    }
-  },
-  "agent": {
-    "team-lead": {
-      "description": "Orchestrator. Classifies complexity and impact, delegates, enforces gates and completion.",
-      "mode": "primary",
-      "permission": {
-        "edit": "deny",
-        "task": {
-          "*": "allow"
-        },
-        "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
-          "./framework/*": "allow",
-          "python3 framework/*": "allow",
-          "mkdir -p*retro/triggers*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow",
-          "Get-ChildItem*": "allow",
-          "Test-Path*": "allow",
-          "Remove-Item*": "deny",
-          "rm *": "deny",
-          "del *": "deny",
-          "git push*": "deny",
-          "git push*": "allow",
-          "git reset*": "deny",
-          "git clean*": "deny",
-          "git checkout*": "deny",
-          "git restore*": "deny",
-          "git rebase*": "deny",
-          "git merge*": "deny",
-          "git cherry-pick*": "deny"
-        }
-      },
-      "tools": {
-        "playwright*": false
-      },
-      "model": "opencode/big-pickle",
-      "temperature": 0.1,
-      "_model_rationale": "Routing + classification against fixed tables. Structured, low-variance."
-    },
-    "researcher": {
-      "description": "Investigates unknowns before design. Produces structured findings with evidence.",
-      "mode": "subagent",
-      "permission": {
-        "edit": "deny",
-        "webfetch": "allow",
-        "task": {
-          "*": "deny"
-        },
-        "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow",
-          "python3 framework/claims/ledger.py*": "allow"
-        }
-      },
-      "tools": {
-        "playwright*": false
-      },
-      "model": "opencode/big-pickle",
-      "temperature": 0.3,
-      "_model_rationale": "Breadth over depth. Findings are re-checked downstream by the Architect."
-    },
-    "architect": {
-      "description": "Owns system design, component boundaries, and contract versions.",
-      "mode": "subagent",
-      "permission": {
-        "edit": {
-          "*": "deny",
-          ".planning/contracts/**": "ask"
-        },
-        "task": {
-          "*": "deny"
-        },
-        "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow",
-          "python3 framework/architecture/checklist_check.py*": "allow"
-        }
-      },
-      "tools": {
-        "playwright*": false
-      },
-      "model": "opencode/big-pickle",
-      "temperature": 0.2,
-      "_model_rationale": "Highest-consequence reasoning. A wrong boundary is expensive to unwind."
-    },
-    "planner": {
-      "description": "Decomposes approved architecture into atomic tasks with acceptance criteria.",
-      "mode": "subagent",
-      "permission": {
-        "edit": "deny",
-        "task": {
-          "*": "deny"
-        },
-        "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow"
-        }
-      },
-      "tools": {
-        "playwright*": false
-      },
-      "model": "opencode/big-pickle",
-      "temperature": 0.1,
-      "_model_rationale": "Decomposition of an already-approved design into atomic tasks."
-    },
-    "implementer": {
-      "description": "Writes and modifies code. Loads domain skills per task. Also runs debug mode.",
-      "mode": "subagent",
-      "permission": {
-        "edit": "allow",
-        "task": {
-          "*": "deny"
-        },
-        "bash": {
-          "*": "ask",
-          "git status*": "allow",
-          "git diff*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
-          "npm test*": "allow",
-          "npm run build*": "allow",
-          "pytest*": "allow",
-          "ruff*": "allow",
-          "eslint*": "allow",
-          "tsc*": "allow",
-          "mypy*": "allow",
-          "npx shadcn@latest add*": "ask",
-          "npm run lint*": "allow",
-          "node_modules/.bin/playwright*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow",
-          "python3 framework/*": "allow",
-          "Get-ChildItem*": "allow",
-          "Get-Content*": "allow",
-          "Test-Path*": "allow",
-          "Remove-Item*": "deny",
-          "rm *": "deny",
-          "del *": "deny",
-          "rmdir*": "deny",
-          "rd *": "deny",
-          "git push*": "deny",
-          "git reset*": "deny",
-          "git clean*": "deny",
-          "git checkout*": "deny",
-          "git restore*": "deny",
-          "git rebase*": "deny",
-          "git merge*": "deny",
-          "git cherry-pick*": "deny"
-        }
-      },
-      "tools": {
-        "playwright*": true
-      },
-      "model": "opencode/big-pickle",
-      "temperature": 0.1,
-      "_model_rationale": "Writes all code and does root-cause debugging. Do not economise here first."
-    },
-    "reviewer": {
-      "description": "Independent design and correctness judgement over the diff. Never edits.",
-      "mode": "subagent",
-      "permission": {
-        "edit": "deny",
-        "task": {
-          "*": "deny"
-        },
-        "bash": {
-          "*": "deny",
-          "git diff*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
-          "grep *": "allow"
-        }
-      },
-      "tools": {
-        "playwright*": false
-      },
-      "model": "opencode/big-pickle",
-      "temperature": 0.1,
-      "_model_rationale": "Independent judgement on a diff. A missed finding costs more than the tokens saved."
-    },
-    "verifier": {
-      "description": "Proves requirements are satisfied by executing tests, builds, gates and browser checks.",
-      "mode": "subagent",
-      "permission": {
-        "edit": {
-          "*": "deny",
-          ".planning/**/VERIFICATION.md": "allow",
-          "tests/**": "ask"
-        },
-        "task": {
-          "*": "deny"
-        },
-        "bash": {
-          "*": "ask",
-          "pytest*": "allow",
-          "npm test*": "allow",
-          "npm run build*": "allow",
-          "tsc*": "allow",
-          "mypy*": "allow",
-          "ruff*": "allow",
-          "eslint*": "allow",
-          "git diff*": "allow",
-          "git status*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
-          "./framework/*": "allow",
-          "npm audit*": "allow",
-          "pip-audit*": "allow",
-          "node_modules/.bin/playwright*": "allow",
-          "npm run test:e2e*": "allow",
-          "npm ci*": "ask",
-          "./framework/gates/*": "allow",
-          "python3 framework/adapters/gsd_state.py*": "allow",
-          "python3 framework/*": "allow",
-          "Get-ChildItem*": "allow",
-          "Test-Path*": "allow",
-          "Remove-Item*": "deny",
-          "rm *": "deny",
-          "del *": "deny",
-          "rmdir*": "deny",
-          "rd *": "deny",
-          "git push*": "deny",
-          "git reset*": "deny",
-          "git clean*": "deny",
-          "git checkout*": "deny",
-          "git restore*": "deny",
-          "git rebase*": "deny",
-          "git merge*": "deny",
-          "git cherry-pick*": "deny"
-        }
-      },
-      "tools": {
-        "playwright*": true
-      },
-      "model": "opencode/big-pickle",
-      "temperature": 0.0,
-      "_model_rationale": "Runs gates and transcribes exit codes. Least reasoning-intensive role."
-    }
-  },
-  "mcp": {
-    "memory": {
-      "type": "local",
-      "command": [
-        "mcp-server-memory"
-      ]
-    },
-    "context7": {
-      "type": "local",
-      "command": [
-        "context7-mcp"
-      ]
-    },
-    "playwright": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@playwright/mcp@latest",
-        "--headless",
-        "--isolated",
-        "--caps=testing",
-        "--output-dir=./framework/telemetry/browser/mcp"
-      ],
-      "enabled": true
-    }
-  },
-  "references": {
-    "docs": {
-      "path": "docs",
-      "description": "Full project documentation: architecture, design, testing, security, migration guides"
-    }
-  },
-  "skills": {
-    "paths": [
-      ".opencode/skills"
-    ]
-  },
-  "plugin": [
-    "file://.opencode/plugin/telemetry.ts"
-  ],
-  "compaction": {
-    "auto": true,
-    "prune": true,
-    "reserved": 12000
-  }
+    "$schema":  "https://opencode.ai/config.json",
+    "model":  "opencode/big-pickle",
+    "small_model":  "opencode/big-pickle",
+    "instructions":  [
+                         "AGENTS.md",
+                         ".opencode/rules/*.md"
+                     ],
+    "permission":  {
+                       "read":  "allow",
+                       "glob":  "allow",
+                       "grep":  "allow",
+                       "list":  "allow",
+                       "lsp":  "allow",
+                       "todowrite":  "allow",
+                       "question":  "allow",
+                       "websearch":  "allow",
+                       "skill":  "allow",
+                       "task":  {
+                                    "*":  "allow"
+                                },
+                       "edit":  "deny",
+                       "webfetch":  "deny",
+                       "bash":  {
+                                    "*":  "ask",
+                                    "git status*":  "allow",
+                                    "git diff*":  "allow",
+                                    "git log*":  "allow",
+                                    "git show*":  "allow",
+                                    "npm test*":  "allow",
+                                    "npm run build*":  "allow",
+                                    "npm run lint*":  "allow",
+                                    "pytest*":  "allow",
+                                    "tsc*":  "allow",
+                                    "eslint*":  "allow",
+                                    "ruff*":  "allow",
+                                    "mypy*":  "allow",
+                                    "python3 framework/*":  "allow",
+                                    "./framework/*":  "allow",
+                                    "python framework/*":  "allow",
+                                    "bash framework/*":  "allow",
+                                    "Select-String*":  "allow",
+                                    "Get-ChildItem*":  "allow",
+                                    "Get-Content*":  "allow",
+                                    "Get-Item*":  "allow",
+                                    "Test-Path*":  "allow",
+                                    "Remove-Item*":  "deny",
+                                    "rm *":  "deny",
+                                    "del *":  "deny",
+                                    "rmdir*":  "deny",
+                                    "rd *":  "deny",
+                                    "git push*":  "deny",
+                                    "git reset*":  "deny",
+                                    "git clean*":  "deny",
+                                    "git checkout*":  "deny",
+                                    "git restore*":  "deny",
+                                    "git rebase*":  "deny",
+                                    "git merge*":  "deny",
+                                    "git cherry-pick*":  "deny"
+                                }
+                   },
+    "agent":  {
+                  "team-lead":  {
+                                    "description":  "Orchestrator. Classifies complexity and impact, delegates, enforces gates and completion.",
+                                    "mode":  "primary",
+                                    "permission":  {
+                                                       "edit":  "deny",
+                                                       "task":  {
+                                                                    "*":  "allow"
+                                                                },
+                                                       "bash":  {
+                                                                    "*":  "ask",
+                                                                    "git status*":  "allow",
+                                                                    "git diff*":  "allow",
+                                                                    "git log*":  "allow",
+                                                                    "git show*":  "allow",
+                                                                    "./framework/*":  "allow",
+                                                                    "python3 framework/*":  "allow",
+                                                                    "mkdir -p*retro/triggers*":  "allow",
+                                                                    "python3 framework/adapters/gsd_state.py*":  "allow",
+                                                                    "Get-ChildItem*":  "allow",
+                                                                    "Test-Path*":  "allow",
+                                                                    "Remove-Item*":  "deny",
+                                                                    "rm *":  "deny",
+                                                                    "del *":  "deny",
+                                                                    "git push*":  "deny",
+                                                                    "git reset*":  "deny",
+                                                                    "git clean*":  "deny",
+                                                                    "git checkout*":  "deny",
+                                                                    "git restore*":  "deny",
+                                                                    "git rebase*":  "deny",
+                                                                    "git merge*":  "deny",
+                                                                    "git cherry-pick*":  "deny",
+                                                                    "python framework/*":  "allow",
+                                                                    "bash framework/*":  "allow"
+                                                                }
+                                                   },
+                                    "tools":  {
+                                                  "playwright*":  false
+                                              },
+                                    "model":  "opencode/big-pickle",
+                                    "temperature":  0.1,
+                                    "_model_rationale":  "Routing + classification against fixed tables. Structured, low-variance."
+                                },
+                  "researcher":  {
+                                     "description":  "Investigates unknowns before design. Produces structured findings with evidence.",
+                                     "mode":  "subagent",
+                                     "permission":  {
+                                                        "edit":  "deny",
+                                                        "webfetch":  "allow",
+                                                        "task":  {
+                                                                     "*":  "deny"
+                                                                 },
+                                                        "bash":  {
+                                                                     "*":  "deny",
+                                                                     "git status*":  "allow",
+                                                                     "git diff*":  "allow",
+                                                                     "git log*":  "allow",
+                                                                     "git show*":  "allow",
+                                                                     "python3 framework/adapters/gsd_state.py*":  "allow",
+                                                                     "python3 framework/claims/ledger.py*":  "allow",
+                                                                     "python framework/*":  "allow",
+                                                                     "./framework/*":  "allow",
+                                                                     "bash framework/*":  "allow",
+                                                                     "Get-Content*":  "allow",
+                                                                     "Test-Path*":  "allow"
+                                                                 }
+                                                    },
+                                     "tools":  {
+                                                   "playwright*":  false
+                                               },
+                                     "model":  "opencode/big-pickle",
+                                     "temperature":  0.3,
+                                     "_model_rationale":  "Breadth over depth. Findings are re-checked downstream by the Architect."
+                                 },
+                  "architect":  {
+                                    "description":  "Owns system design, component boundaries, and contract versions.",
+                                    "mode":  "subagent",
+                                    "permission":  {
+                                                       "edit":  {
+                                                                    "*":  "deny",
+                                                                    ".planning/contracts/**":  "ask"
+                                                                },
+                                                       "task":  {
+                                                                    "*":  "deny"
+                                                                },
+                                                       "bash":  {
+                                                                    "*":  "deny",
+                                                                    "git status*":  "allow",
+                                                                    "git diff*":  "allow",
+                                                                    "git log*":  "allow",
+                                                                    "git show*":  "allow",
+                                                                    "python3 framework/adapters/gsd_state.py*":  "allow",
+                                                                    "python3 framework/architecture/checklist_check.py*":  "allow",
+                                                                    "python framework/*":  "allow",
+                                                                    "./framework/*":  "allow",
+                                                                    "bash framework/*":  "allow",
+                                                                    "Get-Content*":  "allow",
+                                                                    "Test-Path*":  "allow"
+                                                                }
+                                                   },
+                                    "tools":  {
+                                                  "playwright*":  false
+                                              },
+                                    "model":  "opencode/big-pickle",
+                                    "temperature":  0.2,
+                                    "_model_rationale":  "Highest-consequence reasoning. A wrong boundary is expensive to unwind."
+                                },
+                  "planner":  {
+                                  "description":  "Decomposes approved architecture into atomic tasks with acceptance criteria.",
+                                  "mode":  "subagent",
+                                  "permission":  {
+                                                     "edit":  "deny",
+                                                     "task":  {
+                                                                  "*":  "deny"
+                                                              },
+                                                     "bash":  {
+                                                                  "*":  "deny",
+                                                                  "git status*":  "allow",
+                                                                  "git diff*":  "allow",
+                                                                  "git log*":  "allow",
+                                                                  "git show*":  "allow",
+                                                                  "python3 framework/adapters/gsd_state.py*":  "allow",
+                                                                  "python framework/*":  "allow",
+                                                                  "./framework/*":  "allow",
+                                                                  "bash framework/*":  "allow",
+                                                                  "Get-Content*":  "allow",
+                                                                  "Test-Path*":  "allow"
+                                                              }
+                                                 },
+                                  "tools":  {
+                                                "playwright*":  false
+                                            },
+                                  "model":  "opencode/big-pickle",
+                                  "temperature":  0.1,
+                                  "_model_rationale":  "Decomposition of an already-approved design into atomic tasks."
+                              },
+                  "implementer":  {
+                                      "description":  "Writes and modifies code. Loads domain skills per task. Also runs debug mode.",
+                                      "mode":  "subagent",
+                                      "permission":  {
+                                                         "edit":  "allow",
+                                                         "task":  {
+                                                                      "*":  "deny"
+                                                                  },
+                                                         "bash":  {
+                                                                      "*":  "deny",
+                                                                      "git status*":  "allow",
+                                                                      "git diff*":  "allow",
+                                                                      "git log*":  "allow",
+                                                                      "git show*":  "allow",
+                                                                      "npm test*":  "allow",
+                                                                      "npm run build*":  "allow",
+                                                                      "pytest*":  "allow",
+                                                                      "ruff*":  "allow",
+                                                                      "eslint*":  "allow",
+                                                                      "tsc*":  "allow",
+                                                                      "mypy*":  "allow",
+                                                                      "npx shadcn@latest add*":  "deny",
+                                                                      "npm run lint*":  "allow",
+                                                                      "node_modules/.bin/playwright*":  "allow",
+                                                                      "python3 framework/adapters/gsd_state.py*":  "allow",
+                                                                      "python3 framework/*":  "allow",
+                                                                      "Get-ChildItem*":  "allow",
+                                                                      "Get-Content*":  "allow",
+                                                                      "Test-Path*":  "allow",
+                                                                      "Remove-Item*":  "deny",
+                                                                      "rm *":  "deny",
+                                                                      "del *":  "deny",
+                                                                      "rmdir*":  "deny",
+                                                                      "rd *":  "deny",
+                                                                      "git push*":  "deny",
+                                                                      "git reset*":  "deny",
+                                                                      "git clean*":  "deny",
+                                                                      "git checkout*":  "deny",
+                                                                      "git restore*":  "deny",
+                                                                      "git rebase*":  "deny",
+                                                                      "git merge*":  "deny",
+                                                                      "git cherry-pick*":  "deny",
+                                                                      "python framework/*":  "allow",
+                                                                      "bash framework/*":  "allow",
+                                                                      "./framework/*":  "allow"
+                                                                  }
+                                                     },
+                                      "tools":  {
+                                                    "playwright*":  true
+                                                },
+                                      "model":  "opencode/big-pickle",
+                                      "temperature":  0.1,
+                                      "_model_rationale":  "Writes all code and does root-cause debugging. Do not economise here first."
+                                  },
+                  "reviewer":  {
+                                   "description":  "Independent design and correctness judgement over the diff. Never edits.",
+                                   "mode":  "subagent",
+                                   "permission":  {
+                                                      "edit":  "deny",
+                                                      "task":  {
+                                                                   "*":  "deny"
+                                                               },
+                                                      "bash":  {
+                                                                   "*":  "deny",
+                                                                   "git diff*":  "allow",
+                                                                   "git log*":  "allow",
+                                                                   "git show*":  "allow",
+                                                                   "grep *":  "allow"
+                                                               }
+                                                  },
+                                   "tools":  {
+                                                 "playwright*":  false
+                                             },
+                                   "model":  "opencode/big-pickle",
+                                   "temperature":  0.1,
+                                   "_model_rationale":  "Independent judgement on a diff. A missed finding costs more than the tokens saved."
+                               },
+                  "verifier":  {
+                                   "description":  "Proves requirements are satisfied by executing tests, builds, gates and browser checks.",
+                                   "mode":  "subagent",
+                                   "permission":  {
+                                                      "edit":  {
+                                                                   "*":  "deny",
+                                                                   ".planning/**/VERIFICATION.md":  "allow",
+                                                                   "tests/**":  "ask"
+                                                               },
+                                                      "task":  {
+                                                                   "*":  "deny"
+                                                               },
+                                                      "bash":  {
+                                                                   "*":  "deny",
+                                                                   "pytest*":  "allow",
+                                                                   "npm test*":  "allow",
+                                                                   "npm run build*":  "allow",
+                                                                   "tsc*":  "allow",
+                                                                   "mypy*":  "allow",
+                                                                   "ruff*":  "allow",
+                                                                   "eslint*":  "allow",
+                                                                   "git diff*":  "allow",
+                                                                   "git status*":  "allow",
+                                                                   "git log*":  "allow",
+                                                                   "git show*":  "allow",
+                                                                   "./framework/*":  "allow",
+                                                                   "npm audit*":  "allow",
+                                                                   "pip-audit*":  "allow",
+                                                                   "node_modules/.bin/playwright*":  "allow",
+                                                                   "npm run test:e2e*":  "allow",
+                                                                   "npm ci*":  "allow",
+                                                                   "./framework/gates/*":  "allow",
+                                                                   "python3 framework/adapters/gsd_state.py*":  "allow",
+                                                                   "python3 framework/*":  "allow",
+                                                                   "Get-ChildItem*":  "allow",
+                                                                   "Test-Path*":  "allow",
+                                                                   "Remove-Item*":  "deny",
+                                                                   "rm *":  "deny",
+                                                                   "del *":  "deny",
+                                                                   "rmdir*":  "deny",
+                                                                   "rd *":  "deny",
+                                                                   "git push*":  "deny",
+                                                                   "git reset*":  "deny",
+                                                                   "git clean*":  "deny",
+                                                                   "git checkout*":  "deny",
+                                                                   "git restore*":  "deny",
+                                                                   "git rebase*":  "deny",
+                                                                   "git merge*":  "deny",
+                                                                   "git cherry-pick*":  "deny",
+                                                                   "python framework/*":  "allow",
+                                                                   "bash framework/*":  "allow",
+                                                                   "Get-Content*":  "allow"
+                                                               }
+                                                  },
+                                   "tools":  {
+                                                 "playwright*":  true
+                                             },
+                                   "model":  "opencode/big-pickle",
+                                   "temperature":  0.0,
+                                   "_model_rationale":  "Runs gates and transcribes exit codes. Least reasoning-intensive role."
+                               }
+              },
+    "mcp":  {
+                "memory":  {
+                               "type":  "local",
+                               "command":  [
+                                               "mcp-server-memory"
+                                           ]
+                           },
+                "context7":  {
+                                 "type":  "local",
+                                 "command":  [
+                                                 "context7-mcp"
+                                             ]
+                             },
+                "playwright":  {
+                                   "type":  "local",
+                                   "command":  [
+                                                   "npx",
+                                                   "-y",
+                                                   "@playwright/mcp@latest",
+                                                   "--headless",
+                                                   "--isolated",
+                                                   "--caps=testing",
+                                                   "--output-dir=./framework/telemetry/browser/mcp"
+                                               ],
+                                   "enabled":  true
+                               }
+            },
+    "references":  {
+                       "docs":  {
+                                    "path":  "docs",
+                                    "description":  "Full project documentation: architecture, design, testing, security, migration guides"
+                                }
+                   },
+    "skills":  {
+                   "paths":  [
+                                 ".opencode/skills"
+                             ]
+               },
+    "plugin":  [
+                   "file://.opencode/plugin/telemetry.ts"
+               ],
+    "compaction":  {
+                       "auto":  true,
+                       "prune":  true,
+                       "reserved":  12000
+                   }
 }
