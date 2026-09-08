@@ -59,22 +59,29 @@ class EventStore:
         except Exception as e:
             err_str = str(e).lower()
             if "duplicate key" in err_str:
-                deduped = []
-                seen_keys = set()
+                # Idempotent retry: rows whose idempotency_key already exists are
+                # returned as-is and NEVER re-inserted - re-inserting an existing row
+                # re-triggers the same 23505. Only genuinely new rows are inserted;
+                # this also covers a partially-applied batch (rows applied before the
+                # failure are picked up by the existence lookup, not re-inserted).
+                existing_rows: list[dict] = []
+                pending: list[dict] = []
+                seen_keys: set[str] = set()
                 for ev in events:
                     key = ev.get("idempotency_key")
                     if key:
                         if key in seen_keys:
                             continue
+                        seen_keys.add(key)
                         existing = self._get_by_idempotency_key(key)
                         if existing:
-                            deduped.append(existing)
-                            seen_keys.add(key)
+                            existing_rows.append(existing)
                             continue
-                        seen_keys.add(key)
-                    deduped.append(ev)
-                if deduped:
-                    return self.client.table(self.TABLE).insert(deduped).execute().data or []
+                    pending.append(ev)
+                inserted: list[dict] = []
+                if pending:
+                    inserted = self.client.table(self.TABLE).insert(pending).execute().data or []
+                return existing_rows + inserted
             raise
 
     def get_all_events(

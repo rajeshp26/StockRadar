@@ -81,6 +81,109 @@ class TestEventAppend:
         )
         result = store.append_events_batch(events)
         assert len(result) == 3
+    def test_append_events_batch_all_keys_existing_returns_existing(self, mock_supabase_client):
+        from postgrest.exceptions import APIError
+
+        store = EventStore(client=mock_supabase_client)
+        events = [
+            {"event_type": "split", "aggregate_id": "account_9",
+             "aggregate_type": "account", "data": {},
+             "idempotency_key": f"split_133_1996-08-09_{i}"}
+            for i in range(2)
+        ]
+        dup_error = APIError({"code": "23505", "message": "duplicate key value violates unique constraint", "details": ""})
+
+        mock_supabase_client.reset_mock()
+        mock_table = MagicMock()
+        mock_supabase_client.table.return_value = mock_table
+
+        key_to_row = {
+            e["idempotency_key"]: {"id": f"evt-{i}", "idempotency_key": e["idempotency_key"]}
+            for i, e in enumerate(events)
+        }
+
+        def eq_side_effect(col, val):
+            lim = MagicMock()
+            lim.limit.return_value.execute.return_value = MagicMock(
+                data=[key_to_row[val]] if val in key_to_row else []
+            )
+            return lim
+
+        mock_table.select.return_value.eq.side_effect = eq_side_effect
+
+        insert_payloads = []
+        def insert_side_effect(rows):
+            insert_payloads.append(rows)
+            builder = MagicMock()
+
+            def execute_side_effect():
+                raise dup_error
+
+            builder.execute.side_effect = execute_side_effect
+            return builder
+
+        mock_table.insert.side_effect = insert_side_effect
+
+        result = store.append_events_batch(events)
+
+        # All keys already existed: existing rows returned, nothing re-inserted.
+        assert len(result) == 2
+        assert {r["idempotency_key"] for r in result} == {e["idempotency_key"] for e in events}
+        assert len(insert_payloads) == 1  # only the original (failed) full-batch insert
+
+    def test_append_events_batch_mixed_existing_and_new(self, mock_supabase_client):
+        from postgrest.exceptions import APIError
+
+        store = EventStore(client=mock_supabase_client)
+        existing = {"event_type": "split", "aggregate_id": "account_9",
+                    "aggregate_type": "account", "data": {},
+                    "idempotency_key": "split_133_1996-08-09_9"}
+        new_event = {"event_type": "split", "aggregate_id": "account_10",
+                     "aggregate_type": "account", "data": {},
+                     "idempotency_key": "split_133_1996-08-09_10"}
+        events = [existing, new_event]
+        dup_error = APIError({"code": "23505", "message": "duplicate key value violates unique constraint", "details": ""})
+
+        mock_supabase_client.reset_mock()
+        mock_table = MagicMock()
+        mock_supabase_client.table.return_value = mock_table
+
+        key_to_row = {
+            "split_133_1996-08-09_9": {"id": "evt-existing", "idempotency_key": "split_133_1996-08-09_9"},
+        }
+
+        def eq_side_effect(col, val):
+            lim = MagicMock()
+            lim.limit.return_value.execute.return_value = MagicMock(
+                data=[key_to_row[val]] if val in key_to_row else []
+            )
+            return lim
+
+        mock_table.select.return_value.eq.side_effect = eq_side_effect
+
+        insert_payloads = []
+        def insert_side_effect(rows):
+            insert_payloads.append(rows)
+            builder = MagicMock()
+
+            def execute_side_effect():
+                if len(insert_payloads) == 1:
+                    raise dup_error
+                return MagicMock(data=rows)
+
+            builder.execute.side_effect = execute_side_effect
+            return builder
+
+        mock_table.insert.side_effect = insert_side_effect
+
+        result = store.append_events_batch(events)
+
+        # Existing row returned as-is; only the genuinely new row was re-inserted.
+        assert len(result) == 2
+        assert {r["idempotency_key"] for r in result} == {"split_133_1996-08-09_9", "split_133_1996-08-09_10"}
+        assert len(insert_payloads) == 2
+        assert insert_payloads[0] == events
+        assert insert_payloads[1] == [new_event]
 
 
 class TestDualWriteRollback:
