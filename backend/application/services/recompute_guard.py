@@ -314,9 +314,12 @@ class RecomputeGuard:
         return await self.should_recompute(company_id=company_id, method="rule1")
 
     # ── Gate 2: Fingerprint ────────────────────────────────────────────────────
-# Valid fingerprint: 16-character lowercase hex string produced by
-# shared.finance_math.build_fingerprint (SHA-256 truncated to 16 chars).
-    _VALID_FINGERPRINT_RE = re.compile(r'^[0-9a-f]{16}$')
+# Valid fingerprint: lowercase hex string produced by
+# shared.finance_math.build_fingerprint (SHA-256 truncated to 32 hex chars).
+# Accept 32-char (current generator output) and legacy 16-char values; the
+# 16-vs-32 mismatch previously flagged every stored 32-char fingerprint as
+# malformed, so Gate 2 forced a recompute on every run (Sep-2026 defect B1).
+    _VALID_FINGERPRINT_RE = re.compile(r'^[0-9a-f]{16,32}$')
     async def check_fingerprint(
         self,
         company_id:          int,
