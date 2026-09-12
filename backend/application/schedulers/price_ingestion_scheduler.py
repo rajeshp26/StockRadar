@@ -16,9 +16,18 @@ class PriceIngestionScheduler:
     - 20:00-07:00 (closed): suspended
     """
 
+    def __init__(self) -> None:
+        # In-memory cadence gate: tracks when the last job was enqueued so
+        # plan() can refuse to emit another until the current interval window
+        # has elapsed (5 min trading / 30 min pre-post).  The planner ticks
+        # every 60s, so without this gate the job would be re-enqueued every
+        # tick once the prior run completes (Sep-2026 defect S1).
+        self._last_enqueued_at: datetime | None = None
+
     @property
-    def interval_hours(self) -> int:
-        return 0
+    def interval_hours(self) -> float:
+        """Current interval in hours (0 = suspended, 5/60 = trading, 30/60 = pre/post)."""
+        return self._current_interval_minutes() / 60.0
 
     def _current_interval_minutes(self) -> int:
         now_et = datetime.now(UTC)
@@ -38,9 +47,30 @@ class PriceIngestionScheduler:
         if interval == 0:
             return []
 
+        now = now_utc()
+        if self._last_enqueued_at is not None:
+            elapsed_min = (now - self._last_enqueued_at).total_seconds() / 60.0
+            if elapsed_min < interval:
+                logger.debug(
+                    "[PRICE] Within %d-min window (%.1f min since last job) — skip",
+                    interval, elapsed_min,
+                )
+                return []
+
+        self._last_enqueued_at = now
+
+        # Windowed dedupe_key: bucket time to the interval so consecutive planner
+        # ticks within the same window (5min trading / 30min pre-post) produce the
+        # same key and the enqueue dedup layer merges them.  Previously the key
+        # used second-granularity timestamps, so every planner tick enqueued a
+        # fresh job regardless of the computed interval (Sep-2026 defect S1).
+        minute_of_day = now.hour * 60 + now.minute
+        bucket = minute_of_day // interval
+        dedupe_key = f"price_ingestion_{interval}m_{bucket}"
+
         return [{
             "job_type": "price_ingestion",
-            "dedupe_key": f"price_ingestion_{now_utc().isoformat()}",
+            "dedupe_key": dedupe_key,
             "priority": 40,
-            "payload": {},
+            "payload": {"interval_minutes": interval},
         }]
