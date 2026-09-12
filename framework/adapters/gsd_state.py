@@ -9,6 +9,7 @@ adapter change and nothing else.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import datetime
@@ -293,17 +294,26 @@ def list_blockers(as_text: bool = False):
 # last event timestamp against the contract deadlines: a task with no events is
 # SPAWNED regardless of what its session label claims. session_info != progress.
 TASKS_REL = "tasks"
-TASK_TERMINAL = ("COMPLETED", "FAILED", "CANCELLED")
+TASK_TERMINAL = ("COMPLETED", "FAILED", "CANCELLED", "LOST")
 TASK_NEXT = {
-    None: ("ACK", "STARTED", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
-    "ACK": ("STARTED", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
-    "STARTED": ("PROGRESS", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
-    "PROGRESS": ("PROGRESS", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED"),
-    "BLOCKED": ("PROGRESS", "FAILED", "COMPLETED", "CANCELLED"),
+    None: ("ACK", "STARTED", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED", "LOST"),
+    "ACK": ("STARTED", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED", "LOST"),
+    "STARTED": ("PROGRESS", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED", "LOST"),
+    "PROGRESS": ("PROGRESS", "BLOCKED", "FAILED", "COMPLETED", "CANCELLED", "LOST"),
+    "BLOCKED": ("PROGRESS", "FAILED", "COMPLETED", "CANCELLED", "LOST"),
+    "LOST": (),
 }
 _TASK_REQUIRED = ("agent", "objective", "expected_artifact")
 
 
+# Health-level escalation signals for recovery. Mirrors the health table in
+# .opencode/rules/delegation-protocol.md; a type recovery policy in
+# task_types.yaml must declare a route for each of these. FAILED splits by
+# taxonomy class into FAILED_PROVIDER / FAILED_WORKER for policy lookup.
+_RECOVERY_SIGNALS = ("FAILED_PROVIDER", "FAILED_WORKER", "STALLED", "OVERDUE", "LOST")
+
+
+@lru_cache(maxsize=1)
 def _task_types() -> dict:
     """Type timeout budgets live in framework/tasks/task_types.yaml. Described
     in state, never invented in code -- an absent file must not read as
@@ -319,7 +329,63 @@ def _task_types() -> dict:
         raise SystemExit(
             "BLOCKED: framework/tasks/task_types.yaml must declare 'defaults'."
         )
+    _validate_recovery(data)
     return data
+
+
+def _validate_recovery(data: dict):
+    """Recovery is part of every task-type contract. The merged policy for
+    each type (type entry over defaults) must declare a route for every
+    escalation signal in _RECOVERY_SIGNALS, and every route name must be in
+    the file's own recovery_routes vocabulary. A missing or partial policy
+    is a config error, never a silent 'no recovery' (same failure class as
+    an absent parser)."""
+    vocab = {str(r) for r in (data.get("recovery_routes") or [])}
+    if not vocab:
+        raise SystemExit(
+            "TASK_CONFIG_INVALID: task_types.yaml must declare a non-empty "
+            "recovery_routes vocabulary."
+        )
+    dflt = data.get("defaults") or {}
+    dflt_rec = dict(dflt.get("recovery") or {})
+    types = data.get("task_types") or {}
+    # merged_list[0] is the 'default' type (defaults alone); each later
+    # entry is one concrete type's merged policy (type over defaults). A
+    # type may legally omit `recovery` and inherit defaults; the MERGED
+    # policy is what must be complete and route-legal.
+    merged_list = [dflt_rec] + [
+        {**dflt_rec, **(e.get("recovery") or {})} for e in types.values()
+    ]
+    for i, merged in enumerate(merged_list):
+        missing = [s for s in _RECOVERY_SIGNALS if s not in merged]
+        if missing:
+            raise SystemExit(
+                "TASK_CONFIG_INVALID: recovery for entry %d missing signal(s) %s"
+                % (i, ", ".join(missing))
+            )
+        for sig, route in merged.items():
+            if sig not in _RECOVERY_SIGNALS:
+                raise SystemExit(
+                    "TASK_CONFIG_INVALID: unknown recovery signal %r" % sig
+                )
+            if str(route) not in vocab:
+                raise SystemExit(
+                    "TASK_CONFIG_INVALID: recovery route %r for %s is not in "
+                    "recovery_routes" % (route, sig)
+                )
+
+
+def _recovery_policy(tt: str) -> dict:
+    """Merged recovery routes for a type: type entry over defaults, returned
+    as {signal: route}. Surfaced via task-status / task-summary as
+    recovery_policy so the supervisor and gates act on the declared policy,
+    not on an invented one."""
+    budgets = _task_types()
+    entry = (budgets.get("task_types") or {}).get(tt) or {}
+    dflt = budgets.get("defaults") or {}
+    merged = dict(dflt.get("recovery") or {})
+    merged.update(entry.get("recovery") or {})
+    return merged
 
 
 def _resolve_budget(payload: dict, tt: str):
@@ -414,6 +480,9 @@ def _task_load(task_id: str):
 def _append_task_event(task_id: str, event: dict):
     p = _task_events_path(task_id)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Per-task monotonic sequence number: the event-bus ordering guarantee the
+    # supervisor and watchdog rely on. Corrupt streams must block before growing.
+    event["seq"] = len(_task_events(task_id)) + 1
     with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
 
@@ -451,7 +520,23 @@ def task_status(task_id: str, session_alive=None) -> dict:
     elapsed_s = max(0, int((now - created).total_seconds()))
     pt = contract["progress_timeout_s"]
     md = contract["max_duration_s"]
-    checkpoints = [e.get("checkpoint") for e in events if e.get("checkpoint")]
+    milestones = []
+    heartbeats = 0
+    last_progress_kind = "none"
+    for e in events:
+        cp = e.get("checkpoint")
+        if cp and cp not in milestones:
+            # a NEW checkpoint is a milestone: measurable progress.
+            milestones.append(cp)
+            last_progress_kind = "milestone"
+        elif e.get("state") in ("PROGRESS", "BLOCKED") or cp:
+            # a PROGRESS/BLOCKED event without a new checkpoint, or a repeated
+            # checkpoint, is a heartbeat: liveness WITHOUT progress. Separating
+            # the two lets supervision distinguish "alive but stuck" from
+            # "making progress".
+            heartbeats += 1
+            last_progress_kind = "heartbeat"
+    checkpoints = milestones
 
     if state == "COMPLETED":
         health, level, action = "COMPLETE", 0, "continue"
@@ -468,6 +553,12 @@ def task_status(task_id: str, session_alive=None) -> dict:
             action = ("record_blocker: write-blocker WORKER_STALLED, retry once "
                       "narrower, else take over")
         health, level = "FAILED", 4
+    elif state == "LOST":
+        health, level, action = (
+            "LOST", 4,
+            "recover: worker session lost without a recorded failure - re-dispatch "
+            "a fresh attempt (retry_of=" + task_id + ") via a narrowed contract; "
+            "never classify as worker or provider failure")
     elif elapsed_s >= md:
         health, level, action = "OVERDUE", 3, "cancel_and_retry: cancel the bg task, retry with a narrowed prompt"
     elif silent_s >= 2 * pt:
@@ -507,11 +598,12 @@ def task_status(task_id: str, session_alive=None) -> dict:
     execution = {
         None: "STARTING", "ACK": "STARTING", "STARTED": "THINKING",
         "PROGRESS": "WORKING", "BLOCKED": "BLOCKED",
-        "COMPLETED": "IDLE", "FAILED": "IDLE", "CANCELLED": "IDLE",
+        "COMPLETED": "IDLE", "FAILED": "IDLE", "CANCELLED": "IDLE", "LOST": "IDLE",
     }[last["state"] if last else None]
 
     progress = "COMPLETED" if state == "COMPLETED" else (
-        "CHECKPOINT_ADVANCED" if checkpoints else "NONE")
+        "CHECKPOINT_ADVANCED" if checkpoints else (
+        "HEARTBEAT_ONLY" if heartbeats else "NONE"))
 
     return {
         "task_id": contract["task_id"],
@@ -523,10 +615,15 @@ def task_status(task_id: str, session_alive=None) -> dict:
         "health": health,
         "recovery_level": level,
         "recovery_action": action,
+        "recovery_policy": _recovery_policy(contract.get("type") or "default"),
         "failure_class": (last.get("failure_class") or "") if last else "",
         "liveness": liveness,
         "execution": execution,
         "progress": progress,
+        "last_progress_kind": last_progress_kind,
+        "milestones_reached": len(checkpoints),
+        "heartbeats": heartbeats,
+        "headless": bool(contract.get("headless") or False),
         "checkpoints_reached": checkpoints,
         "expected_artifact": contract["expected_artifact"],
         "progress_timeout_s": pt,
@@ -536,7 +633,7 @@ def task_status(task_id: str, session_alive=None) -> dict:
         "created_at": contract["created_at"],
         "last_activity": last["ts"] if last else contract["created_at"],
         "recent_events": [
-            {k: e.get(k) for k in ("state", "ts", "emitter", "checkpoint", "detail", "failure_class")}
+            {k: e.get(k) for k in ("seq", "state", "ts", "emitter", "checkpoint", "detail", "failure_class")}
             for e in events[-3:]
         ],
     }
@@ -569,6 +666,7 @@ def register_task(task_id: str, payload: dict) -> dict:
         "allowed_tools": [str(t) for t in payload.get("allowed_tools") or []],
         "completion_criteria": [str(c) for c in payload.get("completion_criteria") or []],
         "failure_criteria": [str(c) for c in payload.get("failure_criteria") or []],
+        "headless": bool(payload.get("headless") or False),
         "progress_timeout_s": pt,
         "max_duration_s": md,
         "retry_of": str(payload.get("retry_of") or ""),
@@ -585,10 +683,10 @@ def task_event(task_id: str, payload: dict) -> dict:
         _unsupported("task-event")
     payload = payload or {}
     state = str(payload.get("state") or "").strip().upper()
-    if state not in ("ACK", "STARTED", "PROGRESS", "BLOCKED", "FAILED", "COMPLETED"):
+    if state not in ("ACK", "STARTED", "PROGRESS", "BLOCKED", "FAILED", "COMPLETED", "LOST"):
         raise SystemExit(
             f"TASK_INVALID_STATE: {state!r}; legal event states: "
-            "ACK, STARTED, PROGRESS, BLOCKED, FAILED, COMPLETED"
+            "ACK, STARTED, PROGRESS, BLOCKED, FAILED, COMPLETED, LOST"
         )
     contract, events = _task_load(task_id)
     prev = events[-1]["state"] if events else None
@@ -605,6 +703,21 @@ def task_event(task_id: str, payload: dict) -> dict:
         "ts": _now(),
         "emitter": str(payload.get("emitter") or contract["agent"]),
     }
+    if state == "LOST":
+        # LOST is supervisor-declared and terminal: a worker that can emit events
+        # is not lost (it must emit FAILED with a failure_class instead), and a
+        # LOST declaration without a reason cannot be actioned by recovery.
+        if event["emitter"] == contract["agent"]:
+            raise SystemExit(
+                "TASK_INVALID_LOST: LOST is supervisor-declared; a worker that can "
+                "emit events is not lost - emit FAILED with a failure_class."
+            )
+        if not str(payload.get("detail") or "").strip():
+            raise SystemExit(
+                "TASK_INVALID_LOST: LOST requires detail naming what was lost "
+                "(session id, provider, or process) and why no failure was recorded."
+            )
+        event["detail"] = str(payload["detail"])
     if payload.get("checkpoint"):
         event["checkpoint"] = str(payload["checkpoint"])
     if payload.get("detail"):
@@ -690,7 +803,7 @@ def task_summary() -> dict:
                   "recovery_level": 5,
                   "recovery_action": "inspect the task contract and event stream manually"}
         tasks.append(st)
-        if st["health"] in ("STALLED", "OVERDUE", "FAILED", "BROKEN", "UNREADABLE")                 or st.get("recovery_level", 0) >= 2:
+        if st["health"] in ("STALLED", "OVERDUE", "FAILED", "LOST", "BROKEN", "UNREADABLE")                 or st.get("recovery_level", 0) >= 2:
             unhealthy.append({
                 "task_id": st["task_id"],
                 "agent": st.get("agent", "?"),
@@ -698,6 +811,7 @@ def task_summary() -> dict:
                 "health": st["health"],
                 "recovery_level": st.get("recovery_level", 0),
                 "recovery_action": st.get("recovery_action", ""),
+                "recovery_policy": st.get("recovery_policy") or {},
                 "failure_class": st.get("failure_class", ""),
             })
     if not rows:
@@ -763,8 +877,29 @@ def _write(rel: str, body: str, append=False):
         _unsupported(f"write {rel}")
     p = root() / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a" if append else "w", encoding="utf-8") as fh:
-        fh.write(body)
+    if append:
+        # WINDOWS-ATOMIC APPEND (Sep-7 defect: 3 torn lines in
+        # telemetry/records.jsonl). A buffered text append (open("a")) can split
+        # one logical line into several underlying writes, and two concurrent
+        # sessions each holding an append-mode handle can interleave them. Open
+        # once per call and issue the full payload in a single os.write over an
+        # O_APPEND fd — one write at EOF. Fall back to a buffered text write only
+        # when the syscall form is unavailable.
+        try:
+            fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+            try:
+                data = body.encode("utf-8")
+                n = os.write(fd, data)
+                if n != len(data):
+                    raise OSError(f"short append write to {p}: {n}/{len(data)} bytes")
+            finally:
+                os.close(fd)
+        except AttributeError:
+            with p.open("a", encoding="utf-8") as fh:
+                fh.write(body)
+    else:
+        with p.open("w", encoding="utf-8") as fh:
+            fh.write(body)
     return str(p)
 
 
@@ -914,6 +1049,106 @@ def selftest() -> dict:
         _task_path(rtid).unlink(missing_ok=True)
         _task_events_path(rtid).unlink(missing_ok=True)
 
+    # LOST: supervisor-declared, terminal, unrecoverable-by-the-worker state.
+    ltid = "selftest-lost"
+    try:
+        _task_path(ltid).unlink(missing_ok=True)
+        _task_events_path(ltid).unlink(missing_ok=True)
+        register_task(ltid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest LOST state",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 30, "max_duration_s": 60,
+        })
+        task_event(ltid, {"state": "STARTED"})
+        # a worker cannot self-declare LOST: emitting LOST proves it is alive
+        try:
+            task_event(ltid, {"state": "LOST", "emitter": "selftest", "detail": "x"})
+            results["lost_worker_cannot_self_declare"] = "fail: worker LOST accepted"
+        except SystemExit:
+            results["lost_worker_cannot_self_declare"] = "pass"
+        # LOST without a reason is refused: recovery cannot act on it
+        task_event(ltid, {"state": "PROGRESS"})
+        try:
+            task_event(ltid, {"state": "LOST", "emitter": "team-lead"})
+            results["lost_requires_detail"] = "fail: LOST without detail accepted"
+        except SystemExit:
+            results["lost_requires_detail"] = "pass"
+        st = task_event(ltid, {"state": "LOST", "emitter": "team-lead",
+                               "detail": "session vanished mid-flight"})
+        ok = (st["state"] == "LOST" and st["health"] == "LOST"
+              and st["recovery_level"] == 4
+              and "re-dispatch" in st["recovery_action"]
+              and st["execution"] == "IDLE" and st["liveness"] == "DEAD")
+        results["lost_supervisor_declared"] = "pass" if ok else (
+            "fail: " + st["health"] + "/" + st["recovery_action"])
+        try:
+            task_event(ltid, {"state": "COMPLETED"})
+            results["lost_is_terminal"] = "fail: event after LOST accepted"
+        except SystemExit:
+            results["lost_is_terminal"] = "pass"
+    except SystemExit as e:
+        results["lost_supervisor_declared"] = "fail: " + str(e)
+        results["lost_worker_cannot_self_declare"] = "fail: " + str(e)
+    finally:
+        _task_path(ltid).unlink(missing_ok=True)
+        _task_events_path(ltid).unlink(missing_ok=True)
+
+    # progress vs liveness: milestones are NEW checkpoints; repeats and
+    # checkpointless PROGRESS are heartbeats. Sequences prove event ordering.
+    ptid = "selftest-progress"
+    try:
+        _task_path(ptid).unlink(missing_ok=True)
+        _task_events_path(ptid).unlink(missing_ok=True)
+        register_task(ptid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest progress vs liveness",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 30, "max_duration_s": 60,
+        })
+        task_event(ptid, {"state": "STARTED"})                      # seq 1
+        task_event(ptid, {"state": "PROGRESS"})                     # seq 2, heartbeat
+        task_event(ptid, {"state": "PROGRESS", "checkpoint": "C0"}) # seq 3, milestone
+        task_event(ptid, {"state": "PROGRESS", "checkpoint": "C0"}) # seq 4, heartbeat (repeat)
+        task_event(ptid, {"state": "PROGRESS", "checkpoint": "C1"}) # seq 5, milestone
+        st = task_status(ptid)
+        ok = (st["progress"] == "CHECKPOINT_ADVANCED"
+              and st["last_progress_kind"] == "milestone"
+              and st["milestones_reached"] == 2 and st["heartbeats"] == 2
+              and st["checkpoints_reached"] == ["C0", "C1"]
+              and [e["seq"] for e in st["recent_events"]] == [3, 4, 5])
+        results["progress_vs_liveness"] = "pass" if ok else (
+            "fail: " + st["progress"] + "/" + st["last_progress_kind"] + "/"
+            + str(st["milestones_reached"]) + "/" + str(st["heartbeats"]))
+        results["event_seq_monotonic"] = "pass" if ok else (
+            "fail: seqs " + str([e["seq"] for e in st["recent_events"]]))
+    except SystemExit as e:
+        results["progress_vs_liveness"] = "fail: " + str(e)
+        results["event_seq_monotonic"] = "fail: " + str(e)
+    finally:
+        _task_path(ptid).unlink(missing_ok=True)
+        _task_events_path(ptid).unlink(missing_ok=True)
+
+    # headless contract flag round trip
+    htid = "selftest-headless"
+    try:
+        _task_path(htid).unlink(missing_ok=True)
+        _task_events_path(htid).unlink(missing_ok=True)
+        register_task(htid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest headless flag",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 30, "max_duration_s": 60,
+            "headless": True,
+        })
+        st = task_status(htid)
+        results["headless_contract_flag"] = "pass" if (
+            st["headless"] is True) else "fail: headless flag not persisted"
+    except SystemExit as e:
+        results["headless_contract_flag"] = "fail: " + str(e)
+    finally:
+        _task_path(htid).unlink(missing_ok=True)
+        _task_events_path(htid).unlink(missing_ok=True)
     results["read_requirements"] = "pass" if read_requirements() or True else "fail"
     results["detect"] = manifest()["distribution"]
     return results

@@ -1,4 +1,5 @@
-# Gate Exit Code Contract — AUTHORITATIVE
+#| G-ENTRY entry | approved plan + declared scope + acceptance criteria, no open questions - dispatch allowed | named missing prerequisite - NO TASK DISPATCH | BLOCKED (python3 absent / unreadable) | - | NOT_APPLICABLE (ENTRY_EXEMPT=TRIVIAL) |
+ Gate Exit Code Contract — AUTHORITATIVE
 
 Machine-checked by `framework/validate.py`. If a document disagrees with this table, the
 document is wrong. Generated claims about gate behaviour must cite this file.
@@ -20,6 +21,8 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G11 evidence | claims valid, provenance present | invalid claims listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no claims recorded) |
 | G12 provider | healthy — dispatch allowed | unhealthy — NO TASK DISPATCH | BLOCKED (cannot verify provider health) | — | NOT_APPLICABLE (no model resolved) |
 | G13 worker | all workers healthy or terminal | unhealthy worker(s) listed | BLOCKED (cannot read task state) | — | NOT_APPLICABLE (no tasks registered) |
+| G14 evidence-integrity | all claims pass E1-E8 | integrity violation(s) listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no claims recorded) |
+| G-EXEC exec-integrity | matrix 38/38 checks pass | deviations listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no matrix module) |
 
 ## G6 emits ONLY 0, 1, 3
 
@@ -110,12 +113,39 @@ distinct.
 ## G13 is an observability gate — it refuses completion on an unhealthy worker
 
 G13 judges the task event stream, not the contract file. A registered task whose worker
-has gone silent past its budgets (STALLED, OVERDUE), failed unresolved, or left an
-unreadable event stream is a supervision debt; exit 1 names each task WITH its recovery
-route, and the gate keeps failing until the supervisor acts. Exit 4 means no tasks were
-registered — nothing to observe; a skip, not a pass. Exit 2 means task state could not be
-read (missing python3, unparsable summary) — never a pass. WARNING (silent past the
-progress timeout, probe-and-continue) is healthy; only recovery_level >= 2 escalates.
+has gone silent past its budgets (STALLED, OVERDUE), failed unresolved, was declared
+LOST by the supervisor, or left an unreadable event stream is a supervision debt; exit 1
+names each task WITH its recovery route (recovery_action plus the type's
+recovery_policy), and the gate keeps failing until the supervisor acts. Exit 4 means no
+tasks were registered — nothing to observe; a skip, not a pass. Exit 2 means task state
+could not be read (missing python3, unparsable summary) — never a pass. WARNING (silent
+past the progress timeout, probe-and-continue) is healthy; only recovery_level >= 2
+escalates.
+
+## G14 is an evidence-integrity gate — it refuses completion on borrowed or stale evidence
+
+G14 judges the claim store, not the record format. E1-E5 (evidence present, bound to the
+task, git_sha-consistent, timestamp-sane) share the ledger's own validate_record checks;
+E2 (a repo-relative entry_point must exist on disk), E6 (a gate named in evidence must have
+a receipt in VERIFICATION.md), E7 (no open reviewer suspicion or unfinished review may sit
+on a VERIFIED claim), and E8 (no identical evidence payload may be reused across tasks) are
+G14's own. Exit 4 means no claims exist — nothing to judge; a skip, not a pass. Exit 2 means
+integrity could not be computed (missing python3, unparsable report) — never read as pass.
+The gate wraps `python3 framework/claims/ledger.py integrity`, which exits 3 when the ledger
+is empty; the gate maps that to NOT_APPLICABLE.
+
+## G-EXEC asserts execution integrity against the failure-injection matrix
+
+G-EXEC wraps `python3 framework/adapters/failure_injection.py`, the adversarial
+E/G matrix that drives a delegated-task lifecycle through injected deviations:
+wrong budgets, out-of-order lifecycle events, THINKING while paused, leaked
+supervision state. Exit 0 means all checks behaved as the framework declares;
+exit 1 lists the deviations; exit 2 means the matrix could not run (missing
+python3 or unreadable state root) — never a pass; exit 4 means the matrix
+module is absent — nothing to judge. The matrix is self-cleaning: residue
+left in the task store after a run is itself a deviation. G-EXEC complements
+G13 (worker observability) and G14 (evidence integrity) as the gate that tests
+the framework's own execution contract instead of trusting it.
 
 ## Exit 3 is the most important code in the framework
 
@@ -140,3 +170,16 @@ BLOCKED (2) means the gate could not evaluate — a toolchain problem. UNVERIFIA
 the gate evaluated its preconditions correctly and found no way to produce evidence — a
 capability problem. NOT_APPLICABLE (4) means there is nothing of this class to judge. Only
 FAIL (1) is a verdict about the code.
+
+
+## G-ENTRY is a pre-flight gate - it refuses dispatch, it does not report it
+
+G-ENTRY runs BEFORE any task() dispatch, mirroring G12. A task whose plan does not satisfy
+the entry contract - an approval token (status: approved | approved: true | accepted: true),
+declared files_or_components, acceptance_criteria, and no unresolved open_questions - has no
+dispatch right. Exit 1 names the missing prerequisite and dispatch is refused; fix the plan
+first. A task with no plan context and no ENTRY_EXEMPT is a routing defect: exit 1, never a
+skip, and never a pass. ENTRY_EXEMPT=TRIVIAL is the only documented bypass (team-lead's
+trivial-request gate) and returns 4 NOT_APPLICABLE - a recorded exemption, not a verdict on
+the plan. Exit 2 means python3 was unavailable; it is never read as pass. G9 remains the
+post-hoc scope check; G-ENTRY is its pre-flight half.

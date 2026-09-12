@@ -1,4 +1,4 @@
-﻿# Activity-based timeout budgets and default checkpoint progressions per delegated
+# Activity-based timeout budgets and default checkpoint progressions per delegated
 # task type.
 #
 # A delegated task carries two deadlines (seconds):
@@ -22,6 +22,30 @@ checkpoint_vocabulary:
   - C6-REVIEW_READY
   - C7-VERIFICATION_DONE
   - C8-HANDOFF_READY
+
+# recovery_routes is the CLOSED vocabulary of recovery actions a task-type
+# policy may reference. Names mirror the health-table actions in
+# .opencode/rules/delegation-protocol.md and retry_policy.yaml's
+# `on_exhaustion: escalate_to_human`. A route name outside this list is a
+# config error (TASK_CONFIG_INVALID), never a silent fallback.
+#
+# Two axes, two authorities:
+#   - blocker signals (CONTEXT_INSUFFICIENT, TEST_FAILED, ...) route via
+#     framework/retry_policy.yaml.
+#   - health-level escalations (STALLED / OVERDUE / LOST / FAILED) route per
+#     task type via the `recovery` block below: {signal: route}, one entry
+#     for every signal in the health table. A type overrides
+#     `defaults.recovery` only where its activity genuinely diverges; the
+#     merged policy for every type is validated at load and surfaced as
+#     recovery_policy by task-status and task-summary.
+recovery_routes:
+  - query_worker
+  - inspect_then_cancel_if_frozen
+  - cancel_and_retry
+  - g12_provider_fallback
+  - worker_stalled_ladder
+  - re_dispatch_fresh_attempt
+  - escalate_to_human
 task_types:
   explore:
     progress_timeout_s: 20
@@ -59,3 +83,9 @@ defaults:
   progress_timeout_s: 60
   max_duration_s: 300
   checkpoints: [C0-TASK_ACCEPTED, C1-CONTEXT_READ, C8-HANDOFF_READY]
+  recovery:
+    FAILED_PROVIDER: g12_provider_fallback
+    FAILED_WORKER: worker_stalled_ladder
+    STALLED: inspect_then_cancel_if_frozen
+    OVERDUE: cancel_and_retry
+    LOST: re_dispatch_fresh_attempt

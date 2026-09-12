@@ -2,11 +2,13 @@
 # G13 -- Worker observability.
 #
 # Judges the task event stream, not the contract file: a registered task whose worker
-# has gone silent past its budgets, failed without resolution, or left an unreadable
-# event stream is a supervision debt that pretending otherwise does not pay. This gate
-# refuses completion while any worker escalates (health STALLED/OVERDUE/FAILED, or a
-# BROKEN stream); the recovery route is reported WITH the task, never abstracted away.
-# WARNING (silent past the progress timeout, probe-and-continue) is healthy here.
+# has gone silent past its budgets, failed without resolution, was declared LOST by
+# the supervisor, or left an unreadable event stream is a supervision debt that
+# pretending otherwise does not pay. This gate refuses completion while any worker
+# escalates (health STALLED/OVERDUE/LOST/FAILED, or a BROKEN stream); the recovery
+# route is reported WITH the task (recovery_action plus the type's recovery_policy),
+# never abstracted away. WARNING (silent past the progress timeout,
+# probe-and-continue) is healthy here.
 #
 # This gate exists because a delegated task's contract and its lifecycle events are
 # the executable record of a worker's liveness, execution phase, and progress; the
@@ -68,6 +70,9 @@ for u in d.get('unhealthy', []):
     action = u.get('recovery_action') or ''
     if action:
         print('    -> %s' % action)
+        pol = u.get('recovery_policy') or {}
+        if pol:
+            print('    policy: %s' % ' | '.join('%s=%s' % (k, v) for k, v in pol.items()))
 " 2>/dev/null | while IFS= read -r line; do
       [ -n "$line" ] && log "FAIL  $line"
     done
