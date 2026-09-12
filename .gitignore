@@ -121,3 +121,6 @@ backend/verify_db.txt
 # One-off operational scripts (superseded by schedulers / not part of application)
 backend/scripts/reconcile_financial_data.py
 backend/scripts/run_earnings_batch.py
+
+# Generated telemetry analysis artifact (session/telemetry aggregates)
+telemetry_analysis.json
