@@ -1,0 +1,13 @@
+{
+  "manifest_version": "1.0.0",
+  "name": "stockerpro-model-profile-pilot",
+  "seed": 20260911,
+  "conditions": [
+    { "id": "A", "label": "baseline", "profile": "baseline", "runs": 20 },
+    { "id": "B", "label": "tiered", "profile": "tiered", "runs": 20 }
+  ],
+  "corpus": {
+    "file": "corpus.json",
+    "total_runs": 40
+  }
+}

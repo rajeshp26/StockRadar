@@ -1,0 +1,87 @@
+{
+  "corpus_version": "1.0.0",
+  "tasks": [
+    {
+      "id": "T-01",
+      "type": "inspect/reason",
+      "name": "describe module exports",
+      "prompt": "Inspect vending.js and math.go in the scratch directory. List every exported symbol from both files, and explain in one sentence what computeTotal in vending.js calculates.",
+      "input_files": {
+        "vending.js": "export function computeTotal(items) { return items.reduce((s, i) => s + i.price * (1 - (i.discount || 0)), 0) }\nexport const TAX_RATE = 0.13\n",
+        "math.go": "package math\n\nfunc Min(a, b int) int {\n\tif a < b { return a }\n\treturn b\n}\n"
+      },
+      "expected_outcome": "a text answer naming computeTotal, TAX_RATE, Min and the discount-applied sum"
+    },
+    {
+      "id": "T-02",
+      "type": "modify-code",
+      "name": "add optional param",
+      "prompt": "Edit greet.js in the scratch directory so greet(name) also accepts an optional suffix (defaulting to empty string) and appends it to the greeting. Keep the existing export name.",
+      "input_files": {
+        "greet.js": "export function greet(name) {\n  return `Hello, ${name}!`\n}\n"
+      },
+      "expected_outcome": "greet.js exports greet accepting name and optional suffix"
+    },
+    {
+      "id": "T-03",
+      "type": "debugging",
+      "name": "fix fencepost loop",
+      "prompt": "sum_all.js in the scratch directory is supposed to return the sum of integers from `from` to `to` inclusive. It has an off-by-one defect. Find it, fix it, and confirm with a quick inline check.",
+      "input_files": {
+        "sum_all.js": "export function sumAll(from, to) {\n  let s = 0\n  for (let i = from; i < to; i++) s += i\n  return s\n}\n"
+      },
+      "expected_outcome": "sumAll(1, 5) equals 15"
+    },
+    {
+      "id": "T-04",
+      "type": "testing",
+      "name": "author unit tests",
+      "prompt": "Write a node:test test file test_math.test.mjs in the scratch directory proving that toBaseUnits(amount) converts dollars to cents (e.g. 1.5 -> 150) and rejects negative input by throwing.",
+      "input_files": {
+        "math.js": "export function toBaseUnits(amount) {\n  if (amount < 0) throw new Error('amount must be non-negative')\n  return Math.round(amount * 100)\n}\n"
+      },
+      "expected_outcome": "test_math.test.mjs passes against math.js"
+    },
+    {
+      "id": "T-05",
+      "type": "architecture/reasoning",
+      "name": "split or merge",
+      "prompt": "items.js in the scratch directory mixes persistence and formatting concerns. Read it and write a short rationale (split.md) recommending whether to split the module in two, naming the two responsibilities.",
+      "input_files": {
+        "items.js": "export async function saveItem(cart, item) { await db.write(cart, item) }\nexport function formatLine(item) { return `${item.qty} x ${item.sku}` }\n"
+      },
+      "expected_outcome": "split.md with two named responsibilities"
+    },
+    {
+      "id": "T-06",
+      "type": "multi-step",
+      "name": "rename across files",
+      "prompt": "In the scratch directory, rename the exported function runPipeline to execute in pipeline.js and update the single caller in main.js to use the new name. Do not change behaviour.",
+      "input_files": {
+        "pipeline.js": "export function runPipeline(x) { return x * 2 }\n",
+        "main.js": "import { runPipeline } from './pipeline.js'\nexport const r = runPipeline(21)\n"
+      },
+      "expected_outcome": "no reference to runPipeline remains; execute(21) === 42"
+    },
+    {
+      "id": "T-07",
+      "type": "reasoning",
+      "name": "schema analysis",
+      "prompt": "config.json in the scratch directory declares a schema. Answer: which field is required but has no default, and what happens when that field is missing?",
+      "input_files": {
+        "config.json": "{\n  \"schema\": {\n    \"required\": [\"endpoint\"],\n    \"properties\": {\n      \"endpoint\": { \"type\": \"string\" },\n      \"retries\": { \"type\": \"integer\", \"default\": 3 }\n    }\n  }\n}\n"
+      },
+      "expected_outcome": "endpoint is required without default; missing endpoint fails validation"
+    },
+    {
+      "id": "T-08",
+      "type": "modify+verify",
+      "name": "config edit and validate",
+      "prompt": "Edit limits.json in the scratch directory to raise maxConnections from 10 to 25, then verify the file parses as valid JSON.",
+      "input_files": {
+        "limits.json": "{\"maxConnections\": 10, \"timeoutMs\": 5000}\n"
+      },
+      "expected_outcome": "limits.json parses with maxConnections 25"
+    }
+  ]
+}
