@@ -2,12 +2,13 @@
   "name": "opencode-agentic-framework-reference-app",
   "private": true,
   "version": "1.0.0",
+  "engines": { "node": ">=23.6" },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
-    "test": "node --test \".opencode/plugin/*.test.mjs\" \"framework/experiments/*.test.mjs\"",
+    "test": "node framework/tools/run_tests.mjs",
     "test:e2e": "playwright test",
     "lint": "eslint src --max-warnings=0"
   },

@@ -890,10 +890,17 @@ if _tl_pkg.exists():
     import json as _tl_json
     _tl_scripts = _tl_json.loads(_tl_pkg.read_text(encoding="utf-8")).get("scripts") or {}
     _tl_test_script = _tl_scripts.get("test", "")
-    check("package.json declares a test script running node --test",
-          "node --test" in _tl_test_script,
-          "g4 runs `npm test` when a test script exists; it must invoke node --test "
+    check("package.json declares a test script that reaches node --test",
+          ("node --test" in _tl_test_script or _tl_test_script.endswith("framework/tools/run_tests.mjs")),
+          "g4 runs `npm test` when a test script exists; the script must reach node --test "
           "so the telemetry harness is part of the executable chain")
+
+# The runner is the sanctioned entry point; guard its delegation so the chain
+# cannot silently stop reaching node --test.
+_tl_runner = Path("framework/tools/run_tests.mjs")
+check("runner delegates to node --test",
+      "--test" in (_tl_runner.read_text(encoding="utf-8") if _tl_runner.exists() else ""),
+      "run_tests.mjs must spawn node --test; npm test reaches the harness through it")
 
 # Agent instructions must carry the contract so the primary agent sees it before
 # launching anything in background.
