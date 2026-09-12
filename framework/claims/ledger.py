@@ -21,7 +21,7 @@ CLAIM_TYPES = {"environment", "behavioral", "data", "causal"}
 CLASSIFICATIONS = {"FACT", "HYPOTHESIS", "ASSUMPTION", "UNKNOWN"}
 STATUSES = {"UNVERIFIED", "VERIFIED", "REFUTED", "PARTIALLY_VERIFIED"}
 IMPACTS = {"high", "medium", "low"}
-EVIDENCE_KINDS = {"command_run", "artifact", "observation"}
+EVIDENCE_KINDS = {"command_run", "artifact", "observation", "DIRECT", "DERIVED", "INFERRED", "ASSERTED", "UNOBSERVED", "CONTRADICTED"}
 EVIDENCE_RESULTS = {"pass", "fail", "inconclusive"}
 DISCONFIRMATION_RESULTS = {"confirmed", "refuted", "inconclusive"}
 CONFIDENCE_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
@@ -136,6 +136,65 @@ def _has_refutation_evidence(rec: dict) -> bool:
         if e.get("result") == "fail" and e.get("expected") and e.get("actual"):
             return True
     return False
+
+
+def _validate_integrity(rec: dict) -> list[str]:
+    """Validate evidence integrity per ARIS patterns.
+    
+    Checks:
+    - E1: Claim has evidence
+    - E2: Evidence exists and is accessible
+    - E3: Evidence belongs to this task
+    - E4: Evidence postdates relevant change (git_sha match)
+    - E5: Execution receipt exists
+    - E6: Gate receipt exists
+    - E7: Reviewer actually inspected required artifacts
+    - E8: No stale evidence reused
+    """
+    problems = []
+    
+    # E1: Claim should have evidence (warnings, not hard failures for some classifications)
+    classification = rec.get("classification")
+    status = rec.get("status")
+    evidence = rec.get("evidence") or []
+    
+    if status in ("VERIFIED", "PARTIALLY_VERIFIED") and not evidence:
+        problems.append("EVIDENCE_MISSING_FOR_VERIFIED")
+    
+    # E2-E3: Evidence task binding
+    task_id = rec.get("task_id")
+    for e in evidence:
+        if isinstance(e, dict):
+            # Evidence should reference the same task
+            e_task = e.get("task_id") or task_id  # inherit if not specified
+            if e_task and e_task != task_id:
+                problems.append("EVIDENCE_TASK_MISMATCH")
+                break
+    
+    # E4: Git SHA consistency (if provided)
+    git_sha = rec.get("git_sha")
+    if git_sha:
+        for e in evidence:
+            if isinstance(e, dict) and e.get("git_sha"):
+                if e["git_sha"] != git_sha:
+                    problems.append("EVIDENCE_GIT_SHA_MISMATCH")
+                    break
+    
+    # E5: Execution timestamp sanity
+    execution_ts = rec.get("execution_timestamp")
+    created = rec.get("created")
+    if execution_ts and created:
+        # Execution should not be after claim creation (with 1min tolerance)
+        try:
+            from datetime import datetime
+            exec_dt = datetime.fromisoformat(execution_ts.replace("Z", "+00:00"))
+            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if exec_dt > created_dt:
+                problems.append("EVIDENCE_FUTURE_TIMESTAMP")
+        except (ValueError, TypeError):
+            pass
+    
+    return problems
 
 
 def derive_confidence(rec: dict) -> str:
@@ -269,6 +328,10 @@ def validate_record(rec: dict) -> list[str]:
         if not _has_refutation_evidence(rec):
             problems.append("CLAIM_REFUTED_NO_EVIDENCE")
 
+    # 8. Evidence integrity checks (ARIS patterns)
+    integrity_problems = _validate_integrity(rec)
+    problems.extend(integrity_problems)
+
     return problems
 
 
@@ -346,10 +409,161 @@ def analyse() -> dict:
     }
 
 
+_INTEGRITY_MESSAGES = {
+    "EVIDENCE_MISSING_FOR_VERIFIED": "VERIFIED claim has no evidence",
+    "EVIDENCE_TASK_MISMATCH": "evidence references a different task",
+    "EVIDENCE_GIT_SHA_MISMATCH": "evidence git_sha differs from claim git_sha",
+    "EVIDENCE_FUTURE_TIMESTAMP": "execution_timestamp is after claim creation",
+}
+
+
+def _gate_receipts() -> set:
+    """Gate names with a recorded run receipt in any phases/*/VERIFICATION.md."""
+    receipts = set()
+    base = _state_root()
+    for md in sorted((base / "phases").glob("*/VERIFICATION.md")):
+        for ln in md.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = re.match(r"\s*gate:\s*(g[a-z0-9_]+)", ln)
+            if m:
+                receipts.add(m.group(1))
+    return receipts
+
+
+def _open_suspicions() -> set:
+    """Task ids with an OPEN suspicion in the reviewer suspicion log."""
+    out = set()
+    p = _state_root() / "verification" / "suspicion_log.jsonl"
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("status") == "OPEN" and rec.get("task_id"):
+            out.add(str(rec["task_id"]))
+    return out
+
+
+def _unfinished_reviews() -> set:
+    """Task ids whose review loop did not reach COMPLETED."""
+    out = set()
+    p = _state_root() / "verification" / "review_state.json"
+    if not p.exists():
+        return out
+    try:
+        state = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError):
+        return out
+    for rec in state.values():
+        if isinstance(rec, dict) and rec.get("status") != "COMPLETED" and rec.get("task_id"):
+            out.add(str(rec["task_id"]))
+    return out
+
+
+def integrity_report() -> dict:
+    """E1-E8 evidence integrity over the latest claim per id.
+
+    Distinct from validate_record: validation answers "is the record well-formed and
+    truthful per its own fields"; integrity answers "does the evidence exist, belong to
+    this work, and was it actually produced". A claim can be valid yet carry fabricated,
+    borrowed, or stale evidence; G14 exists to catch that class.
+    """
+    violations = []
+    p = ledger_path()
+    if not p.exists():
+        return {"status": "empty", "entries": 0, "claims": 0, "violations": []}
+    lines = [ln.strip() for ln in p.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()]
+    records = []
+    for ln in lines:
+        try:
+            records.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    if not records:
+        return {"status": "empty", "entries": len(lines), "claims": 0, "violations": []}
+
+    latest: dict[str, dict] = {}
+    for r in records:
+        latest[str(r.get("claim_id") or "?")] = r
+    claims = list(latest.values())
+
+    def _add(cid, tid, code, message):
+        violations.append({"claim_id": cid, "task_id": tid, "check": code, "message": message})
+
+    # E1/E3/E4/E5: record-structure integrity, shared with validate_record.
+    for c in claims:
+        for code in _validate_integrity(c):
+            _add(c.get("claim_id"), c.get("task_id"), code,
+                 _INTEGRITY_MESSAGES.get(code, code))
+
+    # E2: repo-relative entry_points must resolve to a real file. Command-like
+    # entry_points (containing a space) and non-repo prefixes are not path claims.
+    for c in claims:
+        for e in c.get("evidence") or []:
+            if not isinstance(e, dict):
+                continue
+            ep = e.get("entry_point")
+            if isinstance(ep, str) and re.match(r"^(framework|src|backend)/", ep) and " " not in ep:
+                if not Path(ep).exists():
+                    _add(c.get("claim_id"), c.get("task_id"), "EVIDENCE_ARTIFACT_MISSING",
+                         f"evidence entry_point does not exist: {ep}")
+
+    # E6: evidence naming a gate script requires a recorded gate receipt.
+    for c in claims:
+        for e in c.get("evidence") or []:
+            if not isinstance(e, dict):
+                continue
+            text = " ".join(str(e.get(k) or "") for k in ("command", "entry_point"))
+            m = re.search(r"framework/gates/(g[a-z0-9_]+)\.sh", text)
+            if m and m.group(1) not in _gate_receipts():
+                _add(c.get("claim_id"), c.get("task_id"), "EVIDENCE_GATE_RECEIPT_MISSING",
+                     f"gate {m.group(1)} named in evidence but no receipt in VERIFICATION.md")
+
+    # E7: an open reviewer suspicion or an unfinished review loop blocks a VERIFIED claim.
+    open_suspicions = _open_suspicions()
+    unfinished = _unfinished_reviews()
+    for c in claims:
+        tid = str(c.get("task_id") or "")
+        if c.get("status") in ("VERIFIED", "PARTIALLY_VERIFIED"):
+            if tid in open_suspicions:
+                _add(c.get("claim_id"), tid, "EVIDENCE_OPEN_SUSPICION",
+                     f"task {tid} has an open reviewer suspicion")
+            if tid in unfinished:
+                _add(c.get("claim_id"), tid, "EVIDENCE_REVIEW_UNFINISHED",
+                     f"task {tid} review loop did not complete")
+
+    # E8: the identical evidence payload (full dict set) recorded for 2+ different
+    # tasks is evidence reuse -- a fabricated- or stale-evidence signal. A full-payload
+    # match across tasks is far too specific to be a coincidence.
+    if len(claims) > 1:
+        fp_to_tasks: dict[tuple, set] = {}
+        fp_to_claims: dict[tuple, list] = {}
+        for c in claims:
+            payload = tuple(sorted(
+                json.dumps(e, sort_keys=True) for e in (c.get("evidence") or [])
+                if isinstance(e, dict)))
+            if not payload:
+                continue
+            fp_to_tasks.setdefault(payload, set()).add(str(c.get("task_id") or "?"))
+            fp_to_claims.setdefault(payload, []).append(c.get("claim_id"))
+        for fp, tasks in fp_to_tasks.items():
+            if len(tasks) > 1:
+                for cid in fp_to_claims[fp]:
+                    _add(cid, latest[cid].get("task_id"), "EVIDENCE_STALE_REUSE",
+                         f"identical evidence payload recorded across tasks {sorted(tasks)}")
+
+    return {"status": "violations" if violations else "ok",
+            "entries": len(lines), "claims": len(claims), "violations": violations}
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Claim ledger")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("analyse")
+    sub.add_parser("integrity")
     sub.add_parser("path")
     ad = sub.add_parser("append")
     ad.add_argument("--json", required=True)
@@ -367,8 +581,18 @@ if __name__ == "__main__":
         cid = append(entry)
         print(json.dumps({"claim_id": cid})); sys.exit(0)
 
+    if a.cmd == "integrity":
+        out = integrity_report()
+        print(json.dumps(out, indent=2))
+        if out["status"] == "empty":
+            sys.exit(3)
+        sys.exit(1 if out["violations"] else 0)
+
     out = analyse()
     print(json.dumps(out, indent=2))
     if out["status"] == "empty":
         sys.exit(3)
     sys.exit(1 if out["invalid"] else 0)
+
+
+

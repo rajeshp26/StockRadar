@@ -23,6 +23,8 @@ The state root is resolved exactly like the rest of the framework
 python3 framework/claims/ledger.py path                 # print the resolved ledger path
 python3 framework/claims/ledger.py append --json '{...}'  # validate, timestamp, append
 python3 framework/claims/ledger.py analyse              # judge the latest record per claim_id
+python3 framework/claims/ledger.py integrity         # E1-E8 check: evidence is real, on-task, reviewed, not reused
+bash framework/gates/g14_integrity.sh                    # gate: 0 integrity ok | 1 violations | 2 blocked | 4 no claims
 bash framework/gates/g11_evidence.sh                    # gate: 0 valid | 1 invalid | 2 blocked | 4 no claims
 ```
 
@@ -45,7 +47,24 @@ auto-assigns `CLM-NNN`, continuing the highest existing number across all record
 | `evidence` | no | list of `{id, kind, command, runtime, entry_point, reproduced, expected, actual, result, env, disconfirmation}` |
 | `verified_by` | no | the command that verified the claim |
 | `independent_check` | no | a second, different verification command (required for high impact) |
+| `git_sha` | no | git SHA for evidence provenance tracking |
+| `execution_timestamp` | no | ISO-8601 timestamp of when evidence was generated |
 | `created` | auto | ISO-8601 timestamp added by `append` |
+
+## Extended Evidence Taxonomy
+
+From Aetox Senior Architect Agent patterns, evidence can be classified by its provenance strength:
+
+| Kind | Meaning | When to Use |
+| --- | --- | --- |
+| `DIRECT` | Direct artifact/execution evidence observed firsthand | Test output, build logs, runtime output |
+| `DERIVED` | Computed from direct evidence | Analysis results, aggregations |
+| `INFERRED` | Reasonable conclusion but not directly observed | Code inspection, pattern matching |
+| `ASSERTED` | Agent claims it happened but evidence insufficient | Agent summary without proof |
+| `UNOBSERVED` | Required evidence cannot establish the result | Missing test, no execution record |
+| `CONTRADICTED` | Evidence actively conflicts with the claim | Conflicting test results |
+
+The taxonomy determines confidence derivation: DIRECT > DERIVED > INFERRED > ASSERTED. UNOBSERVED and CONTRADICTED are never acceptable for VERIFIED claims.
 
 Evidence entries may additionally bind a command environment and a disconfirmation
 verdict:
@@ -89,6 +108,7 @@ evidence. The default classification for anything not reproduced is `UNKNOWN`.
 | --- | --- | --- | --- |
 | `append` | accepted, claim_id printed | validation code printed | — |
 | `analyse` | all latest records valid | invalid records found | ledger empty or missing |
+| `integrity` | all latest claims pass E1-E8 | E-code violations listed | ledger empty or missing |
 
 `analyse` never exits 2. The G11 gate maps its exit 3 to NOT_APPLICABLE (4): no claims
 recorded means nothing to judge, which is never a pass.
@@ -99,3 +119,4 @@ The behavioural contract for claims lives in `.opencode/rules/evidence-provenanc
 claim classes, the VERIFIED controlled term, verification levels L1/L2/L3, runtime-scoped
 claims, and the two log rules. Insufficient provenance is blocker signal
 `EVIDENCE_INSUFFICIENT` (retry action `gather_provenance_or_downgrade_claim`).
+
