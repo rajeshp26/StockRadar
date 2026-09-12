@@ -12,7 +12,7 @@ is derived from recorded facts only.
 
 Exit codes:
   0  report produced
-  1  report produced but session(s) never finalized OR the model-resolution snapshot records failures (both named in the output)
+  1  report produced but session(s) never finalized, the model-resolution snapshot records failures, OR telemetry anomalies were detected (all named in the output)
   2  records exist but none are parseable
   3  no telemetry yet (not an error -- nothing has run)
 """
@@ -25,6 +25,7 @@ import statistics as st
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime
 
 import yaml
 
@@ -113,18 +114,28 @@ def state_root() -> str:
 
 
 def load(path):
-    recs, bad = [], 0
+    """Load records; return (recs, bad, torn_offsets).
+
+    torn_offsets are the byte offsets of unparseable lines (T-FX2: torn lines
+    must surface as a JSON field + console warning, never silently skipped)."""
+    recs, bad, offsets = [], 0, []
     if not os.path.exists(path):
-        return recs, bad
-    for line in open(path, encoding="utf-8"):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            recs.append(json.loads(line))
-        except Exception:
-            bad += 1
-    return recs, bad
+        return recs, bad, offsets
+    with open(path, encoding="utf-8") as fh:
+        while True:
+            offset = fh.tell()
+            line = fh.readline()
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                recs.append(json.loads(line))
+            except Exception:
+                bad += 1
+                offsets.append(offset)
+    return recs, bad, offsets
 
 
 def collapse(recs):
@@ -364,6 +375,323 @@ def analyse(recs):
                 task_coverage=task_coverage, impact_to_gates=impact_to_gates)
 
 
+def _gate_silence(recs):
+    """A session (or a day) with tool activity but zero gate evidence.
+
+    Sep 7: 489 gate records dated Sep 6, none on Sep 7, while sessions kept
+    using tools -- the report showed 'no gate results recorded' and nothing
+    flagged the silence."""
+    anomalies = []
+    for r in recs:
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        tools = r.get("tools") or {}
+        taxo = r.get("taxonomy_events") or []
+        gates = r.get("gates") or {}
+        has_tool_activity = bool(tools) or any(
+            isinstance(e, dict) and e.get("event") == "WORK_ATTEMPTED" for e in taxo)
+        has_gate_evidence = bool(gates) or any(
+            isinstance(e, dict) and e.get("event") in GATE_EVENTS_TUPLE for e in taxo)
+        if has_tool_activity and not has_gate_evidence:
+            anomalies.append({
+                "block": "gate_silence", "severity": "warning",
+                "session_id": sid,
+                "detail": f"session {sid} has tool activity but no GATE_* events",
+            })
+    days = defaultdict(list)
+    for r in recs:
+        st_ = r.get("started_at")
+        if st_:
+            days[st_[:10]].append(r)
+    for day, day_recs in sorted(days.items()):
+        has_tool = any(
+            bool(r.get("tools") or {}) or any(
+                isinstance(e, dict) and e.get("event") == "WORK_ATTEMPTED"
+                for e in (r.get("taxonomy_events") or []))
+            for r in day_recs)
+        has_gate = any(
+            bool(r.get("gates") or {}) or any(
+                isinstance(e, dict) and e.get("event") in GATE_EVENTS_TUPLE
+                for e in (r.get("taxonomy_events") or []))
+            for r in day_recs)
+        if has_tool and not has_gate:
+            anomalies.append({
+                "block": "gate_silence", "severity": "warning",
+                "day": day,
+                "detail": (f"day {day} has tool activity but no gate events "
+                           f"across {len(day_recs)} session(s)"),
+            })
+    return anomalies
+
+
+def _twin_sessions(recs):
+    """Two or more sessions referencing the same background-task id.
+
+    Sep 7: ses_f834be76effeTCAKhzHDm6ylRI and ses_f835888e0ffedJI5trxFOVosuv
+    both referenced bg_b6288483/bg_af378573/bg_62fa5735/bg_13672324 -- a
+    background task cannot be owned by two sessions."""
+    bg_to_sessions = defaultdict(list)
+    for r in recs:
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        for bgid in (r.get("bg_tasks") or {}):
+            bg_to_sessions[bgid].append(sid)
+    anomalies = []
+    for bgid, sids in sorted(bg_to_sessions.items()):
+        uniq = sorted(set(sids))
+        if len(uniq) >= 2:
+            anomalies.append({
+                "block": "twin_sessions", "severity": "warning",
+                "background_task_id": bgid,
+                "sessions": uniq,
+                "detail": (f"background task {bgid} referenced by {len(uniq)} "
+                           f"sessions: {', '.join(uniq)}"),
+            })
+    return anomalies
+
+
+def _spawn_burst(recs, window_s=60, min_count=3):
+    """min_count or more sessions started within window_s of each other.
+
+    Sep 7: 4 sessions at 16:49:16.383Z and 6 at 16:55:23.252Z -- parallel
+    spawns the report did not surface."""
+    starts = []
+    for r in recs:
+        st_ = r.get("started_at")
+        sid = r.get("session_id")
+        if not (st_ and sid):
+            continue
+        try:
+            ts = datetime.fromisoformat(st_.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        starts.append((ts, sid, st_))
+    starts.sort()
+    anomalies = []
+    i = 0
+    while i < len(starts):
+        j = i
+        while j + 1 < len(starts) and starts[j + 1][0] - starts[i][0] <= window_s:
+            j += 1
+        count = j - i + 1
+        if count >= min_count:
+            anomalies.append({
+                "block": "spawn_burst", "severity": "warning",
+                "window_start": starts[i][2], "window_end": starts[j][2],
+                "count": count,
+                "sessions": [s[1] for s in starts[i:j + 1]],
+                "detail": (f"{count} sessions started within {window_s}s "
+                           f"({starts[i][2]} .. {starts[j][2]})"),
+            })
+        i = j + 1
+    return anomalies
+
+
+def _early_death(recs, min_duration_s=600):
+    """Unfinalized session whose duration is below min_duration_s.
+
+    Sep 7: six sessions died 172-293s after start with no final record."""
+    anomalies = []
+    for r in recs:
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        if (r.get("kind") or "final") == "final":
+            continue
+        dur = r.get("duration_s")
+        if dur is None:
+            continue
+        if dur < min_duration_s:
+            anomalies.append({
+                "block": "early_death", "severity": "warning",
+                "session_id": sid, "duration_s": dur,
+                "detail": (f"unfinalized session {sid} died after {dur}s "
+                           f"(< {min_duration_s}s)"),
+            })
+    return anomalies
+
+
+def _poll_escalation(recs, top_n=5):
+    """Per-session bg_poll_total offenders, worst first.
+
+    Sep 7: 13 poll events across 2 sessions (10 + 3) -- the polling
+    anti-pattern the background-task contract exists to prevent."""
+    offenders = []
+    for r in recs:
+        sid = r.get("session_id")
+        poll = r.get("bg_poll_total", 0) or 0
+        if not sid or poll <= 0:
+            continue
+        stale = sum(
+            1 for t in (r.get("bg_tasks") or {}).values()
+            if isinstance(t, dict)
+            and (t.get("launched", 0) or 0) > ((t.get("collects", 0) or 0) + (t.get("cancelled", 0) or 0)))
+        offenders.append({"session_id": sid, "bg_poll_total": poll, "stale_bg_tasks": stale})
+    offenders.sort(key=lambda o: -o["bg_poll_total"])
+    anomalies = []
+    for o in offenders[:top_n]:
+        detail = f"session {o['session_id']} recorded {o['bg_poll_total']} background_output poll(s)"
+        if o["stale_bg_tasks"]:
+            detail += f", {o['stale_bg_tasks']} stale bg task(s)"
+        anomalies.append({
+            "block": "poll_escalation", "severity": "warning",
+            "session_id": o["session_id"], "bg_poll_total": o["bg_poll_total"],
+            "stale_bg_tasks": o["stale_bg_tasks"], "detail": detail,
+        })
+    return anomalies
+
+
+def _cache_read_ratio(d, warn_pct=85.0):
+    """Emission-level cache_read vs cache_total.
+
+    Sep 7: 23,305,664 / 25,597,350 = 91.0% -- most context served from cache.
+    The ratio is always reported as a COST/health line; the anomaly (warning)
+    fires only above warn_pct."""
+    tok = d.get("tok") or {}
+    cache_read = tok.get("cache_read", 0) or 0
+    cache_total = sum(v for v in tok.values() if isinstance(v, (int, float)))
+    if cache_total <= 0:
+        return []
+    ratio = round(100.0 * cache_read / cache_total, 1)
+    if ratio < warn_pct:
+        return []
+    return [{
+        "block": "cache_read_ratio", "severity": "warning",
+        "cache_read": cache_read, "cache_total": cache_total, "ratio_pct": ratio,
+        "detail": (f"cache_read is {ratio}% of total tokens "
+                   f"({cache_read:,}/{cache_total:,}) -- most context served "
+                   f"from cache; watch stale-cache risk"),
+    }]
+
+
+def _last_task_state(tasks_dir, task_id):
+    """Last lifecycle state + ts for a supervised task from its events file."""
+    ev_path = os.path.join(tasks_dir, task_id + ".events.jsonl")
+    state, ts = "", ""
+    if not os.path.exists(ev_path):
+        return state, ts
+    try:
+        with open(ev_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                if ev.get("state"):
+                    state = ev["state"]
+                    ts = ev.get("ts") or ""
+    except Exception:
+        pass
+    return state, ts
+
+
+def _supervision_join(recs, tasks_dir=None):
+    """Join supervised task contracts to telemetry sessions.
+
+    (a) A contract whose session_id/background_task_id resolves to no telemetry
+        record, or whose linked telemetry record carries an empty/mismatched
+        task_id (Sep 7: T-P0-3R COMPLETED 16:28:44 with evidence but telemetry
+        task_id empty) -> warning.
+    (b) A telemetry session claiming a task_id with no supervising contract ->
+        warning.
+    A missing tasks dir degrades to an info note, never a failure."""
+    if tasks_dir is None:
+        tasks_dir = os.path.join(state_root(), "tasks")
+    if not os.path.isdir(tasks_dir):
+        return [{"block": "supervision_join", "severity": "info",
+                 "detail": f"tasks dir {tasks_dir} missing -- supervision join skipped"}]
+    contracts = {}
+    for p in sorted(glob.glob(os.path.join(tasks_dir, "*.json"))):
+        base = os.path.basename(p)
+        if base.endswith(".contract.json"):
+            continue  # immutable contract duplicates the working record
+        try:
+            with open(p, encoding="utf-8") as fh:
+                c = json.load(fh)
+        except Exception:
+            continue
+        task_id = c.get("task_id")
+        if not task_id:
+            continue
+        state, ts = _last_task_state(tasks_dir, task_id)
+        contracts[task_id] = {
+            "task_id": task_id,
+            "session_id": c.get("session_id") or "",
+            "background_task_id": c.get("background_task_id") or "",
+            "state": state, "state_ts": ts,
+        }
+    tele_by_sid = {r.get("session_id"): r for r in recs if r.get("session_id")}
+    tele_bgids = set()
+    for r in recs:
+        for bgid in (r.get("bg_tasks") or {}):
+            tele_bgids.add(bgid)
+    tele_task_ids = {str(r.get("task_id") or "") for r in recs if r.get("task_id")}
+    anomalies = []
+    for c in contracts.values():
+        sid, bgid = c["session_id"], c["background_task_id"]
+        if not sid and not bgid:
+            continue  # contract never started a session; nothing to link
+        linked_rec = tele_by_sid.get(sid) if sid else None
+        if linked_rec is not None:
+            rec_tid = str(linked_rec.get("task_id") or "")
+            if rec_tid != c["task_id"]:
+                anomalies.append({
+                    "block": "supervision_join", "severity": "warning",
+                    "task_id": c["task_id"], "state": c["state"], "state_ts": c["state_ts"],
+                    "detail": (f"supervised task {c['task_id']} ({c['state']}) linked to "
+                               f"session {sid} but telemetry task_id is {rec_tid or '(empty)'}"),
+                })
+            continue
+        if bgid and bgid in tele_bgids:
+            continue
+        anomalies.append({
+            "block": "supervision_join", "severity": "warning",
+            "task_id": c["task_id"], "state": c["state"], "state_ts": c["state_ts"],
+            "detail": f"supervised task {c['task_id']} ({c['state']}) has no telemetry session linked",
+        })
+    for tid in sorted(tele_task_ids):
+        if tid and tid not in contracts:
+            anomalies.append({
+                "block": "supervision_join", "severity": "warning",
+                "task_id": tid,
+                "detail": f"telemetry session(s) reference task {tid} but no supervising contract exists",
+            })
+    return anomalies
+
+
+def _torn_lines(bad, offsets):
+    """Unparseable lines in the records file, with their byte offsets."""
+    if bad <= 0:
+        return []
+    return [{
+        "block": "torn_lines", "severity": "warning",
+        "count": bad, "offsets": list(offsets or []),
+        "detail": f"{bad} torn/unparseable line(s) at byte offsets {list(offsets or [])}",
+    }]
+
+
+def detect_anomalies(recs, d, tasks_dir=None, bad=0, torn_offsets=None):
+    """Run every anomaly block over collapsed records + aggregate dict.
+
+    Returns a list of anomaly dicts {block, severity, ...}. Warning-severity
+    anomalies drive exit code 1 in main(); info anomalies are guidance."""
+    out = []
+    out += _gate_silence(recs)
+    out += _twin_sessions(recs)
+    out += _spawn_burst(recs)
+    out += _early_death(recs)
+    out += _poll_escalation(recs)
+    out += _cache_read_ratio(d)
+    out += _supervision_join(recs, tasks_dir)
+    out += _torn_lines(bad, torn_offsets)
+    return out
+
+
 def render(d, verbose=False):
     L, n = [], d["n"]
     total_tok = tot(d["tok"])
@@ -380,6 +708,10 @@ def render(d, verbose=False):
                 L.append(f"  {k:12s} {v:>12,}  ({pct(v, total_tok)}%)")
         L.append(f"  {'TOTAL':12s} {total_tok:>12,}")
         L.append(f"  per session  {round(total_tok / n):>12,}")
+        cache_total = sum(v for v in d["tok"].values() if isinstance(v, (int, float)))
+        if cache_total:
+            L.append(f"  cache_read ratio  {pct(d['tok'].get('cache_read', 0) or 0, cache_total)}%  "
+                     f"({d['tok'].get('cache_read', 0) or 0:,} / {cache_total:,})")
     else:
         L.append("  no token data recorded")
 
@@ -556,6 +888,17 @@ def render(d, verbose=False):
                 L.append("  !! an unresolved model stalls the subagent at spawn; fix before use")
 
     L.append("")
+    L.append("-- ANOMALIES ------------------------------------------------------")
+    anoms = d.get("anomalies") or []
+    if anoms:
+        for an in anoms:
+            sev = an.get("severity", "info")
+            tag = "!!" if sev == "warning" else "  "
+            L.append(f"  {tag} [{an['block']}] {an.get('detail', '')}")
+    else:
+        L.append("  no anomalies detected")
+
+    L.append("")
     L.append("-- READING THIS ---------------------------------------------------")
     if n < 20:
         L.append(f"  {n} session(s). Under ~20 these numbers are indicative, not decisive.")
@@ -565,15 +908,17 @@ def render(d, verbose=False):
     return "\n".join(L)
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="emit aggregate as JSON")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--path", help="override records.jsonl path")
-    a = ap.parse_args()
+    ap.add_argument("--tasks-dir",
+                    help="override the tasks dir the supervision join reads (default: <state_root>/tasks)")
+    a = ap.parse_args(argv)
 
     path = a.path or os.path.join(state_root(), "telemetry", "records.jsonl")
-    recs, bad = load(path)
+    recs, bad, torn_offsets = load(path)
     recs = collapse(recs)
 
     if not recs and not bad:
@@ -582,6 +927,8 @@ def main():
         return 3
     if not recs and bad:
         print(f"[telemetry] {bad} record(s) present but none parseable: {path}")
+        if torn_offsets:
+            print(f"[telemetry] torn line byte offsets: {torn_offsets}")
         return 2
 
     d = analyse(recs)
@@ -589,6 +936,9 @@ def main():
                                if r.get("session_id") and (r.get("kind") or "final") != "final"})
     d["stale"] = stale_bg_tasks(recs)
     d["models_resolution"] = load_models()
+    d["anomalies"] = detect_anomalies(recs, d, tasks_dir=a.tasks_dir,
+                                      bad=bad, torn_offsets=torn_offsets)
+    d["torn_line_offsets"] = torn_offsets
     if a.json:
         out = {k: (dict(v) if isinstance(v, defaultdict) else v) for k, v in d.items()}
         out["agents"] = {k: {**v, "models": sorted(v["models"])} for k, v in d["agents"].items()}
@@ -607,11 +957,16 @@ def main():
         out["unfinalized_sessions"] = d["unfinalized"]
         out["stale_bg_tasks"] = d["stale"]
         out["model_resolution"] = d["models_resolution"]
+        out["anomalies"] = d["anomalies"]
+        out["torn_line_offsets"] = torn_offsets
+        cache_total = sum(v for v in d["tok"].values() if isinstance(v, (int, float)))
+        out["cache_read_ratio_pct"] = (
+            pct(d["tok"].get("cache_read", 0) or 0, cache_total) if cache_total else None)
         print(json.dumps(out, indent=2, default=str))
     else:
         print(render(d, a.verbose))
         if bad:
-            print(f"[telemetry] warning: skipped {bad} unparseable line(s)")
+            print(f"[telemetry] warning: skipped {bad} unparseable line(s) at byte offsets {torn_offsets}")
     rc = 0
     if d["unfinalized"]:
         _head = ", ".join(d["unfinalized"][:5])
@@ -624,6 +979,11 @@ def main():
     if mr and not mr.get("_unreadable") and (mr.get("failures") or []):
         print(f"[telemetry] {len(mr['failures'])} model resolution failure(s): "
               f"{', '.join(mr['failures'])} -- an unresolved model stalls subagent spawn")
+        rc = 1
+    warnings = [an for an in d["anomalies"] if an.get("severity") == "warning"]
+    if warnings:
+        blocks = ", ".join(sorted({an["block"] for an in warnings}))
+        print(f"[telemetry] {len(warnings)} telemetry anomaly(ies) found: {blocks}")
         rc = 1
     return rc
 

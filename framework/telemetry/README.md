@@ -15,12 +15,14 @@ Optional: `export TASK_ID=03-02` before a run so records carry the task they bel
 python3 framework/telemetry/report.py            # human report
 python3 framework/telemetry/report.py --verbose  # + per-agent models, gate breakdowns
 python3 framework/telemetry/report.py --json     # machine-readable aggregate
+python3 framework/telemetry/report.py --tasks-dir <dir>  # isolate the supervision join from live task state
 python3 framework/validate.py --models   # resolve every slot, print source attribution, write the snapshot
 ```
 
 Exit codes: `0` report produced, `1` report produced but session(s) never reached a
-final record (died before SESSION_FINALIZED, named in the output), `3` nothing has run
-yet, `2` records exist but none parse. Exit 3 is not a failure.
+final record (died before SESSION_FINALIZED, named in the output) or telemetry
+anomalies were detected (all named in the output), `3` nothing has run yet, `2`
+records exist but none parse. Exit 3 is not a failure.
 
 ## What the sections answer
 
@@ -34,6 +36,7 @@ yet, `2` records exist but none parse. Exit 3 is not a failure.
 | REWORK RATE | The primary decision metric. |
 | DURATION | Median and worst-case session length. |
 | TELEMETRY HEALTH | Unfinalized sessions, poll totals, stale background tasks, worker supervision counters — the collector's own liveness. |
+| ANOMALIES | Which telemetry-health signals fired: gate silence, twin sessions, spawn bursts, early deaths, poll escalation, cache-read ratio, supervision join, torn lines. |
 | MODEL RESOLUTION | Which layer resolved each agent's model (override/profile/default) and whether any failed closed. |
 
 ## Deliberately not computed

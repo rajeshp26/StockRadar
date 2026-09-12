@@ -257,7 +257,9 @@ check("per-agent token attribution present",
       "agents" in _ts and "chat.params" in _ts and "tool.execute.before" in _ts)
 check("streaming tokens de-duplicated",
       "seen_msg" in _ts, "cumulative updates would be counted repeatedly")
-check("flush is idempotent", "rec.flushed" in _ts, "session.idle can fire twice")
+check("flush is idempotent",
+      "flushGuard.claim()" in _ts and "createFlushGuard" in _ts,
+      "session.idle can fire twice")
 check("no duplicate plugin copy",
       not Path(".opencode/plugins/telemetry.ts").exists(),
       "an unregistered copy diverges silently and keeps stale checks green")
@@ -826,7 +828,7 @@ check("telemetry heartbeats are emitted periodically",
       "setInterval" in _tel and 'emit("heartbeat")' in _tel,
       "heartbeat covers sessions killed before idle/deleted")
 check("telemetry emits one idempotent final record",
-      'emit("final")' in _tel and "rec.flushed" in _tel,
+      'emit("final")' in _tel and "flushGuard.claim()" in _tel,
       "a double idle must not double-count the session")
 check("a poll is made loud in the output it returns",
       "POLL_VIOLATION" in _tel,
@@ -834,6 +836,64 @@ check("a poll is made loud in the output it returns",
 check("compaction feeds the heartbeat",
       "session.compacted" in _tel and "heartbeat()" in _tel,
       "long sessions must keep writing after compaction")
+
+# ── 15d. Telemetry LIVENESS (T-FX3) ───────────────────────────────────────────
+# Escape-path fix target gate_check, destination tier executable_check: the harness
+# and its wiring must be proven by an executable check, not by prose. This block is
+# the text-level regression guard that keeps them from silently disappearing.
+print("\n[15d] Telemetry liveness (T-FX3)")
+
+# (a) The integration harness exists and is runnable by node --test.
+_tl_test = Path(".opencode/plugin/telemetry.test.mjs")
+check("telemetry integration harness exists", _tl_test.exists(),
+      "the executable proof of collector behaviour must be committed")
+if _tl_test.exists():
+    _tl_test_text = _tl_test.read_text(encoding="utf-8")
+    check("harness uses node:test + node:assert only",
+          "node:test" in _tl_test_text and "node:assert" in _tl_test_text,
+          "the harness must be framework-free so g4 can run it without installs")
+    check("harness drives the plugin end to end",
+          "session.created" in _tl_test_text and "tool.execute.before" in _tl_test_text
+          and "tool.execute.after" in _tl_test_text,
+          "the harness must exercise the real hook sequence, not a mock")
+
+# (b) The report anomaly test exists (T-FX2 deliverable; either location on disk).
+_tl_anom = (Path("tests/framework/test_report_telemetry.py")
+            if Path("tests/framework/test_report_telemetry.py").exists()
+            else Path("framework/telemetry/test_report_telemetry.py"))
+check("report anomaly test exists",
+      _tl_anom.exists(),
+      "the report anomaly regression test (T-FX2) must be committed; "
+      "expected at tests/framework/test_report_telemetry.py or "
+      "framework/telemetry/test_report_telemetry.py")
+
+# (c) Text-level regression guard on the collector's gate matcher and task-args read.
+# The old narrow gate regex `gates\/(g[1-8])_` missed g9/g12/g_tool_* (the 2026-09-07
+# zero-gate-records incident). The old task-args read indexed purely on `input?.args`
+# produced 539/547 records with execution_agent "unknown" (args are nested under input
+# in the real runtime). Both must be gone; the collector must read a fallback chain.
+check("collector no longer uses the narrow gate regex as its matcher",
+      "cmd.match(/gates\\/(g[1-8])_/)" not in _ts,
+      "the narrow g[1-8] matcher missed g9/g12/g_tool_*; gate records must come from "
+      "the canonical [gate] line")
+# Fallback chain lives in envelope.mjs (normalizeTaskArgs); the collector routes through it.
+_tl_env = Path(".opencode/plugin/envelope.mjs").read_text(encoding="utf-8")
+check("collector reads task args via a fallback chain (not purely input?.args)",
+      "normalizeTaskArgs" in _ts and "input.input" in _tl_env,
+      "real runtime nests task args under input; reading input?.args alone yields "
+      "execution_agent 'unknown'")
+
+# (d) The g4 hook: package.json must declare a "test" script running node --test so
+# g4_executable.sh executes the harness as part of the executable chain.
+_tl_pkg = Path("package.json")
+if _tl_pkg.exists():
+    import json as _tl_json
+    _tl_scripts = _tl_json.loads(_tl_pkg.read_text(encoding="utf-8")).get("scripts") or {}
+    _tl_test_script = _tl_scripts.get("test", "")
+    check("package.json declares a test script running node --test",
+          "node --test" in _tl_test_script,
+          "g4 runs `npm test` when a test script exists; it must invoke node --test "
+          "so the telemetry harness is part of the executable chain")
 
 # Agent instructions must carry the contract so the primary agent sees it before
 # launching anything in background.
@@ -1088,6 +1148,11 @@ _bad = Path("_val_bad.jsonl")
 _unv = Path("_val_unv.jsonl")
 _val_ded = Path("_val_ded.jsonl")
 _val_unf = Path("_val_unf.jsonl")
+# Fixture records reference task ids with no contract in the LIVE tasks dir; a real
+# tasks dir would trip the supervision-join warning and exit 1. Point those runs at
+# a nonexistent tasks dir -- report.py degrades a missing tasks dir to an info note,
+# never a failure (report.py:_supervision_join).
+_val_td = str(Path(tempfile.mkdtemp(prefix="val19_td_")) / "tasks").replace("\\", "/")
 try:
     _bad.write_text("garbage\n{oops\n", encoding="utf-8")
     _rc, _o = sh("python3 framework/telemetry/report.py --path _val_bad.jsonl")
@@ -1101,11 +1166,11 @@ try:
         "tools": {"bash": {"count": 2, "ms": 300, "fail": 0}},
         "gates": {"g4": {"result": "pass", "ms": 50, "exit": 0}},
         "retries": {"test_failure": 1}, "retro_recurrences": 1}) + "\n", encoding="utf-8")
-    _rc, _o = sh("python3 framework/telemetry/report.py --path _val_good.jsonl")
+    _rc, _o = sh("python3 framework/telemetry/report.py --path _val_good.jsonl --tasks-dir " + _val_td)
     check("report renders a valid record", _rc == 0, f"exit={_rc}")
     check("rework rate reported", "REWORK RATE" in _o and "100.0%" in _o, _o[-200:])
     check("recurrence surfaced", "did not close the gap" in _o, _o[-200:])
-    _rc, _o = sh("python3 framework/telemetry/report.py --json --path _val_good.jsonl")
+    _rc, _o = sh("python3 framework/telemetry/report.py --json --path _val_good.jsonl --tasks-dir " + _val_td)
     check("json mode emits rework_rate_pct",
           _rc == 0 and '"rework_rate_pct"' in _o, f"exit={_rc}")
     # Unverifiable must never be aggregated as a pass.
@@ -1127,7 +1192,7 @@ try:
             {"record_version": 2, "session_id": "s_ded", "kind": "final",
              "tokens": {"input": 100}, "agents": {}, "tools": {}})) + "\n",
         encoding="utf-8")
-    _rc, _o = sh("python3 framework/telemetry/report.py --json --path _val_ded.jsonl")
+    _rc, _o = sh("python3 framework/telemetry/report.py --json --path _val_ded.jsonl --tasks-dir " + _val_td)
     check("lifecycle records dedupe to one per session",
           _rc == 0 and '"n": 1' in _o and '"input": 100' in _o and '"input": 300' not in _o,
           f"exit={_rc}; {_o[-200:]}")
@@ -2086,6 +2151,194 @@ check("type default checkpoints land in the contract",
       str(_contract26.get("checkpoints"))[:200])
 
 shutil.rmtree(_bd26, ignore_errors=True)
+
+# g_entry: pre-dispatch plan contract (P1). A valid approved plan passes the entry
+# contract; unapproved, scopeless, criteria-less and open-question plans refuse
+# dispatch; ENTRY_EXEMPT is the only bypass; missing plan context is a routing
+# defect, never a silent skip.
+_bd27 = Path(tempfile.mkdtemp(prefix="val27_entry_"))
+shutil.copytree("framework", _bd27 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd27 / ".planning").mkdir(parents=True, exist_ok=True)
+(_bd27 / ".planning" / "phases" / "00-unphased").mkdir(parents=True, exist_ok=True)
+
+def _wsh27(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd27)), cmd), timeout=timeout)
+
+_G27 = "bash framework/gates/g_entry.sh"
+
+# static: gate exists, exit taxonomy and routing documented, agent contracts wired
+_g27 = Path("framework/gates/g_entry.sh").read_text(encoding="utf-8")
+check("g_entry refuses dispatch without a plan context",
+      "NO TASK DISPATCH" in _g27 and "ENTRY_EXEMPT" in _g27,
+      "the gate must refuse by name, never skip")
+_x27 = Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8")
+check("EXIT_CODES documents G-ENTRY with the NOT_APPLICABLE bypass",
+      "G-ENTRY" in _x27 and "NOT_APPLICABLE (ENTRY_EXEMPT=TRIVIAL)" in _x27,
+      "exit contract lives in the gate table")
+_p27 = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
+check("profiles routes the dispatch-time signal to g_entry",
+      "no_plan_context" in _p27 and "g_entry" in _p27,
+      "a fired signal with no gate is a routing gap")
+_t27 = Path(".opencode/agents/team-lead.md").read_text(encoding="utf-8")
+check("team-lead runs the entry gate before every dispatch",
+      "Entry contract before dispatch" in _t27
+      and "framework/gates/g_entry.sh" in _t27,
+      "pre-flight belongs in the dispatch path")
+_i27 = Path(".opencode/agents/implementer.md").read_text(encoding="utf-8")
+check("implementer declares the plan-authority contract",
+      "Plan authority" in _i27 and "scope drift" in _i27,
+      "authority boundaries must bound the implementation")
+_a27 = Path(".opencode/agents/architect.md").read_text(encoding="utf-8")
+check("architect binds architecture-right-sizing in primary skills",
+      "architecture-right-sizing" in _a27
+      and "software-architecture-design" in _a27,
+      "right-sizing is a primary skill choice, not a habit")
+_r27v = Path(".opencode/agents/reviewer.md").read_text(encoding="utf-8")
+check("reviewer finding contract carries impact/confidence/direction",
+      "impact: [blast radius if unfixed]" in _r27v
+      and "confidence: [high | medium | low]" in _r27v
+      and "direction: [reject | revise | redesign | propose_alternative]" in _r27v
+      and "not a mandate to rewrite" in _r27v,
+      "a finding without a direction cannot route a fix")
+
+# behavioral: isolated copy, real gate round-trips
+_plan27 = ("status: approved\n"
+           "title: entry gate fixture\n"
+           "files_or_components:\n"
+           "  - framework/gates/g_entry.sh\n"
+           "  - .opencode/agents/team-lead.md\n"
+           "acceptance_criteria:\n"
+           "  - the entry gate refuses dispatch without a valid approved plan\n"
+           "  - EXIT_CODES documents the exit contract including the trivial bypass\n")
+(_bd27 / ".planning" / "phases" / "00-unphased" / "V27-001_PLAN.md").write_text(_plan27, encoding="utf-8")
+_r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-001_PLAN.md " + _G27)
+check("g_entry passes a complete approved plan",
+      _r == 0 and "entry contract complete" in _o, (_o or "")[-200:])
+_r, _o = _wsh27("ENTRY_TASK=V27-001 " + _G27)
+check("g_entry resolves the plan through plan-path --task",
+      _r == 0 and "entry contract complete" in _o, (_o or "")[-200:])
+_r, _o = _wsh27(_G27)
+check("g_entry with no plan context refuses dispatch",
+      _r == 1 and "NO TASK DISPATCH" in _o, (_o or "")[-200:])
+_r, _o = _wsh27("ENTRY_EXEMPT=TRIVIAL " + _G27)
+check("ENTRY_EXEMPT=TRIVIAL is NOT_APPLICABLE, never a pass",
+      _r == 4 and "NOT_APPLICABLE" in _o, (_o or "")[-200:])
+(_bd27 / ".planning" / "phases" / "00-unphased" / "V27-002_PLAN.md").write_text(
+    _plan27.replace("status: approved", "status: draft"), encoding="utf-8")
+_r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-002_PLAN.md " + _G27)
+check("g_entry refuses an unapproved plan",
+      _r == 1 and "not approved" in _o, (_o or "")[-200:])
+(_bd27 / ".planning" / "phases" / "00-unphased" / "V27-003_PLAN.md").write_text(
+    _plan27.replace("files_or_components:\n", ""), encoding="utf-8")
+_r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-003_PLAN.md " + _G27)
+check("g_entry refuses a plan with no declared files_or_components",
+      _r == 1 and "no files_or_components" in _o, (_o or "")[-200:])
+(_bd27 / ".planning" / "phases" / "00-unphased" / "V27-004_PLAN.md").write_text(
+    _plan27.replace("acceptance_criteria:\n", ""), encoding="utf-8")
+_r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-004_PLAN.md " + _G27)
+check("g_entry refuses a plan with no acceptance_criteria",
+      _r == 1 and "no acceptance_criteria" in _o, (_o or "")[-200:])
+(_bd27 / ".planning" / "phases" / "00-unphased" / "V27-005_PLAN.md").write_text(
+    _plan27 + "open_questions:\n  - who owns the entry gate?\n", encoding="utf-8")
+_r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-005_PLAN.md " + _G27)
+check("g_entry refuses a plan with unresolved open questions",
+      _r == 1 and "open questions" in _o, (_o or "")[-200:])
+
+shutil.rmtree(_bd27, ignore_errors=True)
+
+print("\n[28] Evidence integrity (ledger integrity + G14)")
+# statics: the gate must wrap the ledger's integrity report -- authenticity is a
+# derived fact over the claim store, never something a gate re-derives itself
+_g1428 = Path("framework/gates/g14_integrity.sh").read_text(encoding="utf-8")
+check("G14 wraps ledger integrity and owns its exit contract",
+      'GATE_NAME="g14_integrity"' in _g1428 and "ledger.py integrity" in _g1428
+      and "exit $NOT_APPLICABLE" in _g1428,
+      "a gate is a command with an exit code; it must map integrity to 0/1/2/4")
+_l28 = Path("framework/claims/ledger.py").read_text(encoding="utf-8")
+check("ledger exposes integrity_report with E2/E7/E8 codes",
+      "def integrity_report()" in _l28 and "EVIDENCE_ARTIFACT_MISSING" in _l28
+      and "EVIDENCE_OPEN_SUSPICION" in _l28 and "EVIDENCE_STALE_REUSE" in _l28,
+      "G14's own checks must exist in the data source it wraps")
+_exc28 = Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8")
+check("G14 exit contract documented in EXIT_CODES.md",
+      "| G14 evidence-integrity" in _exc28 and "NOT_APPLICABLE (no claims recorded)" in _exc28,
+      "generated claims about gate behaviour must cite the authoritative table")
+_pf28 = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
+check("functional profile always runs g14",
+      "./framework/gates/g14_integrity.sh" in _pf28,
+      "evidence integrity is a default property, not an impact-triggered one")
+
+# behavioral: isolated copy, real CLI round-trips, real gate exits, no network
+_bd28 = Path(tempfile.mkdtemp(prefix="val28_integrity_"))
+shutil.copytree("framework", _bd28 / "framework",
+                ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
+(_bd28 / ".planning").mkdir()
+
+def _wsh28(cmd, timeout=180):
+    return sh("cd '%s' && %s" % (_wsl_path(str(_bd28)), cmd), timeout=timeout)
+
+_GI28 = "bash framework/gates/g14_integrity.sh"
+_LG28 = "python3 framework/claims/ledger.py"
+
+# empty store: nothing to check
+_r, _o = _wsh28(_GI28)
+check("G14 with no claims is NOT_APPLICABLE (4), never a pass",
+      _r == 4 and "NOT_APPLICABLE" in _o, (_o or "")[-200:])
+
+# clean claim: full provenance, impact low -> passes E1-E8
+_clean28 = ('{"claim_id":"CLM-960","task_id":"V28-001","agent":"verifier",'
+            '"statement":"integrity-clean claim",'
+            '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+            '"verified_by":"bash framework/claims/ledger.py integrity",'
+            '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+            '"entry_point":"framework/claims/ledger.py analyse","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh28(_LG28 + " append --json '%s'" % _clean28)
+check("ledger accepts a fully-provenanced low-impact claim",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_r, _o = _wsh28(_GI28)
+check("G14 passes a clean claim store",
+      _r == 0 and "PASS" in _o, (_o or "")[-200:])
+
+# fabricated artifact: entry_point names a repo file that does not exist
+_bogus28 = ('{"claim_id":"CLM-962","task_id":"V28-003","agent":"verifier",'
+            '"statement":"evidence names a nonexistent artifact",'
+            '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+            '"verified_by":"bash framework/claims/ledger.py integrity",'
+            '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+            '"entry_point":"framework/claims/nonexistent_artifact.py","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh28(_LG28 + " append --json '%s'" % _bogus28)
+check("ledger accepts the artifact claim (append cannot see the file exists)",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_r, _o = _wsh28(_GI28)
+check("G14 flags evidence naming a nonexistent repo artifact (E2)",
+      _r == 1 and "EVIDENCE_ARTIFACT_MISSING" in _o and "CLM-962" in _o, (_o or "")[-300:])
+
+# suspicion: an OPEN reviewer suspicion on the task blocks its VERIFIED claims
+(_bd28 / ".planning" / "verification").mkdir(parents=True, exist_ok=True)
+(_bd28 / ".planning" / "verification" / "suspicion_log.jsonl").write_text(
+    '{"suspicion_id":"SUSP-900","task_id":"V28-001","status":"OPEN","detail":"fixture"}\n',
+    encoding="utf-8")
+_r, _o = _wsh28(_GI28)
+check("G14 refuses VERIFIED claims while a reviewer suspicion is open (E7)",
+      _r == 1 and "EVIDENCE_OPEN_SUSPICION" in _o and "CLM-960" in _o, (_o or "")[-300:])
+
+# stale reuse: identical evidence payload reused under a different task
+(_bd28 / ".planning" / "verification" / "suspicion_log.jsonl").unlink()
+_reuse28 = ('{"claim_id":"CLM-961","task_id":"V28-002","agent":"verifier",'
+            '"statement":"reuses prior task evidence verbatim",'
+            '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
+            '"verified_by":"bash framework/claims/ledger.py integrity",'
+            '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+            '"entry_point":"framework/claims/ledger.py analyse","reproduced":true,"result":"pass"}]}')
+_r, _o = _wsh28(_LG28 + " append --json '%s'" % _reuse28)
+check("ledger accepts the reused-evidence claim (each record is individually valid)",
+      _r == 0 and '"claim_id"' in _o, (_o or "")[-200:])
+_r, _o = _wsh28(_GI28)
+check("G14 flags identical evidence payload reused across tasks (E8)",
+      _r == 1 and "EVIDENCE_STALE_REUSE" in _o and "CLM-961" in _o, (_o or "")[-300:])
+
+shutil.rmtree(_bd28, ignore_errors=True)
 
 print("\n" + "=" * 60)
 if WARNS:

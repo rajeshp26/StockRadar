@@ -3,7 +3,7 @@ profiles:
   functional:
     always: true
     evidence: [unit_test, integration_test]
-    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh", "./framework/gates/g9_scope.sh", "./framework/gates/g11_evidence.sh"]
+    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh", "./framework/gates/g9_scope.sh", "./framework/gates/g11_evidence.sh", "./framework/gates/g14_integrity.sh"]
 
   contract:
     when: {contract_change: true}
@@ -66,3 +66,21 @@ shape_to_gates:
 # follow any classification, so it cannot be routed from impact_to_gates.
 event_to_gates:
   defect_escaped: [g7]
+
+# Risk signals route to gates by SIGNAL, not by impact class. A signal is a routing input the
+# Team Lead records at dispatch time (e.g. "unfamiliar dependency", "boundary ambiguity").
+# impact_to_gates still decides breadth; risk_signal_to_gates decides WHICH checks a specific
+# signal invokes when shape and impact alone would not reach them. A fired signal with no gate
+# is a routing gap, not a silence: record it as a claim, then route.
+risk_signal_to_gates:
+  visible_behaviour:      [g6]
+  frontend_files_changed: [g5]
+  security_sensitive:     [g10]
+  contract_change:        [g1]
+  scope_uncertainty:      [g2, g9]
+  unfamiliar_dependency:  [g4, g5]
+  no_plan_context:        [g_entry]
+
+# Exemption recording (D): when a fired signal's gate does not run, the reason is written to
+# the verification artifact naming the signal. A waiver with no record is a routing gap, not a
+# pass. There is no silent exemption - only recorded ones.
