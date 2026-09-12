@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 METRIC_IDS = ["pe", "ev_ebitda", "pfcf"]
 
+# Max absolute value for stats stored in numeric(10,2) columns.
+# Values exceeding this (e.g. ev_ebitda for Financial Services / Real Estate)
+# would cause OverflowError 22003 on insert. Clamp before upsert (Sep-2026 B3).
+_MAX_STAT = 99_999_999.99
+
 # Map our metric_id to the actual column name in financial_ratios
 COLUMN_MAP: dict[str, str] = {
     "pe": "trailing_pe",
@@ -208,14 +213,14 @@ async def _compute_group_stats(
             lo = int(idx)
             hi = min(lo + 1, n - 1)
             frac = idx - lo
-            return round(sorted_vals[lo] + frac * (sorted_vals[hi] - sorted_vals[lo]), 2)
+            return min(_MAX_STAT, round(sorted_vals[lo] + frac * (sorted_vals[hi] - sorted_vals[lo]), 2))
 
         p05 = percentile(5)
         p25 = percentile(25)
         p50 = percentile(50)
         p75 = percentile(75)
         p95 = percentile(95)
-        mean_val = round(sum(sorted_vals) / n, 2) if n > 0 else None
+        mean_val = min(_MAX_STAT, round(sum(sorted_vals) / n, 2)) if n > 0 else None
 
         # Upsert into group_metric_stats
         payload = {
