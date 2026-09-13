@@ -182,6 +182,10 @@ class SuperInvestorsRefreshScheduler:
                 "⚠️  ALL super investors failed to refresh - possible bug, needs investigation"
             )
 
+        if results["refreshed"] > 0:
+            from application.services.super_investors_cache import invalidate_super_investors_cache
+            invalidate_super_investors_cache()
+
         logger.info(f"Cycle complete: {results}")
         return results
 

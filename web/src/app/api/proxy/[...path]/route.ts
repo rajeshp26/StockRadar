@@ -215,6 +215,14 @@ async function proxy(request: NextRequest, method: string, pathParts: string[]) 
 
   const passthroughHeaders = new Headers();
   if (contentType) passthroughHeaders.set("Content-Type", contentType);
+
+  // Forward the upstream cache policy on reads only — the server-side fetch
+  // above stays no-store; this only lets the declared policy reach the client.
+  if (!isMutating(method)) {
+    const upstreamCacheControl = upstream.headers.get("cache-control");
+    if (upstreamCacheControl) passthroughHeaders.set("Cache-Control", upstreamCacheControl);
+  }
+
   attachSecurityHeaders(passthroughHeaders);
 
   return new NextResponse(upstream.body, {

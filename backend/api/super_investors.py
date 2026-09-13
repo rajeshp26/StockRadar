@@ -15,12 +15,14 @@ Two route groups:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
+from application.services.super_investors_cache import get_super_investors_cache
 from database import supabase
 from shared.time_utils import now_utc
 
@@ -78,33 +80,36 @@ def _prev_quarter(quarter_date: str) -> str:
 # Existing per-ticker endpoints (preserved exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_cache = get_super_investors_cache()
+
+
 @router.get("/analysis/{symbol}/super-investors")
-async def get_super_investors(symbol: str) -> dict[str, Any]:
+async def get_super_investors(symbol: str, response: Response) -> dict[str, Any]:
+    """Get institutional ownership data for a stock.
+
+    Served from the database read model (latest quarter per investor, no
+    filing-date window). Never hits SEC on a user request: a miss returns an
+    empty payload and enqueues a background refresh for due investors — the
+    scheduler owns SEC ingestion.
     """
-    Get institutional ownership data for a stock.
-    Checks DB first (last 30 days); falls back to live SEC fetch.
-    """
+    ticker = symbol.upper()
+    response.headers["Cache-Control"] = "public, max-age=900"
+
+    cached = _cache.get(ticker)
+    if cached is not None:
+        return cached
+
     try:
-        ticker = symbol.upper()
         db_data = _get_holdings_from_db(ticker)
         if db_data and db_data["overlap_count"] > 0:
-            return db_data
+            payload = db_data
+        else:
+            payload = _empty_holdings_payload(ticker)
+            _trigger_investor_refresh_background(ticker)
 
-        from application.services.super_investors_service import SuperInvestorsService
-        service = SuperInvestorsService()
-        data = service.get_super_investor_holdings(ticker, limit=10)
-
-        if data["overlap_count"] == 0:
-            return {
-                "ticker": ticker,
-                "holders": [],
-                "overlap_count": 0,
-                "avg_portfolio_weight": 0.0,
-                "conviction_level": "none",
-                "recent_activity": {"buyers": [], "sellers": []},
-                "message": "No tracked super investors currently hold this stock.",
-            }
-        return data
+        _cache.set(ticker, payload)
+        response.headers["Cache-Control"] = "public, max-age=900"
+        return payload
 
     except Exception as e:
         logger.error("Failed to fetch super investors for %s: %s", symbol, e, exc_info=True)
@@ -1215,64 +1220,117 @@ def _empty_overview() -> dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Per-ticker DB helper (preserved from original)
+# Per-ticker DB helper — read model (view) first, legacy join fallback
 # ─────────────────────────────────────────────────────────────────────────────
+
+_VIEW_NAME = "super_investor_current_holdings"
+
+
+def _query_current_holdings(ticker: str) -> list[dict[str, Any]]:
+    """Read latest-quarter holdings for one ticker from the read model view.
+
+    The view joins institutional_holdings x institutional_investors x
+    companies and returns, per investor, only the most recent
+    quarter_end_date — the materialized "as-of now" read model. Single query.
+    No filing-date window, so a quarter older than 30 days is still served
+    (the old path's 30-day window is exactly what forced the live-SEC
+    fallback). Falls back to a legacy join only if the view is missing.
+    """
+    try:
+        result = (
+            supabase.table(_VIEW_NAME)
+            .select("*")
+            .eq("ticker_symbol", ticker)
+            .execute()
+        )
+        rows = result.data or []
+        logger.debug("super-investors: view hit for %s (%d rows)", ticker, len(rows))
+        return rows
+    except Exception as e:
+        logger.warning(
+            "super_investor_current_holdings view unavailable for %s (%s); using legacy join",
+            ticker, e,
+        )
+        return _legacy_current_holdings(ticker)
+
+
+def _legacy_current_holdings(ticker: str) -> list[dict[str, Any]]:
+    """Legacy 3-query join used only when the view is missing.
+
+    Mirrors the view's semantics: per investor, keep the row with the latest
+    quarter_end_date (no filing-date window).
+    """
+    company_result = supabase.table("companies").select("company_id").eq(
+        "ticker_symbol", ticker
+    ).execute()
+    if not (company_result.data or []):
+        return []
+    company_id = company_result.data[0]["company_id"]
+
+    five_years_ago = (now_utc() - timedelta(days=5 * 365)).date().isoformat()
+    holdings_result = (
+        supabase.table("institutional_holdings")
+        .select(
+            "holding_id, shares_held, position_value, portfolio_weight, "
+            "shares_change, shares_change_pct, change_type, "
+            "quarter_end_date, filing_date, investor_id"
+        )
+        .eq("company_id", company_id)
+        .gte("quarter_end_date", five_years_ago)
+        .execute()
+    )
+    rows = holdings_result.data or []
+    if not rows:
+        return []
+
+    investor_ids = list({h["investor_id"] for h in rows})
+    investors_result = (
+        supabase.table("institutional_investors")
+        .select("investor_id, investor_name, firm_name, investor_tag, investment_style")
+        .in_("investor_id", investor_ids)
+        .execute()
+    )
+    investors_map = {i["investor_id"]: i for i in (investors_result.data or [])}
+
+    # Per investor, keep only the latest quarter (view parity).
+    latest_by_investor: dict[str, dict[str, Any]] = {}
+    for h in rows:
+        inv = investors_map.get(h.get("investor_id"))
+        if not inv:
+            continue
+        prev = latest_by_investor.get(h["investor_id"])
+        if prev is None or (h.get("quarter_end_date") or "") > (prev.get("quarter_end_date") or ""):
+            latest_by_investor[h["investor_id"]] = {**h, **inv}
+    return list(latest_by_investor.values())
+
+
+def _build_holders_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    holders = []
+    for r in rows:
+        holders.append({
+            "investor_name": r.get("investor_name", ""),
+            "firm": r.get("firm_name", ""),
+            "tag": r.get("investor_tag", ""),
+            "style": r.get("investment_style", ""),
+            "shares": r.get("shares_held", 0),
+            "value": r.get("position_value", 0),
+            "portfolio_weight": r.get("portfolio_weight", 0),
+            "change_pct": r.get("shares_change_pct") or 0,
+            "change_type": r.get("change_type", "held"),
+            "quarter_date": str(r.get("quarter_end_date", "")),
+        })
+    return holders
+
 
 def _get_holdings_from_db(ticker: str) -> dict[str, Any] | None:
     try:
-        company_result = supabase.table("companies").select("company_id").eq(
-            "ticker_symbol", ticker
-        ).execute()
-        if not company_result.data:
-            return None
-        company_id = company_result.data[0]["company_id"]
-
-        cutoff_date = (now_utc() - timedelta(days=30)).date().isoformat()
-        holdings_result = (
-            supabase.table("institutional_holdings")
-            .select(
-                "holding_id, shares_held, position_value, portfolio_weight, "
-                "shares_change, shares_change_pct, change_type, "
-                "quarter_end_date, filing_date, investor_id"
-            )
-            .eq("company_id", company_id)
-            .gte("filing_date", cutoff_date)
-            .execute()
-        )
-        if not holdings_result.data:
-            return None
-
-        investor_ids = [h["investor_id"] for h in holdings_result.data]
-        investors_result = (
-            supabase.table("institutional_investors")
-            .select("investor_id, investor_name, firm_name, investor_tag, investment_style")
-            .in_("investor_id", investor_ids)
-            .execute()
-        )
-        investors_map = {i["investor_id"]: i for i in (investors_result.data or [])}
-
-        holders = []
-        for h in holdings_result.data:
-            inv = investors_map.get(h.get("investor_id"), {})
-            if not inv:
-                continue
-            holders.append({
-                "investor_name": inv.get("investor_name", ""),
-                "firm": inv.get("firm_name", ""),
-                "tag": inv.get("investor_tag", ""),
-                "style": inv.get("investment_style", ""),
-                "shares": h.get("shares_held", 0),
-                "value": h.get("position_value", 0),
-                "portfolio_weight": h.get("portfolio_weight", 0),
-                "change_pct": h.get("shares_change_pct") or 0,
-                "change_type": h.get("change_type", "held"),
-                "quarter_date": str(h.get("quarter_end_date", "")),
-            })
-
+        rows = _query_current_holdings(ticker)
+        holders = _build_holders_from_rows(rows)
         if not holders:
             return None
 
         avg_weight = sum(h["portfolio_weight"] for h in holders) / len(holders)
+        filing_dates = [r.get("filing_date") for r in rows if r.get("filing_date")]
         return {
             "ticker": ticker,
             "holders": holders,
@@ -1283,9 +1341,53 @@ def _get_holdings_from_db(ticker: str) -> dict[str, Any] | None:
                 "buyers": [h for h in holders if h["change_type"] in ("new", "increased")][:5],
                 "sellers": [h for h in holders if h["change_type"] in ("decreased", "sold")][:5],
             },
+            "as_of": max(h["quarter_date"] for h in holders),
+            "data_updated_at": max(filing_dates) if filing_dates else None,
             "source": "database",
         }
 
     except Exception as e:
         logger.error("_get_holdings_from_db failed for %s: %s", ticker, e)
         return None
+
+
+def _empty_holdings_payload(ticker: str) -> dict[str, Any]:
+    return {
+        "ticker": ticker,
+        "holders": [],
+        "overlap_count": 0,
+        "avg_portfolio_weight": 0.0,
+        "conviction_level": "none",
+        "recent_activity": {"buyers": [], "sellers": []},
+        "as_of": None,
+        "source": "database",
+        "message": (
+            "No tracked super investor holdings on file for this stock yet — "
+            "a data refresh has been queued."
+        ),
+    }
+
+
+def _trigger_investor_refresh_background(ticker: str) -> None:
+    """Fire a background "plan due investor refreshes" after a DB miss.
+
+    Best-effort and non-blocking: the response returns immediately. The job
+    engine dedupes on 'investor_refresh:{cik}', so repeated misses for the
+    same ticker cannot stack duplicate work.
+    """
+
+    async def _kick() -> None:
+        try:
+            from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
+            from infrastructure.repositories.scheduler_repository import SchedulerRepository
+            jobs = await SuperInvestorsRefreshScheduler().plan()
+            if jobs:
+                enqueued = SchedulerRepository().enqueue_job_batch(jobs)
+                logger.info(
+                    "Super-investors miss for %s: enqueued %d due investor refreshes (%d accepted)",
+                    ticker, len(jobs), enqueued,
+                )
+        except Exception as e:
+            logger.warning("Background investor refresh trigger failed for %s: %s", ticker, e)
+
+    asyncio.create_task(_kick())

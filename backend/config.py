@@ -239,6 +239,27 @@ class Settings(BaseSettings):
         default=49,
         description="Days after quarter end before filing is due"
     )
+    SUPER_INVESTORS_CACHE_TTL_SECONDS: int = Field(
+        default=900,
+        description=(
+            "TTL for the in-process super-investor read cache. 13F data changes "
+            "at most quarterly; the TTL is the authoritative coherence mechanism "
+            "while the scheduler worker runs in a separate process."
+        ),
+    )
+    SUPER_INVESTORS_CACHE_MAX_ENTRIES: int = Field(
+        default=512,
+        description="Maximum entries in the in-process super-investor read cache.",
+    )
+    SUPER_INVESTORS_API_SEC_FALLBACK: bool = Field(
+        default=False,
+        description=(
+            "Allow the API to fall back to a live SEC 13F fetch on a database "
+            "miss. Professional default is off: user requests are served from "
+            "the database only, and the scheduler owns SEC ingestion. Kept as a "
+            "kill-switch for emergency backfill scenarios."
+        ),
+    )
     ENABLE_RECONCILIATION_SCHEDULER: bool = Field(
         default=True,
         description="Enable the weekly data reconciliation scheduler (gap detection)"

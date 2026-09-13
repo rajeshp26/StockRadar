@@ -50,6 +50,7 @@ from application.schedulers.reconciliation_scheduler import ReconciliationSchedu
 # v2 scheduler classes (used for plan() + data logic)
 from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
 from application.schedulers.valuation_computation_scheduler import ValuationComputationScheduler
+from application.services.super_investors_cache import invalidate_super_investors_cache
 
 # Config
 from config import settings
@@ -168,6 +169,8 @@ async def handle_investor_refresh(job: dict[str, Any]) -> dict[str, Any]:
     scheduler = SuperInvestorsRefreshScheduler()
     info = {"name": name, "firm": payload.get("firm"), "tag": payload.get("tag")}
     result = await scheduler._refresh_single_investor(cik, info)
+    if result:
+        invalidate_super_investors_cache()
     return {"cik": cik, "status": "ok" if result else "skipped"}
 
 
