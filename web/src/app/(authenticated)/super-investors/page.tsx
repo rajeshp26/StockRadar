@@ -9,6 +9,7 @@ import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { QK } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
+import { AlertTriangle, SearchX } from "lucide-react";
 import {
     fetchSuperInvestorsOverview,
     fetchTopStocks,
@@ -67,19 +68,45 @@ function fmtQuarter(dateStr: string): string {
 // Shared UI atoms
 // ─────────────────────────────────────────────────────────────────────────────
 
+const SURFACE =
+    "rounded-2xl border border-au-border bg-au-bg-elevated shadow-[var(--au-shadow-sm)]";
+
+const FOCUS_RING =
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/50";
+
 function Spinner() {
     return (
-        <div className="flex items-center justify-center gap-3 py-16">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" />
-            <p className="text-sm text-slate-400">Loading...</p>
+        <div className="space-y-3 px-4 py-6" role="status" aria-label="Loading">
+            {[100, 84, 92, 76, 60].map((w, i) => (
+                <div
+                    key={i}
+                    className={cn(
+                        "h-4 rounded-md",
+                        i === 4 && "border-b border-transparent",
+                        "animate-shimmer bg-[linear-gradient(100deg,rgba(255,255,255,0.04),rgba(255,255,255,0.10),rgba(255,255,255,0.04))] bg-[length:200%_100%] motion-reduce:animate-none motion-reduce:bg-white/5"
+                    )}
+                    style={{ width: `${w}%` }}
+                />
+            ))}
         </div>
     );
 }
 
 function ErrorState({ message }: { message: string }) {
     return (
-        <div className="glass-panel p-8 text-center">
-            <p className="text-sm text-rose-400">{message}</p>
+        <div className={cn(SURFACE, "flex flex-col items-center gap-2 p-8 text-center")}>
+            <AlertTriangle className="h-6 w-6 text-financial-warn" aria-hidden="true" />
+            <p className="text-sm text-au-text-tertiary">{message}</p>
+        </div>
+    );
+}
+
+function EmptyState({ title, hint }: { title: string; hint?: string }) {
+    return (
+        <div className="flex flex-col items-center justify-center gap-2 py-14 text-center">
+            <SearchX className="h-6 w-6 text-au-text-faint" aria-hidden="true" />
+            <p className="text-sm text-au-text-tertiary">{title}</p>
+            {hint && <p className="text-xs text-au-text-faint">{hint}</p>}
         </div>
     );
 }
@@ -96,25 +123,30 @@ function MetricCard({
     accent?: string;
 }) {
     return (
-        <div className="glass-stat">
-            <p className="text-xs text-slate-400">{label}</p>
-            <p className={cn("mt-1 text-2xl font-semibold", accent ?? "text-slate-100")}>
+        <div className={cn(SURFACE, "p-4")}>
+            <p className="text-xs text-au-text-tertiary">{label}</p>
+            <p
+                className={cn(
+                    "mt-1 text-2xl font-semibold tabular-nums",
+                    accent ?? "text-au-text"
+                )}
+            >
                 {value}
             </p>
-            {sub && <p className="mt-0.5 text-xs text-slate-500">{sub}</p>}
+            {sub && <p className="mt-0.5 text-xs text-au-text-faint tabular-nums">{sub}</p>}
         </div>
     );
 }
 
 function ChangeTypeBadge({ type }: { type: ChangeType }) {
     const map: Record<ChangeType, { label: string; cls: string }> = {
-        new: { label: "New", cls: "bg-indigo-500/15 text-indigo-400" },
-        increased: { label: "Added", cls: "bg-emerald-500/15 text-emerald-400" },
-        decreased: { label: "Trimmed", cls: "bg-amber-500/15 text-amber-400" },
-        held: { label: "Held", cls: "bg-slate-500/15 text-slate-400" },
-        sold: { label: "Exited", cls: "bg-rose-500/15 text-rose-400" },
+        new: { label: "New", cls: "bg-violet-500/15 text-violet-300" },
+        increased: { label: "Added", cls: "bg-financial-up-bg text-financial-up-muted" },
+        decreased: { label: "Trimmed", cls: "bg-financial-warn-bg text-financial-warn" },
+        held: { label: "Held", cls: "bg-financial-neutral-bg text-au-text-tertiary" },
+        sold: { label: "Exited", cls: "bg-financial-down-bg text-financial-down-muted" },
     };
-    const { label, cls } = map[type] ?? { label: type, cls: "text-slate-400" };
+    const { label, cls } = map[type] ?? { label: type, cls: "text-au-text-tertiary" };
     return (
         <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", cls)}>
             {label}
@@ -124,13 +156,13 @@ function ChangeTypeBadge({ type }: { type: ChangeType }) {
 
 function ConvictionBadge({ level }: { level: ConvictionLevel }) {
     const map: Record<ConvictionLevel, { label: string; cls: string }> = {
-        very_high: { label: "Very High", cls: "text-emerald-400" },
-        high: { label: "High", cls: "text-emerald-500" },
-        moderate: { label: "Moderate", cls: "text-amber-400" },
-        low: { label: "Low", cls: "text-slate-400" },
-        none: { label: "None", cls: "text-slate-500" },
+        very_high: { label: "Very High", cls: "text-financial-up-muted" },
+        high: { label: "High", cls: "text-financial-up" },
+        moderate: { label: "Moderate", cls: "text-financial-warn" },
+        low: { label: "Low", cls: "text-au-text-tertiary" },
+        none: { label: "None", cls: "text-au-text-faint" },
     };
-    const { label, cls } = map[level] ?? { label: level, cls: "text-slate-400" };
+    const { label, cls } = map[level] ?? { label: level, cls: "text-au-text-tertiary" };
     return <span className={cn("text-xs font-medium", cls)}>{label}</span>;
 }
 
@@ -160,9 +192,9 @@ function InvestorDot({ tag }: { tag: string }) {
 
 function SectionHeader({ title, sub }: { title: string; sub?: string }) {
     return (
-        <div className="border-b border-white/5 p-4">
-            <h3 className="text-sm font-medium text-slate-200">{title}</h3>
-            {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
+        <div className="border-b border-au-border p-4">
+            <h3 className="text-sm font-medium text-au-text-secondary">{title}</h3>
+            {sub && <p className="mt-0.5 text-xs text-au-text-tertiary">{sub}</p>}
         </div>
     );
 }
@@ -180,10 +212,11 @@ function FilterChip({
         <button
             onClick={onClick}
             className={cn(
-                "rounded-full border px-3 py-1 text-xs transition-colors",
+                "rounded-full border px-3 py-1 text-xs tabular-nums transition-colors",
+                FOCUS_RING,
                 active
-                    ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-300"
-                    : "border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-300"
+                    ? "border-violet-400/60 bg-violet-500/15 text-violet-300"
+                    : "border-au-border text-au-text-tertiary hover:border-au-border-strong hover:text-au-text-secondary"
             )}
         >
             {label}
@@ -236,13 +269,13 @@ function OverviewTab() {
                     label="New positions"
                     value={data.new_positions}
                     sub={fmtQuarter(data.latest_quarter)}
-                    accent="text-emerald-400"
+                    accent="text-financial-up"
                 />
                 <MetricCard
                     label="Full exits"
                     value={data.full_exits}
                     sub={fmtQuarter(data.latest_quarter)}
-                    accent="text-rose-400"
+                    accent="text-financial-down"
                 />
             </div>
 
@@ -276,9 +309,9 @@ function MoverCard({
     variant: "buy" | "sell";
 }) {
     return (
-        <div className="glass-panel">
+        <div className={cn(SURFACE, "overflow-hidden")}>
             <SectionHeader title={title} sub={sub} />
-            <div className="divide-y divide-white/5">
+            <div className="divide-y divide-au-border">
                 {items.slice(0, 8).map((item) => (
                     <div
                         key={item.ticker}
@@ -286,10 +319,10 @@ function MoverCard({
                     >
                         <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                                <span className="font-medium text-slate-100 text-sm">
+                                <span className="font-medium text-au-text text-sm">
                                     {item.ticker}
                                 </span>
-                                <span className="truncate text-xs text-slate-400">
+                                <span className="truncate text-xs text-au-text-tertiary">
                                     {item.company_name}
                                 </span>
                             </div>
@@ -298,7 +331,7 @@ function MoverCard({
                                     <InvestorDot key={t} tag={t} />
                                 ))}
                                 {item.investor_tags.length > 5 && (
-                                    <span className="text-xs text-slate-500">
+                                    <span className="text-xs text-au-text-faint tabular-nums">
                                         +{item.investor_tags.length - 5}
                                     </span>
                                 )}
@@ -306,10 +339,10 @@ function MoverCard({
                         </div>
                         <span
                             className={cn(
-                                "rounded-full px-2.5 py-0.5 text-xs font-medium shrink-0",
+                                "rounded-full px-2.5 py-0.5 text-xs font-medium tabular-nums shrink-0",
                                 variant === "buy"
-                                    ? "bg-emerald-500/15 text-emerald-400"
-                                    : "bg-rose-500/15 text-rose-400"
+                                    ? "bg-financial-up-bg text-financial-up-muted"
+                                    : "bg-financial-down-bg text-financial-down-muted"
                             )}
                         >
                             {variant === "buy" ? "+" : "−"}
@@ -347,10 +380,10 @@ function TopStocksTab() {
     return (
         <div className="space-y-4">
             {/* Filters */}
-            <div className="glass-panel px-4 py-3">
+            <div className={cn(SURFACE, "px-4 py-3")}>
                 <div className="flex flex-wrap gap-4">
                     <div className="flex flex-wrap gap-2">
-                        <span className="text-xs text-slate-400 self-center mr-1">Sector</span>
+                        <span className="text-xs text-au-text-tertiary self-center mr-1">Sector</span>
                         {SECTORS.map((s) => (
                             <FilterChip
                                 key={s}
@@ -361,7 +394,7 @@ function TopStocksTab() {
                         ))}
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <span className="text-xs text-slate-400 self-center mr-1">Style</span>
+                        <span className="text-xs text-au-text-tertiary self-center mr-1">Style</span>
                         {STYLES.map((s) => (
                             <FilterChip
                                 key={s}
@@ -372,7 +405,7 @@ function TopStocksTab() {
                         ))}
                     </div>
                     <div className="flex gap-2 items-center">
-                        <span className="text-xs text-slate-400">Min investors</span>
+                        <span className="text-xs text-au-text-tertiary">Min investors</span>
                         {[1, 2, 3, 4, 5].map((n) => (
                             <FilterChip
                                 key={n}
@@ -386,7 +419,7 @@ function TopStocksTab() {
             </div>
 
             {/* Table */}
-            <div className="glass-panel overflow-hidden">
+            <div className={cn(SURFACE, "overflow-hidden")}>
                 <SectionHeader
                     title="Most widely held stocks"
                     sub={data ? `${data.total_stocks} stocks · ${fmtQuarter(data.quarter ?? "")}` : undefined}
@@ -396,7 +429,7 @@ function TopStocksTab() {
                 ) : error || !data ? (
                     <ErrorState message="Failed to load top stocks." />
                 ) : (
-                    <div className="divide-y divide-white/5">
+                    <div className="divide-y divide-au-border">
                         {data.stocks.map((stock) => (
                             <TopStockRow key={stock.ticker} stock={stock} totalInvestors={data.total_stocks} />
                         ))}
@@ -411,20 +444,20 @@ function TopStockRow({ stock, totalInvestors }: { stock: TopStock; totalInvestor
     const barWidth = Math.round(stock.investor_breadth_pct * 100);
     return (
         <div className="flex items-center gap-4 px-4 py-3 hover:bg-white/[0.02]">
-            <span className="w-6 text-right text-xs text-slate-500 shrink-0">{stock.rank}</span>
+            <span className="w-6 text-right text-xs text-au-text-faint tabular-nums shrink-0">{stock.rank}</span>
             <div className="w-28 shrink-0">
-                <p className="font-medium text-slate-100 text-sm">{stock.ticker}</p>
-                <p className="truncate text-xs text-slate-400">{stock.company_name}</p>
+                <p className="font-medium text-au-text text-sm">{stock.ticker}</p>
+                <p className="truncate text-xs text-au-text-tertiary">{stock.company_name}</p>
             </div>
             <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                     <div className="flex-1 h-1.5 rounded-full bg-white/5">
                         <div
-                            className="h-1.5 rounded-full bg-indigo-500/60"
+                            className="h-1.5 rounded-full bg-violet-500/60"
                             style={{ width: `${barWidth}%` }}
                         />
                     </div>
-                    <span className="text-xs text-slate-300 shrink-0">
+                    <span className="text-xs text-au-text-secondary tabular-nums shrink-0">
                         {stock.investor_count} investors
                     </span>
                 </div>
@@ -435,13 +468,13 @@ function TopStockRow({ stock, totalInvestors }: { stock: TopStock; totalInvestor
                 </div>
             </div>
             <div className="text-right shrink-0 hidden md:block">
-                <p className="text-sm text-slate-200">{fmtMoney(stock.total_position_value)}</p>
+                <p className="text-sm text-au-text tabular-nums">{fmtMoney(stock.total_position_value)}</p>
                 <ConvictionBadge level={stock.conviction_level} />
             </div>
             <div className="text-right shrink-0 w-16">
-                <p className="text-xs text-slate-400">{fmtPct(stock.avg_portfolio_weight)} avg</p>
+                <p className="text-xs text-au-text-tertiary tabular-nums">{fmtPct(stock.avg_portfolio_weight)} avg</p>
                 {stock.sector && (
-                    <p className="text-[10px] text-slate-500 mt-0.5">{stock.sector}</p>
+                    <p className="text-[10px] text-au-text-faint mt-0.5">{stock.sector}</p>
                 )}
             </div>
         </div>
@@ -464,9 +497,9 @@ function OverlapTab() {
 
     return (
         <div className="space-y-4">
-            <div className="glass-panel px-4 py-3 flex flex-wrap gap-4">
+            <div className={cn(SURFACE, "px-4 py-3 flex flex-wrap gap-4")}>
                 <div className="flex gap-2 items-center">
-                    <span className="text-xs text-slate-400">Min overlap</span>
+                    <span className="text-xs text-au-text-tertiary">Min overlap</span>
                     {[2, 3, 4, 5, 6].map((n) => (
                         <FilterChip
                             key={n}
@@ -477,7 +510,7 @@ function OverlapTab() {
                     ))}
                 </div>
                 <div className="flex gap-2 items-center">
-                    <span className="text-xs text-slate-400">Sector</span>
+                    <span className="text-xs text-au-text-tertiary">Sector</span>
                     {SECTORS.map((s) => (
                         <FilterChip
                             key={s}
@@ -489,7 +522,7 @@ function OverlapTab() {
                 </div>
             </div>
 
-            <div className="glass-panel overflow-hidden">
+            <div className={cn(SURFACE, "overflow-hidden")}>
                 <SectionHeader
                     title="Consensus picks"
                     sub={`Stocks held by ${minInv}+ tracked investors — smart money overlap`}
@@ -499,11 +532,12 @@ function OverlapTab() {
                 ) : error || !data ? (
                     <ErrorState message="Failed to load overlap data." />
                 ) : data.stocks.length === 0 ? (
-                    <div className="py-12 text-center text-sm text-slate-400">
-                        No stocks held by {minInv}+ investors.
-                    </div>
+                    <EmptyState
+                        title={`No stocks held by ${minInv}+ investors.`}
+                        hint="Try lowering the overlap threshold."
+                    />
                 ) : (
-                    <div className="divide-y divide-white/5">
+                    <div className="divide-y divide-au-border">
                         {data.stocks.map((stock) => (
                             <OverlapRow key={stock.ticker} stock={stock} />
                         ))}
@@ -519,15 +553,18 @@ function OverlapRow({ stock }: { stock: OverlapStock }) {
     return (
         <div>
             <button
-                className="w-full flex items-center gap-4 px-4 py-3 hover:bg-white/[0.02] text-left"
+                className={cn(
+                    "w-full flex items-center gap-4 px-4 py-3 hover:bg-white/[0.02] text-left",
+                    FOCUS_RING
+                )}
                 onClick={() => setExpanded((e) => !e)}
             >
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                        <span className="font-medium text-slate-100 text-sm">{stock.ticker}</span>
-                        <span className="truncate text-xs text-slate-400">{stock.company_name}</span>
+                        <span className="font-medium text-au-text text-sm">{stock.ticker}</span>
+                        <span className="truncate text-xs text-au-text-tertiary">{stock.company_name}</span>
                         {stock.sector && (
-                            <span className="hidden md:inline text-[10px] text-slate-500 border border-white/10 rounded px-1.5 py-0.5">
+                            <span className="hidden md:inline text-[10px] text-au-text-faint border border-au-border rounded px-1.5 py-0.5">
                                 {stock.sector}
                             </span>
                         )}
@@ -539,27 +576,27 @@ function OverlapRow({ stock }: { stock: OverlapStock }) {
                     </div>
                 </div>
                 <div className="text-right shrink-0">
-                    <p className="text-sm font-medium text-slate-200">
+                    <p className="text-sm font-medium text-au-text tabular-nums">
                         {stock.investor_count} investors
                     </p>
                     <ConvictionBadge level={stock.conviction_level} />
                 </div>
-                <span className="text-slate-500 text-xs ml-2">{expanded ? "▲" : "▼"}</span>
+                <span className="text-au-text-faint text-xs ml-2">{expanded ? "▲" : "▼"}</span>
             </button>
 
             {expanded && (
-                <div className="bg-white/[0.01] px-4 py-3 divide-y divide-white/5">
+                <div className="bg-white/[0.01] px-4 py-3 divide-y divide-au-border">
                     {stock.investors.map((inv) => (
                         <div key={inv.tag} className="flex items-center justify-between py-2">
                             <div className="flex items-center gap-2">
                                 <InvestorDot tag={inv.tag} />
                                 <div>
-                                    <p className="text-sm text-slate-200">{inv.investor_name}</p>
-                                    <p className="text-xs text-slate-500">{inv.style}</p>
+                                    <p className="text-sm text-au-text-secondary">{inv.investor_name}</p>
+                                    <p className="text-xs text-au-text-faint">{inv.style}</p>
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">
-                                <span className="text-xs text-slate-400">
+                                <span className="text-xs text-au-text-tertiary tabular-nums">
                                     {fmtPct(inv.portfolio_weight)} of portfolio
                                 </span>
                                 <ChangeTypeBadge type={inv.change_type} />
@@ -604,9 +641,9 @@ function ActivityTab() {
     return (
         <div className="space-y-4">
             {/* Filters */}
-            <div className="glass-panel px-4 py-3 space-y-3">
+            <div className={cn(SURFACE, "px-4 py-3 space-y-3")}>
                 <div className="flex flex-wrap gap-2 items-center">
-                    <span className="text-xs text-slate-400 mr-1">Action</span>
+                    <span className="text-xs text-au-text-tertiary mr-1">Action</span>
                     {CHANGE_TYPES.map((ct) => (
                         <FilterChip
                             key={ct}
@@ -617,7 +654,7 @@ function ActivityTab() {
                     ))}
                 </div>
                 <div className="flex flex-wrap gap-2 items-center">
-                    <span className="text-xs text-slate-400 mr-1">Quarters</span>
+                    <span className="text-xs text-au-text-tertiary mr-1">Quarters</span>
                     {[2, 4, 8, 12].map((q) => (
                         <FilterChip
                             key={q}
@@ -628,7 +665,7 @@ function ActivityTab() {
                     ))}
                     {investorTags.length > 0 && (
                         <>
-                            <span className="text-xs text-slate-400 ml-3 mr-1">Investor</span>
+                            <span className="text-xs text-au-text-tertiary ml-3 mr-1">Investor</span>
                             <FilterChip
                                 label="All"
                                 active={!investorTag}
@@ -647,7 +684,7 @@ function ActivityTab() {
                 </div>
             </div>
 
-            <div className="glass-panel overflow-hidden">
+            <div className={cn(SURFACE, "overflow-hidden")}>
                 <SectionHeader
                     title="Activity feed"
                     sub={
@@ -661,11 +698,12 @@ function ActivityTab() {
                 ) : error || !data ? (
                     <ErrorState message="Failed to load activity." />
                 ) : data.activity.length === 0 ? (
-                    <div className="py-12 text-center text-sm text-slate-400">
-                        No activity matching current filters.
-                    </div>
+                    <EmptyState
+                        title="No activity matching current filters."
+                        hint="Adjust the action or quarter filters."
+                    />
                 ) : (
-                    <div className="divide-y divide-white/5">
+                    <div className="divide-y divide-au-border">
                         {data.activity.map((item, idx) => (
                             <ActivityRow key={idx} item={item} />
                         ))}
@@ -680,38 +718,36 @@ function ActivityRow({ item }: { item: ActivityItem }) {
     const changeSign =
         (item.shares_change_pct ?? 0) > 0
             ? "+"
-            : (item.shares_change_pct ?? 0) < 0
-                ? ""
-                : "";
+            : "";
 
     return (
         <div className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02]">
-            <span className="text-xs text-slate-500 shrink-0 w-14">
+            <span className="text-xs text-au-text-faint tabular-nums shrink-0 w-14">
                 {fmtQuarter(item.quarter_end_date)}
             </span>
             <InvestorDot tag={item.investor_tag} />
             <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-slate-200">
+                    <span className="text-sm font-medium text-au-text-secondary">
                         {item.investor_name}
                     </span>
                     <ChangeTypeBadge type={item.change_type} />
-                    <span className="font-medium text-slate-100 text-sm">{item.ticker}</span>
-                    <span className="truncate text-xs text-slate-400 hidden md:inline">
+                    <span className="font-medium text-au-text text-sm">{item.ticker}</span>
+                    <span className="truncate text-xs text-au-text-tertiary hidden md:inline">
                         {item.company_name}
                     </span>
                 </div>
-                <p className="mt-0.5 text-xs text-slate-500">{item.style}</p>
+                <p className="mt-0.5 text-xs text-au-text-faint">{item.style}</p>
             </div>
             <div className="text-right shrink-0">
-                <p className="text-sm text-slate-200">{fmtMoney(item.position_value)}</p>
+                <p className="text-sm text-au-text tabular-nums">{fmtMoney(item.position_value)}</p>
                 {item.shares_change_pct != null && Math.abs(item.shares_change_pct) >= 0.5 && (
                     <p
                         className={cn(
-                            "text-xs",
+                            "text-xs tabular-nums",
                             (item.shares_change_pct ?? 0) > 0
-                                ? "text-emerald-400"
-                                : "text-rose-400"
+                                ? "text-financial-up-muted"
+                                : "text-financial-down-muted"
                         )}
                     >
                         {changeSign}
@@ -752,7 +788,7 @@ function ByInvestorTab() {
             {listLoading ? (
                 <Spinner />
             ) : (
-                <div className="glass-panel px-4 py-3">
+                <div className={cn(SURFACE, "px-4 py-3")}>
                     <div className="flex flex-wrap gap-2">
                         {(listData?.investors ?? []).map((inv) => (
                             <FilterChip
@@ -813,24 +849,24 @@ function InvestorPortfolioDetail({ data }: { data: InvestorPortfolioData }) {
         <div className="space-y-4">
             {/* Sector breakdown */}
             {data.sector_breakdown.length > 0 && (
-                <div className="glass-panel">
+                <div className={cn(SURFACE, "overflow-hidden")}>
                     <SectionHeader title="Sector allocation" />
                     <div className="p-4 space-y-2">
                         {data.sector_breakdown.map((s) => (
                             <div key={s.sector} className="flex items-center gap-3">
-                                <span className="w-32 shrink-0 text-xs text-slate-400">
+                                <span className="w-32 shrink-0 text-xs text-au-text-tertiary">
                                     {s.sector}
                                 </span>
                                 <div className="flex-1 h-1.5 rounded-full bg-white/5">
                                     <div
-                                        className="h-1.5 rounded-full bg-indigo-500/50"
+                                        className="h-1.5 rounded-full bg-violet-500/50"
                                         style={{ width: `${Math.round(s.weight * 100)}%` }}
                                     />
                                 </div>
-                                <span className="text-xs text-slate-300 w-12 text-right">
+                                <span className="text-xs text-au-text-secondary w-12 text-right tabular-nums">
                                     {fmtPct(s.weight)}
                                 </span>
-                                <span className="text-xs text-slate-500 w-20 text-right hidden md:block">
+                                <span className="text-xs text-au-text-faint w-20 text-right hidden md:block tabular-nums">
                                     {fmtMoney(s.value)}
                                 </span>
                             </div>
@@ -840,12 +876,12 @@ function InvestorPortfolioDetail({ data }: { data: InvestorPortfolioData }) {
             )}
 
             {/* Holdings table */}
-            <div className="glass-panel overflow-hidden">
+            <div className={cn(SURFACE, "overflow-hidden")}>
                 <SectionHeader
                     title="Portfolio holdings"
                     sub={`${data.positions_count} positions · ${fmtQuarter(data.latest_quarter ?? "")}`}
                 />
-                <div className="divide-y divide-white/5">
+                <div className="divide-y divide-au-border">
                     {data.holdings.map((h) => (
                         <HoldingRow key={h.ticker} holding={h} />
                     ))}
@@ -862,45 +898,49 @@ function HoldingRow({ holding }: { holding: InvestorPortfolioData["holdings"][nu
     return (
         <div>
             <button
-                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] text-left"
+                className={cn(
+                    "w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] text-left",
+                    FOCUS_RING,
+                    holding.history.length === 0 && "cursor-default"
+                )}
                 onClick={() => setExpanded((e) => !e)}
                 disabled={holding.history.length === 0}
             >
-                <span className="text-xs text-slate-500 w-6 text-right shrink-0">
+                <span className="text-xs text-au-text-faint w-6 text-right tabular-nums shrink-0">
                     {holding.rank}
                 </span>
                 <div className="w-24 shrink-0">
-                    <p className="font-medium text-sm text-slate-100">{holding.ticker}</p>
-                    <p className="text-xs text-slate-500 truncate">{holding.company_name}</p>
+                    <p className="font-medium text-sm text-au-text">{holding.ticker}</p>
+                    <p className="text-xs text-au-text-faint truncate">{holding.company_name}</p>
                 </div>
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                         <div className="h-1.5 flex-1 rounded-full bg-white/5 max-w-[120px]">
                             <div
-                                className="h-1.5 rounded-full bg-indigo-500/50"
+                                className="h-1.5 rounded-full bg-violet-500/50"
                                 style={{ width: `${Math.min(barW * 2, 100)}%` }}
                             />
                         </div>
-                        <span className="text-xs text-slate-300">{fmtPct(holding.portfolio_weight)}</span>
+                        <span className="text-xs text-au-text-secondary tabular-nums">{fmtPct(holding.portfolio_weight)}</span>
                     </div>
                 </div>
                 <div className="text-right shrink-0">
-                    <p className="text-sm text-slate-200">{fmtMoney(holding.position_value)}</p>
-                    <p className="text-xs text-slate-400">{fmtShares(holding.shares_held)} sh</p>
+                    <p className="text-sm text-au-text tabular-nums">{fmtMoney(holding.position_value)}</p>
+                    <p className="text-xs text-au-text-tertiary tabular-nums">{fmtShares(holding.shares_held)} sh</p>
                 </div>
                 <ChangeTypeBadge type={holding.change_type} />
                 {holding.history.length > 0 && (
-                    <span className="text-slate-500 text-xs ml-1">{expanded ? "▲" : "▼"}</span>
+                    <span className="text-au-text-faint text-xs ml-1">{expanded ? "▲" : "▼"}</span>
                 )}
             </button>
 
             {expanded && holding.history.length > 0 && (
-                <div className="bg-white/[0.015] border-t border-white/5 px-8 py-2">
+                <div className="bg-white/[0.015] border-t border-au-border px-8 py-2">
                     <div className="flex gap-4 overflow-x-auto pb-1">
                         {holding.history.map((h) => (
                             <div key={h.quarter} className="shrink-0 text-center">
-                                <p className="text-[10px] text-slate-500">{fmtQuarter(h.quarter)}</p>
-                                <p className="text-xs text-slate-300 mt-0.5">
+                                <p className="text-[10px] text-au-text-faint">{fmtQuarter(h.quarter)}</p>
+                                <p className="text-xs text-au-text-secondary mt-0.5 tabular-nums">
                                     {fmtShares(h.shares_held)}
                                 </p>
                                 <ChangeTypeBadge type={h.change_type} />
@@ -933,8 +973,8 @@ function SectorsTab() {
 
     return (
         <div className="space-y-4">
-            <div className="glass-panel px-4 py-3 flex gap-2 items-center">
-                <span className="text-xs text-slate-400 mr-1">Style</span>
+            <div className={cn(SURFACE, "px-4 py-3 flex gap-2 items-center")}>
+                <span className="text-xs text-au-text-tertiary mr-1">Style</span>
                 {STYLES.map((s) => (
                     <FilterChip
                         key={s}
@@ -945,7 +985,7 @@ function SectorsTab() {
                 ))}
             </div>
 
-            <div className="glass-panel overflow-hidden">
+            <div className={cn(SURFACE, "overflow-hidden")}>
                 <SectionHeader
                     title="Sector exposure"
                     sub={data ? `Aggregate across all investors · ${fmtQuarter(data.quarter ?? "")}` : undefined}
@@ -955,7 +995,7 @@ function SectorsTab() {
                 ) : error || !data ? (
                     <ErrorState message="Failed to load sectors." />
                 ) : (
-                    <div className="divide-y divide-white/5">
+                    <div className="divide-y divide-au-border">
                         {data.sectors.map((sector) => (
                             <SectorRow key={sector.sector} sector={sector} maxValue={maxValue} />
                         ))}
@@ -973,12 +1013,15 @@ function SectorRow({ sector, maxValue }: { sector: SectorRow; maxValue: number }
     return (
         <div>
             <button
-                className="w-full flex items-center gap-4 px-4 py-3 hover:bg-white/[0.02] text-left"
+                className={cn(
+                    "w-full flex items-center gap-4 px-4 py-3 hover:bg-white/[0.02] text-left",
+                    FOCUS_RING
+                )}
                 onClick={() => setExpanded((e) => !e)}
             >
                 <div className="w-36 shrink-0">
-                    <p className="text-sm font-medium text-slate-200">{sector.sector}</p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-sm font-medium text-au-text-secondary">{sector.sector}</p>
+                    <p className="text-xs text-au-text-faint tabular-nums">
                         {sector.stock_count} stocks · {sector.investor_count} investors
                     </p>
                 </div>
@@ -986,29 +1029,29 @@ function SectorRow({ sector, maxValue }: { sector: SectorRow; maxValue: number }
                     <div className="flex items-center gap-2">
                         <div className="flex-1 h-2 rounded-full bg-white/5">
                             <div
-                                className="h-2 rounded-full bg-indigo-500/50"
+                                className="h-2 rounded-full bg-violet-500/50"
                                 style={{ width: `${barW}%` }}
                             />
                         </div>
-                        <span className="text-sm text-slate-200 shrink-0 w-20 text-right">
+                        <span className="text-sm text-au-text tabular-nums shrink-0 w-20 text-right">
                             {fmtMoney(sector.total_value)}
                         </span>
                     </div>
                 </div>
-                <span className="text-slate-500 text-xs ml-2">{expanded ? "▲" : "▼"}</span>
+                <span className="text-au-text-faint text-xs ml-2">{expanded ? "▲" : "▼"}</span>
             </button>
 
             {expanded && (
                 <div className="bg-white/[0.01] px-4 pb-3 pt-1">
-                    <p className="text-xs text-slate-500 mb-2">Top holdings</p>
+                    <p className="text-xs text-au-text-faint mb-2">Top holdings</p>
                     <div className="flex flex-wrap gap-3">
                         {sector.top_stocks.map((s) => (
                             <div
                                 key={s.ticker}
-                                className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5"
+                                className="flex items-center gap-2 rounded-lg border border-au-border px-3 py-1.5"
                             >
-                                <span className="text-sm font-medium text-slate-200">{s.ticker}</span>
-                                <span className="text-xs text-slate-400">{fmtMoney(s.total_value)}</span>
+                                <span className="text-sm font-medium text-au-text-secondary">{s.ticker}</span>
+                                <span className="text-xs text-au-text-tertiary tabular-nums">{fmtMoney(s.total_value)}</span>
                             </div>
                         ))}
                     </div>
@@ -1029,30 +1072,27 @@ export default function SuperInvestorsPage() {
         <div className="mx-auto max-w-6xl space-y-6">
             {/* Page header */}
             <div>
-                <h1 className="text-2xl font-semibold text-slate-100">Super Investors</h1>
-                <p className="mt-1 text-sm text-slate-400">
+                <h1 className="text-2xl font-bold tracking-tight text-au-text">Super Investors</h1>
+                <p className="mt-1 text-sm text-au-text-tertiary">
                     13F institutional holdings from 24 tracked value and growth investors
                 </p>
             </div>
 
-            {/* Tab nav */}
-            <div className="border-b border-white/10">
-                <nav className="-mb-px flex gap-1 overflow-x-auto">
-                    {TABS.map((tab) => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={cn(
-                                "shrink-0 border-b-2 px-4 py-2.5 text-sm transition-colors",
-                                activeTab === tab.id
-                                    ? "border-indigo-400 text-indigo-300 font-medium"
-                                    : "border-transparent text-slate-400 hover:text-slate-300"
-                            )}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
-                </nav>
+            {/* Tab nav — the single glass slot on this page */}
+            <div className="glass-segmented w-fit max-w-full overflow-x-auto styled-scrollbar">
+                {TABS.map((tab) => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={cn(
+                            "glass-segmented-item",
+                            activeTab === tab.id && "active si-tab-active"
+                        )}
+                        aria-current={activeTab === tab.id ? "page" : undefined}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
             {/* Tab content */}
