@@ -1,0 +1,25 @@
+# Canonical enforcement plane - THE single source of truth for agent-immutable paths.
+#
+#   framework/security/sync_enforcement_plane.py    propagates this list into the
+#                                                   permission.edit deny blocks in
+#                                                   opencode.json and the fence in AGENTS.md
+#   framework/security/check_enforcement_plane.py   asserts all three agree (exit 0)
+#
+# Rules:
+#   - add a path here, re-run sync + check; check stays red until config and docs catch up
+#   - a `*` in a permission pattern spans path segments; plane denies must trail every allow
+#   - the sync script only mirrors this list; it cannot invent or weaken rules
+#   - agents may EXECUTE the sync/check tooling but may not MODIFY any input, implementation,
+#     or configuration that determines the enforcement-plane result - those are plane files,
+#     the checker included
+
+version: 1
+paths:
+  - path: "framework/**"
+    note: "gates, claims, retro, security, adapters, policy"
+  - path: ".opencode/**"
+    note: "agents, rules, skills, plugin, config"
+  - path: "opencode.json"
+    note: "permission model"
+  - path: "AGENTS.md"
+    note: "stable global rules"

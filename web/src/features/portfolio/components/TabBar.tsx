@@ -4,8 +4,6 @@ import { cn } from '@/lib/utils';
 import { TAB_DEFINITIONS, type TabId } from '../types/portfolio.types';
 import {
     LayoutDashboard,
-    TrendingUp,
-    PieChart,
     DollarSign,
     Receipt,
     Shield,
@@ -14,8 +12,6 @@ import type { LucideIcon } from 'lucide-react';
 
 const ICON_MAP: Record<string, LucideIcon> = {
     LayoutDashboard,
-    TrendingUp,
-    PieChart,
     DollarSign,
     Receipt,
     Shield,

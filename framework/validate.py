@@ -1499,6 +1499,9 @@ check("claim ledger enforces VERIFIED requires command", "CLAIM_VERIFIED_NO_COMM
 check("claim ledger enforces independent check for high impact",
       "CLAIM_VERIFIED_NO_INDEPENDENT_CHECK" in _cl,
       "high-impact claims need a second pair of eyes")
+check("claim ledger requires runtime-backed evidence for causal conclusions",
+      "CLAIM_CAUSAL_NO_RUNTIME" in _cl,
+      "static configuration, code inspection, logs, or plausibility cannot establish causation")
 _tl11 = Path(".opencode/agents/team-lead.md").read_text()
 check("team lead references evidence provenance",
       "evidence provenance" in _tl11.lower() or "claim ledger" in _tl11.lower() or "G-VERIFY" in _tl11,

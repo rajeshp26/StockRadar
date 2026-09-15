@@ -1,22 +1,19 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Upload, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { usePortfolioDashboard } from '../hooks/usePortfolio';
-import { AccountChipStrip } from './AccountChipStrip';
+import { usePortfolioNavigation } from '../hooks/usePortfolioNavigation';
 import { TabBar } from './TabBar';
+import { AccountNavDropdown } from './AccountNavDropdown';
 import { OverviewTab } from './OverviewTab';
-import { PerformanceTab } from './PerformanceTab';
-import { HoldingsTab } from './HoldingsTab';
 import { DividendsTab } from './DividendsTab';
 import { TransactionsTab } from './TransactionsTab';
-import { AllocationTab } from './AllocationTab';
 import { RiskPanel } from './RiskPanel';
 import { ImportTransactionsModal } from './ImportTransactionsModal';
 import { ManualTradeForm } from './ManualTradeForm';
-import { usePortfolioNavigation } from '../hooks/usePortfolioNavigation';
-import { Skeleton } from '@/components/ui/skeleton';
 import type { TabId } from '../types/portfolio.types';
 
 interface PortfolioTabShellProps {
@@ -27,18 +24,6 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
     const { activeTab, selectedAccountId, setActiveTab, setSelectedAccountId } =
         usePortfolioNavigation();
     const { data: initialData, isLoading } = usePortfolioDashboard();
-
-    useEffect(() => {
-        console.time('[PERF] PortfolioTabShell mount → first paint');
-        console.log('[PERF] PortfolioTabShell mounted');
-    }, []);
-
-    useEffect(() => {
-        if (!isLoading && initialData) {
-            console.timeEnd('[PERF] PortfolioTabShell mount → first paint');
-            console.log(`[PERF] Dashboard data received: ${initialData.accounts.length} accounts, ${initialData.holdings.length} holdings, ${initialData.overview.total_value}`);
-        }
-    }, [isLoading, initialData]);
     const accounts = initialData?.accounts;
 
     const [showImportModal, setShowImportModal] = useState(false);
@@ -53,18 +38,12 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
         switch (resolvedTab) {
             case 'overview':
                 return <OverviewTab accountIds={accountIds} />;
-            case 'performance':
-                return <PerformanceTab accountIds={accountIds} />;
-            case 'holdings':
-                return <HoldingsTab accountIds={accountIds} />;
             case 'dividends':
                 return <DividendsTab accountIds={accountIds} />;
             case 'transactions':
                 return <TransactionsTab accountIds={accountIds} />;
-            case 'allocation':
-                return <AllocationTab accountIds={accountIds} />;
             case 'risk':
-                return <RiskPanel />;
+                return <RiskPanel accountIds={accountIds} />;
             default:
                 return <OverviewTab accountIds={accountIds} />;
         }
@@ -72,10 +51,19 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
 
     return (
         <div className="space-y-6">
-            {/* Header with action buttons */}
+            {/* Header with global account selector and action buttons */}
             <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
+                <div className="flex items-center gap-3">
                     <h2 className="text-xl font-bold text-white">Portfolio</h2>
+                    {isLoading ? (
+                        <Skeleton className="h-10 w-56 rounded-xl" />
+                    ) : accounts && accounts.length > 0 ? (
+                        <AccountNavDropdown
+                            accounts={accounts}
+                            selectedAccountId={selectedAccountId}
+                            onSelect={setSelectedAccountId}
+                        />
+                    ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                     <Button
@@ -95,17 +83,6 @@ export function PortfolioTabShell({ initialTab }: PortfolioTabShellProps) {
                     </Button>
                 </div>
             </div>
-
-            {/* Account chips — show skeleton while loading, render tabs immediately */}
-            {isLoading ? (
-                <Skeleton className="h-12 w-full" />
-            ) : accounts && accounts.length > 0 ? (
-                <AccountChipStrip
-                    accounts={accounts}
-                    selectedAccountId={selectedAccountId}
-                    onSelect={setSelectedAccountId}
-                />
-            ) : null}
 
             <TabBar activeTab={resolvedTab} onTabChange={setActiveTab} />
 

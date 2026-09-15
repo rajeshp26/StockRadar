@@ -22,6 +22,10 @@ CLASSIFICATIONS = {"FACT", "HYPOTHESIS", "ASSUMPTION", "UNKNOWN"}
 STATUSES = {"UNVERIFIED", "VERIFIED", "REFUTED", "PARTIALLY_VERIFIED"}
 IMPACTS = {"high", "medium", "low"}
 EVIDENCE_KINDS = {"command_run", "artifact", "observation", "DIRECT", "DERIVED", "INFERRED", "ASSERTED", "UNOBSERVED", "CONTRADICTED"}
+# Runtime-backed kinds: directly observed or executed evidence. Weak kinds
+# (INFERRED/ASSERTED/UNOBSERVED/CONTRADICTED) are excluded -- inspection,
+# assertion, absence, or contradiction cannot establish causation.
+RUNTIME_BACKED_KINDS = {"command_run", "artifact", "observation", "DIRECT", "DERIVED"}
 EVIDENCE_RESULTS = {"pass", "fail", "inconclusive"}
 DISCONFIRMATION_RESULTS = {"confirmed", "refuted", "inconclusive"}
 CONFIDENCE_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
@@ -116,6 +120,19 @@ def _has_provenance(rec: dict) -> bool:
         if not isinstance(e, dict):
             continue
         if e.get("runtime") and e.get("entry_point") and e.get("reproduced") is True:
+            return True
+    return False
+
+
+def _has_runtime_backed_evidence(rec: dict) -> bool:
+    """Causal conclusion evidence: an entry whose KIND is runtime-backed (observed
+    or executed) and carries provenance. Unlike _has_provenance -- which checks the
+    fields alone, so an INFERRED/ASSERTED entry stamped with provenance-shape fields
+    sneaks through -- this requires the kind itself to carry runtime weight."""
+    for e in rec.get("evidence") or []:
+        if not isinstance(e, dict):
+            continue
+        if e.get("kind") in RUNTIME_BACKED_KINDS and e.get("runtime") and e.get("entry_point") and e.get("reproduced") is True:
             return True
     return False
 
@@ -306,6 +323,12 @@ def validate_record(rec: dict) -> list[str]:
     # 3. A FACT must be VERIFIED.
     if classification == "FACT" and status != "VERIFIED":
         problems.append("CLAIM_FACT_UNVERIFIED")
+
+    # 3b. A causal claim promoted to a conclusion (FACT) requires runtime-backed
+    # evidence. Static configuration, code inspection, logs, or plausibility
+    # (weak kinds) cannot establish causation alone -- evidence-provenance rule.
+    if rec.get("claim_type") == "causal" and classification == "FACT" and not _has_runtime_backed_evidence(rec):
+        problems.append("CLAIM_CAUSAL_NO_RUNTIME")
 
     # 4-6. VERIFIED requirements.
     if status == "VERIFIED":

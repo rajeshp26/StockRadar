@@ -209,11 +209,9 @@ export type TimePeriod = '1D' | '1W' | '1M' | '3M' | '1Y' | 'YTD' | 'ALL';
 export const PERIOD_OPTIONS: { label: string; value: TimePeriod }[] = [
     { label: '1D', value: '1D' },
     { label: '1W', value: '1W' },
-    { label: '1M', value: '1M' },
-    { label: '3M', value: '3M' },
-    { label: '1Y', value: '1Y' },
     { label: 'YTD', value: 'YTD' },
-    { label: 'ALL', value: 'ALL' },
+    { label: '1Y', value: '1Y' },
+    { label: 'All Time', value: 'ALL' },
 ];
 
 export const ACCOUNT_TYPE_COLORS: Record<string, string> = {
@@ -683,11 +681,8 @@ export interface PortfolioDashboardResponse {
 
 export const TAB_DEFINITIONS = [
     { id: 'overview', label: 'Overview', icon: 'LayoutDashboard' },
-    { id: 'performance', label: 'Performance', icon: 'TrendingUp' },
-    { id: 'holdings', label: 'Holdings', icon: 'PieChart' },
     { id: 'dividends', label: 'Dividends', icon: 'DollarSign' },
-    { id: 'transactions', label: 'Transactions', icon: 'Receipt' },
-    { id: 'allocation', label: 'Allocation', icon: 'PieChart' },
+    { id: 'transactions', label: 'Transaction', icon: 'Receipt' },
     { id: 'risk', label: 'Risk', icon: 'Shield' },
 ] as const;
 

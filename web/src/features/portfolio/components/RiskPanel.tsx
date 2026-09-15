@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { usePortfolioAccounts } from '../hooks/usePortfolio';
 import {
     useRiskMetrics,
     useDrawdown,
@@ -9,7 +8,6 @@ import {
     useRiskContribution,
     useMarketExposure,
 } from '../hooks/usePortfolio';
-import { AccountSelector } from './AccountSelector';
 import { TimePeriodSelector } from './TimePeriodSelector';
 import { RiskMetricCard } from './RiskMetricCard';
 import { DrawdownChart } from './DrawdownChart';
@@ -17,18 +15,16 @@ import { RiskContributionBar } from './RiskContributionBar';
 import { EfficientFrontierChart } from './EfficientFrontierChart';
 import type { TimePeriod } from '../types/portfolio.types';
 
-export function RiskPanel() {
+export function RiskPanel({ accountIds }: { accountIds?: number[] }) {
     const [period, setPeriod] = useState<TimePeriod>('1Y');
-    const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
     const [showFrontier, setShowFrontier] = useState(false);
     const [showContributions, setShowContributions] = useState(false);
 
-    const { data: accounts } = usePortfolioAccounts();
-    const { data: metrics, isLoading: metricsLoading, isError: metricsError } = useRiskMetrics(period, selectedAccountIds);
-    const { data: drawdown, isLoading: ddLoading, isError: ddError } = useDrawdown(period, selectedAccountIds);
-    const { data: frontier, isLoading: frontierLoading, isError: frontierError } = useEfficientFrontier(20, selectedAccountIds);
-    const { data: contributions, isLoading: contribLoading, isError: contribError } = useRiskContribution(selectedAccountIds);
-    const { data: exposure, isLoading: exposureLoading } = useMarketExposure(selectedAccountIds);
+    const { data: metrics, isLoading: metricsLoading, isError: metricsError } = useRiskMetrics(period, accountIds);
+    const { data: drawdown, isLoading: ddLoading, isError: ddError } = useDrawdown(period, accountIds);
+    const { data: frontier, isLoading: frontierLoading, isError: frontierError } = useEfficientFrontier(20, accountIds);
+    const { data: contributions, isLoading: contribLoading, isError: contribError } = useRiskContribution(accountIds);
+    const { data: exposure, isLoading: exposureLoading } = useMarketExposure(accountIds);
 
     const fmtPct = (val: number | null | undefined, digits: number = 2) =>
         val != null ? `${val >= 0 ? '+' : ''}${(val * 100).toFixed(digits)}%` : '—';
@@ -44,11 +40,6 @@ export function RiskPanel() {
                     Portfolio Risk Analytics
                 </h3>
                 <div className="flex items-center gap-3">
-                    <AccountSelector
-                        accounts={accounts || []}
-                        selected={selectedAccountIds}
-                        onChange={setSelectedAccountIds}
-                    />
                     <TimePeriodSelector value={period} onChange={setPeriod} />
                 </div>
             </div>

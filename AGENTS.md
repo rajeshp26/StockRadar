@@ -46,6 +46,34 @@ silently, or modify production without an approved release gate. Credentials liv
 workspace in environment variables.
 
 
+## Enforcement plane is agent-immutable
+
+A gate executed from mutable, agent-writable code is not a trustworthy security boundary.
+Permissions control tool availability; gates are the authorization layer. Neither replaces the
+other. The enforcement plane must be verified independently of any agent that runs it.
+
+Canonical source: `framework/security/enforcement_plane.yaml`. The fence below and the
+`permission.edit` deny blocks in `opencode.json` are generated from it by
+`framework/security/sync_enforcement_plane.py` (human-run; it only mirrors the YAML) and
+verified by `framework/security/check_enforcement_plane.py` (must exit 0 - run it after any
+plane change).
+
+<!-- enforcement-plane: begin -->
+    framework/**        gates, claims, retro, security, adapters, policy
+    .opencode/**        agents, rules, skills, plugin, config
+    opencode.json       permission model
+    AGENTS.md           stable global rules
+<!-- enforcement-plane: end -->
+
+Enforced by edit permissions in opencode.json (narrow allowlists with deny fallback, and an
+explicit plane deny after any path-scoped allow - a `*` in a permission pattern spans path
+segments). Add a rule that crosses a plane boundary only with a trailing deny for the plane.
+
+Tooling bound to the plane (the sync and check scripts) may be EXECUTED by agents, but every
+input, implementation, and configuration that determines the enforcement-plane result is a
+plane file - immutable to agents, the checker included. That is what makes the check
+trustworthy: nothing that could change its verdict can be changed by an agent.
+
 ## Frontend stack is a contract
 
 The mandated stack (shadcn/ui, Tailwind, Lucide, Motion, Playwright) is enforced executably by

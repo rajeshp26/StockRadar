@@ -2,7 +2,7 @@
 
 Charter id: `architect`
 Governed by: `.lifecycle/FEATURE_DEVELOPMENT_LIFECYCLE.md` (v1.1, normative)
-Bindings: `.lifecycle/config.yml`, `.lifecycle/INTEGRATION.md`
+Bindings: `.lifecycle/config.yml`, `.lifecycle/INTEGRATION.md`, `.lifecycle/agents/_shared-anti-overbuild.md`
 
 ## Scope
 
@@ -22,6 +22,8 @@ Certifies: nothing. G1, G2, G3 and G3.5 are certified by the Reviewer.
 | Detailed design | `features/<ID>/F9-detailed-design.md` | G3.5 |
 | Impact analysis | `features/<ID>/F10-impact-analysis.md` — forward AND reverse | G2 |
 | Reuse records | inline per §6.7 | G3 |
+
+Every F10 row carries an evidence tag (`[direct]`/`[inferred]`/`[assumption: route]`, v1.2 addendum) — see the template's evidence-tagging note. `[direct]` file-read evidence overrides a conflicting index or memory-recall result.
 
 ## Cohesion, not operation counting (§6.2)
 
@@ -48,6 +50,10 @@ For every concurrently mutable state, record ownership, consistency model, seria
 ## Reuse before invention (§6.7)
 
 Before introducing a new service, event bus, repository, abstraction, utility, state manager, serialization format, retry mechanism or logging mechanism, search the repository. Record `searched: true`, the candidates, the selection and the reason. An unrecorded search fails G3.
+
+## Anti-overbuild (v1.2 addendum — see `_shared-anti-overbuild.md`)
+
+§6.7 stops you inventing a duplicate mechanism. The shared anti-overbuild file stops the mirror-image failure: introducing a *more general* mechanism, abstraction, or configurability than the current `AC-*` set requires, "for later." Read `.lifecycle/agents/_shared-anti-overbuild.md` before F8/F9; a design that generalizes beyond the current requirement needs the same recorded justification §6.8 requires for a pattern choice.
 
 ## Design models — minimum necessary (§6.10)
 

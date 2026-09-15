@@ -14,12 +14,14 @@ Timestamp: <ISO 8601 with offset>
 
 Spec: §6.11. Hard gate before implementation. Two directions, both mandatory. **A forward-only analysis fails G2.**
 
+Evidence tagging (v1.2 addendum): every row in Parts 1 and 2 carries one of `[direct]` (you read the file/contract/schema yourself), `[inferred]` (reasoned from something you read directly, with the reasoning stated), or `[assumption: how to verify]`. Where `[direct]` evidence and an index, graph, or memory-recall result disagree, `[direct]` wins — re-read the file rather than trusting the index. This mirrors the Researcher's F1 marker discipline; F10 gets its own copy of the rule because a forward/reverse impact claim that turns out to be `[assumption]` dressed as fact is exactly how a reverse-impact miss (§F10 Part 2) escapes to G2.
+
 ## Part 1 — Forward impact: what does this change touch?
 
 Every row answered, or marked not applicable with a reason.
 
-| Category | Impact | Detail |
-|---|---|---|
+| Category | Impact | Detail | Evidence |
+|---|---|---|---|
 | requirements | | |
 | architecture | | |
 | components | | |
@@ -49,8 +51,8 @@ Every row answered, or marked not applicable with a reason.
 
 For every symbol, contract, event, table, column, config key and file being modified:
 
-| Changed thing | Existing consumers | Features relying on current behaviour | Existing tests / regression suites | Documented behaviour |
-|---|---|---|---|---|
+| Changed thing | Existing consumers | Features relying on current behaviour | Existing tests / regression suites | Documented behaviour | Evidence |
+|---|---|---|---|---|---|
 
 ## Part 3 — Impacted-path list → verification path
 
@@ -88,4 +90,5 @@ impacted_paths:
 - [ ] Both sections non-empty
 - [ ] Every forward category answered or marked N/A with a reason
 - [ ] Every changed thing has a reverse-impact row
+- [ ] Every row carries an evidence tag; no unmarked claim (v1.2 addendum)
 - [ ] Impacted-path list handed over and reflected in F5

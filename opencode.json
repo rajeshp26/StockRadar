@@ -19,7 +19,13 @@
                        "task":  {
                                     "*":  "allow"
                                 },
-                       "edit":  "deny",
+                       "edit":  {
+                                     "*":  "ask",
+                                     "framework/**":  "deny",
+                                     ".opencode/**":  "deny",
+                                     "opencode.json":  "deny",
+                                     "AGENTS.md":  "deny"
+                                 },
                        "webfetch":  "deny",
                        "bash":  {
                                     "*":  "ask",
@@ -64,7 +70,13 @@
                                     "description":  "Orchestrator. Classifies complexity and impact, delegates, enforces gates and completion.",
                                     "mode":  "primary",
                                     "permission":  {
-                                                       "edit":  "deny",
+                                                       "edit":  {
+                                                         "*":  "ask",
+                                                         "framework/**":  "deny",
+                                                         ".opencode/**":  "deny",
+                                                         "opencode.json":  "deny",
+                                                         "AGENTS.md":  "deny"
+                                                       },
                                                        "task":  {
                                                                     "*":  "allow"
                                                                 },
@@ -199,7 +211,21 @@
                                       "description":  "Writes and modifies code. Loads domain skills per task. Also runs debug mode.",
                                       "mode":  "subagent",
                                       "permission":  {
-                                                         "edit":  "allow",
+                                                         "edit":  {
+                                                           "*":  "deny",
+                                                           "src/**":  "allow",
+                                                           "tests/**":  "allow",
+                                                           "docs/**":  "allow",
+                                                           "package.json":  "allow",
+                                                           "package-lock.json":  "allow",
+                                                           "components.json":  "allow",
+                                                           "tsconfig*.json":  "allow",
+                                                           "*.config.*":  "allow",
+                                                           "framework/**":  "deny",
+                                                           ".opencode/**":  "deny",
+                                                           "opencode.json":  "deny",
+                                                           "AGENTS.md":  "deny"
+                                                         },
                                                          "task":  {
                                                                       "*":  "deny"
                                                                   },

@@ -29,6 +29,17 @@ Every claim carries one of three markers. There is no fourth option.
 
 An unmarked claim is a G0 finding.
 
+## Grilling pass (v1.2 addendum) — before writing F1, not after
+
+An interview beats a checklist at surfacing ambiguity, because a checklist only asks what it already anticipated. Before filling in the F1 template's tables, actively interrogate the request with questions in this shape, and record the answers in F1 §0:
+
+* "When you say `<term>`, do you mean `<candidate meaning A>` or `<candidate meaning B>`?" — for every domain term used loosely enough to support two readings
+* "What should happen when `<condition neither party mentioned>`?" — pick at least one condition from each operating-condition class in `config.yml` and ask, don't assume
+* "Is `<adjacent existing feature>` in scope, out of scope, or does this feature change its behaviour?" — the §5 prior-art section exists to answer this, but only if someone asked the question that produces it
+* "What would make this the wrong feature to build?" — surfaces scope and requirement defects before F3 drafts them, not after F4 challenges them
+
+This is not a substitute for the evidence-marker discipline below — every answer still gets `[verified]`, `[inferred]`, or `[assumption: route]`. It is a discipline for generating the claims that discipline gets applied to, since a marker on an unasked question is not possible. Skipping this pass on a trivial, unambiguous change is fine; skipping it because it feels slow on a genuinely ambiguous one is the failure mode it exists to prevent.
+
 ## Environment enumeration (§5.1)
 
 Answer every general dimension: vehicle state, ignition and power state, connectivity, network availability, location and region, user and account state, device state, active media source, vehicle configuration and variant, software version, hardware variant, language, privacy settings, permissions, driving context, online or offline, and time.

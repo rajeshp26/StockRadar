@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PortfolioPerformanceChart } from './PortfolioPerformanceChart';
 
-export function LazyPerformanceChart() {
+export function LazyPerformanceChart({ accountIds }: { accountIds?: number[] }) {
     const ref = useRef<HTMLDivElement>(null);
     const [inView, setInView] = useState(false);
 
@@ -14,7 +14,6 @@ export function LazyPerformanceChart() {
         const observer = new IntersectionObserver(
             ([entry]) => {
                 if (entry.isIntersecting) {
-                    console.log('[PERF] LazyPerformanceChart intersection triggered — loading chart');
                     setInView(true);
                     observer.disconnect();
                 }
@@ -29,7 +28,7 @@ export function LazyPerformanceChart() {
     return (
         <div ref={ref} className="lg:col-span-2 min-h-[200px]">
             {inView ? (
-                <PortfolioPerformanceChart />
+                <PortfolioPerformanceChart accountIds={accountIds} />
             ) : (
                 <div className="glass-panel p-6">
                     <div className="h-[300px] rounded-xl bg-white/[0.02]" />

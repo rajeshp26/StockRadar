@@ -178,28 +178,33 @@ vi.mock("@/components/ui/label", () => ({
     },
 }));
 
-vi.mock("@/components/ui/select", () => ({
-    Select: ({ children, value, onValueChange }: any) => {
-        const React = require("react");
-        return React.createElement("div", { "data-testid": "select" }, children);
-    },
-    SelectTrigger: ({ children, id, className, disabled }: any) => {
-        const React = require("react");
-        return React.createElement("button", { id, className, disabled, "data-testid": "select-trigger" }, children);
-    },
-    SelectValue: ({ placeholder }: any) => {
-        const React = require("react");
-        return React.createElement("span", null, placeholder);
-    },
-    SelectContent: ({ children }: any) => {
-        const React = require("react");
-        return React.createElement("div", null, children);
-    },
-    SelectItem: ({ children, value }: any) => {
-        const React = require("react");
-        return React.createElement("div", { "data-value": value }, children);
-    },
-}));
+let selectOnValueChange: ((value: string) => void) | null = null;
+
+vi.mock("@/components/ui/select", () => {
+    const React = require("react");
+    return {
+        Select: ({ children, value, onValueChange }: any) => {
+            selectOnValueChange = onValueChange ?? null;
+            return React.createElement("div", { "data-testid": "select" }, children);
+        },
+        SelectTrigger: ({ children, id, className, disabled }: any) => {
+            return React.createElement("button", { id, className, disabled, "data-testid": "select-trigger" }, children);
+        },
+        SelectValue: ({ placeholder }: any) => {
+            return React.createElement("span", null, placeholder);
+        },
+        SelectContent: ({ children }: any) => {
+            return React.createElement("div", null, children);
+        },
+        SelectItem: ({ children, value }: any) => {
+            return React.createElement(
+                "button",
+                { value, onClick: () => selectOnValueChange?.(value) },
+                children
+            );
+        },
+    };
+});
 
 vi.mock("@/components/ui/checkbox", () => ({
     Checkbox: ({ id, checked, onCheckedChange, className }: any) => {
@@ -246,7 +251,7 @@ vi.mock("@/components/ui/textarea", () => ({
 
 // ── Components under test ──────────────────────────────────────────────
 import { TabBar } from "@/features/portfolio/components/TabBar";
-import { AccountChipStrip } from "@/features/portfolio/components/AccountChipStrip";
+import { AccountNavDropdown } from "@/features/portfolio/components/AccountNavDropdown";
 import { PortfolioTabShell } from "@/features/portfolio/components/PortfolioTabShell";
 
 // ── Factory helpers ────────────────────────────────────────────────────
@@ -270,14 +275,12 @@ describe("TabBar — FT-TAB-01 to FT-TAB-04", () => {
         vi.clearAllMocks();
     });
 
-    it("FT-TAB-01: renders all 6 tab buttons", () => {
+    it("FT-TAB-01: renders all 4 tab buttons", () => {
         render(<TabBar activeTab="overview" onTabChange={vi.fn()} />);
         expect(screen.getByText("Overview")).toBeInTheDocument();
-        expect(screen.getByText("Performance")).toBeInTheDocument();
-        expect(screen.getByText("Holdings")).toBeInTheDocument();
         expect(screen.getByText("Dividends")).toBeInTheDocument();
-        expect(screen.getByText("Transactions")).toBeInTheDocument();
-        expect(screen.getByText("Allocation")).toBeInTheDocument();
+        expect(screen.getByText("Transaction")).toBeInTheDocument();
+        expect(screen.getByText("Risk")).toBeInTheDocument();
     });
 
     it("FT-TAB-02: active tab has blue highlight class", () => {
@@ -290,13 +293,13 @@ describe("TabBar — FT-TAB-01 to FT-TAB-04", () => {
     it("FT-TAB-03: clicking tab calls onTabChange with correct id", () => {
         const onTabChange = vi.fn();
         render(<TabBar activeTab="overview" onTabChange={onTabChange} />);
-        fireEvent.click(screen.getByText("Performance"));
-        expect(onTabChange).toHaveBeenCalledWith("performance");
+        fireEvent.click(screen.getByText("Risk"));
+        expect(onTabChange).toHaveBeenCalledWith("risk");
     });
 
-    it("FT-TAB-04: hides Transactions tab when showTransactions=false", () => {
+    it("FT-TAB-04: hides Transaction tab when showTransactions=false", () => {
         render(<TabBar activeTab="overview" onTabChange={vi.fn()} showTransactions={false} />);
-        expect(screen.queryByText("Transactions")).not.toBeInTheDocument();
+        expect(screen.queryByText("Transaction")).not.toBeInTheDocument();
     });
 });
 
@@ -304,43 +307,44 @@ describe("TabBar — FT-TAB-01 to FT-TAB-04", () => {
 // ACCOUNT CHIP STRIP TESTS
 // ═══════════════════════════════════════════════════════════════════════
 
-describe("AccountChipStrip — FT-ACCT-01 to FT-ACCT-03", () => {
+describe("AccountNavDropdown — FT-DROPDOWN-01 to FT-DROPDOWN-03", () => {
     const accounts = makeMockAccounts();
 
     beforeEach(() => {
         vi.clearAllMocks();
     });
 
-    it("FT-ACCT-01: renders All Accounts chip plus one per account", () => {
+    it("FT-DROPDOWN-01: renders All Accounts plus one item per account", () => {
         render(
-            <AccountChipStrip
+            <AccountNavDropdown
                 accounts={accounts}
                 selectedAccountId={null}
                 onSelect={vi.fn()}
             />
         );
-        expect(screen.getByText("All Accounts")).toBeInTheDocument();
-        const chips = screen.getAllByText(/TFSA|RRSP/);
-        expect(chips.length).toBe(2);
+        const allAccounts = screen.getAllByText("All Accounts");
+        expect(allAccounts.length).toBeGreaterThanOrEqual(1);
+        expect(screen.getByText("TFSA (TFSA)")).toBeInTheDocument();
+        expect(screen.getByText("RRSP (RRSP)")).toBeInTheDocument();
     });
 
-    it("FT-ACCT-02: clicking account calls onSelect with account_id", () => {
+    it("FT-DROPDOWN-02: selecting account calls onSelect with account_id", () => {
         const onSelect = vi.fn();
         render(
-            <AccountChipStrip
+            <AccountNavDropdown
                 accounts={accounts}
                 selectedAccountId={null}
                 onSelect={onSelect}
             />
         );
-        fireEvent.click(screen.getByText("TFSA"));
+        fireEvent.click(screen.getByText("TFSA (TFSA)"));
         expect(onSelect).toHaveBeenCalledWith(1);
     });
 
-    it("FT-ACCT-03: clicking All Accounts calls onSelect with null", () => {
+    it("FT-DROPDOWN-03: selecting All Accounts calls onSelect with null", () => {
         const onSelect = vi.fn();
         render(
-            <AccountChipStrip
+            <AccountNavDropdown
                 accounts={accounts}
                 selectedAccountId={1}
                 onSelect={onSelect}
@@ -412,10 +416,10 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
         expect(screen.getByText("Overview")).toBeInTheDocument();
     });
 
-    it("FT-SHELL-02: renders Performance tab content", () => {
-        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "performance" }));
+    it("FT-SHELL-02: renders Risk tab content", () => {
+        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "risk" }));
         render(<PortfolioTabShell />);
-        expect(screen.getByText("Performance")).toBeInTheDocument();
+        expect(screen.getByText("Portfolio Risk Analytics")).toBeInTheDocument();
     });
 
     it("FT-SHELL-03: shows loading skeleton while accounts load", () => {
@@ -428,8 +432,8 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
         expect(skeletons.length).toBeGreaterThanOrEqual(1);
     });
 
-    it("FT-SHELL-04: renders Allocation tab content", () => {
-        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "allocation" }));
+    it("FT-SHELL-04: renders overview allocation content", () => {
+        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "overview" }));
         mockUsePortfolioAllocation.mockReturnValue({
             data: {
                 success: true,
@@ -462,14 +466,14 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
         expect(screen.getByText("Energy")).toBeInTheDocument();
     });
 
-    it("FT-SHELL-05: renders Holdings tab placeholder when no account selected", () => {
-        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "holdings" }));
+    it("FT-SHELL-05: renders Risk tab when tab=risk", () => {
+        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "risk" }));
         mockUsePortfolioDashboard.mockReturnValue({
             data: { accounts: [] },
             isLoading: false,
         });
         render(<PortfolioTabShell />);
-        expect(screen.getByText("No holdings found")).toBeInTheDocument();
+        expect(screen.getByText("Portfolio Risk Analytics")).toBeInTheDocument();
     });
 
     it("FT-SHELL-06: renders Dividends tab placeholder when no account selected", () => {
@@ -492,8 +496,8 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
         expect(screen.getByText("No transactions found matching filters")).toBeInTheDocument();
     });
 
-    it("FT-SHELL-08: allocation tab shows empty state when no segments", () => {
-        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "allocation" }));
+    it("FT-SHELL-08: overview shows empty allocation state when no segments", () => {
+        mockUseSearchParams.mockReturnValue(makeMockSearchParams({ tab: "overview" }));
         mockUsePortfolioAllocation.mockReturnValue({
             data: { success: true, group_by: "sector", segments: [], total_value: 0 },
             isLoading: false,
@@ -505,14 +509,14 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
     it("FT-SHELL-09: clicking a tab in shell updates URL", () => {
         mockUseSearchParams.mockReturnValue(makeMockSearchParams({}));
         render(<PortfolioTabShell />);
-        fireEvent.click(screen.getByText("Performance"));
-        expect(mockReplace).toHaveBeenCalledWith("?tab=performance", { scroll: false });
+        fireEvent.click(screen.getByText("Risk"));
+        expect(mockReplace).toHaveBeenCalledWith("?tab=risk", { scroll: false });
     });
 
-    it("FT-SHELL-10: clicking account chip in shell updates URL", () => {
+    it("FT-SHELL-10: selecting account in shell updates URL", () => {
         mockUseSearchParams.mockReturnValue(makeMockSearchParams({}));
         render(<PortfolioTabShell />);
-        fireEvent.click(screen.getAllByText("TFSA")[0]);
+        fireEvent.click(screen.getByText("TFSA (TFSA)"));
         expect(mockReplace).toHaveBeenCalledWith("?account=1", { scroll: false });
     });
 

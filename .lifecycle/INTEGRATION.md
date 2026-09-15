@@ -79,7 +79,19 @@ G8 Part B emits `RECOMMEND_RELEASE`, `RECOMMEND_RELEASE_WITH_LIMITATIONS`, or `R
 
 Release decisions, deployment, rollout sequencing, branch and merge policy, staffing, schedule commitments, and the internals of G1–G6 or H1–H3.
 
-## 5. Installation order
+## 6. Relationship to `.opencode/gsd-core` (v1.2 addendum)
+
+This repository also contains `.opencode/gsd-core`, an independently versioned workflow engine (its own skills, hooks, telemetry and `.planning/` state store) that predates this pack's installation here and is not one of the "existing framework" G1–G6 definitions referenced above.
+
+**Authority split, stated explicitly because nothing previously stated it:**
+
+* `.lifecycle/config.yml` is the single source of truth for **depth classification** (L0–L4), the **phase and gate sets** those depths require, and **defect/escape classification**. `.opencode/gsd-core` workflows that touch a `.lifecycle`-governed feature must read depth and gate requirements from here, not re-derive or duplicate them.
+* `.opencode/gsd-core`'s telemetry/attribution plugin and `.planning/telemetry/` remain authoritative for **agent-attribution accuracy** (which agent produced which artifact) — a concern this pack's `authorship` block (§9.1.1) assumes is already solved correctly, rather than re-solving.
+* `framework/retro/ledger.py` (wired into the G7 gate in this repository) and `.opencode/skills/retrospective` and `gsd-extract-learnings` are **not yet merged into one ledger**. Until they are, run both, but treat `framework/retro/ledger.py` as authoritative for anything that changes a `.lifecycle` artifact (fix_target values point at `.lifecycle/` paths — see `framework/retro/containment_map.yaml`), and the `.opencode` side as authoritative for anything that changes a `.opencode/gsd-core` skill or workflow file. A finding whose fix_target is ambiguous between the two belongs in both ledgers with a cross-reference, not in neither.
+
+If a project using this pack does not also run `.opencode/gsd-core`, this section does not apply and can be deleted.
+
+## 7. Installation order
 
 1. Bind `commands`, `ui_surface`, `external_gates.definitions_location` in `config.yml`.
 2. Add the §1.2 block to the host runtime entry file (`AGENTS.md` is provided).

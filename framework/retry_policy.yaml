@@ -9,6 +9,11 @@ retry_policy:
   release_blocked: 0
   retro_recurrence: 0         # a repeated gap signature escalates immediately
   worker_stalled: 1           # silent delegated worker; retry once narrower, then take over
+                              # KNOWN ISSUE (temporary, doc-only): background task() delegation on
+                              # this host stalled 3/3 observed attempts (timeout after 30 min
+                              # inactivity; T-DOC-01 SUSPECTED_STALL, T-DOC-02 LOST). The
+                              # WORKER_STALLED route below and g13_worker enforce the recovery
+                              # ladder; worker_stalled stays 1 per retry_policy intent.
 on_exhaustion: escalate_to_human
 
 # A retrospective is owed whenever one of these signals fires against work already accepted.

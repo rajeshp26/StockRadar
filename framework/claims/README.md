@@ -90,6 +90,7 @@ store is caught exactly like a rejected append:
 | `CLAIM_INCOMPLETE` | a required top-level field is missing, empty, or None |
 | `CLAIM_BAD_VOCAB` | a vocabulary value is outside its list (claim_type / classification / status / impact / evidence kind / result; `reproduced` must be bool) |
 | `CLAIM_FACT_UNVERIFIED` | classification `FACT` with status other than `VERIFIED` |
+| `CLAIM_CAUSAL_NO_RUNTIME` | claim_type `causal`, classification `FACT`, without evidence of a runtime-backed kind (`DIRECT` \| `DERIVED` \| `command_run` \| `artifact` \| `observation`) carrying runtime + entry_point with `reproduced: true` — static configuration, code inspection, logs, or plausibility cannot establish causation |
 | `CLAIM_VERIFIED_NO_COMMAND` | status `VERIFIED` (or `PARTIALLY_VERIFIED`) without `verified_by` |
 | `CLAIM_VERIFIED_NO_PROVENANCE` | status `VERIFIED` without evidence naming runtime + entry_point with `reproduced: true`; `PARTIALLY_VERIFIED` without evidence whose result is pass or fail |
 | `CLAIM_VERIFIED_NO_INDEPENDENT_CHECK` | status `VERIFIED`, impact `high`, no `independent_check` |

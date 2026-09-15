@@ -1,5 +1,41 @@
 # .lifecycle CHANGELOG
 
+## v1.2 — self-optimization addendum (merged 2026-09-12)
+
+Additive only — no change to any v1.1 normative rule, phase, or gate definition.
+
+This repository already shipped the mechanical retrospective half (`framework/retro/ledger.py`, `framework/retro/escape_path.py`) wired into G7, so the v1.2 tooling was merged adaptively: the `.lifecycle` layer landed as-is, and the `framework/retro`/`.opencode` tooling changes (SKILL.md v3 bump, `propose_patch.py`, ledger.py `fix_commit`/denylist additions) were ported as adapted proposals under the enforcement plane rather than overwriting the live files. `escape_path.py` was deliberately not replaced — the existing `containment_map.yaml` machine and its G7 exit-code contract (3 reserved for unverifiable evidence) are richer than the patch's hardcoded version.
+
+### 1. Cross-model review at the three highest-stakes checkpoints
+
+§9.1.1 independence is identity/session-based, which does not guard against two sessions of the same underlying model sharing a blind spot. `config.yml` `cross_model_review` names H1, H2, and G8-B as checkpoints where the certifying review should come from a different model family than the artifact's author, with an explicit, schema-compliant fallback for each: CONDITIONAL where legal (G1–G3.5, feeding H1/H2), a capped Part B recommendation with a named residual limitation at G8-B (CONDITIONAL is schema-forbidden there).
+
+Files: `config.yml` (`cross_model_review` block), `agents/reviewer.md`, `agents/verifier.md`.
+
+### 2. Gate-value counterweight to the retrospective ratchet
+
+`retrospective` only ever tightens the framework. Nothing measured whether an existing gate is pulling its weight. `gate_value_report.py` reads gate ledger entries across a configurable feature window and flags gates with zero non-PASS verdicts as pruning candidates — never auto-pruned, always requiring the same Reviewer concurrence de-escalation already requires.
+
+Files: `scripts/gate_value_report.py` (new), `config.yml` (`gate_value` block).
+
+### 3. Anti-overbuild ceiling on speculative defense
+
+A new shared constraint file bounds four failure modes (unjustified hashing, speculative edge-case handling, ad hoc rubric invention, and overbuilt generality) that a large, review-heavy framework tends to accumulate over time as agents over-index on past findings. Referenced by, not duplicated into, the Implementer and Architect charters.
+
+Files: `agents/_shared-anti-overbuild.md` (new), `agents/implementer.md`, `agents/architect.md`.
+
+### 4. Grilling pass before F1, evidence tags in F10
+
+An active interrogation pass (not just a checklist) is now required before the Researcher fills in F1's tables, to surface ambiguity the checklist format doesn't prompt for on its own. F10's forward and reverse impact rows now carry the same `[direct]/[inferred]/[assumption]` evidence-marker discipline F1 already required, since an unmarked F10 claim dressed as fact is exactly how a reverse-impact miss reaches G2.
+
+Files: `agents/researcher.md`, `templates/F1-context.md`, `templates/F10-impact-analysis.md`, `agents/architect.md`.
+
+### 5. `.opencode/gsd-core` authority split documented
+
+This pack coexists with an independently-versioned `.opencode/gsd-core` workflow engine in the same repository. `INTEGRATION.md` §6 now states explicitly which system is authoritative for depth classification, agent-attribution telemetry, and retrospective ledger placement, so the two do not silently duplicate or contradict each other's self-optimization signal.
+
+Files: `INTEGRATION.md`.
+
 ## v1.1 — 2026-08-29
 
 Ten review findings landed. Each entry names the sections and pack files changed.

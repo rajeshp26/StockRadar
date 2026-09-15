@@ -1,5 +1,10 @@
 import { defineConfig } from '@playwright/test';
 import path from 'path';
+import dotenv from 'dotenv';
+
+// Load E2E_* vars (web/.env.e2e) so specs in worker processes see them.
+// global-setup.ts also loads it for its own process.
+dotenv.config({ path: path.join(__dirname, '.env.e2e') });
 
 export default defineConfig({
   testDir: './e2e',

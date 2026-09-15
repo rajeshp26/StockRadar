@@ -14,6 +14,14 @@ Timestamp: <ISO 8601 with offset>
 
 Spec: §5.1. Every claim is `[verified: source]`, `[inferred]`, or `[assumption: how to verify]`.
 
+## 0. Grilling pass (v1.2 addendum — see `researcher.md`)
+
+Answered before the tables below, not after. Skip only for a change with no ambiguity to surface — record that decision, don't just leave this section blank.
+
+| Question asked | Why it mattered | Answer | Marker |
+|---|---|---|---|
+| | | | |
+
 ## 1. Customers
 
 | Id | Customer | Why they touch this feature |
@@ -81,6 +89,7 @@ Classify each relevant condition: `normal`, `degraded`, `unavailable`, `failure`
 
 ## 6. Exit criteria
 
+- [ ] Grilling pass performed or explicitly waived with a reason (§0)
 - [ ] No environment dimension left "unknown"
 - [ ] Every assumption has a route to resolution
 - [ ] Every claim carries its `[verified/inferred/assumption]` marker

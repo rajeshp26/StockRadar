@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import datetime
+import tempfile
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -783,17 +784,62 @@ def list_tasks() -> list:
     return out
 
 
+def _retry_chain_resolved() -> set:
+    """Task ids whose terminal FAILED/LOST state was superseded by a retry_of
+    successor that reached COMPLETED (directly or transitively).
+
+    g13_worker's own recovery_action text tells a supervisor to close out a
+    LOST/FAILED task by registering 'a fresh id carrying retry_of: <old-id>'
+    (see register_task's EXISTS message) -- but nothing previously consumed
+    that field, so a resolved ancestor stayed flagged unhealthy forever even
+    after its retry completed. This walks retry_of edges from every task and
+    marks an ancestor resolved once its chain terminates in COMPLETED.
+    """
+    resolved = set()
+    tasks_dir = _tasks_dir() if "_tasks_dir" in globals() else (root() / "tasks")
+    contracts = {}
+    for p in sorted(tasks_dir.glob("*.json")) if tasks_dir.is_dir() else []:
+        try:
+            c = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        tid = c.get("task_id")
+        if tid:
+            contracts[tid] = c
+    for tid, c in contracts.items():
+        ro = str(c.get("retry_of") or "").strip()
+        if not ro:
+            continue
+        try:
+            st = task_status(tid)
+        except (SystemExit, KeyError, ValueError, TypeError, IndexError):
+            continue
+        if st.get("state") != "COMPLETED":
+            continue
+        # walk the whole ancestor chain, not just the immediate parent
+        cur = ro
+        seen = set()
+        while cur and cur not in seen:
+            seen.add(cur)
+            resolved.add(cur)
+            cur = str((contracts.get(cur) or {}).get("retry_of") or "").strip()
+    return resolved
+
+
 def task_summary() -> dict:
     """Aggregate worker health across all registered tasks.
 
     The G13 worker-observability gate's data source: every task's live health plus the
     escalation route each unhealthy task implies. 'unhealthy' means a supervisor action
     is owed NOW (recovery_level >= 2, or an unreadable event stream); WARNING (level 1)
-    is probe-and-continue and counts as healthy here.
+    is probe-and-continue and counts as healthy here. A task resolved by a completed
+    retry_of successor (see _retry_chain_resolved) is reported informationally, not
+    as owing supervision -- the escalation it named was already acted on.
     """
     rows = list_tasks()
     tasks = []
     unhealthy = []
+    resolved = _retry_chain_resolved()
     for slim in rows:
         tid = slim["task_id"]
         try:
@@ -803,6 +849,8 @@ def task_summary() -> dict:
                   "recovery_level": 5,
                   "recovery_action": "inspect the task contract and event stream manually"}
         tasks.append(st)
+        if tid in resolved:
+            continue
         if st["health"] in ("STALLED", "OVERDUE", "FAILED", "LOST", "BROKEN", "UNREADABLE")                 or st.get("recovery_level", 0) >= 2:
             unhealthy.append({
                 "task_id": st["task_id"],
@@ -821,7 +869,7 @@ def task_summary() -> dict:
     else:
         status = "ok"
     return {"status": status, "registered": len(rows), "unhealthy": unhealthy,
-            "tasks": tasks}
+            "resolved_by_retry": sorted(resolved), "tasks": tasks}
 
 # ── reads ────────────────────────────────────────────────────────────────
 def _read(rel: str) -> str:
@@ -898,8 +946,24 @@ def _write(rel: str, body: str, append=False):
             with p.open("a", encoding="utf-8") as fh:
                 fh.write(body)
     else:
-        with p.open("w", encoding="utf-8") as fh:
-            fh.write(body)
+        # ATOMIC OVERWRITE (T-FX1: append path was fixed for the Sep-7 torn-line
+        # defect; this single-shot path was not. A plain open("w") truncates the
+        # target before the new content lands, so a crash or a concurrent reader
+        # mid-write can observe a zero-length or half-written decision/contract/
+        # summary file. Write to a sibling temp file in the same directory (so
+        # os.replace stays on one filesystem) and rename over the target — POSIX
+        # and Windows (py3.3+) both make os.replace atomic for same-volume renames.
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.replace(tmp_path, p)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     return str(p)
 
 

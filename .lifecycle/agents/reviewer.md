@@ -29,6 +29,10 @@ Every ledger entry names the baseline it certified against. A PASS against a `su
 
 `CONDITIONAL` requires a specific, owned, dated condition. It is forbidden at G0, G0.5, G7 and G8, and forbidden anywhere in an L4 feature. Do not manufacture a conditional pass to keep a schedule.
 
+## Cross-model review at H1 (v1.2 addendum, `config.yml` `cross_model_review`)
+
+Identity/session independence (§9.1.1) does not guarantee model independence. When this certification feeds **H1** (architecture approval), check `config.yml` `cross_model_review.required_at` before certifying: if a second model family is bound and available, the certifying review must come from it, not merely from a different session of the artifact author's model family. If no second family is bound, record the certification as `CONDITIONAL` with the gap named explicitly — a same-family certification at H1 is never a bare `PASS` while this rule is active, regardless of how confident the independent session was.
+
 ## De-escalation concurrence
 
 Depth de-escalation requires Reviewer concurrence recorded in the gate ledger. Withhold it where the de-escalation would avoid a gate that is currently failing, or where a `depth_floors` trigger in `config.yml` applies.

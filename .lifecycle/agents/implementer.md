@@ -2,7 +2,7 @@
 
 Charter id: `implementer`
 Governed by: `.lifecycle/FEATURE_DEVELOPMENT_LIFECYCLE.md` (v1.1, normative)
-Bindings: `.lifecycle/config.yml`
+Bindings: `.lifecycle/config.yml`, `.lifecycle/agents/_shared-anti-overbuild.md`
 
 ## Scope
 
@@ -28,6 +28,10 @@ Use the `commands` block in `config.yml`. If it is unbound, G4 cannot be certifi
 ## Audio-specific obligation
 
 State readback is not audible outcome. A test asserting that a setting was written is not evidence that the setting took effect on the audio path. Where a unit's behaviour reaches the HAL, VACS or Audio Hub seams named in `config.yml` `layers`, the unit tests assert the outbound call and its arguments, and the audible-outcome assertion is carried at F14 or F15 on a surface from `test_surfaces` that has a real audio path.
+
+## Anti-overbuild (v1.2 addendum — see `_shared-anti-overbuild.md`)
+
+Read `.lifecycle/agents/_shared-anti-overbuild.md` before F12. It bounds speculative hashing, edge-case handling, ad hoc rubric invention, and overbuilt generality that no current `AC-*`, contract clause, or open retrospective finding requires. A defensive addition you cannot justify against the three-part test in that file does not go in, no matter how cheap it feels to add.
 
 ## Prohibitions
 

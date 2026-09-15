@@ -361,15 +361,13 @@ describe("E2E: Overview tab — PT-E2E-01 to PT-E2E-06", () => {
         expect(result.net_worth).toBeUndefined();
     });
 
-    it("PT-E2E-05: TabBar renders all 6 tabs", async () => {
+    it("PT-E2E-05: TabBar renders all 4 tabs", async () => {
         defaultApiMock();
         renderWithProviders(<PortfolioTabShell />);
         expect(await screen.findByText("Overview")).toBeInTheDocument();
-        expect(screen.getByText("Performance")).toBeInTheDocument();
-        expect(screen.getByText("Holdings")).toBeInTheDocument();
         expect(screen.getByText("Dividends")).toBeInTheDocument();
-        expect(screen.getByText("Transactions")).toBeInTheDocument();
-        expect(screen.getByText("Allocation")).toBeInTheDocument();
+        expect(screen.getByText("Transaction")).toBeInTheDocument();
+        expect(screen.getByText("Risk")).toBeInTheDocument();
     });
 
     it("PT-E2E-06: account_breakdown entries match backend schema", async () => {
@@ -387,13 +385,13 @@ describe("E2E: Overview tab — PT-E2E-01 to PT-E2E-06", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// PERFORMANCE — PT-E2E-07 to PT-E2E-10
+// PERFORMANCE & RISK — PT-E2E-07 to PT-E2E-10
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe("E2E: Performance tab — PT-E2E-07 to PT-E2E-10", () => {
+describe("E2E: Performance & Risk — PT-E2E-07 to PT-E2E-10", () => {
     beforeEach(() => {
         setupServices();
-        mockSearchParams = new URLSearchParams({ tab: "performance" });
+        mockSearchParams = new URLSearchParams({ tab: "risk" });
         mockUsePortfolioAccounts.mockReturnValue({ data: buildAccountsResponse(), isLoading: false });
     });
 
@@ -423,15 +421,14 @@ describe("E2E: Performance tab — PT-E2E-07 to PT-E2E-10", () => {
         }
     });
 
-    it("PT-E2E-09: PerformanceTab renders without crashing", async () => {
+    it("PT-E2E-09: Risk tab renders analytics without crashing", async () => {
         defaultApiMock();
         renderWithProviders(<PortfolioTabShell />);
-        // Performance chart is self-contained; just verify no crash + skeleton resolves
-        expect(await screen.findByText("Performance")).toBeInTheDocument();
-        // Period buttons render
-        expect(screen.getByText("1M")).toBeInTheDocument();
+        expect(await screen.findByText("Portfolio Risk Analytics")).toBeInTheDocument();
+        // Period presets are 1D/1W/YTD/1Y/All Time — no 1M or MAX
         expect(screen.getByText("1Y")).toBeInTheDocument();
-        expect(screen.getByText("MAX")).toBeInTheDocument();
+        expect(screen.queryByText("1M")).not.toBeInTheDocument();
+        expect(screen.queryByText("MAX")).not.toBeInTheDocument();
     });
 
     it("PT-E2E-10: BenchmarkCompareResponse has all keys", async () => {
@@ -453,13 +450,13 @@ describe("E2E: Performance tab — PT-E2E-07 to PT-E2E-10", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ALLOCATION — PT-E2E-11 to PT-E2E-14
+// ALLOCATION (OVERVIEW) — PT-E2E-11 to PT-E2E-14
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe("E2E: Allocation tab — PT-E2E-11 to PT-E2E-14", () => {
+describe("E2E: Allocation data on Overview — PT-E2E-11 to PT-E2E-14", () => {
     beforeEach(() => {
         setupServices();
-        mockSearchParams = new URLSearchParams({ tab: "allocation" });
+        mockSearchParams = new URLSearchParams({ tab: "overview" });
         mockUsePortfolioAccounts.mockReturnValue({ data: buildAccountsResponse(), isLoading: false });
     });
 
@@ -487,20 +484,21 @@ describe("E2E: Allocation tab — PT-E2E-11 to PT-E2E-14", () => {
         }
     });
 
-    it("PT-E2E-13: AllocationTab renders segments with correct values", async () => {
+    it("PT-E2E-13: Overview renders donut segments and asset-class rows with correct values", async () => {
         defaultApiMock();
         renderWithProviders(<PortfolioTabShell />);
         expect(await screen.findByText("Technology")).toBeInTheDocument();
         expect(screen.getByText("Energy")).toBeInTheDocument();
+        expect(screen.getByText("Stocks")).toBeInTheDocument();
         expect(screen.getByText("62.5%")).toBeInTheDocument();
         expect(screen.getByText("37.5%")).toBeInTheDocument();
-        expect(screen.getByText("$50,000.00")).toBeInTheDocument();
-        expect(screen.getByText("$30,000.00")).toBeInTheDocument();
-        // Positive gain_loss shows green, negative shows red
-        expect(screen.getByText("+$10,000.00")).toBeInTheDocument();
+        expect(screen.getByText("$50,000")).toBeInTheDocument();
+        expect(screen.getByText("$30,000")).toBeInTheDocument();
+        // Type-row gain shows formatted sign
+        expect(screen.getByText("+$8,000.00")).toBeInTheDocument();
     });
 
-    it("PT-E2E-14: AllocationTab shows empty state when no segments", async () => {
+    it("PT-E2E-14: Overview shows empty allocation state when no segments", async () => {
         mockApiGet.mockImplementation((url: string) => {
             if (url.startsWith("/portfolio/allocation")) return Promise.resolve({ data: { success: true, group_by: "sector", segments: [], total_value: 0 } });
             if (url === "/portfolio/accounts") return Promise.resolve({ data: buildAccountsResponse() });
@@ -513,10 +511,10 @@ describe("E2E: Allocation tab — PT-E2E-11 to PT-E2E-14", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// HOLDINGS — PT-E2E-15 to PT-E2E-17
+// HOLDINGS CONTRACT — PT-E2E-15 to PT-E2E-16
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe("E2E: Holdings tab — PT-E2E-15 to PT-E2E-17", () => {
+describe("E2E: Holdings contract — PT-E2E-15 to PT-E2E-16", () => {
     beforeEach(() => {
         setupServices();
         mockSearchParams = new URLSearchParams({ tab: "holdings", account: "1" });
@@ -549,24 +547,6 @@ describe("E2E: Holdings tab — PT-E2E-15 to PT-E2E-17", () => {
             expect(typeof h.quantity).toBe("number");
             expect(typeof h.current_value).toBe("number");
         }
-    });
-
-    it("PT-E2E-17: HoldingsTab renders holdings from real backend data", async () => {
-        mockApiGet.mockImplementation((url: string) => {
-            if (url === "/portfolio/accounts") return Promise.resolve({ data: buildAccountsResponse() });
-            if (url === "/portfolio/overview") return Promise.resolve({ data: buildOverviewResponse() });
-            if (url.includes("/holdings")) return Promise.resolve({ data: buildHoldingsResponse() });
-            if (url.startsWith("/portfolio/performance")) return Promise.resolve({ data: buildPerformanceResponse() });
-            if (url.startsWith("/portfolio/allocation")) return Promise.resolve({ data: buildAllocationResponse() });
-            return Promise.resolve({ data: {} });
-        });
-        renderWithProviders(<PortfolioTabShell />);
-        expect(await screen.findByText("AAPL")).toBeInTheDocument();
-        expect(screen.getByText("GOOGL")).toBeInTheDocument();
-        expect(screen.getByText("$9,025.00")).toBeInTheDocument();
-        expect(screen.getByText("$5,256.00")).toBeInTheDocument();
-        expect(screen.getByText("+20.33%")).toBeInTheDocument();
-        expect(screen.getByText("+25.14%")).toBeInTheDocument();
     });
 });
 

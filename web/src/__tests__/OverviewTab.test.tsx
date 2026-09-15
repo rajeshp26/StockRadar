@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 
 const mockUsePortfolioOverview = vi.fn();
 const mockUsePortfolioPerformance = vi.fn();
+const mockUsePortfolioAllocation = vi.fn();
 
 const mockUsePortfolioAccounts = vi.fn();
 const mockUseBenchmarks = vi.fn();
@@ -10,6 +11,7 @@ const mockUseBenchmarks = vi.fn();
 vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
     usePortfolioOverview: (...args: any[]) => mockUsePortfolioOverview(...args),
     usePortfolioPerformance: (...args: any[]) => mockUsePortfolioPerformance(...args),
+    usePortfolioAllocation: (...args: any[]) => mockUsePortfolioAllocation(...args),
     usePortfolioAccounts: (...args: any[]) => mockUsePortfolioAccounts(...args),
     useBenchmarks: (...args: any[]) => mockUseBenchmarks(...args),
     useBenchmarkCompare: () => ({ data: null, isLoading: false }),
@@ -80,6 +82,7 @@ describe("OverviewTab", () => {
         });
         mockUsePortfolioAccounts.mockReturnValue({ data: [], isLoading: false });
         mockUseBenchmarks.mockReturnValue({ data: [], isLoading: false });
+        mockUsePortfolioAllocation.mockReturnValue({ data: null, isLoading: false });
     });
 
     it("renders loading skeleton while fetching", () => {
@@ -105,7 +108,7 @@ describe("OverviewTab", () => {
             isLoading: false,
         });
         const { container } = render(<OverviewTab />);
-        const gainLossText = screen.getByText(($) => $.includes("$") && $.includes("-5,000"));
+        const gainLossText = screen.getByText(($) => $.includes("$") && $.includes("5,000") && $.startsWith("-"));
         expect(gainLossText.className).toContain("text-red-400");
     });
 

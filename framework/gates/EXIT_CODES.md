@@ -22,6 +22,7 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G12 provider | healthy — dispatch allowed | unhealthy — NO TASK DISPATCH | BLOCKED (cannot verify provider health) | — | NOT_APPLICABLE (no model resolved) |
 | G13 worker | all workers healthy or terminal | unhealthy worker(s) listed | BLOCKED (cannot read task state) | — | NOT_APPLICABLE (no tasks registered) |
 | G14 evidence-integrity | all claims pass E1-E8 | integrity violation(s) listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no claims recorded) |
+| G15 tripwires | no eval tripwire hits | violations listed | BLOCKED (grep/awk absent) | — | NOT_APPLICABLE (no changed eval files) |
 | G-EXEC exec-integrity | matrix 38/38 checks pass | deviations listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no matrix module) |
 
 ## G6 emits ONLY 0, 1, 3
@@ -133,6 +134,17 @@ G14's own. Exit 4 means no claims exist — nothing to judge; a skip, not a pass
 integrity could not be computed (missing python3, unparsable report) — never read as pass.
 The gate wraps `python3 framework/claims/ledger.py integrity`, which exits 3 when the ledger
 is empty; the gate maps that to NOT_APPLICABLE.
+
+## G15 is an eval-integrity gate — it refuses completion on tripwire hits in changed eval-scoped code
+
+G15 scans changed test/eval/harness/candidate/variant files for syntactic
+tripwires ported from the ECC eval-harness DEFAULT_TRIPWIRES : hidden network
+access, process spawning, sandbox weakening, gate probing, and parent escape.
+Exit 1 lists each hit as rule|file:line:content. Exit 4 means no eval-scoped
+files changed — nothing to scan; a skip, not a pass. Exit 2 means the scan could
+not run (grep/awk absent) — never read as pass. G15 covers the agent-written
+eval code that the stack-conformance gate (G5) does not: it judges behaviour-
+relevant imports and probes, not the declared stack.
 
 ## G-EXEC asserts execution integrity against the failure-injection matrix
 

@@ -351,8 +351,44 @@ ui_surface:
 # ---------------------------------------------------------------------------
 # External gates (§15). The lifecycle defers to existing definitions.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Cross-model review (v1.2 addendum — self-optimization roadmap Tier 1 #2).
+# §9.1.1 independence is identity/session-based, which is necessary but not
+# sufficient at the highest-stakes checkpoints: a Reviewer and an Architect
+# running the same underlying model family share that model's blind spots
+# even in different sessions. At the three checkpoints below, the certifying
+# review MUST be performed by a model from a DIFFERENT family than the one
+# that authored the artifact under review, not merely a different session of
+# the same family. This is additive to, not a replacement for, §9.1.1.
+# ---------------------------------------------------------------------------
+cross_model_review:
+  enabled: true
+  required_at:
+    - { checkpoint: H1,    reason: "architecture approval — highest blast radius of a shared blind spot" }
+    - { checkpoint: H2,    reason: "incompatible contract change — consumer impact is easy to under-scope from inside one model family's assumptions" }
+    - { checkpoint: G8-B,  reason: "release recommendation — the last automated check before H3" }
+  rule: "certifier.model_family != author.model_family, recorded alongside the existing identity/session fields"
+  fallback_when_unavailable: "at H1/H2 feeder gates (G1, G2, G3, G3.5 — CONDITIONAL is legal there): record the gap explicitly under `conditions`, a same-family certification is CONDITIONAL, never bare PASS. At G8-B, CONDITIONAL is schema-forbidden (gate.schema.json); instead the Part B recommendation ceiling is RECOMMEND_RELEASE_WITH_LIMITATIONS at most, with the gap recorded as a named residual limitation — see verifier.md."
+  binding: "BIND ME — name of the second model/runtime used as certifier at these checkpoints (e.g. a different provider's model via this project's host tool)"
+
+# ---------------------------------------------------------------------------
+# Gate value (v1.2 addendum — self-optimization roadmap Tier 1 #3).
+# retro/ledger.py only ever ADDS checks. Nothing previously balanced that by
+# asking which existing gates/checklist items are pure overhead. This block
+# is read by `.lifecycle/scripts/gate_value_report.py`.
+# ---------------------------------------------------------------------------
+gate_value:
+  enabled: true
+  window_features: 20        # look back this many completed features
+  prune_candidate_threshold: 0   # a checklist item/gate with this many non-PASS
+                                  # verdicts across the window is a pruning candidate
+  review_cadence: "paired with the existing §12.5 preventive control improvement
+                    rate check — run gate_value_report.py at the same review"
+  never_prune_without: "Reviewer concurrence recorded the same way de-escalation
+                         concurrence is recorded (§3.4 escalation rule)"
+
 external_gates:
-  definitions_location: ""  # BIND ME — authoritative location of existing G1–G6 definitions
+  definitions_location: "framework/gates/"  # bound 2026-09-14, see DID-010 — authoritative location of existing G1–G6 definitions (framework now installed at repo root)
   existing:
     G1: { name: "Contract",   owner: existing_framework, lifecycle_supplies: "F7-contracts/, contract baseline" }
     G2: { name: "Impact",     owner: existing_framework, lifecycle_supplies: "F10 forward+reverse, impacted_paths" }

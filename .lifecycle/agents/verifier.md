@@ -69,6 +69,10 @@ Part A before F16: readiness, with every `critical` scenario having an F16 case.
 
 Part B emits `RECOMMEND_RELEASE`, `RECOMMEND_RELEASE_WITH_LIMITATIONS` or `RECOMMEND_HOLD`. It is a recommendation. **H3 owns the accept-or-reject decision** (§15.4). There is no G9.
 
+## Cross-model review at G8 Part B (v1.2 addendum, `config.yml` `cross_model_review`)
+
+G8-B is the last automated checkpoint before H3. Check `config.yml` `cross_model_review.required_at` before certifying: if a second model family is bound, the G8-B certification must come from it. `gate.schema.json` forbids `CONDITIONAL` at G8-B, so the fallback used at H1/H2's feeder gates does not apply here. If no second family is bound, G8-B may still PASS on a same-family certification, but Part B's recommendation ceiling is `RECOMMEND_RELEASE_WITH_LIMITATIONS` at most — never bare `RECOMMEND_RELEASE` — with "no cross-model release certification available" recorded as a named residual limitation for H3 to see. Do not silently certify a bare `RECOMMEND_RELEASE` because the binding happens to be unset.
+
 ## Prohibitions
 
 May not:

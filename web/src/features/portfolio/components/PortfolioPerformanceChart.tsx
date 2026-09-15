@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
     Area,
     XAxis,
@@ -12,51 +12,21 @@ import {
     ComposedChart,
     Legend,
 } from 'recharts';
-import { usePortfolioPerformance, useBenchmarks, useBenchmarkCompare, usePortfolioAccounts } from '../hooks/usePortfolio';
+import { usePortfolioPerformance, useBenchmarks, useBenchmarkCompare } from '../hooks/usePortfolio';
 import { TimePeriodSelector } from './TimePeriodSelector';
 import { BenchmarkSelector } from '@/components/ui/benchmark-selector';
-import { AccountSelector } from './AccountSelector';
 import type { TimePeriod, BenchmarkCompareResponse } from '../types/portfolio.types';
 import { BENCHMARK_COLORS, FALLBACK_COLORS } from '@/lib/colors';
 
-export function PortfolioPerformanceChart() {
+export function PortfolioPerformanceChart({ accountIds }: { accountIds?: number[] }) {
     const [period, setPeriod] = useState<TimePeriod>('1Y');
     const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([]);
-    const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
 
-    const { data: accounts } = usePortfolioAccounts();
-    const { data: perf, isLoading: perfLoading, isError: perfError, isFetching } = usePortfolioPerformance(period, selectedAccountIds);
+    const { data: perf, isLoading: perfLoading, isError: perfError, isFetching } = usePortfolioPerformance(period, accountIds);
     const { data: benchmarks } = useBenchmarks();
-    const { data: compareData, isLoading: compareLoading, isError: compareError } = useBenchmarkCompare(period, selectedBenchmarks, selectedAccountIds);
-
-    const loggedRef = useEffect((() => {
-        console.log('[PERF] PortfolioPerformanceChart mounted — fired accounts, performance, benchmarks requests');
-        return () => {};
-    }) as any, []);
-
-    useEffect(() => {
-        if (accounts) console.log(`[PERF] PortfolioPerformanceChart accounts received: ${accounts.length} accounts`);
-    }, [accounts]);
-
-    useEffect(() => {
-        if (perf && !perfLoading) {
-            const snaps = perf.snapshots ?? [];
-            console.log(`[PERF] performance_response period=${perf.period} source=${perf.data_source} rows=${snaps.length} ret=${perf.total_return_pct}%`);
-            snaps.forEach(s => console.log(`[PERF]   date=${s.date} V=${s.value} ND=${s.net_deposits}`));
-        }
-    }, [perf, perfLoading]);
-
-    useEffect(() => {
-        if (benchmarks) console.log(`[PERF] PortfolioPerformanceChart benchmarks received: ${benchmarks.length} benchmarks`);
-    }, [benchmarks]);
+    const { data: compareData, isLoading: compareLoading, isError: compareError } = useBenchmarkCompare(period, selectedBenchmarks, accountIds);
 
     const chartData = buildChartData(perf?.snapshots, compareData, selectedBenchmarks);
-    if (chartData.length > 0 && !perfLoading) {
-        console.log(`[PERF] chart_data period=${period} rows=${chartData.length}`);
-        chartData.forEach(d => console.log(`[PERF]   date=${d.date} V=${d.portfolio} ND=${d.netDeposits}`));
-    } else if (!perfLoading) {
-        console.log(`[PERF] chart_data period=${period} rows=0 (empty)`);
-    }
     const hasData = chartData.length > 1 && chartData.some((d) => (d.portfolio as number) > 0 || (d.netDeposits as number) > 0);
     const showBenchmarks = selectedBenchmarks.length > 0;
 
@@ -94,11 +64,6 @@ export function PortfolioPerformanceChart() {
                     Portfolio Performance
                 </h3>
                 <div className="flex items-center gap-3">
-                    <AccountSelector
-                        accounts={accounts || []}
-                        selected={selectedAccountIds}
-                        onChange={setSelectedAccountIds}
-                    />
                     <BenchmarkSelector
                         benchmarks={benchmarks || []}
                         selected={selectedBenchmarks}

@@ -89,7 +89,7 @@ describe("PerformanceTab", () => {
 
     it("renders period selector buttons from child chart component", () => {
         render(<PerformanceTab />);
-        const periods = ["1D", "1W", "1M", "3M", "1Y", "YTD", "ALL"];
+        const periods = ["1D", "1W", "YTD", "1Y", "All Time"];
         periods.forEach((p) => {
             expect(screen.getByText(p)).toBeInTheDocument();
         });
