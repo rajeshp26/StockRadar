@@ -157,4 +157,5 @@ preferred_fix:
     missing_test:                 [gate_check, evidence_mapping]
     visible_behaviour_defect:     [gate_routing, requirement_shape]
   framework:
+    contract_mismatch:            [gate_routing, validation_check, gate_check]
     framework_gap:                [validation_check, gate_check]

@@ -39,12 +39,13 @@ AGENTS.md                         stable global rules only (rule zero, do-not-in
   plugin/telemetry.ts             v2 collector, one record per session
   commands/ hooks/ scripts/       OpenCode project configuration (skills-as-commands, hooks)
 framework/
-  gates/                          EXIT_CODES.md (AUTHORITATIVE contract) + 18 executable gates:
+  gates/                          EXIT_CODES.md (AUTHORITATIVE contract) + 19 executable gates:
                                   g1_contract, g2_impact, g3_architecture, g4_executable,
                                   g5_frontend_stack, g6_browser, g7_retro, g8_blockers,
                                   g9_scope, g10_permission, g_tool_readiness (G-T0),
                                   g_tool_utilization (G-T1), g11_evidence, g12_provider,
-                                  g13_worker, g14_integrity, g_entry (G-ENTRY), g_exec (G-EXEC),
+                                  g13_worker, g14_integrity, g15_eval_tripwires,
+                                  g_entry (G-ENTRY), g_exec (G-EXEC),
                                   + _lib.sh shared library
   adapters/                       gsd_state.py (GSD state + task supervision), host.py,
                                   hosts/opencode.py + hosts/dsh.py, code_intel.py,

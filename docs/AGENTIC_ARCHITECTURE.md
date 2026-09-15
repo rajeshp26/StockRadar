@@ -527,6 +527,7 @@ missing.
 | G12 provider | `g12_provider.sh` | healthy — dispatch allowed | unhealthy — NO TASK DISPATCH | BLOCKED (cannot verify provider health) | — | NOT_APPLICABLE (no model resolved) |
 | G13 worker | `g13_worker.sh` | all workers healthy or terminal | unhealthy worker(s) listed | BLOCKED (cannot read task state) | — | NOT_APPLICABLE (no tasks registered) |
 | G14 evidence-integrity | `g14_integrity.sh` | all claims pass E1-E8 | integrity violation(s) listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no claims recorded) |
+| G15 eval tripwires | `g15_eval_tripwires.sh` | no eval tripwire hits | violations listed | BLOCKED (grep/awk absent) | — | NOT_APPLICABLE (no changed eval files) |
 | G-ENTRY entry | `g_entry.sh` | approved plan + declared scope + acceptance criteria, no open questions — dispatch allowed | named missing prerequisite — NO TASK DISPATCH | BLOCKED (python3 absent / unreadable) | — | NOT_APPLICABLE (ENTRY_EXEMPT=TRIVIAL) |
 | G-EXEC exec-integrity | `g_exec.sh` | matrix 38/38 checks pass | deviations listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no matrix module) |
 
@@ -1116,6 +1117,7 @@ framework/
     g5_frontend_stack.sh          g6_browser.sh  g7_retro.sh  g8_blockers.sh
     g9_scope.sh  g10_permission.sh  g_tool_readiness.sh  g_tool_utilization.sh
     g11_evidence.sh  g12_provider.sh  g13_worker.sh  g14_integrity.sh
+    g15_eval_tripwires.sh
     g_entry.sh  g_exec.sh  _lib.sh (shared gate library)
   adapters/
     gsd_state.py                  GSD state adapter (supervision + state commands)

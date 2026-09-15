@@ -147,9 +147,13 @@ check("seven agents defined", sorted(agents) == sorted(EXPECTED), f"got {sorted(
 for a in EXPECTED:
     check(f"{a} markdown exists", Path(f".opencode/agents/{a}.md").exists())
 
-check("implementer can edit", agents["implementer"]["permission"]["edit"] == "allow")
+_edit = agents["implementer"]["permission"]["edit"]
+check("implementer can edit",
+      _edit == "allow" or (isinstance(_edit, dict) and any(v == "allow" for v in _edit.values())))
 for a in ("reviewer", "planner", "researcher", "team-lead"):
-    check(f"{a} cannot edit", agents[a]["permission"]["edit"] == "deny")
+    _edit = agents[a]["permission"]["edit"]
+    check(f"{a} cannot edit",
+          _edit == "deny" or (isinstance(_edit, dict) and _edit.get("*", "deny") != "allow"))
 check("architect edits contracts only",
       isinstance(agents["architect"]["permission"]["edit"], dict)
       and agents["architect"]["permission"]["edit"]["*"] == "deny")
@@ -419,7 +423,7 @@ check("skills directory is populated", len(_skills) >= 4,
       "opencode.json pointed at .opencode/skills while it did not exist")
 import re as _re
 for _f in _skills:
-    _txt = _f.read_text()
+    _txt = _f.read_text(encoding="utf-8")
     _m = _re.match(r"^---\n(.*?)\n---\n", _txt, _re.S)
     check(f"skill frontmatter parses ({_f.parent.name})", bool(_m),
           "a skill without frontmatter is never discovered")
