@@ -18,8 +18,11 @@ if TYPE_CHECKING:
 
 import pandas as pd
 
-# Defeat Beta SDK
-from defeatbeta_api.data.ticker import Ticker
+# Defeat Beta SDK — import via the console-safe shim (SDK prints an emoji banner
+# at import time which UnicodeEncodeErrors on cp1252 Windows consoles; RC9).
+from providers.defeatbeta_runtime import import_ticker
+
+Ticker = import_ticker()
 
 from application.normalizers.statement_normalizer import (
     normalize_balance_row,
@@ -325,7 +328,8 @@ class DefeatBetaProvider(StockDataProvider):
     async def warm_cache() -> None:
         """Pre-warm DuckDB httpfs cache by querying a known stock."""
         try:
-            from defeatbeta_api.client.duckdb_client import get_duckdb_client
+            from providers.defeatbeta_runtime import import_get_duckdb_client
+            get_duckdb_client = import_get_duckdb_client()
             client = get_duckdb_client()
             spec_url = "https://huggingface.co/datasets/defeatbeta/yahoo-finance-data/resolve/main/spec.json"
             client.query(f"SELECT * FROM '{spec_url}'")
@@ -337,7 +341,8 @@ class DefeatBetaProvider(StockDataProvider):
     def _clear_duckdb_cache() -> None:
         """Clear DuckDB httpfs on-disk cache."""
         try:
-            from defeatbeta_api.client.duckdb_client import get_duckdb_client
+            from providers.defeatbeta_runtime import import_get_duckdb_client
+            get_duckdb_client = import_get_duckdb_client()
             client = get_duckdb_client()
             client._clear_cache()
             logger.info("DuckDB httpfs cache cleared")

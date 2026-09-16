@@ -67,7 +67,7 @@ dash==4.1.0
     # via stockdex
 decorator==5.2.1
     # via ipython
-defeatbeta-api==0.0.50
+defeatbeta-api==0.0.61
     # via -r requirements.in
 deprecated==1.3.1
     # via limits
@@ -77,7 +77,7 @@ deprecation==2.1.0
     #   storage3
 distro==1.9.0
     # via openai
-duckdb==1.4.3
+duckdb==1.5.3
     # via defeatbeta-api
 edgartools==5.30.0
     # via -r requirements.in

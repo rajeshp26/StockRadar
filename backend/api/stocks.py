@@ -193,8 +193,8 @@ async def _fallback_price_history(symbol: str, days: int) -> PriceHistoryRespons
 def _get_news_from_defeatbeta(symbol: str, limit: int) -> list[NewsArticle] | None:
     """Fetch news from DefeatBeta provider (primary)."""
     try:
-        from defeatbeta_api.data.ticker import Ticker
-        ticker = Ticker(symbol)
+        from providers.defeatbeta_runtime import import_ticker
+        ticker = import_ticker()(symbol)
         news_obj = ticker.news()
         df = news_obj.get_news_list()
         if df is None or df.empty:
