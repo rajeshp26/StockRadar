@@ -685,6 +685,16 @@ class SupabaseFinancialRepository:
             seen = {}
             for r in rows:
                 key = (r.get("company_id"), r.get("report_date"))
+                # reverse_split is derivable from the factor string ("a:b" with
+                # a<b means a reverse split); normalize it here so a source that
+                # gets it wrong cannot clobber a correctly-derived value.
+                factor = str(r.get("split_factor") or "").strip()
+                if ":" in factor:
+                    try:
+                        a, b = factor.split(":")
+                        r["reverse_split"] = (Decimal(a) < Decimal(b))
+                    except Exception:
+                        pass
                 seen[key] = r
             dedup = list(seen.values())
 

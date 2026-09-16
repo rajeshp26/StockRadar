@@ -528,11 +528,19 @@ class DefeatBetaProvider(StockDataProvider):
                     dt = pd.to_datetime(str(r.get("report_date")), errors='coerce')
                     if pd.isna(dt):
                         continue
+                    factor = str(r.get("split_factor")) if pd.notna(r.get("split_factor")) else None
+                    reverse = False
+                    if factor and ":" in factor:
+                        try:
+                            a, b = factor.split(":")
+                            reverse = (Decimal(a) < Decimal(b))
+                        except Exception:
+                            pass
                     out.append({
                         "company_id": company_id,
                         "report_date": dt.date(),
-                        "split_factor": str(r.get("split_factor")) if pd.notna(r.get("split_factor")) else None,
-                        "reverse_split": False,  # YF doesn't indicate reverse natively; compute later if needed
+                        "split_factor": factor,
+                        "reverse_split": reverse,
                         "data_source": "yfinance",
                     })
                 return out
