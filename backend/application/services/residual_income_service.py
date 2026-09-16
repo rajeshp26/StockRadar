@@ -780,7 +780,7 @@ class ResidualIncomeService:
 
         ri_score, ri_category, ri_flags, ri_evidence = await evaluate_residual_income_suitability(
             repo=self.repo, company_id=company_id, sector=sector,
-            cost_of_equity=float(k_e),
+            cost_of_equity=float(k_e), roe0=roe0,
         )
         flags.extend(ri_flags)
 
@@ -799,8 +799,10 @@ class ResidualIncomeService:
                 "bvPerShare":             bv_per_share,
                 "roe0":                   roe0,
                 "ri0PerShare":            ri0_per_share,
-                "costOfEquity":           float(k_e),
-                "riGrowthRate":           float(g_ri),
+                "costOfEquityUsed":       float(k_e),
+                "riGrowthRateUsed":       float(g_ri),
+                "terminalGrowthRateUsed": tg_used,
+                "forecastYears":          int(n),
                 "intrinsicValuePerShare": float(intrinsic_ps) if intrinsic_ps is not None else None,
                 "currentPrice":           current_price,
                 "upsideDownsidePct":      upside,

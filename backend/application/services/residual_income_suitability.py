@@ -75,6 +75,7 @@ async def evaluate_residual_income_suitability(
     company_id: int,
     sector: str | None,
     cost_of_equity: float | None = None,
+    roe0: float | None = None,
 ) -> tuple[int, str, list[DiagnosticFlag], dict[str, Any]]:
     """
     7-metric Residual Income suitability scorecard.
@@ -82,6 +83,9 @@ async def evaluate_residual_income_suitability(
     Args:
         cost_of_equity: If provided (computed by service), used directly for ROE-excess metric.
                         If None, the metric is marked 'na'.
+        roe0: Live IS/BS ROE computed by the service (same value the formula uses).
+              If provided, preferred as ROE-latest so the scorecard and the formula
+              block agree on the ROE − CoE spread.
 
     Returns:
         score_0_100, category, flags, evidence
@@ -169,6 +173,11 @@ async def evaluate_residual_income_suitability(
         eq = _safe_float(bs_latest.get("shareholders_equity"))
         if ni is not None and eq is not None and eq > 0:
             roe_latest = ni / eq
+
+    # RC7: prefer the service's live IS/BS ROE (roe0) so the scorecard and the
+    # formula block use the same ROE − CoE spread.
+    if roe0 is not None:
+        roe_latest = _safe_float(roe0)
 
     excess = None
     if roe_latest is not None and cost_of_equity is not None:
@@ -516,6 +525,37 @@ async def evaluate_residual_income_suitability(
     passes = sum(r.points for r in results)
     score_0_100 = _points_to_score(passes, total_possible)
     category = _category_from_passes(passes)
+
+    # ── Prompt-compatible evidence aliases (RC7) ─────────────────────────────
+    # _prompt_residual_income reads m2_roe_vs_ke / m3_roe_consistency /
+    # m4_bv_growth / m5_net_debt_to_equity / m6_eps_positivity / m7_roic_5y.
+    # Emit those keys so the AVAILABLE METRICS block renders instead of
+    # "(insufficient data)".
+
+    eps_pos = sum(1 for v in eps_vals_clean if v is not None and v > 0)
+
+    roic_pairs: list[tuple[Any, float | None]] = []
+    if hasattr(repo, "get_roic_history"):
+        try:
+            roic_rows = await repo.get_roic_history(company_id)
+            roic_pairs = sorted(
+                [(r.get("fiscal_year"), _safe_float(r.get("roic"))) for r in roic_rows
+                 if r.get("fiscal_year") is not None and _safe_float(r.get("roic")) is not None],
+                key=lambda t: t[0],
+            )[-5:]
+        except Exception:
+            roic_pairs = []
+    roic_vals = [v for _, v in roic_pairs if v is not None]
+    roic_norm = [v / 100.0 if v > 1.0 else v for v in roic_vals]
+    roic_avg = _mean(roic_norm) if len(roic_norm) >= 3 else None
+
+    evidence["m1_equity_positivity"]  = {"positive": equity is not None and equity > 0, "equity": equity}
+    evidence["m2_roe_vs_ke"]          = {"roeAvg": roe_latest, "keUsed": cost_of_equity}
+    evidence["m3_roe_consistency"]    = {"positiveYears": roe_pos, "totalYears": len(roe_sorted)}
+    evidence["m4_bv_growth"]          = {"cagr": bv_cagr}
+    evidence["m5_net_debt_to_equity"] = {"ratio": nd_to_equity}
+    evidence["m6_eps_positivity"]     = {"positiveYears": eps_pos, "totalYears": len(eps_vals_clean)}
+    evidence["m7_roic_5y"]            = {"roicAvg": roic_avg, "points": len(roic_norm)}
 
     evidence["data_coverage"] = coverage
     evidence["final_scoring"] = {

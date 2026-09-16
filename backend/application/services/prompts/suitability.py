@@ -741,6 +741,23 @@ def _prompt_residual_income(symbol, score, category, flags, ev, vi, id_) -> str:
     spread_text = f"{_fmt(spread, as_pct=True)} (value {'creating' if spread and spread > 0 else 'destroying'})" if spread is not None else "N/A"
     upside_text = f"{_fmt(upside, as_pct=True)} vs current price" if upside is not None else "N/A"
     formula_broken = intrinsic is None
+    neg_intrinsic = intrinsic is not None and float(intrinsic) < 0
+
+    if neg_intrinsic:
+        intrinsic_line = (
+            f"{_fmt(intrinsic)} {currency} (NEGATIVE — value destruction: PV of residual income < 0); "
+            "company currently earns below its cost of equity"
+        )
+        sentence_4 = (
+            f"Sentence 4: How much to trust the negative intrinsic value of {_fmt(intrinsic)} {currency}/share — "
+            "a value-destruction signal, not a price estimate — and the main sensitivity risk."
+        )
+    else:
+        intrinsic_line = f"{_fmt(intrinsic)} {currency} | Upside/downside={upside_text}"
+        sentence_4 = (
+            f"Sentence 4: How much to trust the intrinsic value of {_fmt(intrinsic)} {currency}/share "
+            "and the main sensitivity risk."
+        )
 
     if formula_broken:
         return f"""Analyse this Residual Income suitability for {symbol.upper()}. The model could not produce an intrinsic value.
@@ -767,7 +784,7 @@ Intrinsic = BV₀/share + Σ[(ROE−CoE)×BVₜ₋₁]/(1+CoE)ᵗ + Terminal
 BV/share={_fmt(bv)} {currency} | EPS={_fmt(eps0)} {currency} | ROE={_fmt(roe0, as_pct=True)} | CoE={_fmt(ke, as_pct=True)}
 RI₀/share={_fmt(ri0)} {currency} | ROE−CoE spread={spread_text}
 g={_fmt(g, as_pct=True)} | terminal g={_fmt(tg, as_pct=True)} | horizon={n_years} yrs
-Intrinsic/share={_fmt(intrinsic)} {currency} | Upside/downside={upside_text}
+Intrinsic/share={intrinsic_line}
 === AVAILABLE METRICS ===
 {metrics_block}
 === CRITICAL FLAGS ===
@@ -777,7 +794,7 @@ Output only the paragraph. No labels. No headers. Complete every sentence.
 Sentence 1: Verdict + the ROE vs CoE spread — is the company generating or destroying value above its cost of equity?
 Sentence 2: Is book value growing consistently? Are earnings reliably positive to anchor the RI stream?
 Sentence 3: Are the CoE and growth assumptions defensible? Does leverage pose a risk to the book value anchor?
-Sentence 4: How much to trust the intrinsic value of {_fmt(intrinsic)} {currency}/share and the main sensitivity risk."""
+{sentence_4}"""
 
 
 def _prompt_magic_formula(symbol, score, category, flags, ev, vi) -> str:
