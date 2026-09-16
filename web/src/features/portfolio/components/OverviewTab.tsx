@@ -1,12 +1,11 @@
 'use client';
 
-import { useState } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Wallet } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePortfolioOverview, usePortfolioAllocation } from '../hooks/usePortfolio';
 import { LazyPerformanceChart } from './LazyPerformanceChart';
-import { AllocationDonutCard } from './AllocationDonutCard';
+import { AllocationOverviewCard } from './AllocationOverviewCard';
 import { formatCurrency } from '@/lib/currency';
 import type { AllocationSegment, TypeAllocationSegment } from '../types/portfolio.types';
 
@@ -51,8 +50,6 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
     const overviewIds = accountIds?.length === 1 ? accountIds : undefined;
     const { data: overview, isLoading: overviewLoading } = usePortfolioOverview(overviewIds);
     const { data: allocation, isLoading: allocationLoading } = usePortfolioAllocation('sector', accountIds);
-
-    const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
 
     const segments: AllocationSegment[] = allocation?.segments ?? [];
     const types: TypeAllocationSegment[] = allocation?.types ?? [];
@@ -138,47 +135,12 @@ export function OverviewTab({ accountIds }: OverviewTabProps) {
                     <p className="text-white/40 text-sm">No allocation data available</p>
                 </div>
             ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {segments.length > 0 && (
-                        <AllocationDonutCard
-                            segments={segments}
-                            selectedSegment={selectedSegment}
-                            onSegmentClick={setSelectedSegment}
-                            totalValue={allocation?.total_value ?? 0}
-                        />
-                    )}
-                    {types.length > 0 && (
-                        <div className="glass-panel rounded-lg p-6">
-                            <h3 className="text-xs font-black uppercase tracking-widest text-white/40 mb-4">
-                                Asset Classes
-                            </h3>
-                            <div className="space-y-3">
-                                {types.map((t) => (
-                                    <div
-                                        key={t.type}
-                                        className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-white/5 transition-colors"
-                                    >
-                                        <div className="min-w-0">
-                                            <p className="text-sm font-bold text-white truncate">{t.type_label}</p>
-                                            <p className="text-[10px] text-white/30">
-                                                {t.count} position{t.count === 1 ? '' : 's'}
-                                            </p>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-sm text-white/90">{formatCurrency(t.value, ccy)}</p>
-                                            <p className="text-[10px] text-white/30">{t.weight.toFixed(1)}%</p>
-                                        </div>
-                                        <div className="text-right shrink-0">
-                                            <p className={t.gain_loss >= 0 ? 'text-green-400' : 'text-red-400'}>
-                                                {formatSignedCurrency(t.gain_loss)}
-                                            </p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </div>
+                <AllocationOverviewCard
+                    types={types}
+                    segments={segments}
+                    totalValue={allocation?.total_value ?? 0}
+                    currency={ccy}
+                />
             )}
 
             {/* Account Breakdown */}
