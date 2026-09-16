@@ -167,8 +167,8 @@ async def refresh_upcoming_dividend(
     """
     from providers.yfinance_provider import YFinanceProvider
     yf = YFinanceProvider()
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
-    sd = StockdexMacrotrendsProvider()
+    from dependencies import get_stockdex_provider
+    sd = get_stockdex_provider()
 
     # 1. YFinance (primary) — no rate limit issue
     yf_date = yf.get_upcoming_ex_date(symbol)
