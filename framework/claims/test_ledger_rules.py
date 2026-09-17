@@ -11,13 +11,7 @@ entries are stamped with provenance-shaped fields.
 validate_record is a pure function over a record dict, so tests assert on the
 returned problem-code list, not printed text.
 """
-import sys
-from pathlib import Path
-
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-
-import ledger
+from framework.claims import ledger
 
 
 def _claim(kind, claim_type="causal", classification="FACT", status="VERIFIED",

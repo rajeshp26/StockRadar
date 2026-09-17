@@ -772,7 +772,7 @@ if _mt.exists():
     except Exception as e:
         check("maturity parseable", False, str(e)[:100])
 
-_st = _rd / "smoke_test.py"
+_st = _rd / "smoke_check.py"
 check("smoke test exists", _st.exists())
 if _st.exists():
     _stc = _st.read_text()
