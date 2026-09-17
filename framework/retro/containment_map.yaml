@@ -104,7 +104,8 @@ fix_targets:
   skill_rule:
     files: [.opencode/skills/frontend-react/SKILL.md, .opencode/skills/backend-python/SKILL.md,
             .opencode/skills/contract-authoring/SKILL.md,
-            .opencode/skills/browser-verification/SKILL.md]
+            .opencode/skills/browser-verification/SKILL.md,
+            .opencode/skills/unit-test-authoring/SKILL.md]
     closes: [containment_miss]
   agent_instruction:
     files: [.opencode/agents/]
