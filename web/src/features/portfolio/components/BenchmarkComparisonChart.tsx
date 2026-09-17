@@ -12,6 +12,8 @@ import {
     Line,
 } from 'recharts';
 import { BENCHMARK_COLORS, FALLBACK_COLORS } from '@/lib/colors';
+import { getDateAxis, formatAxisTick } from '@/lib/chart-time-axis';
+import { useChartWidth } from '@/lib/use-chart-width';
 import type { BenchmarkCompareResponse } from '../types/portfolio.types';
 
 interface BenchmarkComparisonChartProps {
@@ -19,6 +21,8 @@ interface BenchmarkComparisonChartProps {
 }
 
 export function BenchmarkComparisonChart({ data }: BenchmarkComparisonChartProps) {
+    const { ref: widthRef, width: chartWidth } = useChartWidth();
+
     if (!data.portfolio || data.portfolio.length === 0) {
         return (
             <div className="glass-panel p-6">
@@ -45,13 +49,14 @@ export function BenchmarkComparisonChart({ data }: BenchmarkComparisonChartProps
     }
     const sortedDates = Object.keys(dateMap).sort();
     const chartData = sortedDates.map((date) => ({ date, ...dateMap[date] }));
+    const dateAxis = getDateAxis(data.period, sortedDates, { widthPx: chartWidth });
 
     return (
         <div className="glass-panel p-6">
             <h3 className="text-sm font-black text-white/60 uppercase tracking-widest mb-4">
                 Benchmark Comparison
             </h3>
-            <div className="h-[300px] md:h-[400px]">
+            <div ref={widthRef} className="h-[300px] md:h-[400px]">
                 <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={chartData}>
                         <CartesianGrid
@@ -63,10 +68,8 @@ export function BenchmarkComparisonChart({ data }: BenchmarkComparisonChartProps
                             tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}
                             axisLine={false}
                             tickLine={false}
-                            tickFormatter={(val: string) => {
-                                const d = new Date(val);
-                                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                            }}
+                            ticks={dateAxis.ticks}
+                            tickFormatter={(val: string) => formatAxisTick(val, dateAxis.tickFormat)}
                         />
                         <YAxis
                             tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}

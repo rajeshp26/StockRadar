@@ -10,6 +10,8 @@ import {
     AreaChart,
 } from 'recharts';
 import type { DrawdownResponse } from '../types/portfolio.types';
+import { getDateAxis, formatAxisTick } from '@/lib/chart-time-axis';
+import { useChartWidth } from '@/lib/use-chart-width';
 
 interface DrawdownChartProps {
     data: DrawdownResponse | undefined;
@@ -18,6 +20,8 @@ interface DrawdownChartProps {
 }
 
 export function DrawdownChart({ data, isLoading, isError }: DrawdownChartProps) {
+    const { ref: widthRef, width: chartWidth } = useChartWidth();
+
     if (isError) {
         return (
             <div className="glass-panel p-6">
@@ -60,6 +64,7 @@ export function DrawdownChart({ data, isLoading, isError }: DrawdownChartProps) 
     const maxDDEnd = data.max_drawdown_end
         ? new Date(data.max_drawdown_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
         : '—';
+    const dateAxis = getDateAxis(data.period, data.drawdowns.map((d) => d.date), { widthPx: chartWidth });
 
     return (
         <div className="glass-panel p-6">
@@ -76,7 +81,7 @@ export function DrawdownChart({ data, isLoading, isError }: DrawdownChartProps) 
                     </span>
                 </div>
             </div>
-            <div className="h-[250px]">
+            <div ref={widthRef} className="h-[250px]">
                 <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data.drawdowns}>
                         <CartesianGrid
@@ -88,11 +93,8 @@ export function DrawdownChart({ data, isLoading, isError }: DrawdownChartProps) 
                             tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}
                             axisLine={false}
                             tickLine={false}
-                            tickFormatter={(val: string) => {
-                                const d = new Date(val);
-                                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                            }}
-                            minTickGap={40}
+                            ticks={dateAxis.ticks}
+                            tickFormatter={(val: string) => formatAxisTick(val, dateAxis.tickFormat)}
                         />
                         <YAxis
                             tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}

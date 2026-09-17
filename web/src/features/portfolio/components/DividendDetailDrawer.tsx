@@ -4,6 +4,8 @@ import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useDividendHoldingDetail } from '../hooks/usePortfolio';
+import { getDateAxis, formatAxisTick } from '@/lib/chart-time-axis';
+import { useChartWidth } from '@/lib/use-chart-width';
 
 interface DividendDetailDrawerProps {
     symbol: string | null;
@@ -12,6 +14,7 @@ interface DividendDetailDrawerProps {
 }
 
 export function DividendDetailDrawer({ symbol, accountIds, onClose }: DividendDetailDrawerProps) {
+    const { ref: widthRef, width: chartWidth } = useChartWidth();
     const { data, isLoading, error } = useDividendHoldingDetail(symbol, accountIds);
 
     useEffect(() => {
@@ -26,6 +29,9 @@ export function DividendDetailDrawer({ symbol, accountIds, onClose }: DividendDe
 
     const formatCurrency = (v: number) =>
         v.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+
+    const dividendChartData = data?.dividend_history.map((d) => ({ ...d, date: d.date.slice(0, 7) })) ?? [];
+    const dividendAxis = getDateAxis('ALL', dividendChartData.map((d) => d.date), { widthPx: chartWidth });
 
     return (
         <>
@@ -88,11 +94,11 @@ export function DividendDetailDrawer({ symbol, accountIds, onClose }: DividendDe
                             {data.dividend_history.length > 0 && (
                                 <div className="glass-panel p-5 relative overflow-hidden">
                                     <p className="glass-overline">Dividend History</p>
-                                    <div className="h-36 mt-3">
+                                    <div ref={widthRef} className="h-36 mt-3">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <BarChart data={data.dividend_history.map((d) => ({ ...d, date: d.date.slice(0, 7) }))}>
+                                            <BarChart data={dividendChartData}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                                                <XAxis dataKey="date" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                                                <XAxis dataKey="date" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} ticks={dividendAxis.ticks} tickFormatter={(val: string) => formatAxisTick(val, dividendAxis.tickFormat)} axisLine={false} tickLine={false} />
                                                 <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                                                 <Tooltip
                                                     contentStyle={{ backgroundColor: '#111827', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}

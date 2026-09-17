@@ -7,6 +7,8 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { TrendingUp, AlertTriangle } from "lucide-react";
 import { BenchmarkSelector } from "@/components/ui/benchmark-selector";
 import { BENCHMARK_COLORS } from "@/lib/colors";
+import { getDateAxis, formatAxisTick } from "@/lib/chart-time-axis";
+import { useChartWidth } from "@/lib/use-chart-width";
 import {
     Metric,
     SectionHeader,
@@ -27,6 +29,7 @@ export function StockVsIndexPanel({ symbol }: { symbol: string }) {
     const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>(["SPY"]);
     const { data: availableBenchmarks } = useAnalysisBenchmarks();
     const { loading, error, data } = useStockVsIndex(symbol, selectedBenchmarks);
+    const { ref: widthRef, width: chartWidth } = useChartWidth();
 
     const handleToggle = useCallback((bmSymbol: string) => {
         setSelectedBenchmarks((prev) =>
@@ -126,6 +129,7 @@ export function StockVsIndexPanel({ symbol }: { symbol: string }) {
         const { dates, normalized_prices, relative_strength } = data.charts;
         const stock_symbol = data.symbol;
         const benchmarkSymbols = data.benchmarks.map((b) => b.symbol);
+        const dateAxis = getDateAxis('ALL', dates, { widthPx: chartWidth });
 
         const chartData = dates.map((date, i) => {
             const row: Record<string, any> = { date };
@@ -140,7 +144,7 @@ export function StockVsIndexPanel({ symbol }: { symbol: string }) {
         });
 
         return (
-            <div className="glass-panel p-8">
+            <div ref={widthRef} className="glass-panel p-8">
                 <div className="flex items-start justify-between">
                     <SectionHeader title="Performance Charts" subtitle="Normalized to 100 at start" />
                     <BenchmarkSelector
@@ -159,7 +163,7 @@ export function StockVsIndexPanel({ symbol }: { symbol: string }) {
                     <ResponsiveContainer width="100%" height={300}>
                         <LineChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                            <XAxis dataKey="date" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
+                            <XAxis dataKey="date" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} ticks={dateAxis.ticks} tickFormatter={(val: string) => formatAxisTick(val, dateAxis.tickFormat)} />
                             <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
                             <Tooltip
                                 contentStyle={{
@@ -201,7 +205,7 @@ export function StockVsIndexPanel({ symbol }: { symbol: string }) {
                     <ResponsiveContainer width="100%" height={200}>
                         <LineChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                            <XAxis dataKey="date" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
+                            <XAxis dataKey="date" stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} ticks={dateAxis.ticks} tickFormatter={(val: string) => formatAxisTick(val, dateAxis.tickFormat)} />
                             <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fontSize: 10 }} />
                             <Tooltip
                                 contentStyle={{
@@ -228,7 +232,7 @@ export function StockVsIndexPanel({ symbol }: { symbol: string }) {
                 </div>
             </div>
         );
-    }, [data, availableBenchmarks, handleToggle]);
+    }, [data, availableBenchmarks, handleToggle, chartWidth, selectedBenchmarks, widthRef]);
 
     return (
         <div className="space-y-6 animate-fade-up">

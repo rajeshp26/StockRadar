@@ -22,6 +22,8 @@ import { Metric } from '@/features/analysis/components/shared-ui';
 import { SectionHeader } from '@/features/analysis/components/shared-ui';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BENCHMARK_COLORS, FALLBACK_COLORS } from '@/lib/colors';
+import { getDateAxis, formatAxisTick } from '@/lib/chart-time-axis';
+import { useChartWidth } from '@/lib/use-chart-width';
 import { TrendingUp, TrendingDown, DollarSign, Wallet, Receipt, PiggyBank, Calendar, Activity, ArrowUpRight, CalendarDays, BarChart3 } from 'lucide-react';
 import type { TimePeriod, HoldingPerformanceResponse, BenchmarkCompareResponse, HoldingTransaction, HoldingAccountBreakdown, MonthlyReturnSummary, DrawdownInfo, DaysAboveCostBasis } from '@/features/portfolio/types/portfolio.types';
 import { cn } from '@/lib/utils';
@@ -33,6 +35,7 @@ interface StockPerformancePanelProps {
 export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
   const [period, setPeriod] = useState<TimePeriod>('1Y');
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([]);
+  const { ref: widthRef, width: chartWidth } = useChartWidth();
 
   const { data: perf, isLoading: perfLoading, isError: perfError } = useHoldingPerformance(symbol, period);
   const { data: dividends, isLoading: divLoading } = useHoldingDividends(symbol);
@@ -73,6 +76,7 @@ export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
 
   const showBenchmarks = selectedBenchmarks.length > 0;
   const chartData = buildPerformanceChartData(perf, compareData, selectedBenchmarks);
+  const dateAxis = getDateAxis(period, chartData.map((d) => String(d.date)), { widthPx: chartWidth });
   const hasChartData = chartData.length > 1 && chartData.some((d) => (d.position_value as number) > 0);
   const firstNonZeroSnapshot = perf.snapshots.find((s) => s.position_value > 0);
   const hasPrePurchaseData = firstNonZeroSnapshot && chartData.some((d) => d.date < firstNonZeroSnapshot.date);
@@ -111,7 +115,7 @@ export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
             No position held before {firstNonZeroSnapshot?.date}
           </div>
         )}
-        <div className="h-[300px] md:h-[400px]">
+        <div ref={widthRef} className="h-[300px] md:h-[400px]">
           {hasChartData ? (
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={chartData}>
@@ -121,10 +125,8 @@ export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
                   tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(val: string) => {
-                    const d = new Date(val);
-                    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                  }}
+                  ticks={dateAxis.ticks}
+                  tickFormatter={(val: string) => formatAxisTick(val, dateAxis.tickFormat)}
                 />
                 <YAxis
                   tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}

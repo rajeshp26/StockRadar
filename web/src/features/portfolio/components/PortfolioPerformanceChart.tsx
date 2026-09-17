@@ -17,16 +17,20 @@ import { TimePeriodSelector } from './TimePeriodSelector';
 import { BenchmarkSelector } from '@/components/ui/benchmark-selector';
 import type { TimePeriod, BenchmarkCompareResponse } from '../types/portfolio.types';
 import { BENCHMARK_COLORS, FALLBACK_COLORS } from '@/lib/colors';
+import { getDateAxis, formatAxisTick } from '@/lib/chart-time-axis';
+import { useChartWidth } from '@/lib/use-chart-width';
 
 export function PortfolioPerformanceChart({ accountIds }: { accountIds?: number[] }) {
     const [period, setPeriod] = useState<TimePeriod>('1Y');
     const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([]);
+    const { ref: widthRef, width: chartWidth } = useChartWidth();
 
     const { data: perf, isLoading: perfLoading, isError: perfError, isFetching } = usePortfolioPerformance(period, accountIds);
     const { data: benchmarks } = useBenchmarks();
     const { data: compareData, isLoading: compareLoading, isError: compareError } = useBenchmarkCompare(period, selectedBenchmarks, accountIds);
 
     const chartData = buildChartData(perf?.snapshots, compareData, selectedBenchmarks);
+    const dateAxis = getDateAxis(period, chartData.map((d) => String(d.date)), { widthPx: chartWidth });
     const hasData = chartData.length > 1 && chartData.some((d) => (d.portfolio as number) > 0 || (d.netDeposits as number) > 0);
     const showBenchmarks = selectedBenchmarks.length > 0;
 
@@ -108,7 +112,7 @@ export function PortfolioPerformanceChart({ accountIds }: { accountIds?: number[
                     Failed to load benchmark data
                 </div>
             )}
-            <div className="h-[300px] md:h-[400px]">
+            <div ref={widthRef} className="h-[300px] md:h-[400px]">
                 {hasData ? (
                     <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={chartData}>
@@ -121,10 +125,8 @@ export function PortfolioPerformanceChart({ accountIds }: { accountIds?: number[
                                 tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}
                                 axisLine={false}
                                 tickLine={false}
-                                tickFormatter={(val: string) => {
-                                    const d = new Date(val);
-                                    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                                }}
+                                ticks={dateAxis.ticks}
+                                tickFormatter={(val: string) => formatAxisTick(val, dateAxis.tickFormat)}
                             />
                             <YAxis
                                 tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}
