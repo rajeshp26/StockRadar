@@ -4,6 +4,7 @@ Supports the OpenAPI 3 subset the contracts actually use: type, required,
 additionalProperties, enum, minLength, minimum, $ref. Uses `jsonschema` when installed.
 Kept small deliberately — this validates contracts, it is not a general schema engine.
 """
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,26 @@ try:
     _HAVE_JSONSCHEMA = True
 except ImportError:
     _HAVE_JSONSCHEMA = False
+
+# DID-013 PR-B: the active engine must be observable. A run without jsonschema
+# is a subset-mode run, never an indistinguishable "validated" run — repo rule
+# "tool unavailability is never a verdict": unavailable must be explicit, never
+# silent. The mode is emitted once per process, on first validation, to stderr.
+VALIDATOR_MODE = "jsonschema" if _HAVE_JSONSCHEMA else "subset"
+_MODE_EMITTED = False
+
+
+def validator_mode() -> str:
+    """Return the active validation engine: 'jsonschema' or 'subset'."""
+    return VALIDATOR_MODE
+
+
+def _emit_mode_once():
+    global _MODE_EMITTED
+    if not _MODE_EMITTED:
+        _MODE_EMITTED = True
+        print(f"[contract-validator] mode: {VALIDATOR_MODE}", file=sys.stderr)
+
 
 _TYPES = {"string": str, "integer": int, "number": (int, float),
           "boolean": bool, "array": list, "object": dict}
@@ -31,6 +52,7 @@ def _deref(schema, doc):
 
 def validate_instance(inst, schema, doc, path="$"):
     """Return a list of violation strings. Empty means valid."""
+    _emit_mode_once()
     schema = _deref(schema, doc)
     errs = []
 

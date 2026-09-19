@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # G-T0 -- Tool readiness.
 #
 # Before work begins, verify that:

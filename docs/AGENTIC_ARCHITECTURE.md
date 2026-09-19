@@ -320,7 +320,6 @@ telemetry as `bg_poll_total`).
 ```yaml
 task_id: 03-02
 agent: implementer
-status: complete | blocked | failed
 summary: <= 5 lines
 files_changed: []
 contracts_touched: []
@@ -329,9 +328,12 @@ evidence: ["[VERIFIED: src/auth/service.py:41-58]"]
 impact_rederived: {scope: local, contract_change: false, public_api_change: false}
 risks: []
 blockers: []
-next_action: review | verify | escalate
 actions_to_avoid_until_clarified: []
 ```
+
+`status`, `position`, `derived_state`, and `next_action` are **derived** (DID-012 I8) by
+`execute.py render-summary` from the task's lifecycle events - never authored. A payload
+that authors any of them is rejected (exit 1) and the SUMMARY is not written.
 
 ---
 
@@ -354,15 +356,16 @@ session via `opencode.json` `instructions`.
 
 ---
 
-## 8. The eighty-five skills
+## 8. The eighty-six skills
 
-There are **85 skills** in `.opencode/skills/`:
+There are **86 skills** in `.opencode/skills/`:
 
-- **14 framework-authored skills** — specialist knowledge for engineering domains:
+- **15 framework-authored skills** — specialist knowledge for engineering domains:
   `api-design`, `apple-ui`, `architecture-right-sizing`, `backend-python`,
   `browser-verification`, `contract-authoring`, `database-schema-design`,
-  `frontend-react`, `performance-testing`, `requirements-authoring`, `retrospective`,
-  `software-architecture-design`, `technical-validation`, `unit-test-authoring`.
+  `frontend-react`, `instinct`, `performance-testing`, `requirements-authoring`,
+  `retrospective`, `software-architecture-design`, `technical-validation`,
+  `unit-test-authoring`.
 - **71 `gsd-*` distribution skills** — the GSD workflow system (planning, execution,
   review, docs, security, UI, debugging, etc.).
 
@@ -1148,7 +1151,7 @@ framework/
 .opencode/
   agents/                         40 agent definitions (7 core + 33 gsd-*)
   rules/                          9 standing rules
-  skills/                         85 skills (14 framework + 71 gsd-*)
+  skills/                         86 skills (15 framework + 71 gsd-*)
   skill-routing.md                central registry: condition → skill → agent
   skill-integration-matrix.md     binding contract: role → skill → artifact → gate
   tools/context-builder.ts        pointer resolver, capped excerpts

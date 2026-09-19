@@ -968,9 +968,28 @@ def _write(rel: str, body: str, append=False):
 
 
 def write_task_summary(task_id: str, payload: str) -> str:
+    """Write the SUMMARY.md by delegating to the execution-position adapter (I8 seam).
+
+    The SUMMARY is a RENDER of materialized derived state, not authored state
+    (DID-012 I8): `status`, `position`, `derived_state`, and `next_action` are derived
+    by execute.py render-summary from the task's lifecycle events. A payload that
+    authors any of them is REJECTED (exit 1, no write). The task must be registered
+    first (`task-register`) -- render-summary requires the contract. Returns the
+    written path.
+    """
     phase = (current_phase().get("current") or "00-unphased")
-    return _write(f"phases/{phase}/{task_id}-SUMMARY.md",
-                  f"# Summary {task_id}\n\n_generated {_now()}_\n\n```yaml\n{payload}\n```\n")
+    adapter = Path(__file__).resolve().parent / "execute.py"
+    env = dict(os.environ)
+    env["EXEC_ROOT"] = str(root())
+    p = subprocess.run(
+        [sys.executable, str(adapter), "render-summary",
+         "--task", task_id, "--json", payload, "--phase", phase],
+        capture_output=True, text=True, env=env,
+    )
+    if p.returncode != 0:
+        raise SystemExit((p.stdout + p.stderr).strip() or
+                         f"write-summary delegation failed (exit {p.returncode})")
+    return p.stdout.strip()
 
 
 def write_verification(phase: str, payload: str) -> str:
@@ -1011,11 +1030,40 @@ def health() -> dict:
 def selftest() -> dict:
     """Round-trip suite. Run this on every GSD upgrade; a failure is blocking."""
     results = {}
+    # write-summary delegates to execute.py render-summary (strict I8 seam, DID-012):
+    # the SUMMARY is a RENDER and status/position/next_action are DERIVED, never
+    # authored; the task must be registered first. Both the accepted render and the
+    # I8 rejection at the seam are checked; all residue is cleaned up.
+    wtid = "selftest-ws"
+    ws_path = None
     try:
-        write_task_summary("selftest-00", "status: complete")
-        results["write_summary"] = "pass"
+        _task_path(wtid).unlink(missing_ok=True)
+        _task_events_path(wtid).unlink(missing_ok=True)
+        register_task(wtid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest write-summary delegation",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 30, "max_duration_s": 60,
+        })
+        task_event(wtid, {"state": "STARTED"})
+        ws_path = write_task_summary(wtid, "summary: round trip")
+        doc = Path(ws_path).read_text(encoding="utf-8")
+        ok = ("# derived (I8)" in doc and "status:" in doc
+              and ws_path.endswith(f"{wtid}-SUMMARY.md"))
+        results["write_summary"] = "pass" if ok else f"fail: render not derived ({ws_path})"
+        try:
+            write_task_summary(wtid, "status: complete\nsummary: authored")
+            results["write_summary_i8"] = "fail: authored status accepted"
+        except SystemExit as e:
+            results["write_summary_i8"] = \
+                "pass" if "I8_VIOLATION" in str(e) else f"fail: {e}"
     except SystemExit as e:
         results["write_summary"] = f"unsupported: {e}"
+    finally:
+        _task_path(wtid).unlink(missing_ok=True)
+        _task_events_path(wtid).unlink(missing_ok=True)
+        if ws_path is not None:
+            Path(ws_path).unlink(missing_ok=True)
     try:
         write_verification(current_phase().get("current") or "00-unphased", "status: pass")
         results["write_verification"] = "pass"

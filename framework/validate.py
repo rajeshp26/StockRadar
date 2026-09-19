@@ -1525,7 +1525,7 @@ _rp22 = Path("framework/retry_policy.yaml").read_text()
 check("EVIDENCE_INSUFFICIENT escalation route recorded",
       "EVIDENCE_INSUFFICIENT" in _rp22 and "gather_provenance_or_downgrade_claim" in _rp22,
       "a claim without provenance needs a named recovery action")
-_rs22 = Path(".opencode/agents/researcher.md").read_text()
+_rs22 = Path(".lifecycle/agents/researcher.md").read_text()
 check("researcher classifies findings and records them",
       "classification: FACT | HYPOTHESIS | ASSUMPTION | UNKNOWN" in _rs22
       and "## Claim classification" in _rs22 and "ledger" in _rs22.lower(),
@@ -1534,14 +1534,15 @@ _im22 = Path(".opencode/agents/implementer.md").read_text()
 check("implementer records claim classification",
       "classification:" in _im22 and "FACT | HYPOTHESIS" in _im22,
       "a debug-mode diagnosis must carry a claim classification")
+_im22l = Path(".lifecycle/agents/implementer.md").read_text()
 check("implementer knows verification levels",
-      "### Verification levels" in _im22 and "L3 end-to-end" in _im22,
+      "### Verification levels" in _im22l and "L3 end-to-end" in _im22l,
       "evidence levels L1/L2/L3 must be taught to the agent that records claims")
 _ar22 = Path(".opencode/agents/architect.md").read_text()
 check("architect records ASSUMPTION decisions",
       "ASSUMPTION claim" in _ar22 and "ledger.py" in _ar22,
       "an accepted assumption that is never claimed is an unrecorded decision")
-_rv22 = Path(".opencode/agents/reviewer.md").read_text()
+_rv22 = Path(".lifecycle/agents/reviewer.md").read_text()
 check("reviewer traces conclusions to VERIFIED claims",
       "VERIFIED claims" in _rv22 and "ledger" in _rv22.lower(),
       "a review conclusion without a claim is a question, not a finding")
@@ -2199,7 +2200,7 @@ check("team-lead runs the entry gate before every dispatch",
       "Entry contract before dispatch" in _t27
       and "framework/gates/g_entry.sh" in _t27,
       "pre-flight belongs in the dispatch path")
-_i27 = Path(".opencode/agents/implementer.md").read_text(encoding="utf-8")
+_i27 = Path(".lifecycle/agents/implementer.md").read_text(encoding="utf-8")
 check("implementer declares the plan-authority contract",
       "Plan authority" in _i27 and "scope drift" in _i27,
       "authority boundaries must bound the implementation")
@@ -2208,7 +2209,7 @@ check("architect binds architecture-right-sizing in primary skills",
       "architecture-right-sizing" in _a27
       and "software-architecture-design" in _a27,
       "right-sizing is a primary skill choice, not a habit")
-_r27v = Path(".opencode/agents/reviewer.md").read_text(encoding="utf-8")
+_r27v = Path(".lifecycle/agents/reviewer.md").read_text(encoding="utf-8")
 check("reviewer finding contract carries impact/confidence/direction",
       "impact: [blast radius if unfixed]" in _r27v
       and "confidence: [high | medium | low]" in _r27v
@@ -2229,6 +2230,14 @@ _plan27 = ("status: approved\n"
 _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-001_PLAN.md " + _G27)
 check("g_entry passes a complete approved plan",
       _r == 0 and "entry contract complete" in _o, (_o or "")[-200:])
+# I1 (DID-012 PR-D1) is now part of the entry contract: an EXECUTABLE task must carry a
+# bound ASK_ID. This check isolates plan-path resolution, so its fixture task is made
+# terminal -- I1 does not govern terminal tasks. The executable-unbound refusal is its
+# own check below, never folded into this one.
+_wsh27("python3 framework/adapters/gsd_state.py task-register --id V27-001 "
+       "--json '{\"agent\":\"verifier\",\"objective\":\"entry gate fixture\","
+       "\"expected_artifact\":\"plan resolved via plan-path\"}'")
+_wsh27("python3 framework/adapters/gsd_state.py task-cancel --id V27-001")
 _r, _o = _wsh27("ENTRY_TASK=V27-001 " + _G27)
 check("g_entry resolves the plan through plan-path --task",
       _r == 0 and "entry contract complete" in _o, (_o or "")[-200:])
@@ -2258,6 +2267,17 @@ check("g_entry refuses a plan with no acceptance_criteria",
 _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-005_PLAN.md " + _G27)
 check("g_entry refuses a plan with unresolved open questions",
       _r == 1 and "open questions" in _o, (_o or "")[-200:])
+
+# I1 at dispatch (DID-012 PR-D1): an approved plan is not sufficient when the task is
+# executable and carries no bound ASK_ID. The refusal must name I1, not a plan defect.
+(_bd27 / ".planning" / "phases" / "00-unphased" / "V27-006_PLAN.md").write_text(
+    _plan27, encoding="utf-8")
+_wsh27("python3 framework/adapters/gsd_state.py task-register --id V27-006 "
+       "--json '{\"agent\":\"verifier\",\"objective\":\"I1 enforcement fixture\","
+       "\"expected_artifact\":\"refusal without a bound ASK_ID\"}'")
+_r, _o = _wsh27("ENTRY_TASK=V27-006 " + _G27)
+check("g_entry refuses dispatch when an executable task has no bound ASK_ID (I1)",
+      _r == 1 and "no durable ASK_ID" in _o, (_o or "")[-200:])
 
 shutil.rmtree(_bd27, ignore_errors=True)
 
@@ -2353,6 +2373,103 @@ check("G14 flags identical evidence payload reused across tasks (E8)",
       _r == 1 and "EVIDENCE_STALE_REUSE" in _o and "CLM-961" in _o, (_o or "")[-300:])
 
 shutil.rmtree(_bd28, ignore_errors=True)
+
+print("\n[29] Router-table conformance (DID-013 PR-F residual 1)")
+_router = Path(".opencode/skills/gsd-ns-workflow/SKILL.md")
+_rtext = _router.read_text(encoding="utf-8") if _router.exists() else ""
+_routed = []
+for _line in _rtext.splitlines():
+    _cells = [c.strip() for c in _line.split("|")]
+    if len(_cells) == 4 and _cells[2].startswith("gsd-"):
+        _routed.append(_cells[2])
+_routed = sorted(set(_routed))
+_WORKFLOW_FAMILY = frozenset([
+    "gsd-add-tests", "gsd-ai-integration-phase", "gsd-autonomous",
+    "gsd-discuss-phase", "gsd-execute-phase", "gsd-fast",
+    "gsd-mvp-phase", "gsd-next", "gsd-phase",
+    "gsd-plan-phase", "gsd-plan-review-convergence", "gsd-progress",
+    "gsd-quick", "gsd-spec-phase", "gsd-ultraplan-phase", "gsd-verify-work",
+])
+check("gsd-ns-workflow routes all 16 workflow skills (bidirectional)",
+      set(_routed) == _WORKFLOW_FAMILY,
+      "table-only=%s family-only=%s" % (sorted(set(_routed) - _WORKFLOW_FAMILY),
+                                        sorted(_WORKFLOW_FAMILY - set(_routed))))
+_missing = [t for t in _routed
+            if not Path(".opencode/skills/%s/SKILL.md" % t).exists()]
+check("every routed skill resolves to .opencode/skills/<name>/SKILL.md on disk",
+      not _missing, "missing on disk: %s" % _missing)
+
+print("\n[30] Charter single-source conformance (DID-013 PR-E)")
+_ROLES30 = ["architect", "implementer", "planner", "researcher",
+            "reviewer", "team-lead", "verifier"]
+_pointer30 = "Read `.lifecycle/agents/%s.md` and act only within that charter."
+_missing30 = [r for r in _ROLES30
+              if not Path(".lifecycle/agents/%s.md" % r).exists()]
+check("every core role has a portable charter in .lifecycle/agents/",
+      not _missing30, "missing charter: %s" % _missing30)
+_no_pointer30 = []
+for _r30 in _ROLES30:
+    _op30 = Path(".opencode/agents/%s.md" % _r30)
+    if not _op30.exists() or (_pointer30 % _r30) not in _op30.read_text(encoding="utf-8"):
+        _no_pointer30.append(_r30)
+check("every .opencode/agents/<role>.md is a thin pointer to its charter",
+      not _no_pointer30, "missing pointer line: %s" % _no_pointer30)
+
+print("\n[31] Intake adapter (DID-012 PR-D1, ask conservation I1/I2)")
+_intake31 = Path("framework/adapters/intake.py")
+check("framework/adapters/intake.py exists (Pillar 1 durable intake)",
+      _intake31.exists(), "missing: framework/adapters/intake.py")
+check("intake adapter has a test module (pytest framework/ covers it)",
+      Path("framework/adapters/test_intake.py").exists(),
+      "missing: framework/adapters/test_intake.py")
+if _intake31.exists():
+    _r31 = subprocess.run([sys.executable, str(_intake31), "selftest"],
+                          capture_output=True, text=True, timeout=180)
+    check("intake adapter selftest exits 0 (invariants I1/I2/I8/I10/I11 hold)",
+          _r31.returncode == 0, (_r31.stdout + _r31.stderr)[-400:])
+
+
+print("\n[32] Gate line-ending hygiene (LF invariant; g_entry CRLF defect)")
+# A CR byte in a bash gate is fatal under WSL bash (the g_entry defect class:
+# `_lib.sh\r` fails to source, backslash continuations break, gate exits 2 on
+# every path). .gitattributes normalizes on commit, which HIDES working-tree
+# CR as "clean" (g9/g14 each carried 1 stray CR invisible to git status).
+# This check asserts the raw-byte invariant directly so the class cannot recur.
+_crlf32 = []
+for _dir32 in ("framework/gates", ".lifecycle/scripts"):
+    _p32 = Path(_dir32)
+    if _p32.exists():
+        for _sh32 in sorted(_p32.glob("*.sh")):
+            if b"\r" in _sh32.read_bytes():
+                _crlf32.append(str(_sh32))
+check("every bash gate/script in framework/ and .lifecycle/ is byte-level LF (no CR)",
+      not _crlf32, "files contain a CR byte: %s" % ", ".join(_crlf32))
+
+print("\n[33] Control adapter (DID-012 PR-D2, lease/reap I3-I7)")
+_control33 = Path("framework/adapters/control.py")
+check("framework/adapters/control.py exists (Pillar 3 lease/reap control)",
+      _control33.exists(), "missing: framework/adapters/control.py")
+check("control adapter has a test module (pytest framework/ covers it)",
+      Path("framework/adapters/test_control.py").exists(),
+      "missing: framework/adapters/test_control.py")
+if _control33.exists():
+    _r33 = subprocess.run([sys.executable, str(_control33), "selftest"],
+                          capture_output=True, text=True, timeout=180)
+    check("control adapter selftest exits 0 (invariants I3-I7/I10/I11 hold)",
+          _r33.returncode == 0, (_r33.stdout + _r33.stderr)[-400:])
+
+print("\n[34] Execution-position adapter (DID-012 PR-D3, derivation I8/I10)")
+_execute34 = Path("framework/adapters/execute.py")
+check("framework/adapters/execute.py exists (Pillar 2 execution position)",
+      _execute34.exists(), "missing: framework/adapters/execute.py")
+check("execution adapter has a test module (pytest framework/ covers it)",
+      Path("framework/adapters/test_execute.py").exists(),
+      "missing: framework/adapters/test_execute.py")
+if _execute34.exists():
+    _r34 = subprocess.run([sys.executable, str(_execute34), "selftest"],
+                          capture_output=True, text=True, timeout=180)
+    check("execution adapter selftest exits 0 (invariants I8/I10/I11 hold)",
+          _r34.returncode == 0, (_r34.stdout + _r34.stderr)[-400:])
 
 print("\n" + "=" * 60)
 if WARNS:

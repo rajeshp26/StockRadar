@@ -118,5 +118,23 @@ if [ -n "$open_qs" ]; then
   fail "unresolved open questions block dispatch:"$'\n'"$open_qs"
 fi
 
+# 5. ASK coverage (DID-012 PR-D1 / invariant I1): an executable task must be bound to a
+# durable ASK record before dispatch. A terminal task is not executable, so the adapter
+# reports NOT_APPLICABLE (4) and the gate continues. Unbound is a hard refusal; an
+# unreadable adapter is BLOCKED -- never a pass.
+if [ -n "$ENTRY_TASK" ]; then
+  python3 framework/adapters/intake.py verify-task --id "$ENTRY_TASK" >/dev/null 2>&1
+  rc=$?
+  case $rc in
+    0) : ;;
+    4) log "NOT_APPLICABLE  ask coverage: task $ENTRY_TASK is terminal (not executable)" ;;
+    1) persist fail "ask coverage: executable task $ENTRY_TASK has no durable ASK_ID (I1)"
+       fail "ask coverage: executable task $ENTRY_TASK has no durable ASK_ID; NO TASK DISPATCH" ;;
+    *) persist blocked "ask coverage unreadable (intake adapter exit $rc)"
+       log "BLOCKED  ask coverage unreadable (intake adapter exit $rc)"
+       exit $BLOCKED ;;
+  esac
+fi
+
 persist pass "entry contract complete"
 pass "entry contract complete; dispatch allowed"

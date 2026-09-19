@@ -1,0 +1,18 @@
+# Framework tooling dependency manifest (DID-013, PR-B — root variant)
+#
+# Declares Python dependencies load-bearing to the framework tooling, which the
+# backend manifests do not cover:
+#   - PyYAML       framework gates, retro subsystem, contracts (16 files import yaml)
+#   - jsonschema   framework/contracts/validator.py — degrades to a hand-rolled subset
+#                  validator when absent (DID-013: make the fallback loud)
+#   - pytest       framework test files (claims/retro/telemetry test_*.py)
+#
+# Kept at repo root, off the agent-immutable enforcement plane, so it is
+# agent-writable. Pinned to the versions verified in the canonical dev
+# environment on 2026-09-16. pytest==9.0.3 matches backend/requirements-dev.txt.
+#
+# Install:  pip install -r requirements-framework.txt
+
+PyYAML==6.0.3
+jsonschema==4.26.0
+pytest==9.0.3

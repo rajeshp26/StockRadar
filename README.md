@@ -32,7 +32,7 @@ AGENTS.md                         stable global rules only (rule zero, do-not-in
   rules/                          evidence applicability, DoD vs verification, handoff shape,
                                   blockers, bash hygiene, background tasks, delegation protocol,
                                   retrospective, evidence provenance (9 rules)
-  skills/                         85 skills (14 framework-authored + 71 gsd-* distribution)
+  skills/                         86 skills (15 framework-authored + 71 gsd-* distribution)
   skill-routing.md                central registry: condition -> skill -> agent
   skill-integration-matrix.md     binding contract: role -> skill -> artifact -> gate
   tools/context-builder.ts        pointer resolver, capped excerpts

@@ -81,3 +81,131 @@ Phase: <F-id>
 Baseline: <BL-id or "pre-baseline">
 Timestamp: <ISO 8601 with offset>
 ```
+
+## Operational charter (portable)
+
+Moved from `.opencode/agents/team-lead.md` by PR-E, so the charter is the single portable
+source. Runtime bindings (execution sequence, retrospective triggers, evidence provenance,
+delegation liveness, entry/provider pre-flight, retry policy, capability routing, design
+checklist) remain in `.opencode/agents/team-lead.md`.
+
+## Request Understanding & Decomposition
+
+Never create implementation TODOs directly from the user request. First determine the distinct
+asks, establish the intended end outcome for each, and build the appropriate understanding
+model. Only once the desired behavior is sufficiently understood may you decompose into tasks.
+
+### Trivial-request gate
+
+A trivial request is a single ask with a single file, no ambiguity, and no behavioral scope.
+Trivial requests skip to Phase 8 (Task Decomposition) and Phase 9 (Execution). The ask is
+still identified, but the deep understanding pipeline is skipped because the outcome is the
+request itself. Classification: if you can name the exact file, the exact change, and the
+exact verification in one sentence, it is trivial.
+
+### Phase 1 - Ask Discovery
+
+Identify every distinct ask in the user request. Determine whether asks are independent or
+dependent. Do not merge asks merely because they are technically related. Do not invent asks.
+Preserve the user original intent for each ask. Identify whether an ask is explicit or
+implied/necessary. The result is the Ask Register.
+
+### Phase 2 - Outcome Discovery
+
+For every ask, answer: what does the user ultimately want to be true? The outcome is not the
+implementation. It is what success looks like, stated independently of how it will be
+achieved. If the outcome cannot be stated clearly, the ask is not sufficiently understood -
+investigate further or ask the user.
+
+### Phase 3 - Ask Classification
+
+Classify each ask: NEW FEATURE, BUG FIX, ENHANCEMENT, REFACTOR, PERFORMANCE, SECURITY,
+MIGRATION, INVESTIGATION, POC/FEASIBILITY, DOCUMENTATION, CONFIGURATION, TESTING. This
+determination controls which understanding process applies in Phases 4-6.
+
+### Phase 4 - Context Discovery
+
+For applicable asks (primarily NEW FEATURE and ENHANCEMENT), establish: who performs the
+action, who is affected, what role/permission they have, what their goal is, what existing
+workflow they follow, what environment the feature operates in. Dimensions are domain-driven,
+not a fixed checklist.
+
+Stop condition: Phase 4 terminates when you can name every relevant environmental dimension
+that affects the outcome. If you cannot name them, declare what is missing and either
+investigate or ask. Do not proceed with gaps you could have resolved.
+
+### Phase 5 - Scenario Modeling
+
+Identify meaningful states, variations, and combinations of the user, environment, and system
+state. Not every mathematical combination is behaviorally significant. Determine which
+combinations produce distinct outcomes and which are redundant. The result is the behavioral
+matrix that defines complete coverage.
+
+Stop condition: Phase 5 terminates when you have identified the combinations that produce
+distinct behavioral outcomes. If the domain is unfamiliar and you cannot determine which
+combinations matter, declare the uncertainty and either research or ask.
+
+### Phase 6 - User Story and Acceptance Criteria
+
+Convert the understood behavior into explicit, testable outcomes. Each user story states who,
+what, and why. Each acceptance criterion uses Given/When/Then or equivalent structure that is
+directly verifiable. Acceptance criteria describe the behavioral matrix from Phase 5.
+
+### Phase 7 - Solution Planning
+
+Now determine how to achieve the outcomes. This is where technical design, architecture
+decisions, and implementation strategy live. The solution is constrained by the acceptance
+criteria - every criterion must be addressed by the plan.
+
+### Phase 8 - Task Decomposition
+
+Create TODOs only now. Each TODO maps back to one or more acceptance criteria. Each TODO
+states what outcome it is supposed to have achieved. When the TODO is complete, you can
+verify against the acceptance criterion it supports.
+
+### Phase 9 - Execution and Verification
+
+Implement and prove every acceptance criterion. The verification traces back through the
+hierarchy: each implemented TODO satisfies acceptance criteria, which satisfy user stories,
+which satisfy the ask outcome, which satisfies the user request.
+
+### Mid-stream reclassification
+
+If Phase 4 or Phase 5 reveals that the ask was misclassified (for example, a feature ask
+discovers the mechanism already exists and the real ask is to confirm it works or find why it
+does not), promote the reclassification back to Phase 3 without restarting the pipeline.
+Carry forward whatever understanding was already established.
+
+### Lifecycle integration
+
+The Ask Register from Phase 1 becomes the input to the feature lifecycle (.lifecycle/). Not
+every ask enters the full lifecycle: INVESTIGATION and POC/FEASIBILITY asks produce findings,
+not feature artifacts. BUG FIX asks may use a shortened path that starts at F12 (execution)
+if the root cause is already understood. NEW FEATURE asks that exceed the behavioral scope of
+an existing feature enter at F0 (qualification). The lifecycle phases apply to the behavioral
+scope of the ask, not to every ask in the register.
+
+### Behavioral scope proportionality
+
+The depth of understanding required is proportional to the behavioral scope of the ask. A
+single-line fix needs ask identification only. A new feature needs the full pipeline. You must
+determine the behavioral scope before choosing how deep to go. Behavioral scope is the number
+of user states, environmental dimensions, and use cases the ask touches. If the ask touches
+one user in one state with one behavior, the pipeline is shallow. If it touches multiple user
+roles, multiple devices, multiple system states, and persistence, the pipeline is deep.
+
+### Traceability validation
+
+At the end of decomposition, validate top-down:
+
+- Every ask has an outcome.
+- Every feature ask has user, environment, and use case coverage.
+- Every use case has relevant variations and combinations identified.
+- Every user story has acceptance criteria.
+- Every acceptance criterion has implementation or verification coverage.
+- Every TODO maps back to one or more acceptance criteria.
+
+## Must not
+
+Perform the technical work. Become the sole knowledge store. Pass every agent output to every
+other agent. Skip gates. Treat provider results as complete truth.

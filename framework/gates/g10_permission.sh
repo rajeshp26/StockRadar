@@ -5,7 +5,8 @@
 #   * deny families: destructive fs, git history mutation, push
 #   * negative invariants: no backend/scripts path trust, no arbitrary python allow,
 #     no New-Item allow
-#   * per-agent enforcement: reviewer deny-only, implementer ask default
+#   * per-agent enforcement: team-lead (primary) ask default; every subagent
+#     fail-fast (bash catch-all deny) with scoped allows
 # A gate cannot drive opencode's interactive ask/allow engine; it asserts the policy
 # structure that produces those behaviours. Interactive silence/prompt/deny is verified
 # by the manual smoke commands in EXIT_CODES.md.
@@ -80,10 +81,71 @@ for pat, effect in bash.items():
     if effect not in ("allow", "deny", "ask"):
         violations.append("rule '%s' has unknown effect '%s'" % (pat, effect))
 
-for agent, expected in (("reviewer", "deny"), ("implementer", "ask")):
+# DID-013 PR-G10 calibration: the per-agent bash catch-all must match the realized
+# fail-fast model — team-lead (primary) may prompt (ask); every subagent defaults
+# to deny and is granted scoped allows. (Staged PR-G10 originally asserted
+# implementer=ask, which predates the T-05 fail-fast fix and would keep the gate red.)
+for agent, expected in (
+    ("team-lead", "ask"),
+    ("researcher", "deny"),
+    ("architect", "deny"),
+    ("planner", "deny"),
+    ("implementer", "deny"),
+    ("reviewer", "deny"),
+    ("verifier", "deny"),
+):
     abash = (((cfg.get("agent") or {}).get(agent) or {}).get("permission") or {}).get("bash")
     if not isinstance(abash, dict) or abash.get("*") != expected:
         violations.append("agent '%s' bash catch-all is not '%s'" % (agent, expected))
+
+# --- [2] edit permission schema (enforcement plane; DID-013 PR-G10) ----
+# The enforcement plane (framework/**, .opencode/**, opencode.json, AGENTS.md)
+# is agent-immutable. The bash checks above never see the edit plane; assert its
+# shape explicitly so a config edit that opens the plane fails the gate.
+edit = (cfg.get("permission") or {}).get("edit")
+PLANE = ("framework/**", ".opencode/**", "opencode.json", "AGENTS.md")
+if not isinstance(edit, dict):
+    violations.append("permission.edit missing or not an object")
+else:
+    ekeys = list(edit.keys())
+    if not ekeys or ekeys[0] != "*":
+        violations.append('first edit rule is not the catch-all "*" (last-match-wins ordering)')
+    elif edit.get("*") != "ask":
+        violations.append('edit catch-all "*" is not "ask"')
+    for p in PLANE:
+        if edit.get(p) != "deny":
+            violations.append("enforcement-plane path '%s' not denied in permission.edit" % p)
+    for pat, effect in edit.items():
+        if effect not in ("allow", "deny", "ask"):
+            violations.append("edit rule '%s' has unknown effect '%s'" % (pat, effect))
+
+# reviewers/planners/researchers are read-only: bare deny, no editor surface
+for agent in ("reviewer", "planner", "researcher"):
+    aedit = (((cfg.get("agent") or {}).get(agent) or {}).get("permission") or {}).get("edit")
+    if aedit != "deny":
+        violations.append("agent '%s' edit is not bare 'deny' (got %r)" % (agent, aedit))
+
+# architect and verifier: default-deny dict, writing only where the role owns
+for agent in ("architect", "verifier"):
+    aedit = (((cfg.get("agent") or {}).get(agent) or {}).get("permission") or {}).get("edit")
+    if not isinstance(aedit, dict) or aedit.get("*") != "deny":
+        violations.append("agent '%s' edit must be dict with '*' 'deny' (got %r)" % (agent, aedit))
+
+# team-lead: catch-all ask + explicit plane denies (the only agent allowed to prompt)
+aedit = (((cfg.get("agent") or {}).get("team-lead") or {}).get("permission") or {}).get("edit")
+if not isinstance(aedit, dict) or aedit.get("*") != "ask":
+    violations.append("team-lead edit must be dict with '*' 'ask' (got %r)" % aedit)
+else:
+    for p in PLANE:
+        if aedit.get(p) != "deny":
+            violations.append("team-lead edit does not deny plane path '%s'" % p)
+
+# implementer: grants >=1 allow, never through the catch-all
+aedit = (((cfg.get("agent") or {}).get("implementer") or {}).get("permission") or {}).get("edit")
+if not isinstance(aedit, dict) or not any(v == "allow" for v in aedit.values()):
+    violations.append("implementer edit must be dict granting >=1 allow (got %r)" % aedit)
+elif aedit.get("*") == "allow":
+    violations.append("implementer edit catch-all must not be 'allow'")
 
 print(json.dumps({"violations": violations, "config_scanned": True}))
 PY

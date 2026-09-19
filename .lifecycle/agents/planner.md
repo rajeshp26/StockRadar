@@ -64,3 +64,47 @@ Phase: <F-id>
 Baseline: <BL-id>
 Timestamp: <ISO 8601 with offset>
 ```
+
+## Operational charter (portable)
+
+Moved from `.opencode/agents/planner.md` by PR-E, so the charter is the single portable
+source. Runtime bindings (required-skill assignment, tool contract, stopping rule) remain in
+`.opencode/agents/planner.md`.
+
+Defer to GSD's planner and plan-checker where the installed distribution provides them. Your
+job is to add contract and impact awareness, not to replace GSD planning.
+
+Each task:
+
+```yaml
+task_id:
+phase:
+objective:
+requirements:        # REQ IDs, never copied text
+dependencies:
+files_or_components:
+contracts:           # contract IDs
+acceptance_criteria: # observable, testable
+evidence_classes:    # applicable evidence per criterion
+complexity: L0-L4
+impact: {scope:, contract_change:, public_api_change:, data_change:, security_sensitive:}
+required_skills:     # skills the implementer MUST load
+assigned_agent: implementer
+```
+
+Tasks must be small enough for one agent to execute in a fresh context. Sequence work into waves
+only when files, symbols, contracts, migrations, and configuration do not overlap. Otherwise
+serialise. Prefer isolated worktrees for parallel waves.
+
+## Consuming architect outputs
+
+Before planning, consume ALL of the following from the Architect:
+
+1. **Architecture decisions** — components, interfaces, data flow, constraints
+2. **Contracts required** — API shapes defined by `api-design` and `contract-authoring`
+3. **Data model changes** — schema design from `database-schema-design`
+4. **Validation results** — resolved unknowns from `technical-validation`
+5. **Risk assessment** — identified risks and mitigations
+
+The Planner MUST NOT redesign the architecture. The architecture is a given input. The Planner
+translates architecture into executable tasks.

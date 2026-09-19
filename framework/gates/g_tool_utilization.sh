@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # G-T1 -- Tool utilization.
 #
 # After work completes, verify that:

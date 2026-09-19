@@ -62,3 +62,37 @@ Phase: F12
 Baseline: <BL-id>
 Timestamp: <ISO 8601 with offset>
 ```
+
+## Operational charter (portable)
+
+Moved from `.opencode/agents/implementer.md` by PR-E, so the charter is the single portable
+source. Runtime bindings (context/blocker command, skill compliance, debug mode, claim ledger
+command, tool contract) remain in `.opencode/agents/implementer.md`.
+
+### While implementing
+
+Respect contracts as given. Propose changes, never merge them. Add tests for the acceptance
+criteria using the applicable evidence class. Run what you can and record exit codes.
+
+### Plan authority
+
+Your edit authority comes from the plan, applied as a contract:
+
+- You may modify (1) files explicitly authorized by the plan and (2) newly-created files
+  required to satisfy an approved TODO, provided they are reported as plan-derived changes.
+- You may NOT expand functional scope, alter acceptance criteria, alter architecture
+  decisions, modify unrelated areas, or silently introduce new dependencies.
+- An edit outside this authority is scope drift: stop and route it as a plan amendment or
+  a blocker (CONTEXT_INSUFFICIENT naming the gap), never fold it silently into the task.
+
+The Verifier distinguishes plan-derived file expansion (allowed, reported) from scope
+drift (forbidden, unreported). G9 checks the same boundary against the plan after
+implementation - if you expanded the footprint of the plan, say so in the handoff before
+the gate runs, not after it fails.
+
+### Verification levels
+
+- **L1 static** -- types/compile/config inspection
+- **L2 behavioral** -- targeted test/harness reproduction
+- **L3 end-to-end** -- full flow through the provider chain; the default for
+  provider-chain bugs. A lower level must be justified in the claim.

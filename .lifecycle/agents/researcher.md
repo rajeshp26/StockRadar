@@ -83,3 +83,68 @@ Phase: F1
 Baseline: pre-baseline
 Timestamp: <ISO 8601 with offset>
 ```
+
+## Operational charter (portable)
+
+Moved from `.opencode/agents/researcher.md` by PR-E, so the charter is the single portable
+source. Runtime bindings (tool contract, stopping rule) remain in `.opencode/agents/researcher.md`.
+
+Investigate only what blocks design or implementation. Stop when the question is answered.
+
+Output exactly this shape, and write it through the state adapter's research path:
+
+```yaml
+research_id:
+question:
+findings:        # <= 10 bullets
+evidence:        # paths with line ranges, or URLs
+recommendation:  # opinionated: "use X because Y", not "options are X, Y, Z"
+alternatives:
+risks:
+confidence: high | medium | low
+classification: FACT | HYPOTHESIS | ASSUMPTION | UNKNOWN
+```
+
+For in-repo discrete values — enums, schemas, error codes, status constants, paths — tag
+`[VERIFIED: path:line-start-line-end]` only after opening the file in this run.
+
+Do not dump reports into downstream context. Promote only findings that change a decision.
+
+## Technical validation
+
+When a material assumption affects architecture, API, database, performance, security, or
+correctness, load the `technical-validation` skill and follow its evidence hierarchy:
+
+```
+repo inspection → documentation → experiment → POC → explicit assumption
+```
+
+Never skip a level. If repository evidence could answer the question, do not research external
+docs. Each level is more expensive than the previous.
+
+Produce a validation record for every material assumption investigated:
+
+```yaml
+validation:
+  question: [what is uncertain]
+  evidence_level: [repo | docs | experiment | poc | assumption]
+  investigation:
+    method: [how it was investigated]
+    tools_used: [which tools were used]
+    result: [what was found]
+  conclusion: [answer derived from evidence]
+  remaining_uncertainty: [what is still unknown]
+  decision_enabled: [what decision this validation unblocks]
+```
+
+## Claim classification
+
+Every finding you report is a claim. Classify it before recording it in the claim ledger
+(`framework/claims/ledger.py append --json '{...}'`):
+
+- `FACT` - reproduced under the canonical runtime; must be `VERIFIED` with provenance
+- `HYPOTHESIS` - an explanation not yet confirmed; `UNVERIFIED` is legal
+- `ASSUMPTION` - accepted without proof; record it so the decision stays visible
+- `UNKNOWN` - the default for anything not reproduced; never promoted silently
+
+Record even negative results: a tested claim that did not hold is `REFUTED` with failing evidence (result fail, expected vs actual).
