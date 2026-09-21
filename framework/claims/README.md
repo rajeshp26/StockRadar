@@ -30,13 +30,14 @@ bash framework/gates/g11_evidence.sh                    # gate: 0 valid | 1 inva
 
 `append` prints the assigned `claim_id` as JSON on stdout and exits 0. On validation failure
 it prints one error code on stdout and exits 1 (never 2). If no `claim_id` is supplied it
-auto-assigns `CLM-NNN`, continuing the highest existing number across all records.
+auto-assigns `CLM-<20-digit ns-epoch>` -- a strictly increasing id clock that needs no
+ledger scan, so append cost is independent of the store size.
 
 ## Record schema
 
 | field | required | meaning |
 | --- | --- | --- |
-| `claim_id` | auto or supplied | `CLM-NNN` or a caller-supplied id; multiple records per id are history, latest wins |
+| `claim_id` | auto or supplied | `CLM-<20-digit ns-epoch>` or a caller-supplied id; ids are monotonically increasing, and multiple records per id are history, latest wins |
 | `task_id` | yes | task that produced the claim |
 | `agent` | yes | agent that recorded it |
 | `statement` | yes | the claim, in one sentence |

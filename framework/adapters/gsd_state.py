@@ -478,12 +478,41 @@ def _task_load(task_id: str):
     return contract, _task_events(task_id)
 
 
+TAIL_READ_BYTES = 1 << 16  # 64 KiB: bounded tail read for seq/status without a full-stream scan
+
+
+def _last_seq(task_id: str) -> int:
+    """Sequence of the latest event, read from the stream tail alone (O(1) not O(n)).
+
+    _task_events() parses the entire stream; calling it on every append makes a
+    long task quadratic (each write re-reads everything written before). The
+    stream is append-only, so the last line always carries the seq, and a bounded
+    tail read is exact. A file with no terminator (torn write) is corrupt -- the
+    same guard _task_events enforced -- and a missing file yields 0.
+    """
+    p = _task_events_path(task_id)
+    if not p.exists() or p.stat().st_size == 0:
+        return 0
+    with p.open("rb") as fh:
+        fh.seek(max(0, p.stat().st_size - TAIL_READ_BYTES))
+        tail = fh.read()
+    if not tail.endswith(b"\n"):
+        raise SystemExit(f"TASK_BLOCKED: event stream for {task_id} corrupt (torn tail)")
+    lines = [ln for ln in tail.splitlines() if ln.strip()]
+    if not lines:
+        return 0
+    try:
+        return int(json.loads(lines[-1]).get("seq") or 0)
+    except (json.JSONDecodeError, ValueError):
+        raise SystemExit(f"TASK_BLOCKED: event stream for {task_id} corrupt at tail")
+
+
 def _append_task_event(task_id: str, event: dict):
     p = _task_events_path(task_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     # Per-task monotonic sequence number: the event-bus ordering guarantee the
     # supervisor and watchdog rely on. Corrupt streams must block before growing.
-    event["seq"] = len(_task_events(task_id)) + 1
+    event["seq"] = _last_seq(task_id) + 1
     with p.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
 
@@ -743,6 +772,10 @@ def task_event(task_id: str, payload: dict) -> dict:
             "events, not " + state
         )
     _append_task_event(task_id, event)
+    if state == "COMPLETED":
+        # Terminal outcome: only last-event readers consume the stream from here
+        # on; the full pre-terminal history has no consumer on a completed task.
+        _compact_terminal_stream(task_id)
     return task_status(task_id)
 
 
@@ -760,6 +793,7 @@ def cancel_task(task_id: str, payload: dict = None) -> dict:
         "ts": _now(),
         "emitter": str(payload.get("emitter") or "team-lead"),
     })
+    _compact_terminal_stream(task_id)
     return task_status(task_id)
 
 
@@ -1012,7 +1046,120 @@ def write_contract(cid: str, schema: str) -> str:
 
 
 def write_telemetry(payload: str) -> str:
+    _rotate_telemetry()
     return _write("telemetry/records.jsonl", payload.strip() + "\n", append=True)
+
+
+TELEMETRY_ROTATE_BYTES = 16 * 1024 * 1024  # 16 MiB: keep the live file a bounded working set
+
+
+def _rotate_telemetry():
+    """Move the live telemetry file into archive/ once it outgrows the budget.
+
+    write_telemetry appends every heartbeat; rollup and report.py re-read the
+    live file whole on every run, so an unbounded live file is a growing hot
+    path. Rotation is atomic (os.replace, same volume) and best-effort: a failed
+    rotation must never break a heartbeat write.
+    """
+    try:
+        p = root() / "telemetry" / "records.jsonl"
+        if not p.exists() or p.stat().st_size < TELEMETRY_ROTATE_BYTES:
+            return
+        arc = root() / "telemetry" / "archive"
+        arc.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        os.replace(p, arc / f"records-{stamp}.jsonl")
+    except OSError:
+        return
+
+
+TERMINAL_COMPACT_LINES = 3
+
+
+def _compact_terminal_stream(task_id: str):
+    """Coalesce a terminal task's event stream in place to its last N events.
+
+    COMPLETED/CANCELLED are final: the only downstream consumers are last-event
+    reads (task_status, intake._task_state), and the contract JSON outlives the
+    stream. A terminal stream's earlier events have no consumer -- keeping them
+    is unbounded growth across a season (every touch re-reads everything).
+    FAILED/LOST are NEVER compacted: their full stream is the audit trail the
+    retry ladder reads. Best-effort: a compaction failure must not break the
+    terminal transition.
+    """
+    try:
+        p = _task_events_path(task_id)
+        if not p.exists():
+            return
+        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if len(lines) <= TERMINAL_COMPACT_LINES:
+            return
+        _write(str(p.relative_to(root())), "\n".join(lines[-TERMINAL_COMPACT_LINES:]) + "\n")
+    except (OSError, ValueError):
+        return
+
+
+STATE_HEALTH_TASK_BUDGET = 200
+
+
+def _scan_task_head(task_id: str) -> bool:
+    """True when a task's contract or event-tail is unreadable (readability only).
+
+    An unreadable stream is a stall the supervisor must see. FAILED/LOST streams
+    remain parseable, so a terminal task reads healthy here.
+    """
+    try:
+        c = _task_path(task_id)
+        if not c.exists():
+            return True
+        json.loads(c.read_text(encoding="utf-8"))
+        _last_seq(task_id)          # raises SystemExit on a torn tail
+        return False
+    except (OSError, ValueError, SystemExit):
+        return True
+
+
+def state_health() -> dict:
+    """One-shot health over the live GSD state: tasks and the claim-ledger tail.
+
+    Surfaced by the `state-health` command; consumed by g16_state_health.sh.
+    A task is 'broken' when its contract or event tail is unreadable. The claim
+    ledger is probed for presence and tail parseability only -- validity is
+    g14's jurisdiction.
+    """
+    tasks_total = tasks_checked = tasks_beyond_limit = broken_tasks = 0
+    ledger_present = ledger_tail_parseable = False
+    dir_tasks = root() / TASKS_REL
+    if dir_tasks.is_dir():
+        contracts = sorted(p for p in dir_tasks.glob("*.json")
+                           if not p.name.endswith(".events.jsonl"))
+        tasks_total = len(contracts)
+        for p in contracts[:STATE_HEALTH_TASK_BUDGET]:
+            if _scan_task_head(p.stem):
+                broken_tasks += 1
+        tasks_checked = min(len(contracts), STATE_HEALTH_TASK_BUDGET)
+        tasks_beyond_limit = max(0, len(contracts) - STATE_HEALTH_TASK_BUDGET)
+    ledger_file = root() / "claims" / "ledger.jsonl"
+    if ledger_file.exists():
+        ledger_present = True
+        try:
+            with ledger_file.open("rb") as fh:
+                fh.seek(max(0, ledger_file.stat().st_size - TAIL_READ_BYTES))
+                tail = fh.read()
+            lines = [ln for ln in tail.splitlines() if ln.strip()]
+            json.loads(lines[-1])
+            ledger_tail_parseable = True
+        except (OSError, IndexError, json.JSONDecodeError):
+            ledger_tail_parseable = False
+    return {
+        "tasks_total": tasks_total,
+        "tasks_checked": tasks_checked,
+        "tasks_beyond_limit": tasks_beyond_limit,
+        "broken_tasks": broken_tasks,
+        "ledger_present": ledger_present,
+        "ledger_tail_parseable": ledger_tail_parseable,
+        "ok": broken_tasks == 0,
+    }
 
 
 # ── health ───────────────────────────────────────────────────────────────
@@ -1286,6 +1433,7 @@ CMDS = {
     "task-status": lambda a: task_status(a.id, {"true": True, "false": False}.get(a.session_alive.lower(), None)),
     "task-list": lambda a: list_tasks(),
     "task-summary": lambda a: task_summary(),
+    "state-health": lambda a: state_health(),
     "task-cancel": lambda a: cancel_task(a.id, _parse_json(a.json, "TASK") if a.json else None),
 }
 

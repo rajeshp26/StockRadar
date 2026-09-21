@@ -29,39 +29,57 @@ raw=$(python3 framework/claims/ledger.py integrity 2>&1)
 rc=$?
 out=$(printf '%s' "$raw" | tr -d '\r')
 
-if [ "$rc" -eq 3 ]; then
-  log "NOT_APPLICABLE  no claims recorded -- nothing to check integrity"
-  exit $NOT_APPLICABLE
-fi
-
-printf '%s' "$out" | python3 -c "import sys, json; d=json.load(sys.stdin); assert isinstance(d, dict) and d.get('status') in ('ok', 'violations')" 2>/dev/null || {
-  log "BLOCKED  unparsable integrity report -- refusing to judge"
-  echo "$out"
-  persist blocked "unparsable integrity report"
-  exit $BLOCKED
-}
-
-status=$(printf '%s' "$out" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status'))" | tr -d '\r')
-violations=$(printf '%s' "$out" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('violations', [])))" | tr -d '\r')
-claims=$(printf '%s' "$out" | python3 -c "import sys, json; print(json.load(sys.stdin).get('claims', 0))" | tr -d '\r')
-
-if [ "$status" = "ok" ] && [ "$violations" -eq 0 ]; then
-  persist pass "$claims claim(s) passed evidence integrity E1-E8"
-  pass "evidence integrity: $claims claim(s), all E-checks pass"
-fi
-
-log "FAIL  $violations evidence integrity violation(s) across $claims claim(s):"
-lines=$(printf '%s' "$out" | python3 -c "
+# Single classification pass; raw report echoed verbatim on the FAIL path so the
+# E-codes and claim ids validate.py asserts on stay visible.
+verdict=$(printf '%s' "$out" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
-for v in d.get('violations', []):
-    print('%s  %s  %s' % (v.get('claim_id'), v.get('check'), v.get('message')))
-" 2>/dev/null)
-while IFS= read -r line; do
-  [ -n "$line" ] && log "FAIL  $line"
-done <<EOF
-$lines
-EOF
+rc = int(sys.argv[1])
+if rc == 3:
+    print('NOT_APPLICABLE|no claims recorded -- nothing to check integrity')
+    sys.exit(0)
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('BLOCKED|unparsable integrity report -- refusing to judge')
+    sys.exit(0)
+status = d.get('status')
+violations = d.get('violations') or []
+if status == 'ok' and not violations:
+    print('PASS|%s' % d.get('claims', 0))
+    sys.exit(0)
+lines = ['%d evidence integrity violation(s) across %s claim(s):' % (
+    len(violations), d.get('claims', 0))]
+for v in violations:
+    lines.append('%s  %s  %s' % (v.get('claim_id'), v.get('check'), v.get('message')))
+print('FAIL|' + chr(10).join(lines))
+" "$rc")
 
-persist fail "$violations evidence integrity violation(s)"
-fail "evidence integrity: $violations violation(s) found"
+case "${verdict%%|*}" in
+  PASS)
+    n=${verdict#*|}
+    persist pass "$n claim(s) passed evidence integrity E1-E8"
+    pass "evidence integrity: $n claim(s), all E-checks pass"
+    ;;
+  NOT_APPLICABLE)
+    log "NOT_APPLICABLE  ${verdict#*|}"
+    exit $NOT_APPLICABLE
+    ;;
+  FAIL)
+    printf '%s\n' "$out"
+    tail=${verdict#*|}
+    first=${tail%%$'\n'*}; first=${first%% *}
+    while IFS= read -r line; do
+      [ -n "$line" ] && log "FAIL  $line"
+    done <<EOF
+$tail
+EOF
+    persist fail "$first evidence integrity violation(s)"
+    fail "evidence integrity: $first violation(s) found"
+    ;;
+  BLOCKED)
+    log "BLOCKED  ${verdict#*|}"
+    printf '%s\n' "$out"
+    persist blocked "unparsable integrity report"
+    exit $BLOCKED
+    ;;
+esac

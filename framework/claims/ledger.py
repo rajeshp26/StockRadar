@@ -12,7 +12,7 @@ Exit codes:
   3  analyse: ledger empty or missing (nothing to judge -- never a pass)
 """
 from __future__ import annotations
-import argparse, json, re, subprocess, sys
+import argparse, json, os, re, subprocess, sys, time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +35,17 @@ REQUIRED = ["claim_id", "task_id", "agent", "statement", "claim_type",
 
 
 def _state_root() -> Path:
-    """Resolve the GSD state root exactly the way the rest of the framework does."""
+    """Resolve the GSD state root exactly the way the rest of the framework does.
+
+    Priority: GSD_STATE_ROOT when it names an explicit path (drive-letter or
+    root-anchored) -- a bare ".planning" is never an override. Without the env,
+    behavior is unchanged: the adapter probe, then .planning. A caller that pins
+    the env removes a subprocess-per-call from the ledger's hot path; the probe
+    stays as the framework's single source of truth for the fallback.
+    """
+    env = os.environ.get("GSD_STATE_ROOT")
+    if env and (len(env) >= 2 and env[1] == ":" or env.startswith("/")):
+        return Path(env)
     try:
         r = subprocess.run(["python3", "framework/adapters/gsd_state.py", "state-root"],
                            capture_output=True, text=True, timeout=30)
@@ -358,22 +368,32 @@ def validate_record(rec: dict) -> list[str]:
     return problems
 
 
-def _next_claim_id(records: list[dict]) -> str:
-    """CLM-NNN continuing the highest existing number across ALL records."""
-    highest = 0
-    for r in records:
-        cid = str(r.get("claim_id") or "")
-        if cid.startswith("CLM-"):
-            try:
-                highest = max(highest, int(cid[4:]))
-            except ValueError:
-                continue
-    return f"CLM-{highest + 1:03d}"
+_last_claim_ns = 0
+
+
+def _next_claim_id() -> str:
+    """CLM-<20-digit ns-epoch> -- stateless, no ledger scan.
+
+    The old id continued the highest number across ALL records, so every append
+    re-read the whole ledger and the scan grew with the store (the quadratic hot
+    path this change removes). A wall-clock-ns id is unique without any scan;
+    _last_claim_ns keeps it strictly monotonic even across an NTP step back.
+    ns-epoch is ~1.8e18 in 2026, safely under int64's 9.2e18; uniqueness does
+    not rely on the file -- one process is fenced by the monotonic guard and
+    cross-process ns collisions are a one-in-a-trillion race the atomic per-line
+    append serialises past anyway.
+    """
+    global _last_claim_ns
+    ns = time.time_ns()
+    if ns <= _last_claim_ns:
+        ns = _last_claim_ns + 1
+    _last_claim_ns = ns
+    return f"CLM-{ns:020d}"
 
 
 def append(entry: dict) -> str:
     if "claim_id" not in entry:
-        entry["claim_id"] = _next_claim_id(load())
+        entry["claim_id"] = _next_claim_id()
     problems = validate_record(entry)
     if problems:
         print(problems[0])

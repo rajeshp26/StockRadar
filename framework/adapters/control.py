@@ -70,6 +70,7 @@ import datetime
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 # --- vocabulary (DID-012 5.x) ----------------------------------------------
@@ -598,9 +599,24 @@ def rollup(max_age_days: int = DEFAULT_MAX_AGE_DAYS,
             with target.open("a", encoding="utf-8") as fh:
                 for rec in archived:
                     fh.write(json.dumps(rec, sort_keys=True) + "\n")
-            with telemetry.open("w", encoding="utf-8") as fh:
-                for rec in keep:
-                    fh.write(json.dumps(rec, sort_keys=True) + "\n")
+            # Atomic live rewrite: a plain open("w") truncates before writing, so
+            # a concurrent reader (telemetry plugin, report.py) can observe an
+            # empty file -- the anomaly detectors flag exactly that as an early
+            # death. Stage to a sibling temp then os.replace.
+            fd, tmp = tempfile.mkstemp(dir=str(telemetry.parent),
+                                       prefix=f".{telemetry.name}.",
+                                       suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    for rec in keep:
+                        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+                os.replace(tmp, telemetry)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
     return {
         "positions_folded": positions_new,
         "records_archived": len(archived),

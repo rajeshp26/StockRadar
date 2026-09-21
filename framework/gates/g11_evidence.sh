@@ -21,44 +21,59 @@ raw=$(python3 framework/claims/ledger.py analyse 2>&1)
 rc=$?
 out=$(printf '%s' "$raw" | tr -d '\r')
 
-# No claims recorded -- nothing to judge. NOT_APPLICABLE is not a pass, and it is not
-# persisted: there is no verdict to record.
-if [ "$rc" -eq 3 ]; then
-  log "NOT_APPLICABLE  no claims recorded -- nothing to judge"
-  exit $NOT_APPLICABLE
-fi
-
-# Validate before judging: an unparsable report must never read as a clean ledger.
-printf '%s' "$out" | python3 -c "import sys, json; d=json.load(sys.stdin); assert d.get('status') in ('ok', 'invalid')" 2>/dev/null || {
-  log "BLOCKED  unparsable claim ledger output -- refusing to read as valid"
-  echo "$out"
-  persist blocked "unparsable claim ledger output"
-  exit $BLOCKED
-}
-
-status=$(printf '%s' "$out" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status'))" | tr -d '\r')
-invalid_count=$(printf '%s' "$out" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('invalid', [])))" | tr -d '\r')
-claims=$(printf '%s' "$out" | python3 -c "import sys, json; print(json.load(sys.stdin).get('claims', 0))" | tr -d '\r')
-
-if [ "$status" = "ok" ] && [ "$invalid_count" -eq 0 ]; then
-  persist pass "$claims claim(s) valid with provenance"
-  pass "claim ledger valid: $claims claim(s), provenance present"
-fi
-
-log "FAIL  $invalid_count invalid claim(s) in ledger:"
-invalid_lines=$(printf '%s' "$out" | python3 -c "
+# Single classification pass: one interpreter, one parse. The raw report is echoed
+# verbatim on the FAIL path so named claim ids stay visible to the caller
+# (validate.py asserts on them).
+verdict=$(printf '%s' "$out" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
-for inv in d.get('invalid', []):
-    print('%s  status=%s  classification=%s  problems=%s' % (
+rc = int(sys.argv[1])
+if rc == 3:
+    print('NOT_APPLICABLE|no claims recorded -- nothing to judge')
+    sys.exit(0)
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('BLOCKED|unparsable claim ledger output -- refusing to read as valid')
+    sys.exit(0)
+status = d.get('status')
+invalid = d.get('invalid') or []
+if status == 'ok' and not invalid:
+    print('PASS|%s' % d.get('claims', 0))
+    sys.exit(0)
+lines = ['%d invalid claim(s) in ledger:' % len(invalid)]
+for inv in invalid:
+    lines.append('%s  status=%s  classification=%s  problems=%s' % (
         inv.get('claim_id'), inv.get('status'), inv.get('classification'),
         ','.join(inv.get('problems', []))))
-" 2>/dev/null)
-while IFS= read -r line; do
-  [ -n "$line" ] && log "FAIL  $line"
-done <<EOF
-$invalid_lines
-EOF
+print('FAIL|' + chr(10).join(lines))
+" "$rc")
 
-persist fail "$invalid_count invalid claim(s)"
-fail "claim ledger invalid: $invalid_count claim(s) lack provenance"
+case "${verdict%%|*}" in
+  PASS)
+    n=${verdict#*|}
+    persist pass "$n claim(s) valid with provenance"
+    pass "claim ledger valid: $n claim(s), provenance present"
+    ;;
+  NOT_APPLICABLE)
+    log "NOT_APPLICABLE  ${verdict#*|}"
+    exit $NOT_APPLICABLE
+    ;;
+  FAIL)
+    printf '%s\n' "$out"
+    tail=${verdict#*|}
+    first=${tail%%$'\n'*}; first=${first%% *}
+    while IFS= read -r line; do
+      [ -n "$line" ] && log "FAIL  $line"
+    done <<EOF
+$tail
+EOF
+    persist fail "$first invalid claim(s)"
+    fail "claim ledger invalid: $first claim(s) lack provenance"
+    ;;
+  BLOCKED)
+    log "BLOCKED  ${verdict#*|}"
+    printf '%s\n' "$out"
+    persist blocked "unparsable claim ledger output"
+    exit $BLOCKED
+    ;;
+esac

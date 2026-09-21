@@ -2471,6 +2471,58 @@ if _execute34.exists():
     check("execution adapter selftest exits 0 (invariants I8/I10/I11 hold)",
           _r34.returncode == 0, (_r34.stdout + _r34.stderr)[-400:])
 
+print("\n[35] G16 state-health gate (task/ledger tail readability)")
+_g1635 = Path("framework/gates/g16_state_health.sh")
+check("framework/gates/g16_state_health.sh exists",
+      _g1635.exists(), "missing: framework/gates/g16_state_health.sh")
+if _g1635.exists():
+    _g16text = _g1635.read_text(encoding="utf-8")
+    check("g16 self-identifies as g16_state_health",
+          'GATE_NAME="g16_state_health"' in _g16text, "GATE_NAME literal missing")
+    check("g16 reads the adapter state-health command",
+          "state-health" in _g16text, "state-health invocation missing")
+    check("g16 has an explicit NOT_APPLICABLE exit",
+          "exit $NOT_APPLICABLE" in _g16text, "NOT_APPLICABLE literal missing")
+    check("g16 is on the functional profile",
+          "./framework/gates/g16_state_health.sh" in
+          Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8"),
+          "profile membership missing")
+    check("EXIT_CODES documents G16",
+          "| G16 state-health" in
+          Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8"),
+          "EXIT_CODES row missing")
+    check("gsd_state exposes state-health",
+          "def state_health()" in
+          Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8"),
+          "state_health missing")
+    import shutil, tempfile
+    _d35 = Path(tempfile.mkdtemp(prefix="val35_g16_"))
+    try:
+        shutil.copytree("framework", _d35 / "framework")
+        _env35 = dict(os.environ, GSD_STATE_ROOT=str(_d35 / ".planning"))
+        _r35a = subprocess.run(["bash", "framework/gates/g16_state_health.sh"],
+                               cwd=str(_d35), env=_env35, capture_output=True, text=True,
+                               timeout=180)
+        check("empty store -> NOT_APPLICABLE (4) with no tasks and no ledger",
+              _r35a.returncode == 4 and "NOT_APPLICABLE" in _r35a.stdout,
+              f"rc={_r35a.returncode} out={_r35a.stdout[-400:]}")
+        _r35b = subprocess.run([sys.executable, "framework/adapters/gsd_state.py",
+                                "task-register", "--id", "V35-001", "--json",
+                                json.dumps({"objective": "g16 probe", "agent": "verifier",
+                                            "expected_artifact": "rc 0", "headless": True})],
+                               cwd=str(_d35), env=_env35, capture_output=True, text=True,
+                               timeout=180)
+        check("task-register in the isolated root exits 0",
+              _r35b.returncode == 0, (_r35b.stdout + _r35b.stderr)[-400:])
+        _r35c = subprocess.run(["bash", "framework/gates/g16_state_health.sh"],
+                               cwd=str(_d35), env=_env35, capture_output=True, text=True,
+                               timeout=180)
+        check("store with one registered task -> PASS (0)",
+              _r35c.returncode == 0 and "PASS" in _r35c.stdout,
+              f"rc={_r35c.returncode} out={_r35c.stdout[-400:]}")
+    finally:
+        shutil.rmtree(_d35, ignore_errors=True)
+
 print("\n" + "=" * 60)
 if WARNS:
     print(f"{len(WARNS)} warning(s):")

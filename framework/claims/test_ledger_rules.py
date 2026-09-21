@@ -85,3 +85,32 @@ def test_non_causal_fact_untouched():
     rec = _claim("INFERRED", claim_type="behavioral")
     problems = ledger.validate_record(rec)
     assert "CLAIM_CAUSAL_NO_RUNTIME" not in problems
+
+
+def test_auto_claim_id_is_20_digit_ns_epoch():
+    ledger._last_claim_ns = 0
+    cid = ledger._next_claim_id()
+    assert cid.startswith("CLM-") and len(cid) == 4 + 20 and cid[4:].isdigit()
+
+
+def test_auto_claim_id_strictly_monotonic_on_clock_step_back(monkeypatch):
+    ledger._last_claim_ns = 0
+    clock = [1_700_000_000_000_000_000]
+    monkeypatch.setattr(ledger.time, "time_ns", lambda: clock[0])
+    a = ledger._next_claim_id()
+    clock[0] -= 1          # NTP step-back: wall clock goes backwards
+    b = ledger._next_claim_id()
+    assert b > a
+
+
+def test_append_auto_ids_without_scanning_existing_records(monkeypatch, tmp_path):
+    # The old id continued the highest existing number (a full-ledger scan on
+    # every append); the new id is clock-only, so the store size cannot change it.
+    ledger._last_claim_ns = 0
+    monkeypatch.setattr(ledger, "_state_root", lambda: tmp_path)
+    rec = _claim("DIRECT")
+    del rec["claim_id"]            # append must auto-assign
+    cid = ledger.append(rec)
+    assert cid.startswith("CLM-")
+    got = ledger.load()
+    assert len(got) == 1 and got[0]["claim_id"] == cid

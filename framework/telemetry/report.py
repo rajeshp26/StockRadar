@@ -908,6 +908,37 @@ def render(d, verbose=False):
     return "\n".join(L)
 
 
+def _team_paths(path=None, live=None):
+    """Ordered telemetry sources: archived rotation segments then the live file.
+
+    Rotation (gsd_state._rotate_telemetry) plus rollup archiving spreads the full
+    series across telemetry/archive/records-*.jsonl and the live tail, newest
+    last. --path pins one file explicitly; otherwise the sorted archive segments
+    plus the live file are the full series.
+    """
+    if path:
+        return [path]
+    current = live or os.path.join(state_root(), "telemetry", "records.jsonl")
+    archive_dir = os.path.join(os.path.dirname(current), "archive")
+    hits = sorted(glob.glob(os.path.join(archive_dir, "records-*.jsonl")))
+    return hits + ([current] if os.path.exists(current) else [])
+
+
+def _load_team(paths):
+    """Load every source in order and merge to one stream (recs, bad, torn_offsets).
+
+    A rotated series is the concatenation of its segments newest-last; torn lines
+    recovered in one segment keep their byte offsets in torn_offsets as usual.
+    """
+    recs, bad, torn_offsets = [], 0, []
+    for p in paths:
+        r, b, t = load(p)
+        recs.extend(r)
+        bad += b
+        torn_offsets.extend(t)
+    return recs, bad, torn_offsets
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="emit aggregate as JSON")
@@ -917,8 +948,9 @@ def main(argv=None):
                     help="override the tasks dir the supervision join reads (default: <state_root>/tasks)")
     a = ap.parse_args(argv)
 
-    path = a.path or os.path.join(state_root(), "telemetry", "records.jsonl")
-    recs, bad, torn_offsets = load(path)
+    paths = _team_paths(a.path)
+    path = paths[0] if len(paths) == 1 else ", ".join(paths)
+    recs, bad, torn_offsets = _load_team(paths)
     recs = collapse(recs)
 
     if not recs and not bad:
