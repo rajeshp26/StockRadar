@@ -20,6 +20,17 @@ Bootstrap is sequential and stops on the first failed stage. Stage 3 prints the
 adopt-before-extend audit — complete it before implementing Reviewer, Verifier profiles, or
 graph access.
 
+### Prerequisites
+
+- **bash** — the gates (`framework/gates/*.sh`) and `bootstrap.sh` are bash scripts and refuse
+  to run under `sh` or PowerShell (exit 2, BLOCKED). On Windows use Git Bash or WSL.
+- **python3 on PATH** — the gates shell out to `python3 framework/adapters/gsd_state.py`; on
+  Windows a bare `python3` may not resolve (use `python` or install the launcher). Gate invocations
+  are the documented contract — see `framework/gates/EXIT_CODES.md`.
+- **LF line endings** — the repo is stored LF (`* text=auto eol=lf` in `.gitattributes`); a
+  machine-global `core.autocrlf=true` rewrites checked-out files to CRLF even though nothing is
+  committed CRLF. If a working tree shows CRLF after clone, run `git add --renormalize .` once.
+
 ## Layout
 
 ```

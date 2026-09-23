@@ -1,0 +1,232 @@
+diff --git a/bin/install.js b/bin/install.js
+index c3f5473..755cef8 100644
+--- a/bin/install.js
++++ b/bin/install.js
+@@ -9408,11 +9408,18 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
+   }
+ 
+   // Build the GSD path using the actual config directory
+-  // Use ~ shorthand if it's in the default location, otherwise use full path
++  // Use ~ shorthand if it's in the default location, otherwise use full path.
++  // Project-local installs (.opencode under the project root) emit a relative
++  // pattern so the permission is portable — an absolute workstation path in
++  // the config breaks when the project moves to another machine.
+   const defaultConfigDir = path.join(os.homedir(), '.config', 'opencode');
++  const relOpenCodeDir = path.relative(process.cwd(), opencodeConfigDir).replace(/\\/g, '/');
++  const isOpenCodeProjectLocal = relOpenCodeDir !== '' && !relOpenCodeDir.startsWith('..') && !path.isAbsolute(relOpenCodeDir);
+   const gsdPath = opencodeConfigDir === defaultConfigDir
+     ? '~/.config/opencode/gsd-core/*'
+-    : `${opencodeConfigDir.replace(/\\/g, '/')}/gsd-core/*`;
++    : (isOpenCodeProjectLocal
++        ? `${relOpenCodeDir}/gsd-core/*`
++        : `${opencodeConfigDir.replace(/\\/g, '/')}/gsd-core/*`);
+ 
+   let modified = false;
+ 
+@@ -9425,13 +9432,19 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
+     modified = true;
+   }
+ 
+-  // Configure external_directory permission (the safety guard for paths outside)
+-  if (!config.permission.external_directory || typeof config.permission.external_directory !== 'object') {
+-    config.permission.external_directory = {};
+-  }
+-  if (config.permission.external_directory[gsdPath] !== 'allow') {
+-    config.permission.external_directory[gsdPath] = 'allow';
+-    modified = true;
++  // external_directory grants tools access to paths OUTSIDE the project root
++  // — it only makes sense for global installs. A project-local .opencode/
++  // tree lives inside the project, where the read permission above already
++  // covers it (and a stale machine-specific entry would be pointless).
++  if (!isOpenCodeProjectLocal) {
++    // Configure external_directory permission (the safety guard for paths outside)
++    if (!config.permission.external_directory || typeof config.permission.external_directory !== 'object') {
++      config.permission.external_directory = {};
++    }
++    if (config.permission.external_directory[gsdPath] !== 'allow') {
++      config.permission.external_directory[gsdPath] = 'allow';
++      modified = true;
++    }
+   }
+ 
+   // ADR-1239 Phase D / #1682 — register the companion MCP server (Phase 4) so
+@@ -9501,11 +9514,18 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
+   }
+ 
+   // Build the GSD path using the actual config directory
+-  // Use ~ shorthand if it's in the default location, otherwise use full path
++  // Use ~ shorthand if it's in the default location, otherwise use full path.
++  // Project-local installs (.kilo under the project root) emit a relative
++  // pattern so the permission is portable — an absolute workstation path in
++  // the config breaks when the project moves to another machine.
+   const defaultConfigDir = path.join(os.homedir(), '.config', 'kilo');
++  const relKiloDir = path.relative(process.cwd(), kiloConfigDir).replace(/\\/g, '/');
++  const isKiloProjectLocal = relKiloDir !== '' && !relKiloDir.startsWith('..') && !path.isAbsolute(relKiloDir);
+   const gsdPath = kiloConfigDir === defaultConfigDir
+     ? '~/.config/kilo/gsd-core/*'
+-    : `${kiloConfigDir.replace(/\\/g, '/')}/gsd-core/*`;
++    : (isKiloProjectLocal
++        ? `${relKiloDir}/gsd-core/*`
++        : `${kiloConfigDir.replace(/\\/g, '/')}/gsd-core/*`);
+ 
+   let modified = false;
+ 
+@@ -9518,13 +9538,19 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
+     modified = true;
+   }
+ 
+-  // Configure external_directory permission (the safety guard for paths outside project)
+-  if (!config.permission.external_directory || typeof config.permission.external_directory !== 'object') {
+-    config.permission.external_directory = {};
+-  }
+-  if (config.permission.external_directory[gsdPath] !== 'allow') {
+-    config.permission.external_directory[gsdPath] = 'allow';
+-    modified = true;
++  // external_directory grants tools access to paths OUTSIDE the project root
++  // — it only makes sense for global installs. A project-local .kilo/ tree
++  // lives inside the project, where the read permission above already covers
++  // it (and a stale machine-specific entry would be pointless).
++  if (!isKiloProjectLocal) {
++    // Configure external_directory permission (the safety guard for paths outside project)
++    if (!config.permission.external_directory || typeof config.permission.external_directory !== 'object') {
++      config.permission.external_directory = {};
++    }
++    if (config.permission.external_directory[gsdPath] !== 'allow') {
++      config.permission.external_directory[gsdPath] = 'allow';
++      modified = true;
++    }
+   }
+ 
+   if (!modified) {
+diff --git a/hooks/dist/gsd-prompt-guard.js b/hooks/dist/gsd-prompt-guard.js
+index b4ee693..815af4c 100644
+--- a/hooks/dist/gsd-prompt-guard.js
++++ b/hooks/dist/gsd-prompt-guard.js
+@@ -141,7 +141,7 @@ process.stdin.on('end', () => {
+     // silencing this injection scan the same way a shadowed new_string did.
+     const filePath = typeof data.tool_input?.file_path === 'string'
+       ? data.tool_input.file_path
+-      : '';
++      : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+ 
+     // Only scan files going into .planning/ (agent context files)
+     if (!filePath.includes('.planning/') && !filePath.includes('.planning\\')) {
+diff --git a/hooks/dist/gsd-read-guard.js b/hooks/dist/gsd-read-guard.js
+index bf5a0a3..35eb071 100644
+--- a/hooks/dist/gsd-read-guard.js
++++ b/hooks/dist/gsd-read-guard.js
+@@ -165,7 +165,7 @@ process.stdin.on('end', () => {
+     // worktree guard's, advisory-only here (no exit(2) path in this hook).
+     const filePath = typeof data.tool_input?.file_path === 'string'
+       ? data.tool_input.file_path
+-      : '';
++      : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+     if (!filePath) {
+       allow(undefined);
+     }
+diff --git a/hooks/dist/gsd-read-injection-scanner.js b/hooks/dist/gsd-read-injection-scanner.js
+index 8f03855..5e061ba 100644
+--- a/hooks/dist/gsd-read-injection-scanner.js
++++ b/hooks/dist/gsd-read-injection-scanner.js
+@@ -241,7 +241,7 @@ process.stdin.on('end', () => {
+       // threw inside isExcludedPath()'s .replace() into the outer catch.
+       source = typeof data.tool_input?.file_path === 'string'
+         ? data.tool_input.file_path
+-        : '';
++        : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+       if (!source) allow(undefined);
+       if (isExcludedPath(source)) allow(undefined);
+     } else if (toolName === 'WebFetch') {
+diff --git a/hooks/dist/gsd-worktree-path-guard.js b/hooks/dist/gsd-worktree-path-guard.js
+index 186c02f..05fe6c6 100644
+--- a/hooks/dist/gsd-worktree-path-guard.js
++++ b/hooks/dist/gsd-worktree-path-guard.js
+@@ -227,7 +227,7 @@ process.stdin.on('end', () => {
+     // original #260 surface. Same shape as hooks/gsd-windsurf-pre-write.js:75.
+     const rawFilePath = typeof data.tool_input?.file_path === 'string'
+       ? data.tool_input.file_path
+-      : '';
++      : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+     if (!rawFilePath) {
+       allow(undefined);
+     }
+diff --git a/hooks/dist/gsd-write-guard.js b/hooks/dist/gsd-write-guard.js
+index afd92fe..4df8ba4 100644
+--- a/hooks/dist/gsd-write-guard.js
++++ b/hooks/dist/gsd-write-guard.js
+@@ -304,7 +304,8 @@ process.stdin.on('end', () => {
+     // early-out, then throw inside path.resolve() — crash-to-allow via the
+     // outer catch. A non-string path field degrades to '' and exits here.
+     const rawInput = data.tool_input;
+-    const rawFilePath = typeof rawInput?.file_path === 'string' ? rawInput.file_path : '';
++    const rawFilePath = typeof rawInput?.file_path === 'string' ? rawInput.file_path
++      : (typeof rawInput?.path === 'string' ? rawInput.path : '');
+     const content = rawInput?.content;
+     if (!rawFilePath || typeof content !== 'string') {
+       allow(undefined);
+diff --git a/hooks/gsd-prompt-guard.js b/hooks/gsd-prompt-guard.js
+index b4ee693..815af4c 100644
+--- a/hooks/gsd-prompt-guard.js
++++ b/hooks/gsd-prompt-guard.js
+@@ -141,7 +141,7 @@ process.stdin.on('end', () => {
+     // silencing this injection scan the same way a shadowed new_string did.
+     const filePath = typeof data.tool_input?.file_path === 'string'
+       ? data.tool_input.file_path
+-      : '';
++      : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+ 
+     // Only scan files going into .planning/ (agent context files)
+     if (!filePath.includes('.planning/') && !filePath.includes('.planning\\')) {
+diff --git a/hooks/gsd-read-guard.js b/hooks/gsd-read-guard.js
+index bf5a0a3..35eb071 100644
+--- a/hooks/gsd-read-guard.js
++++ b/hooks/gsd-read-guard.js
+@@ -165,7 +165,7 @@ process.stdin.on('end', () => {
+     // worktree guard's, advisory-only here (no exit(2) path in this hook).
+     const filePath = typeof data.tool_input?.file_path === 'string'
+       ? data.tool_input.file_path
+-      : '';
++      : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+     if (!filePath) {
+       allow(undefined);
+     }
+diff --git a/hooks/gsd-read-injection-scanner.js b/hooks/gsd-read-injection-scanner.js
+index 8f03855..5e061ba 100644
+--- a/hooks/gsd-read-injection-scanner.js
++++ b/hooks/gsd-read-injection-scanner.js
+@@ -241,7 +241,7 @@ process.stdin.on('end', () => {
+       // threw inside isExcludedPath()'s .replace() into the outer catch.
+       source = typeof data.tool_input?.file_path === 'string'
+         ? data.tool_input.file_path
+-        : '';
++        : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+       if (!source) allow(undefined);
+       if (isExcludedPath(source)) allow(undefined);
+     } else if (toolName === 'WebFetch') {
+diff --git a/hooks/gsd-worktree-path-guard.js b/hooks/gsd-worktree-path-guard.js
+index 186c02f..05fe6c6 100644
+--- a/hooks/gsd-worktree-path-guard.js
++++ b/hooks/gsd-worktree-path-guard.js
+@@ -227,7 +227,7 @@ process.stdin.on('end', () => {
+     // original #260 surface. Same shape as hooks/gsd-windsurf-pre-write.js:75.
+     const rawFilePath = typeof data.tool_input?.file_path === 'string'
+       ? data.tool_input.file_path
+-      : '';
++      : (typeof data.tool_input?.path === 'string' ? data.tool_input.path : '');
+     if (!rawFilePath) {
+       allow(undefined);
+     }
+diff --git a/hooks/gsd-write-guard.js b/hooks/gsd-write-guard.js
+index afd92fe..4df8ba4 100644
+--- a/hooks/gsd-write-guard.js
++++ b/hooks/gsd-write-guard.js
+@@ -304,7 +304,8 @@ process.stdin.on('end', () => {
+     // early-out, then throw inside path.resolve() — crash-to-allow via the
+     // outer catch. A non-string path field degrades to '' and exits here.
+     const rawInput = data.tool_input;
+-    const rawFilePath = typeof rawInput?.file_path === 'string' ? rawInput.file_path : '';
++    const rawFilePath = typeof rawInput?.file_path === 'string' ? rawInput.file_path
++      : (typeof rawInput?.path === 'string' ? rawInput.path : '');
+     const content = rawInput?.content;
+     if (!rawFilePath || typeof content !== 'string') {
+       allow(undefined);
