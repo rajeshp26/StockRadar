@@ -26,6 +26,7 @@
 | .lifecycle/checklists/G7.md | 72d693e8e016a747efbed652e9d3b7b609564f2e131ea386f2dca3881d7f43a9 |
 | .lifecycle/checklists/G8.md | 8e161f82694ef821bec94959670b3a8ff848b0e3320d0623a05a0ccafa09ba09 |
 | .lifecycle/config.yml | e9d037f260b70f5a28ebea642ee4edbd496aacc0b9d67b638d2bfadf83486524 |
+| .lifecycle/fixtures/bad-bidirectional-ac/trace.yml | 5b22c87f539614ea3cb95a3d53dd24c63312e8b960ff89e372124b8d1b03f2e5 |
 | .lifecycle/fixtures/bad-gate-prereq/F0-qualification.md | 34b93556703b47505fa6d48f4e7bfab875cc5dbf65b65d962d7752fb7010d1a4 |
 | .lifecycle/fixtures/bad-gate-prereq/F1-context.md | e6fb5222ad0577ea5111e2f866d1d00afb33b4df28151b0e3b97af50127de484 |
 | .lifecycle/fixtures/bad-gate-prereq/F10-impact-analysis.md | 7cad8ad2f1088b347b071154530c6d1ff4ab7f4ee6f9aeba4ce255a0c9e61477 |
@@ -38,7 +39,7 @@
 | .lifecycle/fixtures/bad-gate-prereq/F7-contracts/IFC-1-zone-offset.yml | 56683a106d36c9e2857b24ddbb82ebc56a59879388c9df0eebaae9443dde5ec5 |
 | .lifecycle/fixtures/bad-gate-prereq/F8-architecture.md | 55db92188bc071297f190e50f75f4e3c31a06297792b9219740b764b0809a8ca |
 | .lifecycle/fixtures/bad-gate-prereq/F9-detailed-design.md | 6218d1eed2778684d542efb64c408c537fc7fb2a37bd8b6a618f9ad927eb1fb0 |
-| .lifecycle/fixtures/bad-gate-prereq/README.md | e4345ea2ff66a127bfbe770762bdd6e12cc6ab5d96479d5a3e1573487cfb920d |
+| .lifecycle/fixtures/bad-gate-prereq/README.md | 08d481c646bafe5ca674f369db13c63828ee9a509fa81d23cc88e4637c6d3a95 |
 | .lifecycle/fixtures/bad-gate-prereq/defects/DEF-001.md | b9a7deeba7a825a976d66cafe9d1004925b73046674b27e3eac646153ce304f3 |
 | .lifecycle/fixtures/bad-gate-prereq/evidence/F13-unit/unit-results.txt | acb8b08f0eea84a26242d7409f7c1a5d6e28ea3d254b679139a28841bb689a36 |
 | .lifecycle/fixtures/bad-gate-prereq/evidence/F14-integration/integration-results.txt | c5707d6ab579cfde2cee88963d84ac51a2faa658c88fb00c425c761304b031f5 |
@@ -64,7 +65,7 @@
 | .lifecycle/fixtures/bad-kind-missing/F7-contracts/IFC-1-zone-offset.yml | 56683a106d36c9e2857b24ddbb82ebc56a59879388c9df0eebaae9443dde5ec5 |
 | .lifecycle/fixtures/bad-kind-missing/F8-architecture.md | 55db92188bc071297f190e50f75f4e3c31a06297792b9219740b764b0809a8ca |
 | .lifecycle/fixtures/bad-kind-missing/F9-detailed-design.md | 6218d1eed2778684d542efb64c408c537fc7fb2a37bd8b6a618f9ad927eb1fb0 |
-| .lifecycle/fixtures/bad-kind-missing/README.md | e4345ea2ff66a127bfbe770762bdd6e12cc6ab5d96479d5a3e1573487cfb920d |
+| .lifecycle/fixtures/bad-kind-missing/README.md | 6ac94d3717c9aae08548594dca351fb2210c64dbf704446e0d0aea8a53e19258 |
 | .lifecycle/fixtures/bad-kind-missing/defects/DEF-001.md | b9a7deeba7a825a976d66cafe9d1004925b73046674b27e3eac646153ce304f3 |
 | .lifecycle/fixtures/bad-kind-missing/evidence/F13-unit/unit-results.txt | acb8b08f0eea84a26242d7409f7c1a5d6e28ea3d254b679139a28841bb689a36 |
 | .lifecycle/fixtures/bad-kind-missing/evidence/F14-integration/integration-results.txt | c5707d6ab579cfde2cee88963d84ac51a2faa658c88fb00c425c761304b031f5 |
@@ -90,7 +91,7 @@
 | .lifecycle/fixtures/bad-orphan-risk/F7-contracts/IFC-1-zone-offset.yml | 56683a106d36c9e2857b24ddbb82ebc56a59879388c9df0eebaae9443dde5ec5 |
 | .lifecycle/fixtures/bad-orphan-risk/F8-architecture.md | 55db92188bc071297f190e50f75f4e3c31a06297792b9219740b764b0809a8ca |
 | .lifecycle/fixtures/bad-orphan-risk/F9-detailed-design.md | 6218d1eed2778684d542efb64c408c537fc7fb2a37bd8b6a618f9ad927eb1fb0 |
-| .lifecycle/fixtures/bad-orphan-risk/README.md | e4345ea2ff66a127bfbe770762bdd6e12cc6ab5d96479d5a3e1573487cfb920d |
+| .lifecycle/fixtures/bad-orphan-risk/README.md | ab57cdde0a56295a8c53838b413c84f5a551600b5f56e1457408caa65658e856 |
 | .lifecycle/fixtures/bad-orphan-risk/defects/DEF-001.md | b9a7deeba7a825a976d66cafe9d1004925b73046674b27e3eac646153ce304f3 |
 | .lifecycle/fixtures/bad-orphan-risk/evidence/F13-unit/unit-results.txt | acb8b08f0eea84a26242d7409f7c1a5d6e28ea3d254b679139a28841bb689a36 |
 | .lifecycle/fixtures/bad-orphan-risk/evidence/F14-integration/integration-results.txt | c5707d6ab579cfde2cee88963d84ac51a2faa658c88fb00c425c761304b031f5 |
@@ -116,7 +117,7 @@
 | .lifecycle/fixtures/bad-sync-mismatch/F7-contracts/IFC-1-zone-offset.yml | 56683a106d36c9e2857b24ddbb82ebc56a59879388c9df0eebaae9443dde5ec5 |
 | .lifecycle/fixtures/bad-sync-mismatch/F8-architecture.md | 55db92188bc071297f190e50f75f4e3c31a06297792b9219740b764b0809a8ca |
 | .lifecycle/fixtures/bad-sync-mismatch/F9-detailed-design.md | 6218d1eed2778684d542efb64c408c537fc7fb2a37bd8b6a618f9ad927eb1fb0 |
-| .lifecycle/fixtures/bad-sync-mismatch/README.md | e4345ea2ff66a127bfbe770762bdd6e12cc6ab5d96479d5a3e1573487cfb920d |
+| .lifecycle/fixtures/bad-sync-mismatch/README.md | ee34863a6f1e6df313e26679a7d9dce2523f90eeb04aef503e92880caafabf6b |
 | .lifecycle/fixtures/bad-sync-mismatch/bad_config.yml | 990ebe2a6e4f2a159c91ac433f0aa73d086cfea4c464697d678a737bb7f8c065 |
 | .lifecycle/fixtures/bad-sync-mismatch/defects/DEF-001.md | b9a7deeba7a825a976d66cafe9d1004925b73046674b27e3eac646153ce304f3 |
 | .lifecycle/fixtures/bad-sync-mismatch/evidence/F13-unit/unit-results.txt | acb8b08f0eea84a26242d7409f7c1a5d6e28ea3d254b679139a28841bb689a36 |
@@ -143,7 +144,7 @@
 | .lifecycle/fixtures/bad-trans-illegal/F7-contracts/IFC-1-zone-offset.yml | 56683a106d36c9e2857b24ddbb82ebc56a59879388c9df0eebaae9443dde5ec5 |
 | .lifecycle/fixtures/bad-trans-illegal/F8-architecture.md | 55db92188bc071297f190e50f75f4e3c31a06297792b9219740b764b0809a8ca |
 | .lifecycle/fixtures/bad-trans-illegal/F9-detailed-design.md | 6218d1eed2778684d542efb64c408c537fc7fb2a37bd8b6a618f9ad927eb1fb0 |
-| .lifecycle/fixtures/bad-trans-illegal/README.md | e4345ea2ff66a127bfbe770762bdd6e12cc6ab5d96479d5a3e1573487cfb920d |
+| .lifecycle/fixtures/bad-trans-illegal/README.md | ce5d473ffaa752f9df3c01e6ac20bdc1f99e77e4a5d073cec72047d70622176b |
 | .lifecycle/fixtures/bad-trans-illegal/defects/DEF-001.md | b9a7deeba7a825a976d66cafe9d1004925b73046674b27e3eac646153ce304f3 |
 | .lifecycle/fixtures/bad-trans-illegal/evidence/F13-unit/unit-results.txt | acb8b08f0eea84a26242d7409f7c1a5d6e28ea3d254b679139a28841bb689a36 |
 | .lifecycle/fixtures/bad-trans-illegal/evidence/F14-integration/integration-results.txt | c5707d6ab579cfde2cee88963d84ac51a2faa658c88fb00c425c761304b031f5 |
@@ -211,7 +212,7 @@
 | .lifecycle/templates/state.json | 848ee2ab36fd16575162cc611b257812f5717d1e9bc556631f41dd8deb160642 |
 | .lifecycle/templates/trace.yml | c37035007c2961c706a7634121063c58cbc23af3afafa1c27463010f9e98c2ca |
 | .lifecycle/tests/test_lifecycle.py | 28167f0e9736dbd134d6cf35bbcfe412241399668a83f239e13470f1e0e4a4b4 |
-| README.md | 31703d6bbbbe2044e8ff49017476c5de8f44f834e79a244bfcb43cfe9ba6a1c4 |
+| README.md | a572fd47a2bcd356c36051aab8670419bd763004ce8acbfb6b3134cb2027db00 |
 
 ## Verification
 
@@ -229,7 +230,7 @@
 | SYNC-MISMATCH | lifecycle-validate | exit=1, SYNC error | PASS |
 | ORPHAN-RISK | orphan-check | exit=1, orphan risk > 0 | PASS |
 
-### P1-C pytest suite (9/9 PASS)
+### P1-C pytest suite (10/10 PASS)
 | Test | Result |
 |------|--------|
 | lifecycle-validate ok-l2 | PASS |
@@ -241,6 +242,7 @@
 | bad-kind-missing (KIND) | PASS |
 | bad-sync-mismatch (SYNC) | PASS |
 | bad-orphan-risk (orphan risk) | PASS |
+| bad-bidirectional-ac (orphan acceptance) | PASS |
 
 ### High-risk recount (§5.2.2)
 All 9 measurement claims (not risk) verified as high-risk:
