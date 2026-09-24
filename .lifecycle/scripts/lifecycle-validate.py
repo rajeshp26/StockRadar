@@ -359,6 +359,25 @@ def check_transitions(state, cfg, r):
         if last and cur and last != cur:
             r.err("TRANS-LASTSTATE", f"declared state {cur!r} != last recorded "
                                      f"transition target {last!r} (\u00a77 / H3)")
+    import datetime as _dt
+    _prev = None
+    for tr in trs:
+        ts = tr.get("timestamp")
+        if not ts:
+            r.err("TRANS-CHRONO", f"{tr.get('from')} -> {tr.get('to')}: missing "
+                                  f"timestamp (\u00a77 / H3)")
+            continue
+        try:
+            cur = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            r.err("TRANS-CHRONO", f"{tr.get('from')} -> {tr.get('to')}: unparseable "
+                                  f"timestamp {ts!r} (\u00a77 / H3)")
+            continue
+        if _prev is not None and cur < _prev:
+            r.err("TRANS-CHRONO", f"{tr.get('from')} -> {tr.get('to')}: recorded at "
+                                  f"{ts} predates the previous transition \u2014 "
+                                  f"backwards timeline (\u00a77 / H3)")
+        _prev = cur
     if not any(e["code"].startswith("TRANS-") for e in r.errors):
         r.ok("TRANS", f"{len(trs)} recorded transition(s) legal against config.yml; "
                       "defect-loop reentry state legal (H3)")

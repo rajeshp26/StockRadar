@@ -8,12 +8,14 @@ The rest of the framework touches only this interface, so adding a distribution 
 adapter change and nothing else.
 """
 import argparse
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import datetime
 import tempfile
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -135,6 +137,63 @@ def _db_mode() -> bool:
     return manifest().get("mode") == "db"
 
 
+# Per-path intra-process mutexes layered under the cross-process file lock.
+# A Windows file lock arbitrates PROCESSES only: msvcrt.locking raises EDEADLK
+# when a second thread in the SAME process tries to lock a region the process
+# already holds, instead of blocking (ext-critique-01 selftest proves 40 workers
+# stay gapless). The thread lock serialises intra-process writers; the file lock
+# serialises cross-process writers. Only four acquisition sites exist and none
+# nests (blockers vs event-stream are disjoint paths), so non-reentrant is safe.
+_THREAD_LOCKS: dict = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+def _thread_lock_for(lock_path: Path) -> threading.Lock:
+    key = str(lock_path.resolve())
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.Lock())
+
+
+@contextlib.contextmanager
+def _file_lock(lock_path: Path):
+    """Cross-process advisory lock for a read-modify-write critical section.
+
+    The event-stream seq append and the blockers upsert both follow a
+    read->mutate->write shape: two writers can each read the same tail and then
+    both write, duplicating a sequence number or dropping an upsert
+    (EXT-CRITIQUE-01). POSIX serialises with fcntl.flock; Windows has no fcntl,
+    so msvcrt.locking over one byte at offset 0 is the portable equivalent.
+    The lock file is created on demand and NEVER unlinked: an unlink races the
+    unlock (another process can hold the old inode while a third opens a fresh
+    one at the same name), so a stale lock file is harmless — the lock lives on
+    the open fd, not the path.
+    """
+    with _thread_lock_for(lock_path):
+        try:
+            import fcntl
+        except ImportError:
+            fcntl = None
+            import msvcrt
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as fh:
+            if fh.seek(0, 2) == 0:        # msvcrt cannot lock a region past EOF
+                fh.write(b"\0")
+                fh.flush()
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            else:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                else:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def _unsupported(op):
     raise SystemExit(
         f"UNSUPPORTED: '{op}' is not implemented for distribution "
@@ -228,44 +287,46 @@ def write_blocker(payload: dict) -> dict:
             raise SystemExit(f"BLOCKER_INCOMPLETE: missing required field '{k}'")
     incoming = _retry_int(payload.get("retries") or 1, "retries")
     now = _now()
-    records = _blockers_load()
-    for r in records:
-        if r.get("resolved_at") is None                 and r.get("task_id") == payload["task_id"]                 and r.get("signal") == payload["signal"]:
-            r["retries"] = max(_retry_int(r.get("retries") or 1, "retries"), incoming)
-            r["agent"] = payload["agent"]
-            for k in _BLOCKER_TEXT_FIELDS:
-                if payload.get(k):
-                    r[k] = payload[k]
-            r["updated_at"] = now
-            _blockers_save(records)
-            return {"id": r.get("id"), "retries": r["retries"], "upserted": True}
-    rec = {
-        "id": _next_blocker_id(records),
-        "signal": payload["signal"],
-        "task_id": payload["task_id"],
-        "agent": payload["agent"],
-        **{k: payload.get(k) for k in _BLOCKER_TEXT_FIELDS},
-        "retries": incoming,
-        "created_at": now,
-        "updated_at": now,
-        "resolved_at": None,
-    }
-    records.append(rec)
-    _blockers_save(records)
-    return {"id": rec["id"], "retries": rec["retries"], "upserted": False}
+    with _file_lock(root() / f"{BLOCKERS_REL}.lock"):
+        records = _blockers_load()
+        for r in records:
+            if r.get("resolved_at") is None                 and r.get("task_id") == payload["task_id"]                 and r.get("signal") == payload["signal"]:
+                r["retries"] = max(_retry_int(r.get("retries") or 1, "retries"), incoming)
+                r["agent"] = payload["agent"]
+                for k in _BLOCKER_TEXT_FIELDS:
+                    if payload.get(k):
+                        r[k] = payload[k]
+                r["updated_at"] = now
+                _blockers_save(records)
+                return {"id": r.get("id"), "retries": r["retries"], "upserted": True}
+        rec = {
+            "id": _next_blocker_id(records),
+            "signal": payload["signal"],
+            "task_id": payload["task_id"],
+            "agent": payload["agent"],
+            **{k: payload.get(k) for k in _BLOCKER_TEXT_FIELDS},
+            "retries": incoming,
+            "created_at": now,
+            "updated_at": now,
+            "resolved_at": None,
+        }
+        records.append(rec)
+        _blockers_save(records)
+        return {"id": rec["id"], "retries": rec["retries"], "upserted": False}
 
 
 def resolve_blocker(bid: str) -> dict:
     """Resolve an OPEN blocker by id. Unknown id fails loudly - never a silent pass."""
     if _db_mode():
         _unsupported("resolve-blocker")
-    records = _blockers_load()
-    for r in records:
-        if r.get("id") == bid and r.get("resolved_at") is None:
-            r["resolved_at"] = _now()
-            r["updated_at"] = r["resolved_at"]
-            _blockers_save(records)
-            return {"id": bid, "resolved": True}
+    with _file_lock(root() / f"{BLOCKERS_REL}.lock"):
+        records = _blockers_load()
+        for r in records:
+            if r.get("id") == bid and r.get("resolved_at") is None:
+                r["resolved_at"] = _now()
+                r["updated_at"] = r["resolved_at"]
+                _blockers_save(records)
+                return {"id": bid, "resolved": True}
     raise SystemExit(f"NOT_FOUND: open blocker {bid}")
 
 
@@ -440,10 +501,18 @@ def _tasks_dir() -> Path:
 
 
 def _task_path(task_id: str) -> Path:
+    if not task_id or not str(task_id).strip() or str(task_id) == "None":
+        raise SystemExit(
+            "TASK_INVALID: task id is required (--id/--task); refusing to address 'None'"
+        )
     return _tasks_dir() / f"{task_id}.json"
 
 
 def _task_events_path(task_id: str) -> Path:
+    if not task_id or not str(task_id).strip() or str(task_id) == "None":
+        raise SystemExit(
+            "TASK_INVALID: task id is required (--id/--task); refusing to address 'None'"
+        )
     return _tasks_dir() / f"{task_id}.events.jsonl"
 
 
@@ -512,9 +581,13 @@ def _append_task_event(task_id: str, event: dict):
     p.parent.mkdir(parents=True, exist_ok=True)
     # Per-task monotonic sequence number: the event-bus ordering guarantee the
     # supervisor and watchdog rely on. Corrupt streams must block before growing.
-    event["seq"] = _last_seq(task_id) + 1
-    with p.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(event) + "\n")
+    # The seq read and the append are ONE critical section: two concurrent
+    # writers can each read the same tail and then both append, duplicating a
+    # seq (EXT-CRITIQUE-01). Hold a cross-process lock over the read + write.
+    with _file_lock(p.with_name(p.name + ".lock")):
+        event["seq"] = _last_seq(task_id) + 1
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event) + "\n")
 
 
 @lru_cache(maxsize=1)
@@ -1091,10 +1164,11 @@ def _compact_terminal_stream(task_id: str):
         p = _task_events_path(task_id)
         if not p.exists():
             return
-        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        if len(lines) <= TERMINAL_COMPACT_LINES:
-            return
-        _write(str(p.relative_to(root())), "\n".join(lines[-TERMINAL_COMPACT_LINES:]) + "\n")
+        with _file_lock(p.with_name(p.name + ".lock")):
+            lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if len(lines) <= TERMINAL_COMPACT_LINES:
+                return
+            _write(str(p.relative_to(root())), "\n".join(lines[-TERMINAL_COMPACT_LINES:]) + "\n")
     except (OSError, ValueError):
         return
 
@@ -1408,6 +1482,57 @@ def selftest() -> dict:
     finally:
         _task_path(htid).unlink(missing_ok=True)
         _task_events_path(htid).unlink(missing_ok=True)
+    # EXT-CRITIQUE-02 regression: a missing, empty, or literal-'None' task id
+    # must be refused loudly, never silently addressed as tasks/None.json.
+    _ng = None
+    try:
+        _task_path("")
+        _ng = "empty id accepted"
+    except SystemExit:
+        pass
+    if _ng is None:
+        try:
+            _task_path("None")
+            _ng = "literal 'None' id accepted"
+        except SystemExit:
+            pass
+    results["task_id_none_guard"] = "pass" if _ng is None else "fail: " + _ng
+
+    # EXT-CRITIQUE-01 regression: 40 concurrent writers must produce a gapless,
+    # strictly monotonic seq range with no duplicates. The pre-fix adapter read
+    # the tail and appended as two unlocked steps, so racing writers duplicated
+    # seqs; the lock now covers the whole read+append critical section.
+    ctid = "selftest-concurrency"
+    try:
+        _task_path(ctid).unlink(missing_ok=True)
+        _task_events_path(ctid).unlink(missing_ok=True)
+        register_task(ctid, {
+            "agent": "selftest", "type": "default",
+            "objective": "selftest concurrent seq append",
+            "expected_artifact": "pass",
+            "progress_timeout_s": 30, "max_duration_s": 60,
+        })
+        _append_task_event(ctid, {"state": "STARTED",
+                                  "ts": _now(), "emitter": "selftest"})   # seq 1
+        import concurrent.futures
+
+        def _fire(_i):
+            _append_task_event(ctid, {"state": "PROGRESS",
+                                      "ts": _now(), "emitter": "selftest"})
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=40) as _ex:
+            list(_ex.map(_fire, range(40)))
+        _, _evs = _task_load(ctid)
+        _seqs = [e["seq"] for e in _evs]
+        ok = _seqs == list(range(1, len(_seqs) + 1)) and len(_seqs) == 41
+        results["seq_unique_under_concurrency"] = "pass" if ok else (
+            "fail: seqs " + str(_seqs))
+    except SystemExit as e:
+        results["seq_unique_under_concurrency"] = "fail: " + str(e)
+    finally:
+        _task_path(ctid).unlink(missing_ok=True)
+        _task_events_path(ctid).unlink(missing_ok=True)
+
     results["read_requirements"] = "pass" if read_requirements() or True else "fail"
     results["detect"] = manifest()["distribution"]
     return results
@@ -1419,8 +1544,8 @@ CMDS = {
     "selftest": lambda a: selftest(), "current-phase": lambda a: current_phase(),
     "project": lambda a: read_project(), "requirements": lambda a: read_requirements(),
     "requirement": lambda a: read_requirement(a.id), "roadmap": lambda a: read_roadmap(),
-    "plan-path": lambda a: plan_path(a.task), "contract": lambda a: read_contract(a.id),
-    "write-summary": lambda a: write_task_summary(a.task, a.json),
+    "plan-path": lambda a: plan_path(a.id), "contract": lambda a: read_contract(a.id),
+    "write-summary": lambda a: write_task_summary(a.id, a.json),
     "write-verification": lambda a: write_verification(a.phase, a.json),
     "write-decision": lambda a: write_decision(a.id, a.json),
     "write-contract": lambda a: write_contract(a.id, a.json),
@@ -1440,7 +1565,8 @@ CMDS = {
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="GSD State Adapter")
     ap.add_argument("command", choices=sorted(CMDS))
-    ap.add_argument("--id"); ap.add_argument("--task"); ap.add_argument("--phase")
+    ap.add_argument("--id", "--task", dest="id")
+    ap.add_argument("--phase")
     ap.add_argument("--json", default="")
     ap.add_argument("--text", action="store_true")
     ap.add_argument("--session-alive", default="unknown")

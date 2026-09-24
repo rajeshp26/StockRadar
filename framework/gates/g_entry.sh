@@ -51,8 +51,10 @@ fi
 # CR-strip the plan -- a Windows CRLF checkout must not change the verdict (G8 pattern).
 plan="$(cat "$ENTRY_PLAN" | tr -d '\r')"
 
-# 1. Approved: an explicit approval token (status: approved | approved: true | accepted: true).
-approved="$(printf '%s' "$plan" | grep -iE '^[[:space:]]*status:[[:space:]]+approved|^[[:space:]]*(approved|accepted):[[:space:]]*true' | head -n1)"
+# 1. Approved: an explicit, TOP-LEVEL approval token only (status: approved |
+# approved: true | accepted: true). Anchored to column 0 -- a nested block
+# (e.g. under `review:`) must not spoof approval (EXT-CRITIQUE-03).
+approved="$(printf '%s' "$plan" | grep -iE '^status:[[:space:]]+approved|^(approved|accepted):[[:space:]]*true' | head -n1)"
 if [ -z "$approved" ]; then
   persist fail "plan not approved (no status: approved / approved: true / accepted: true)"
   fail "plan not approved (no status: approved / approved: true / accepted: true)"
@@ -60,7 +62,7 @@ fi
 
 # 2. Declared scope: YAML block list ("- item") and/or inline "[a, b]" form (G9 awk reuse).
 declared_block=$(printf '%s' "$plan" | awk '
-  /^[[:space:]]*files_or_components:/ { inblock=1; next }
+  /^files_or_components:/ { inblock=1; next }
   inblock && /^[[:space:]]*-[[:space:]]*/ {
     item=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", item); gsub(/"/, "", item)
     if (item != "") print item
@@ -68,7 +70,7 @@ declared_block=$(printf '%s' "$plan" | awk '
   }
   inblock && NF { exit }
 ')
-declared_inline=$(printf '%s' "$plan" | sed -n 's/.*files_or_components:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
+declared_inline=$(printf '%s' "$plan" | sed -n 's/^files_or_components:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
   | tr ',' '\n' | tr -d '"')
 declared="$(printf '%s\n%s\n' "$declared_block" "$declared_inline" \
   | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')"
@@ -80,7 +82,7 @@ fi
 
 # 3. Acceptance criteria present (block or inline form).
 ac_block=$(printf '%s' "$plan" | awk '
-  /^[[:space:]]*acceptance_criteria:/ { inblock=1; next }
+  /^acceptance_criteria:/ { inblock=1; next }
   inblock && /^[[:space:]]*-[[:space:]]*/ {
     item=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", item); gsub(/"/, "", item)
     if (item != "") print item
@@ -88,7 +90,7 @@ ac_block=$(printf '%s' "$plan" | awk '
   }
   inblock && NF { exit }
 ')
-ac_inline=$(printf '%s' "$plan" | sed -n 's/.*acceptance_criteria:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
+ac_inline=$(printf '%s' "$plan" | sed -n 's/^acceptance_criteria:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
   | tr ',' '\n' | tr -d '"')
 acs="$(printf '%s\n%s\n' "$ac_block" "$ac_inline" \
   | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')"
@@ -100,7 +102,7 @@ fi
 
 # 4. No unresolved open_questions (block items or inline list).
 oq_block=$(printf '%s' "$plan" | awk '
-  /^[[:space:]]*open_questions:/ { inblock=1; next }
+  /^open_questions:/ { inblock=1; next }
   inblock && /^[[:space:]]*-[[:space:]]*/ {
     item=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", item); gsub(/"/, "", item)
     if (item != "") print item
@@ -108,7 +110,7 @@ oq_block=$(printf '%s' "$plan" | awk '
   }
   inblock && NF { exit }
 ')
-oq_inline=$(printf '%s' "$plan" | sed -n 's/.*open_questions:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
+oq_inline=$(printf '%s' "$plan" | sed -n 's/^open_questions:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
   | tr ',' '\n' | tr -d '"')
 open_qs="$(printf '%s\n%s\n' "$oq_block" "$oq_inline" \
   | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')"

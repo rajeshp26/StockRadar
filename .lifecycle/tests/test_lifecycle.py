@@ -76,3 +76,17 @@ class TestBadFixtures:
         assert "orphan acceptance" in r.stdout
         line = [l for l in r.stdout.split("\n") if "orphan acceptance" in l][0]
         assert " 0" not in line.split("orphan acceptance")[1]
+
+    def test_trans_chronological(self, tmp_path):
+        """A transition recorded before its predecessor is a backwards timeline (§7)."""
+        import json
+        import shutil
+        dst = tmp_path / "bad-trans-chrono"
+        shutil.copytree(os.path.join(FIX, "ok-l2"), str(dst))
+        sp = dst / "state.json"
+        st = json.loads(sp.read_text(encoding="utf-8"))
+        st["transitions"][8]["timestamp"] = "2026-08-26T09:15:00-04:00"
+        sp.write_text(json.dumps(st, indent=2), encoding="utf-8")
+        r = run_lvc(str(dst))
+        assert r.returncode != 0
+        assert "TRANS-CHRONO" in r.stdout

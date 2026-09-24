@@ -2302,6 +2302,22 @@ def _suite_27():
     _r, _o = _wsh27("ENTRY_TASK=V27-006 " + _G27)
     check("g_entry refuses dispatch when an executable task has no bound ASK_ID (I1)",
           _r == 1 and "no durable ASK_ID" in _o, (_o or "")[-200:])
+    # EXT-CRITIQUE-03: approval anchors at column 0. A nested `status: approved`
+    # (e.g. inside a `review:` block) must NOT satisfy the approval scan -- before
+    # the anchoring fix, the leading-whitespace grep matched any indented block,
+    # so a draft plan carrying an inner approved note passed the gate.
+    (_bd27 / ".planning" / "phases" / "00-unphased" / "V27-007_PLAN.md").write_text(
+        "status: draft\n"
+        "title: nested approval spoof\n"
+        "review:\n"
+        "  status: approved\n"
+        "files_or_components:\n"
+        "  - framework/gates/g_entry.sh\n"
+        "acceptance_criteria:\n"
+        "  - the gate must not accept a nested approval token\n", encoding="utf-8")
+    _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-007_PLAN.md " + _G27)
+    check("g_entry refuses a draft plan whose approval token is nested (EXT-CRITIQUE-03)",
+          _r == 1 and "not approved" in _o, (_o or "")[-200:])
 
     shutil.rmtree(_bd27, ignore_errors=True)
 
@@ -2574,6 +2590,34 @@ if _g1635.exists():
               f"rc={_r35c.returncode} out={_r35c.stdout[-400:]}")
     finally:
         shutil.rmtree(_d35, ignore_errors=True)
+
+print("\n[36] State adapter race fixes under load (EXT-CRITIQUE-01/02)")
+_rc36, _out36 = sh("python3 framework/adapters/gsd_state.py selftest", timeout=180)
+_selftest36 = {}
+if _rc36 == 0:
+    try:
+        _selftest36 = json.loads(_out36)
+    except json.JSONDecodeError:
+        pass
+check("gsd_state selftest runs", _rc36 == 0, _out36[:200])
+# EXT-CRITIQUE-01: 40 concurrent writers used to duplicate seqs because the tail read
+# and the append were two unlocked steps; the read+append critical section is now
+# serialised and selftest proves a gapless 1..41 range.
+check("seq unique under 40 concurrent writers (EXT-CRITIQUE-01)",
+      _selftest36.get("seq_unique_under_concurrency") == "pass",
+      "seq_unique_under_concurrency=" + str(_selftest36.get("seq_unique_under_concurrency")))
+# EXT-CRITIQUE-02: an empty or literal-'None' task id used to resolve to tasks/None.json;
+# the adapter now refuses falsy ids loudly instead of silently addressing a bogus file.
+check("falsy/None task id refused loudly (EXT-CRITIQUE-02)",
+      _selftest36.get("task_id_none_guard") == "pass",
+      "task_id_none_guard=" + str(_selftest36.get("task_id_none_guard")))
+
+print("\n[37] Contract-validator bool guard (EXT-CRITIQUE-07, bool is an int subclass)")
+_r37 = subprocess.run([sys.executable, "tests/contract/test_validator_types.py"],
+                      capture_output=True, text=True, timeout=180)
+check("validator rejects bool for integer/number (EXT-CRITIQUE-07)",
+      _r37.returncode == 0 and "3/3 contract tests passed" in _r37.stdout,
+      (_r37.stdout + _r37.stderr)[-400:])
 
 print("\n" + "=" * 60)
 if WARNS:

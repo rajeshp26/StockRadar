@@ -65,8 +65,8 @@ def validate_instance(inst, schema, doc, path="$"):
 
     t = schema.get("type")
     if t and t in _TYPES:
-        if t == "integer" and isinstance(inst, bool):
-            return [f"{path}: expected integer, got bool"]
+        if t in ("integer", "number") and isinstance(inst, bool):
+            return [f"{path}: expected {t}, got bool"]
         if not isinstance(inst, _TYPES[t]):
             return [f"{path}: expected {t}, got {type(inst).__name__}"]
 

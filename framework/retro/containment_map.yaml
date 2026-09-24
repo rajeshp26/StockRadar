@@ -160,3 +160,5 @@ preferred_fix:
   framework:
     contract_mismatch:            [gate_routing, validation_check, gate_check]
     framework_gap:                [validation_check, gate_check]
+    logic_error:                  [validation_check, gate_check]
+    unhandled_edge_case:          [validation_check, gate_check]
