@@ -155,7 +155,10 @@ if __name__ == "__main__":
     
     # add
     ad = sub.add_parser("add")
-    ad.add_argument("--json", required=True)
+    ad.add_argument("--json", default="")
+    ad.add_argument("--json-file", default="",
+                    help="read the command payload from a file instead of --json "
+                         "(PowerShell-safe: avoids inline-quote mangling)")
     
     # resolve
     rs = sub.add_parser("resolve")
@@ -173,6 +176,11 @@ if __name__ == "__main__":
     ck.add_argument("--task-id", required=True)
     
     a = ap.parse_args()
+    payload_file = getattr(a, "json_file", "")
+    if payload_file:
+        a.json = Path(payload_file).read_text(encoding="utf-8")
+    if a.cmd == "add" and not getattr(a, "json", ""):
+        ap.error("--json or --json-file is required for add")
     
     if a.cmd == "add":
         try:

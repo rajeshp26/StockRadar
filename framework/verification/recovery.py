@@ -176,7 +176,10 @@ if __name__ == "__main__":
     # save
     sv = sub.add_parser("save")
     sv.add_argument("--task-id", required=True)
-    sv.add_argument("--json", required=True)
+    sv.add_argument("--json", default="")
+    sv.add_argument("--json-file", default="",
+                    help="read the command payload from a file instead of --json "
+                         "(PowerShell-safe: avoids inline-quote mangling)")
     
     # restore
     rs = sub.add_parser("restore")
@@ -187,6 +190,11 @@ if __name__ == "__main__":
     lkg.add_argument("--task-id", required=True)
     
     a = ap.parse_args()
+    payload_file = getattr(a, "json_file", "")
+    if payload_file:
+        a.json = Path(payload_file).read_text(encoding="utf-8")
+    if a.cmd == "save" and not getattr(a, "json", ""):
+        ap.error("--json or --json-file is required for save")
     
     if a.cmd == "checkpoint":
         # Just show current checkpoint

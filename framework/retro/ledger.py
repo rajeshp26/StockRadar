@@ -148,8 +148,16 @@ if __name__ == "__main__":
     sub.add_parser("analyse")
     sub.add_parser("path")
     ad = sub.add_parser("append")
-    ad.add_argument("--json", required=True)
+    ad.add_argument("--json", default="")
+    ad.add_argument("--json-file", default="",
+                    help="read the command payload from a file instead of --json "
+                         "(PowerShell-safe: avoids inline-quote mangling)")
     a = ap.parse_args()
+    payload_file = getattr(a, "json_file", "")
+    if payload_file:
+        a.json = Path(payload_file).read_text(encoding="utf-8")
+    if a.cmd == "append" and not getattr(a, "json", ""):
+        ap.error("--json or --json-file is required for append")
 
     if a.cmd == "path":
         print(ledger_path()); sys.exit(0)
