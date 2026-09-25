@@ -555,7 +555,13 @@ if __name__ == "__main__":
     ap.add_argument("command", choices=sorted(CMDS))
     ap.add_argument("--id", default="")
     ap.add_argument("--json", default="")
+    ap.add_argument("--json-file", default="",
+                    help="read the command payload from a file instead of --json "
+                         "(PowerShell-safe: avoids inline-quote mangling)")
     a = ap.parse_args()
+    payload_file = getattr(a, "json_file", "")
+    if payload_file:
+        a.json = Path(payload_file).read_text(encoding="utf-8")
     out = CMDS[a.command](a)
     if out is not None:
         print(json.dumps(out, indent=2) if isinstance(out, (dict, list)) else out)

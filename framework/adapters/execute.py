@@ -599,6 +599,9 @@ def main(argv: list | None = None) -> int:
     rs = sub.add_parser("render-summary")
     rs.add_argument("--task", required=True)
     rs.add_argument("--json", default="")
+    rs.add_argument("--json-file", default="",
+                    help="read the command payload from a file instead of --json "
+                         "(PowerShell-safe: avoids inline-quote mangling)")
     rs.add_argument("--phase")
     rs.add_argument("--now")
 
@@ -608,6 +611,9 @@ def main(argv: list | None = None) -> int:
     sub.add_parser("selftest")
 
     a = ap.parse_args(argv)
+    payload_file = getattr(a, "json_file", "")
+    if payload_file:
+        a.json = Path(payload_file).read_text(encoding="utf-8")
 
     if a.cmd == "selftest":
         return _run_selftest()
