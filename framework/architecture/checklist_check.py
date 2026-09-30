@@ -24,7 +24,7 @@ Exit codes:
   4  NOT_APPLICABLE — no checklist present
 """
 from __future__ import annotations
-import argparse, json, subprocess, sys
+import argparse, json, sys
 from pathlib import Path
 
 CHECKLIST = Path("framework/architecture/design_checklist.yaml")
@@ -38,15 +38,15 @@ EXECUTABLE_SMELL = [
 ]
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from framework.adapters.gsd_state import root as _gsd_state_root
+
+
 def _state_root() -> Path:
-    try:
-        r = subprocess.run(["python3", "framework/adapters/gsd_state.py", "state-root"],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-    except Exception:
-        pass
-    return Path(".planning")
+    """Delegate to the single source of GSD state-root resolution."""
+    return _gsd_state_root()
 
 
 def disposition_dir() -> Path:

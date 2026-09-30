@@ -11,11 +11,19 @@ assert on structure, not printed text. main() is exercised end-to-end with
 monkeypatched state_root so the supervision join is deterministic.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+# report.state_root() imports gsd_state at call time, so the repo root must be
+# importable however pytest was invoked.
+REPO_ROOT = HERE.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import report
 
@@ -312,3 +320,46 @@ def test_render_has_anomalies_section():
     out = report.render(d)
     assert "-- ANOMALIES" in out
     assert "[gate_silence]" in out
+
+
+def test_state_root_delegates_to_the_single_adapter(monkeypatch, tmp_path):
+    """report.py must not grow a second state-root resolution of its own."""
+    import framework.adapters.gsd_state as gs
+
+    real = tmp_path / ".planning"
+    real.mkdir()
+    calls = []
+
+    def _resolve():
+        calls.append(1)
+        return str(real)
+
+    monkeypatch.setattr(gs, "root", _resolve)
+    assert report.state_root() == str(real)
+    assert calls == [1]
+
+
+def test_state_root_announces_a_fallback_instead_of_falling_back_silently(monkeypatch, capsys):
+    """A silent fallback yields a report built from state no other adapter writes."""
+    import framework.adapters.gsd_state as gs
+
+    def _boom():
+        raise RuntimeError("manifest unreadable")
+
+    monkeypatch.setattr(gs, "root", _boom)
+    assert report.state_root() == os.path.join(report.ROOT, ".planning")
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "manifest unreadable" in err
+
+
+def test_state_root_propagates_the_adapter_fail_closed_contract(monkeypatch):
+    """SystemExit must not be downgraded into a report computed from the wrong root."""
+    import framework.adapters.gsd_state as gs
+
+    def _ambiguous():
+        raise SystemExit("BLOCKED: ambiguous distribution")
+
+    monkeypatch.setattr(gs, "root", _ambiguous)
+    with pytest.raises(SystemExit):
+        report.state_root()

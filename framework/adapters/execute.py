@@ -66,6 +66,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # --- vocabulary (DID-012 4.2) ----------------------------------------------
@@ -348,6 +349,25 @@ def _render_doc(task_id: str, rendered_yaml: str, now: str) -> str:
             f"```yaml\n{rendered_yaml}\n```\n")
 
 
+# Only PermissionError is transient here: on Windows os.replace raises it (WinError 5)
+# when the target is held open without FILE_SHARE_DELETE, which clears in milliseconds.
+# ENOSPC/EROFS/EACCES are permanent - catching OSError would mask a real failure.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF_S = 0.02
+
+
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """os.replace, retrying PermissionError only. Re-raises it once the bound is hit."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_BACKOFF_S * (2 ** attempt))
+
+
 def _atomic_write(path: Path, body: str) -> str:
     """Atomic overwrite (T-FX1): write a sibling temp and os.replace over the target."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -355,7 +375,7 @@ def _atomic_write(path: Path, body: str) -> str:
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
             fh.write(body)
-        os.replace(tmp_path, path)
+        _replace_with_retry(Path(tmp_path), path)
     except BaseException:
         try:
             os.unlink(tmp_path)

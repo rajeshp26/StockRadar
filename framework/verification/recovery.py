@@ -13,26 +13,16 @@ Usage:
 from __future__ import annotations
 import argparse
 import json
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def _state_root() -> Path:
-    """Resolve the GSD state root."""
-    try:
-        r = subprocess.run(["python3", "framework/adapters/gsd_state.py", "state-root"],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-    except Exception:
-        pass
-    return Path(".planning")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _state import atomic_write, state_root  # noqa: E402
 
 
 def recovery_dir() -> Path:
-    return _state_root() / "recovery"
+    return state_root() / "recovery"
 
 
 def checkpoint_path(task_id: str) -> Path:
@@ -63,8 +53,9 @@ def save_checkpoint(task_id: str, state: dict) -> dict:
     }
     
     p = checkpoint_path(task_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(checkpoint, indent=2))
+    # Atomic, not write_text: truncation makes a concurrent reader see a partial
+    # file, and load_checkpoint() answers None -- indistinguishable from "absent".
+    atomic_write(p, json.dumps(checkpoint, indent=2))
     
     return checkpoint
 
@@ -91,8 +82,8 @@ def save_last_known_good(task_id: str, state: dict) -> dict:
     }
     
     p = last_known_good_path(task_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(lkg, indent=2))
+    # Atomic, not write_text: same truncation race as save_checkpoint.
+    atomic_write(p, json.dumps(lkg, indent=2))
     
     return lkg
 

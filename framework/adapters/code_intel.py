@@ -26,13 +26,16 @@ CAPABILITIES = ["symbol_search", "relationships", "impact", "affected_tests",
 # Candidate provider CLIs, probed in order. Names deliberately live in ONE place.
 # The OMO harness installs CodeGraph under ~/.omo/codegraph/bin (node CLI). Probe
 # PATH installs by name first, the harness location second.
-_OMO_CG = os.path.expanduser(os.path.join("~", ".omo", "codegraph", "bin",
-                                          "codegraph.cmd" if os.name == "nt" else "codegraph"))
+#
+# Extensions are an install artefact, not a platform law - probe candidates, never branch on os.name.
+_OMO_DIR = Path.home() / ".omo" / "codegraph" / "bin"
 PROVIDERS = [
-    {"bin": "codegraph",      "probe": ["status"]},
-    {"bin": _OMO_CG,          "probe": ["status"]},
-    {"bin": "code-graph-mcp", "probe": ["health-check"]},
-    {"bin": "symgraph",       "probe": ["status"]},
+    {"bins": ["codegraph"], "probe": ["status"]},
+    {"bins": [str(_OMO_DIR / n) for n in
+              ("codegraph", "codegraph.cmd", "codegraph.exe", "codegraph.bat")],
+     "probe": ["status"]},
+    {"bins": ["code-graph-mcp"], "probe": ["health-check"]},
+    {"bins": ["symgraph"], "probe": ["status"]},
 ]
 
 
@@ -47,25 +50,33 @@ def _run(cmd, timeout=60):
         return 1, str(e)
 
 
+def _resolve_provider() -> str | None:
+    """First binary that resolves AND answers its probe; a failed probe must not end the ladder.
+
+    Otherwise one broken install masks a healthy fallback and forces tier 4.
+    """
+    for entry in PROVIDERS:
+        for b in entry["bins"]:
+            if _has(b) and _run([b] + entry["probe"])[0] == 0:
+                return b
+    return None
+
+
 def resolve() -> dict:
     """Resolve each capability to a tier. Written once at install, revalidated at session start."""
     native = _has("gsd")
-    provider = next((p for p in PROVIDERS if _has(p["bin"])), None)
-    if provider:
-        rc, _ = _run([provider["bin"]] + provider["probe"])
-        if rc != 0:
-            provider = None
+    provider = _resolve_provider()
 
     res = {}
     for cap in CAPABILITIES:
         if provider:
-            res[cap] = {"tier": 3, "via": provider["bin"]}
+            res[cap] = {"tier": 3, "via": provider}
         elif cap in ("relationships", "locate") and _has("rg"):
             res[cap] = {"tier": 2, "via": "lsp-or-ripgrep"}
         else:
             res[cap] = {"tier": 4, "via": "grep",
                         "warning": f"{cap} degraded to search fallback"}
-    m = {"provider": provider["bin"] if provider else None,
+    m = {"provider": provider,
          "native_gsd": native, "capabilities": res}
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text(json.dumps(m, indent=2))

@@ -14,26 +14,16 @@ Usage:
 from __future__ import annotations
 import argparse
 import json
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def _state_root() -> Path:
-    """Resolve the GSD state root."""
-    try:
-        r = subprocess.run(["python3", "framework/adapters/gsd_state.py", "state-root"],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-    except Exception:
-        pass
-    return Path(".planning")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _state import atomic_write, file_lock, state_root  # noqa: E402
 
 
 def suspicion_log_path() -> Path:
-    return _state_root() / "verification" / "suspicion_log.jsonl"
+    return state_root() / "verification" / "suspicion_log.jsonl"
 
 
 def load() -> list[dict]:
@@ -41,7 +31,7 @@ def load() -> list[dict]:
     if not p.exists():
         return []
     out = []
-    for i, line in enumerate(p.read_text().splitlines(), 1):
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
         if not line:
             continue
@@ -67,6 +57,14 @@ def _next_suspicion_id(records: list[dict]) -> str:
 
 def add(entry: dict) -> str:
     """Add a new suspicion to the log."""
+    # Not a pure append: the id comes from the highest existing SUSP-NNN, so this
+    # is a read-modify-write. Unlocked, two concurrent callers mint the same id,
+    # and a concurrent resolve() rewrite discards the newly appended line.
+    with file_lock(suspicion_log_path()):
+        return _add_locked(entry)
+
+
+def _add_locked(entry: dict) -> str:
     records = load()
     
     if "suspicion_id" not in entry:
@@ -92,7 +90,7 @@ def add(entry: dict) -> str:
     # Append
     p = suspicion_log_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a") as f:
+    with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, sort_keys=True) + "\n")
     
     return entry["suspicion_id"]
@@ -100,6 +98,13 @@ def add(entry: dict) -> str:
 
 def resolve(suspicion_id: str, resolved_by: str, resolution_evidence: str) -> bool:
     """Resolve an open suspicion."""
+    # Shares add()'s lock. resolve() rewrites the whole file, so without this an
+    # append landing mid-rewrite is lost - the record existed and then vanished.
+    with file_lock(suspicion_log_path()):
+        return _resolve_locked(suspicion_id, resolved_by, resolution_evidence)
+
+
+def _resolve_locked(suspicion_id: str, resolved_by: str, resolution_evidence: str) -> bool:
     records = load()
     updated = False
     
@@ -114,11 +119,10 @@ def resolve(suspicion_id: str, resolved_by: str, resolution_evidence: str) -> bo
     if not updated:
         return False
     
-    # Rewrite the file
+    # Rewrite atomically: open(p, "w") truncates first, so a concurrent reader
+    # sees a partial log and load() silently drops the trailing records.
     p = suspicion_log_path()
-    with p.open("w") as f:
-        for r in records:
-            f.write(json.dumps(r, sort_keys=True) + "\n")
+    atomic_write(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in records))
     
     return True
 

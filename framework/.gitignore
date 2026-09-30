@@ -1,0 +1,9 @@
+# Generated caches owned by the framework, not by the host project.
+# This file travels with the framework so its invariants do not depend on a
+# project-owned root .gitignore.
+.manifest/
+__pycache__/
+*.pyc
+telemetry/records.jsonl
+telemetry/browser/
+telemetry/models-resolved.json

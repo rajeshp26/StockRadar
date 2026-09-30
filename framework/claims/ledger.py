@@ -12,7 +12,7 @@ Exit codes:
   3  analyse: ledger empty or missing (nothing to judge -- never a pass)
 """
 from __future__ import annotations
-import argparse, json, os, re, subprocess, sys, time
+import argparse, json, os, re, sys, time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,35 +34,207 @@ REQUIRED = ["claim_id", "task_id", "agent", "statement", "claim_type",
             "classification", "status", "impact"]
 
 
-def _state_root() -> Path:
-    """Resolve the GSD state root exactly the way the rest of the framework does.
+LEDGER_SCHEMA_VERSION = 2
 
-    Priority: GSD_STATE_ROOT when it names an explicit path (drive-letter or
-    root-anchored) -- a bare ".planning" is never an override. Without the env,
-    behavior is unchanged: the adapter probe, then .planning. A caller that pins
-    the env removes a subprocess-per-call from the ledger's hot path; the probe
-    stays as the framework's single source of truth for the fallback.
+# Every validation rule declares a class. The class answers one question: may this
+# rule judge a record that predates it? DERIVABLE rules read only data already in the
+# record, so an older record either satisfies them or is genuinely malformed -- they
+# may judge history. AUTHOR_SUPPLIED rules need information only the recording agent
+# had, so they may judge only records written at or after their `since`. VOCABULARY
+# rules change an allowed token and keep the old spelling legal for one version.
+#
+# A rule whose `since` is newer than a record's version is NOT evaluated against that
+# record. It is reported in analyse()'s `grandfathered` bucket instead -- counted,
+# visible, never blocking -- because a rule that postdates a record says nothing about
+# whether the record is sound. `append` re-stamps the current version on every write,
+# so a legacy claim that is later re-appended is re-judged under current rules and the
+# gap closes itself with no migration script.
+LEDGER_RULES = (
+    # since 1 -- derivable from record content, or pre-existing author-supplied fields
+    {"code": "CLAIM_INCOMPLETE", "cls": "DERIVABLE", "since": 1,
+     "desc": "a required top-level field is missing, empty, or None"},
+    {"code": "CLAIM_BAD_SCHEMA_VERSION", "cls": "DERIVABLE", "since": 1,
+     "desc": "schema_version is present but is not a positive integer"},
+    {"code": "CLAIM_BAD_VOCAB", "cls": "VOCABULARY", "since": 1,
+     "desc": "a vocabulary value is outside its closed set"},
+    {"code": "CLAIM_UNKNOWN_RUNTIME", "cls": "DERIVABLE", "since": 1,
+     "desc": "an evidence runtime names an unrecorded RT- id"},
+    {"code": "CLAIM_ENV_UNKNOWN", "cls": "DERIVABLE", "since": 1,
+     "desc": "an evidence env names an unrecorded ENV- id"},
+    {"code": "CLAIM_BAD_DISCONFIRMATION", "cls": "VOCABULARY", "since": 1,
+     "desc": "an evidence disconfirmation is outside its closed set"},
+    {"code": "CLAIM_DISCONFIRMED_BUT_VERIFIED", "cls": "DERIVABLE", "since": 1,
+     "desc": "a VERIFIED claim carries a refuted disconfirmation"},
+    {"code": "CLAIM_STORED_CONFIDENCE", "cls": "DERIVABLE", "since": 1,
+     "desc": "the record carries a confidence field; confidence is derived"},
+    {"code": "CLAIM_FACT_UNVERIFIED", "cls": "DERIVABLE", "since": 1,
+     "desc": "classification FACT with a status other than VERIFIED"},
+    {"code": "CLAIM_CAUSAL_NO_RUNTIME", "cls": "DERIVABLE", "since": 1,
+     "desc": "a causal FACT without runtime-backed evidence"},
+    {"code": "CLAIM_VERIFIED_NO_COMMAND", "cls": "AUTHOR_SUPPLIED", "since": 1,
+     "desc": "VERIFIED or PARTIALLY_VERIFIED without verified_by"},
+    {"code": "CLAIM_VERIFIED_NO_PROVENANCE", "cls": "DERIVABLE", "since": 1,
+     "desc": "VERIFIED without evidence naming runtime + entry_point, reproduced"},
+    {"code": "CLAIM_REFUTED_NO_EVIDENCE", "cls": "DERIVABLE", "since": 1,
+     "desc": "REFUTED without fail evidence carrying expected and actual"},
+    # since 2 -- author-supplied and forward-only. Both postdate the existing store:
+    # applying them retroactively would demand provenance that cannot be reconstructed,
+    # which is manufacturing it, not verifying it.
+    {"code": "CLAIM_VERIFIED_NO_SCOPE_LIMIT", "cls": "AUTHOR_SUPPLIED", "since": 2,
+     "desc": "VERIFIED without does_not_prove"},
+    {"code": "CLAIM_VERIFIED_NO_INDEPENDENT_CHECK", "cls": "AUTHOR_SUPPLIED", "since": 2,
+     "desc": "high-impact VERIFIED without independent_check"},
+)
+
+RULE_SINCE = {r["code"]: r["since"] for r in LEDGER_RULES}
+RULE_CLASS = {r["code"]: r["cls"] for r in LEDGER_RULES}
+
+
+def _schema_version_problem(rec: dict) -> str | None:
+    """CLAIM_BAD_SCHEMA_VERSION when `schema_version` is present but malformed.
+
+    Absent means v1 and stays legal. A present-but-malformed value is a defect, not
+    a v1 record. Reading `"2"`, `true` or `0` as v1 exempts the record from the very
+    rules it claims to satisfy, so one typo would silently disable validation for
+    that record instead of reporting it. The v2 design already depends on the stored
+    version being meaningful; a value that is silently coerced destroys that premise.
+    """
+    if "schema_version" not in rec:
+        return None
+    v = rec.get("schema_version")
+    if v is None or isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        return "CLAIM_BAD_SCHEMA_VERSION"
+    return None
+
+
+def _record_version(rec: dict) -> int:
+    """The rule-set version a record was written under. Absent means v1.
+
+    Raises ValueError on a present-but-malformed value. Callers that need a version
+    for reporting screen with `_schema_version_problem` first.
+    """
+    v = rec.get("schema_version")
+    if v is None:
+        return 1
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        raise ValueError("CLAIM_BAD_SCHEMA_VERSION")
+    return v
+
+
+def _version_ok(rec: dict) -> bool:
+    return _schema_version_problem(rec) is None
+
+
+def _rule_applies(code: str, rec: dict) -> bool:
+    """True when `code` was in force when `rec` was written.
+
+    Two failure modes this refuses:
+
+    An unregistered code raises instead of defaulting. `RULE_SINCE.get(code, 1)`
+    would make a newly added rule inherit `since=1` and retroactively judge every
+    historical record -- exactly the invalidation the v2 design exists to prevent,
+    and it would do so silently, because an unregistered code has no other symptom.
+
+    A malformed version fails closed onto the current rule set rather than being
+    read as v1. A record cannot opt out of a rule by corrupting the field that
+    decides which rules apply to it.
+    """
+    if code not in RULE_SINCE:
+        raise KeyError("rule %r is not registered in LEDGER_RULES" % (code,))
+    if not _version_ok(rec):
+        return True
+    return _record_version(rec) >= RULE_SINCE[code]
+
+
+# Which records a rule has anything to say about, independent of version. Without
+# this the `grandfathered` report counts rules against records the rules never
+# governed, which buries the records that genuinely rest on an older rule set.
+_RULE_TARGETS = {
+    "CLAIM_VERIFIED_NO_SCOPE_LIMIT":
+        lambda rec: rec.get("status") == "VERIFIED",
+    "CLAIM_VERIFIED_NO_INDEPENDENT_CHECK":
+        lambda rec: (rec.get("status") == "VERIFIED" and rec.get("impact") == "high"),
+}
+
+
+def _rule_targets(code: str, rec: dict) -> bool:
+    """Whether a rule's subject condition matches this record, ignoring version."""
+    pred = _RULE_TARGETS.get(code)
+    return True if pred is None else bool(pred(rec))
+
+
+def registry_gaps() -> list[dict]:
+    """CLAIM_ codes validate_record() can emit that LEDGER_RULES does not register.
+
+    An emitted-but-unregistered code is the precondition for the retroactive
+    default in `_rule_applies`, so it is reported rather than tolerated. Extracted
+    from the function's own source, which means a rule added to validate_record
+    without a registry entry is detected rather than waiting to misjudge history.
+
+    Scoped to the CLAIM_ namespace on purpose. _validate_integrity emits EVIDENCE_*
+    codes on the separate E1-E8 integrity channel reported by integrity_report();
+    those are integrity signals, not versioned validation rules, and counting them
+    as registry gaps would report four permanent phantom gaps on every run.
+    """
+    import inspect
+    body = inspect.getsource(validate_record)
+    emitted = set(re.findall(r'problems\.append\(\s*"(CLAIM_[A-Z0-9_]+)"', body))
+    return [{"code": c, "since": None, "cls": None}
+            for c in sorted(emitted - set(RULE_SINCE))]
+
+
+def _scope_limit_present(rec: dict) -> bool:
+    """A usable scope limit is a non-empty, non-blank string.
+
+    `not rec.get("does_not_prove")` accepts `{}`, `0`, `False` and `"   "`, all of
+    which satisfy the rule while documenting nothing -- the same empty_string escape
+    the analyse() metric exists to make visible. The rule and its own metric must
+    agree on what counts, or the metric stops describing the rule.
+    """
+    v = rec.get("does_not_prove")
+    return isinstance(v, str) and bool(v.strip())
+
+
+def skipped_rules(rec: dict) -> list[dict]:
+    """Rules that exist but were not in force for this record.
+
+    A record whose version is malformed is not grandfathered -- it is reported as
+    invalid. Listing it here would present a defect as a compatibility exemption.
+    """
+    if not _version_ok(rec):
+        return []
+    v = _record_version(rec)
+    return [{"code": r["code"], "cls": r["cls"], "since": r["since"],
+             "record_version": v}
+            for r in LEDGER_RULES if r["since"] > v]
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from framework.adapters.gsd_state import root as _gsd_state_root
+
+
+def _state_root() -> Path:
+    """Delegate to the single source, keeping this module's env-var override.
+
+    GSD_STATE_ROOT is honoured here and nowhere else in the framework. That asymmetry is
+    deliberate, not an oversight: it is this ledger's documented escape hatch for pinning
+    state in a disposable environment during verification runs.
     """
     env = os.environ.get("GSD_STATE_ROOT")
     if env and (len(env) >= 2 and env[1] == ":" or env.startswith("/")):
         return Path(env)
-    try:
-        r = subprocess.run(["python3", "framework/adapters/gsd_state.py", "state-root"],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-    except Exception:
-        pass
-    return Path(".planning")
+    return _gsd_state_root()
 
 
 def _runtime_recorded(runtime_id: str) -> bool:
     """True iff an execution context row with that id exists binding provider+model.
 
-    The ledger stays self-contained (no framework imports, matching the pattern of the
-    retro and claim ledgers): it reads the context file directly. A claim whose evidence
-    names a canonical RT- id must resolve to a recorded context; an unknown id is
-    provenance the ledger cannot reproduce, and is refused.
+    The ledger reads the context file directly rather than importing the
+    execution_context module, so the two cannot disagree about the record shape. A claim
+    whose evidence names a canonical RT- id must resolve to a recorded context; an unknown
+    id is provenance the ledger cannot reproduce, and is refused.
     """
     p = _state_root() / "contexts" / "execution.jsonl"
     if not p.exists():
@@ -330,6 +502,13 @@ def validate_record(rec: dict) -> list[str]:
     if "confidence" in rec:
         problems.append("CLAIM_STORED_CONFIDENCE")
 
+    # 2e. The stored version decides which rules apply. A present-but-malformed value
+    # is refused rather than coerced, so a record cannot drop out of the rules it is
+    # written under by corrupting the field that selects them.
+    ver_problem = _schema_version_problem(rec)
+    if ver_problem:
+        problems.append(ver_problem)
+
     # 3. A FACT must be VERIFIED.
     if classification == "FACT" and status != "VERIFIED":
         problems.append("CLAIM_FACT_UNVERIFIED")
@@ -346,7 +525,12 @@ def validate_record(rec: dict) -> list[str]:
             problems.append("CLAIM_VERIFIED_NO_COMMAND")
         if not _has_provenance(rec):
             problems.append("CLAIM_VERIFIED_NO_PROVENANCE")
-        if impact == "high" and not rec.get("independent_check"):
+        # AUTHOR_SUPPLIED: a scope limit and a second command cannot be reconstructed
+        # from a record written before the rules existed. Each is judged only against
+        # records at or after its `since`; older records are reported in `grandfathered`.
+        if _rule_applies("CLAIM_VERIFIED_NO_SCOPE_LIMIT", rec) and not _scope_limit_present(rec):
+            problems.append("CLAIM_VERIFIED_NO_SCOPE_LIMIT")
+        if _rule_applies("CLAIM_VERIFIED_NO_INDEPENDENT_CHECK", rec) and impact == "high" and not rec.get("independent_check"):
             problems.append("CLAIM_VERIFIED_NO_INDEPENDENT_CHECK")
 
     # PARTIALLY_VERIFIED: a verifying command plus evidence with a pass/fail result.
@@ -394,6 +578,11 @@ def _next_claim_id() -> str:
 def append(entry: dict) -> str:
     if "claim_id" not in entry:
         entry["claim_id"] = _next_claim_id()
+    # Stamp the rule set in force at write time, before validation, so a rule added
+    # today can never become a retroactive verdict on a record written before it.
+    # Unconditional: a caller cannot declare a weaker rule set for itself, and any
+    # re-append re-judges the claim under current rules (self-healing grandfathering).
+    entry["schema_version"] = LEDGER_SCHEMA_VERSION
     problems = validate_record(entry)
     if problems:
         print(problems[0])
@@ -410,7 +599,8 @@ def analyse() -> dict:
     p = ledger_path()
     if not p.exists():
         return {"status": "empty", "entries": 0, "claims": 0, "invalid": [],
-                "by_type": {}, "by_classification": {}, "by_status": {}, "by_confidence": {}}
+                "by_type": {}, "by_classification": {}, "by_status": {}, "by_confidence": {},
+                "grandfathered": [], "by_scope_limit": {}}
     lines = [ln.strip() for ln in p.read_text().splitlines() if ln.strip()]
     records = []
     for ln in lines:
@@ -420,7 +610,8 @@ def analyse() -> dict:
             print("WARN: claim ledger line is not valid JSON -- skipped", file=sys.stderr)
     if not records:
         return {"status": "empty", "entries": len(lines), "claims": 0, "invalid": [],
-                "by_type": {}, "by_classification": {}, "by_status": {}, "by_confidence": {}}
+                "by_type": {}, "by_classification": {}, "by_status": {}, "by_confidence": {},
+                "grandfathered": [], "by_scope_limit": {}}
 
     # Latest record per claim_id wins (file order = chronological order).
     latest: dict[str, dict] = {}
@@ -440,6 +631,43 @@ def analyse() -> dict:
                 "problems": problems,
             })
 
+    # Rules that postdate a record are reported, not failed: counted and visible so the
+    # gap stays auditable, never blocking so the gate is not trained into being routed
+    # around. Scope-limit quality is measured the same way -- `empty_string` is the
+    # documented way to satisfy the rule without doing it, so it gets its own count.
+    grandfathered = []
+    scope_limits = Counter()
+    for r in claims:
+        v = _record_version(r) if _version_ok(r) else None
+        for s in skipped_rules(r):
+            # Only rules that would have had something to say about this record. A
+            # VERIFIED-only rule is not evidence that an UNVERIFIED record predates
+            # it, and counting it there buries the records that genuinely rest on
+            # an older rule set behind rows that mean nothing.
+            if not _rule_targets(s["code"], r):
+                continue
+            grandfathered.append({"claim_id": r.get("claim_id"),
+                                  "status": r.get("status"),
+                                  "code": s["code"], "since": s["since"],
+                                  "record_version": v})
+        # Scope-limit quality is reported per record the rule actually governs, so
+        # the number answers "of the claims that must state a limit, how many do?"
+        # rather than counting records the rule says nothing about.
+        if not _rule_targets("CLAIM_VERIFIED_NO_SCOPE_LIMIT", r):
+            scope_limits["not_applicable"] += 1
+        elif not _rule_applies("CLAIM_VERIFIED_NO_SCOPE_LIMIT", r):
+            scope_limits["grandfathered"] += 1
+        elif not _scope_limit_present(r):
+            raw = r.get("does_not_prove")
+            if raw is None:
+                scope_limits["missing"] += 1
+            elif not isinstance(raw, str):
+                scope_limits["not_a_string"] += 1
+            else:
+                scope_limits["empty_string"] += 1
+        else:
+            scope_limits["present"] += 1
+
     return {
         "status": "invalid" if invalid else "ok",
         "entries": len(lines),
@@ -449,6 +677,8 @@ def analyse() -> dict:
         "by_classification": dict(Counter(r.get("classification", "?") for r in claims)),
         "by_status": dict(Counter(r.get("status", "?") for r in claims)),
         "by_confidence": dict(Counter(derive_confidence(r) for r in claims)),
+        "grandfathered": grandfathered,
+        "by_scope_limit": dict(scope_limits),
     }
 
 
@@ -550,7 +780,16 @@ def integrity_report() -> dict:
                 continue
             ep = e.get("entry_point")
             if isinstance(ep, str) and re.match(r"^(framework|src|backend)/", ep) and " " not in ep:
-                if not Path(ep).exists():
+                # A citation may carry a line anchor (`f.py:246`, `f.py:12-20`). The
+                # anchor is metadata about the file, not part of its name, so it is
+                # stripped before resolution. Leaving it attached makes every
+                # line-anchored citation report a file as missing, and a gate that
+                # cries wolf on files that exist is worse than no gate at all -- it
+                # teaches reviewers to ignore E2. Resolution is anchored to the repo
+                # root rather than the caller's cwd, so the verdict does not depend
+                # on where the gate was invoked from.
+                target = re.sub(r":\d+(-\d+)?$", "", ep)
+                if not (_REPO_ROOT / target).exists():
                     _add(c.get("claim_id"), c.get("task_id"), "EVIDENCE_ARTIFACT_MISSING",
                          f"evidence entry_point does not exist: {ep}")
 

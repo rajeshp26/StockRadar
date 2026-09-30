@@ -28,7 +28,11 @@ def check(name, ok, detail=""):
 def cleanup(ids):
     for t in ids:
         g._task_path(t).unlink(missing_ok=True)
-        g._task_events_path(t).unlink(missing_ok=True)
+        ev = g._task_events_path(t)
+        # The lockfile belongs to gsd_state._append_event ("<events>.lock"); it is
+        # task state, so omitting it broke the self-cleaning contract.
+        ev.with_name(ev.name + ".lock").unlink(missing_ok=True)
+        ev.unlink(missing_ok=True)
 
 
 def register(tid, **kw):

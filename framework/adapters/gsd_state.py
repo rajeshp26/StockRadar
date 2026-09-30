@@ -20,7 +20,11 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-MANIFEST = Path("framework/.manifest/gsd.json")
+# Anchored on __file__, never on the CWD. The manifest location, state-root detection,
+# and the resolved root were all CWD-relative, so running any framework script from a
+# subdirectory addressed a different tree and silently wrote state outside the repo.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MANIFEST = REPO_ROOT / "framework" / ".manifest" / "gsd.json"
 
 # (state_root, distribution, mode). Recognised for detection; see SUPPORTED for implemented.
 DISTRIBUTIONS = ((".planning", "gsd-core", "files"), (".gsd", "gsd-pi", "db"))
@@ -29,13 +33,14 @@ SUPPORTED = ("gsd-core",)
 
 def detect() -> dict:
     """Identify the installed GSD distribution and its state root."""
-    cwd = Path.cwd()
+    # Probes REPO_ROOT, not the CWD: detection has to find the state root even when the
+    # caller is sitting in a subdirectory, or it reports "none" for a repo that has one.
     # V1 SUPPORTS ONE DISTRIBUTION: the one installed. Probing is detection only —
     # it does NOT imply both are supported. gsd-pi is RECOGNISED so we can refuse it
     # by name instead of silently misreading a db-backed store as a file-backed one.
     found = []
     for root, dist, mode in DISTRIBUTIONS:
-        if (cwd / root).is_dir():
+        if (REPO_ROOT / root).is_dir():
             found.append((root, dist, mode))
 
     if len(found) > 1:
@@ -49,9 +54,10 @@ def detect() -> dict:
         root, dist, mode = found[0]
         # Store RELATIVE, never absolute: an absolute path bakes in one shell's mount
         # flavour (/mnt/c vs C:\), so a gate run under WSL poisons the cache for Windows
-        # and validate fails with 'cache belongs to another checkout'. Detection is
-        # cwd-anchored and every call site invokes the adapter from the repo root, so the
-        # bare root name resolves identically under both shells.
+        # and validate fails with 'cache belongs to another checkout'. The CACHE stays
+        # relative; root() is what joins it onto REPO_ROOT for callers. Those are two
+        # jobs, so they are two values - the relative name is meaningless as a live path
+        # unless the reader already knows where it is standing, and it did not.
         m = {"distribution": dist, "state_root": root, "mode": mode,
              "version": _version(), "detected_at": _now(),
              "supported": dist in SUPPORTED}
@@ -110,10 +116,10 @@ def _cache_valid(m: dict) -> bool:
     p = Path(sr)
     if p.is_absolute():
         try:
-            p.resolve().relative_to(Path.cwd().resolve())
+            p.resolve().relative_to(REPO_ROOT)
         except ValueError:
             return False        # cache belongs to a different checkout
-    return p.exists()
+    return (REPO_ROOT / p).exists()
 
 
 def root() -> Path:
@@ -130,7 +136,8 @@ def root() -> Path:
         raise SystemExit(m.get("error", f"UNSUPPORTED DISTRIBUTION: {dist}"))
     if not m.get("state_root"):
         raise SystemExit(f"BLOCKED: no state root resolved for distribution '{dist}'.")
-    return Path(m["state_root"])
+    sr = Path(m["state_root"])
+    return sr if sr.is_absolute() else (REPO_ROOT / sr)
 
 
 def _db_mode() -> bool:
@@ -1013,9 +1020,27 @@ def current_phase() -> dict:
             "state_excerpt": read_state()[:800]}
 
 
+def _shell_path(p: Path) -> str:
+    """Render a resolved path so a POSIX shell can stat it, in any namespace.
+
+    plan-path output is consumed by the gates, which on Windows run under WSL bash. A
+    Windows-flavoured absolute path (C:\\...) is NOT addressable there -- WSL resolves
+    /mnt/c/... -- so `[ -f "$ENTRY_PLAN" ]` fails and the gate reports the plan as
+    missing even though it exists. A path relative to the caller's CWD carries no
+    flavour at all and resolves in every namespace. Gates invoke gsd_state.py through
+    a CWD-relative script path, so their CWD is the repo root and a relative path is
+    precisely what they already expect. Absolute is kept only when the target lies
+    outside the CWD, where a relative path would be ambiguous rather than portable.
+    """
+    try:
+        return str(p.relative_to(Path.cwd()))
+    except ValueError:
+        return str(p)
+
+
 def plan_path(task_id: str) -> str:
-    hits = sorted(str(p) for p in (root() / "phases").rglob(f"*{task_id}*PLAN.md")) if (root() / "phases").is_dir() else []
-    return hits[0] if hits else f"NOT_FOUND: plan for {task_id}"
+    hits = sorted((p for p in (root() / "phases").rglob(f"*{task_id}*PLAN.md")), key=str) if (root() / "phases").is_dir() else []
+    return _shell_path(hits[0]) if hits else f"NOT_FOUND: plan for {task_id}"
 
 
 def read_contract(cid: str) -> str:
@@ -1174,6 +1199,7 @@ def _compact_terminal_stream(task_id: str):
 
 
 STATE_HEALTH_TASK_BUDGET = 200
+STATE_HEALTH_BROKEN_REPORT = 20
 
 
 def _scan_task_head(task_id: str) -> bool:
@@ -1202,6 +1228,7 @@ def state_health() -> dict:
     g14's jurisdiction.
     """
     tasks_total = tasks_checked = tasks_beyond_limit = broken_tasks = 0
+    broken = []
     ledger_present = ledger_tail_parseable = False
     dir_tasks = root() / TASKS_REL
     if dir_tasks.is_dir():
@@ -1211,6 +1238,7 @@ def state_health() -> dict:
         for p in contracts[:STATE_HEALTH_TASK_BUDGET]:
             if _scan_task_head(p.stem):
                 broken_tasks += 1
+                broken.append(p.stem)
         tasks_checked = min(len(contracts), STATE_HEALTH_TASK_BUDGET)
         tasks_beyond_limit = max(0, len(contracts) - STATE_HEALTH_TASK_BUDGET)
     ledger_file = root() / "claims" / "ledger.jsonl"
@@ -1230,6 +1258,7 @@ def state_health() -> dict:
         "tasks_checked": tasks_checked,
         "tasks_beyond_limit": tasks_beyond_limit,
         "broken_tasks": broken_tasks,
+        "broken_task_ids": broken[:STATE_HEALTH_BROKEN_REPORT],
         "ledger_present": ledger_present,
         "ledger_tail_parseable": ledger_tail_parseable,
         "ok": broken_tasks == 0,

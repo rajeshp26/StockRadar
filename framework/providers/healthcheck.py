@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Provider health pre-flight for task delegation.
 
 Answers one question before dispatch: **is this model safe to spawn right now?**
@@ -37,6 +37,16 @@ Blocking classes (refuse dispatch): AUTH_FAILURE, QUOTA_FAILURE, MODEL_UNAVAILAB
 PROVIDER_TIMEOUT, PROVIDER_NETWORK_FAILURE. Worker-level classes belong to task
 supervision, not the provider boundary, so they never block here.
 
+Blocking classes differ in how they expire (see TRANSIENT_CLASSES):
+
+  transient  PROVIDER_TIMEOUT / PROVIDER_NETWORK_FAILURE clear once they fall
+             outside the window. A blip is not a reason to refuse dispatch forever.
+  persistent AUTH_FAILURE / QUOTA_FAILURE / MODEL_UNAVAILABLE ignore the window
+             entirely. An unpaid account or a revoked key does not heal on a timer,
+             and a uniform TTL on those silently re-enables dispatch against a
+             provider that is still broken. They clear only when a later OK record
+             for the same model is appended.
+
 Exit codes: 0 pass | 1 fail (blocking class named) | 2 blocked (cannot determine:
 CLI missing, inventory unreadable) | 3 usage | 4 not applicable (nothing resolved).
 Blocked is never a pass.
@@ -47,7 +57,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -84,6 +93,10 @@ BLOCKING_CLASSES = {
 }
 ALL_CLASSES = BLOCKING_CLASSES | {"SUSPECTED_STALL", "AGENT_STALL", "AGENT_FAILURE"}
 
+# Blocking classes that legitimately heal on their own. Everything else in
+# BLOCKING_CLASSES is persistent and is NOT subject to the window.
+TRANSIENT_CLASSES = {"PROVIDER_TIMEOUT", "PROVIDER_NETWORK_FAILURE"}
+
 DEFAULT_WINDOW_MIN = 30  # "current execution context" — overridable via env / flag
 
 
@@ -97,16 +110,15 @@ def classify(text: str) -> tuple[str | None, str]:
 
 # --- health ledger ----------------------------------------------------------
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from framework.adapters.gsd_state import root as _gsd_state_root
+
+
 def _state_root() -> Path:
-    """Resolve the GSD state root exactly the way the rest of the framework does."""
-    try:
-        r = subprocess.run(["python3", "framework/adapters/gsd_state.py", "state-root"],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-    except Exception:
-        pass
-    return Path(".planning")
+    """Delegate to the single source of GSD state-root resolution."""
+    return _gsd_state_root()
 
 
 def health_path() -> Path:
@@ -138,24 +150,6 @@ def load_records() -> list[dict]:
     return out
 
 
-def latest_for_model(records: list[dict], model: str, window_min: int) -> dict | None:
-    """Most recent record for this model within the window, by ts. Latest wins."""
-    now = datetime.now(timezone.utc)
-    best: dict | None = None
-    for rec in records:
-        if rec.get("model") != model or rec.get("parse_error"):
-            continue
-        ts = _parse_ts(rec.get("ts"))
-        if ts is None:
-            continue
-        age_min = (now - ts).total_seconds() / 60
-        if age_min > window_min:
-            continue
-        if best is None or ts > _parse_ts(best.get("ts")):  # type: ignore[arg-type]
-            best = rec
-    return best
-
-
 def _parse_ts(value) -> datetime | None:
     if not value:
         return None
@@ -163,6 +157,83 @@ def _parse_ts(value) -> datetime | None:
         return datetime.fromisoformat(str(value))
     except ValueError:
         return None
+
+
+def _order_key(rec: dict, index: int) -> tuple[float, int] | None:
+    """Sort key that never ties across distinct rows.
+
+    Timestamps are written at second precision (see _now), so two records written
+    inside the same second compare equal on ts alone. A `ts > best_ts` test then
+    keeps the FIRST of the two and silently ignores the newer one. Tie-breaking on
+    append order makes the later line authoritative, which is what an append-only
+    ledger means.
+    """
+    ts = _parse_ts(rec.get("ts"))
+    if ts is None:
+        return None
+    return (ts.timestamp(), index)
+
+
+def latest_for_model(records: list[dict], model: str, window_min: int) -> dict | None:
+    """Most recent record for this model within the window. Used for reporting."""
+    now = datetime.now(timezone.utc)
+    best: dict | None = None
+    best_key: tuple[float, int] | None = None
+    for i, rec in enumerate(records):
+        if rec.get("model") != model or rec.get("parse_error"):
+            continue
+        ts = _parse_ts(rec.get("ts"))
+        if ts is None:
+            continue
+        if (now - ts).total_seconds() / 60 > window_min:
+            continue
+        key = _order_key(rec, i)
+        if key is None:
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = rec, key
+    return best
+
+
+def latest_blocking_for_model(records: list[dict], model: str, window_min: int) -> dict | None:
+    """Most recent *live* blocking record for this model, or None.
+
+    "Live" is class-dependent: see the module docstring. A persistent blocking
+    record (quota / auth / model) blocks no matter how old it is; a transient one
+    only inside the window. An OK record is always live and therefore clears an
+    earlier block.
+
+    `records` must be in append order (load_records preserves it). Iteration is
+    bounded by the caller's list, so this is O(n) in ledger size, not O(n^2).
+    """
+    now = datetime.now(timezone.utc)
+    latest_live: dict | None = None
+    latest_key: tuple[float, int] | None = None
+    for i, rec in enumerate(records):
+        if rec.get("model") != model or rec.get("parse_error"):
+            continue
+        cls = rec.get("class")
+        if cls == "OK":
+            pass                       # an OK is always live
+        elif cls in BLOCKING_CLASSES and cls in TRANSIENT_CLASSES:
+            ts = _parse_ts(rec.get("ts"))
+            if ts is None or (now - ts).total_seconds() / 60 > window_min:
+                continue              # expired blip: not live, cannot clear or block
+        elif cls in BLOCKING_CLASSES:
+            pass                       # persistent: live regardless of age
+        else:
+            continue                   # worker-level class: not a provider signal
+        key = _order_key(rec, i)
+        if key is None:
+            continue
+        if latest_key is not None and key <= latest_key:
+            continue                   # an older record cannot override a newer one
+        latest_live, latest_key = rec, key
+    if latest_live is None:
+        return None
+    if latest_live.get("class") in BLOCKING_CLASSES:
+        return latest_live
+    return None
 
 
 def record(provider: str, model: str, cls: str, detail: str = "",
@@ -241,17 +312,18 @@ def check(window_min: int | None = None) -> dict:
             entry["blocking"] = True
             problems.append(entry)
             continue
-        latest = latest_for_model(records, model, window)
-        if latest and latest.get("class") in BLOCKING_CLASSES:
-            entry["problem"] = "%s: %s" % (latest.get("class"),
-                                           (latest.get("detail") or latest.get("source") or "")[:160])
+        blocking = latest_blocking_for_model(records, model, window)
+        if blocking:
+            entry["problem"] = "%s: %s" % (blocking.get("class"),
+                                           (blocking.get("detail") or blocking.get("source") or "")[:160])
             entry["blocking"] = True
-            entry["recorded_at"] = latest.get("ts")
+            entry["recorded_at"] = blocking.get("ts")
             problems.append(entry)
             continue
         entry["blocking"] = False
-        if latest:
-            entry["last_class"] = latest.get("class")
+        recent = latest_for_model(records, model, window)
+        if recent:
+            entry["last_class"] = recent.get("class")
     if problems:
         return {"status": "fail", "window_min": window, "problems": problems, "models": models}
     return {"status": "pass", "window_min": window, "problems": [], "models": models}
@@ -294,8 +366,35 @@ def _selftest() -> int:
             t("S3c load roundtrip", len(recs) == 1 and recs[0]["class"] == "QUOTA_FAILURE")
             latest = latest_for_model(recs, "opencode/big-pickle", 5)
             t("S3d latest within window", latest is not None and latest["class"] == "QUOTA_FAILURE")
-            stale = latest_for_model(recs, "opencode/big-pickle", 0)
-            t("S3e zero window excludes", stale is None)
+
+            # S3e-S3i pin the window rule. The former assertion
+            # ("zero window excludes") is deliberately gone: it encoded the
+            # behaviour this patch removes. A persistent failure must NOT expire.
+            q0 = latest_blocking_for_model(recs, "opencode/big-pickle", 0)
+            t("S3e QUOTA_FAILURE ignores the window entirely",
+              q0 is not None and q0["class"] == "QUOTA_FAILURE")
+
+            timeout_only = [{"provider": "openrouter", "model": "m-timeout",
+                             "class": "PROVIDER_TIMEOUT", "detail": "", "source": "selftest",
+                             "ts": _now()}]
+            t("S3f PROVIDER_TIMEOUT expires outside the window",
+              latest_blocking_for_model(timeout_only, "m-timeout", 0) is None)
+
+            recs.append({"provider": "openrouter", "model": "opencode/big-pickle",
+                         "class": "OK", "detail": "", "source": "selftest", "ts": _now()})
+            t("S3g a later OK record clears the persistent block",
+              latest_blocking_for_model(recs, "opencode/big-pickle", 0) is None)
+
+            same = [
+                {"provider": "p", "model": "m", "class": "QUOTA_FAILURE",
+                 "detail": "", "source": "selftest", "ts": "2026-09-30T00:00:00Z"},
+                {"provider": "p", "model": "m", "class": "OK",
+                 "detail": "", "source": "selftest", "ts": "2026-09-30T00:00:00Z"},
+            ]
+            t("S3h same-second tie: later OK wins",
+              latest_blocking_for_model(same, "m", 100000) is None)
+            t("S3i same-second tie: later failure wins",
+              latest_blocking_for_model(list(reversed(same)), "m", 100000) is not None)
         finally:
             if old is None:
                 os.environ.pop("PROVIDER_HEALTH_FILE", None)

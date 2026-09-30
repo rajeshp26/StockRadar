@@ -65,5 +65,7 @@ These components integrate with the gate system:
 ## State Files
 
 All state is stored under `<state_root>/verification/`:
-- `suspicion_log.jsonl` - Append-only suspicion records
+- `suspicion_log.jsonl` - one JSON record per line; `add()` appends, `resolve()` rewrites
+  the file. Both hold a shared lock, because `add()` derives its id from the highest
+  existing `SUSP-NNN` and `resolve()` rewrites every record.
 - `review_state.json` - Current review loop states

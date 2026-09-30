@@ -48,6 +48,8 @@ ledger scan, so append cost is independent of the store size.
 | `evidence` | no | list of `{id, kind, command, runtime, entry_point, reproduced, expected, actual, result, env, disconfirmation}` |
 | `verified_by` | no | the command that verified the claim |
 | `independent_check` | no | a second, different verification command (required for high impact) |
+| `does_not_prove` | no for v1, yes for v2 | what this evidence does **not** establish. Required for every v2 `VERIFIED` claim; must be a non-empty string |
+| `schema_version` | stamped | the rule set in force when the record was written. `append` stamps the current version on every write, unconditionally, so a caller cannot declare a weaker rule set for itself. An absent value means v1 |
 | `git_sha` | no | git SHA for evidence provenance tracking |
 | `execution_timestamp` | no | ISO-8601 timestamp of when evidence was generated |
 | `created` | auto | ISO-8601 timestamp added by `append` |
@@ -90,11 +92,13 @@ store is caught exactly like a rejected append:
 | --- | --- |
 | `CLAIM_INCOMPLETE` | a required top-level field is missing, empty, or None |
 | `CLAIM_BAD_VOCAB` | a vocabulary value is outside its list (claim_type / classification / status / impact / evidence kind / result; `reproduced` must be bool) |
+| `CLAIM_BAD_SCHEMA_VERSION` | `schema_version` is present but is not an int >= 1 (`"2"`, `true`, `0`, `2.0`, `null`). An **absent** value is legal and means v1; a **malformed** value is a defect, because coercing it to v1 exempts the record from the very rules it claims to satisfy |
 | `CLAIM_FACT_UNVERIFIED` | classification `FACT` with status other than `VERIFIED` |
 | `CLAIM_CAUSAL_NO_RUNTIME` | claim_type `causal`, classification `FACT`, without evidence of a runtime-backed kind (`DIRECT` \| `DERIVED` \| `command_run` \| `artifact` \| `observation`) carrying runtime + entry_point with `reproduced: true` — static configuration, code inspection, logs, or plausibility cannot establish causation |
 | `CLAIM_VERIFIED_NO_COMMAND` | status `VERIFIED` (or `PARTIALLY_VERIFIED`) without `verified_by` |
 | `CLAIM_VERIFIED_NO_PROVENANCE` | status `VERIFIED` without evidence naming runtime + entry_point with `reproduced: true`; `PARTIALLY_VERIFIED` without evidence whose result is pass or fail |
 | `CLAIM_VERIFIED_NO_INDEPENDENT_CHECK` | status `VERIFIED`, impact `high`, no `independent_check` |
+| `CLAIM_VERIFIED_NO_SCOPE_LIMIT` | status `VERIFIED` whose `does_not_prove` is missing, empty, blank, or not a string. A `VERIFIED` claim that states no limit is a claim that proves everything |
 | `CLAIM_REFUTED_NO_EVIDENCE` | status `REFUTED` without evidence with `result: fail` and both `expected` and `actual` |
 | `CLAIM_ENV_UNKNOWN` | an evidence `env` names a canonical `ENV-` id that does not resolve to a recorded command environment |
 | `CLAIM_BAD_DISCONFIRMATION` | an evidence `disconfirmation` is outside `confirmed` \| `refuted` \| `inconclusive` |
@@ -103,6 +107,44 @@ store is caught exactly like a rejected append:
 
 `HYPOTHESIS` / `ASSUMPTION` / `UNKNOWN` with status `UNVERIFIED` are legal and need no
 evidence. The default classification for anything not reproduced is `UNKNOWN`.
+
+## Rule evolution
+
+Adding a rule is a schema decision, not only a code change. Every rule carries a class,
+and the class decides what happens to claims already in the store.
+
+| class | what it judges | history |
+| --- | --- | --- |
+| `DERIVABLE` | something the ledger computes from the record itself -- a required field, a vocabulary value, an internal inconsistency | applies at every version, v1 included. A v1 record that violates it was always invalid |
+| `AUTHOR_SUPPLIED` | information only the recording agent has -- whether an independent check happened, what the evidence does not establish | applies from the version that introduced it. Earlier records are grandfathered, not re-judged |
+
+The mechanism:
+
+- `LEDGER_SCHEMA_VERSION` is the current version; a record with no `schema_version` is v1.
+- `append` stamps the current version on every write, unconditionally. A rule added today
+  cannot become a retroactive verdict on a record written before it.
+- `skipped_rules(record)` returns the `AUTHOR_SUPPLIED` rules that did not apply because
+  the record predates them, so `analyse` reports them as grandfathered instead of silently
+  passing them.
+- `_rule_applies` resolves a code through the registry and raises `KeyError` for an
+  unregistered one. It never defaults a missing code to "applies to everything": that
+  fallback would let a typo retroactively judge the whole store, silently, because a
+  mistyped code has no other symptom.
+
+### Adding a rule
+
+1. Classify it `DERIVABLE` or `AUTHOR_SUPPLIED`. If the judgement requires knowledge only
+   the recording agent has, it is `AUTHOR_SUPPLIED`.
+2. Add it to `LEDGER_RULES` in `ledger.py` with `cls` and `since`. Bump
+   `LEDGER_SCHEMA_VERSION` when the rule needs information older records cannot hold.
+3. Document the code in the table above, and add it to `_RULE_TARGETS` if it is measured.
+4. Add tests to `framework/claims/test_ledger_rules.py` for the v2 case, the v1
+   grandfathered case, and the DERIVABLE case where applicable.
+5. Run `python3 framework/claims/ledger.py analyse` against the real store and confirm
+   `invalid` is still empty. A rule that invalidates existing records is a migration, not
+   a patch.
+6. Confirm `registry_gaps()` is empty -- a code emitted anywhere but registered here is an
+   unroutable rule.
 
 ## Exit codes
 

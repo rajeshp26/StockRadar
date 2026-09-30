@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validation suite. Every check must pass before use."""
 import itertools
+import io
 import json
 import os
 import re
@@ -19,13 +20,55 @@ except Exception as _e:  # pragma: no cover - fail loud, never silent
     _RES_OK = False
     _RES_ERR = repr(_e)
 
-FAILS, WARNS = [], []
+FAILS, WARNS, SKIPS = [], [], []
 
 
-def check(name, ok, detail="", warn_only=False):
+def _resolve_profile() -> str:
+    """--profile framework|app, inferred from the host when absent.
+
+    `framework` asserts only what the framework can verify about itself, so a bare copy
+    exits 0 with its app-dependent checks reported NOT_APPLICABLE - the exit 4 verdict
+    EXIT_CODES.md already defines for an unevaluable check. `app` additionally asserts
+    rollout wiring (contracts, Playwright), which the README places under Rollout, not
+    Install. The default infers `app` once either contracts or an app manifest exist.
+    """
+    if "--profile" in sys.argv:
+        i = sys.argv.index("--profile")
+        if i + 1 < len(sys.argv) and sys.argv[i + 1] in ("framework", "app"):
+            return sys.argv[i + 1]
+        print("validate.py: --profile must be 'framework' or 'app'", file=sys.stderr)
+        sys.exit(2)
+    if Path("package.json").exists():
+        return "app"
+    cdir = Path(".planning/contracts")
+    return "app" if cdir.exists() and any(cdir.glob("*.openapi.y*ml")) else "framework"
+
+
+_PROFILE = _resolve_profile()
+
+
+def _verdict(ok, warn_only=False, app_only=False, profile=None):
+    """Bucket a check lands in: PASS | FAIL | WARN | NOT_APPLICABLE.
+
+    NOT_APPLICABLE deliberately outranks PASS: a profile that declines to assert a class
+    of checks must keep saying so even when the underlying file happens to exist, or
+    "not asserted" becomes indistinguishable from "asserted and passed".
+    """
+    if app_only and (profile if profile is not None else _PROFILE) == "framework":
+        return "NOT_APPLICABLE"
     if ok:
+        return "PASS"
+    return "WARN" if warn_only else "FAIL"
+
+
+def check(name, ok, detail="", warn_only=False, app_only=False):
+    v = _verdict(ok, warn_only, app_only)
+    if v == "PASS":
         print(f"  PASS  {name}")
-    elif warn_only:
+    elif v == "NOT_APPLICABLE":
+        SKIPS.append(f"{name}: {detail}")
+        print(f"  N/A  {name} — not asserted under --profile framework")
+    elif v == "WARN":
         WARNS.append(f"{name}: {detail}"); print(f"  WARN  {name} — {detail}")
     else:
         FAILS.append(f"{name}: {detail}"); print(f"  FAIL  {name} — {detail}")
@@ -280,12 +323,14 @@ print("\n[11] Contract fixture")
 _cdir = Path(".planning/contracts")
 _schemas = sorted(_cdir.glob("*.openapi.y*ml")) if _cdir.exists() else []
 check("openapi schema present", bool(_schemas),
-      "v1 contracts are HTTP/OpenAPI only; no schema means G1 has nothing to enforce")
+      "v1 contracts are HTTP/OpenAPI only; no schema means G1 has nothing to enforce",
+      app_only=True)
 
 _tdir = Path("tests/contract")
 _ctests = sorted(_tdir.glob("test_*.py")) if _tdir.exists() else []
 check("contract tests present", bool(_ctests),
-      "a contract without executable tests is documentation, not a gate")
+      "a contract without executable tests is documentation, not a gate",
+      app_only=True)
 
 for _s in _schemas:
     _meta = _s.with_name(_s.name.split(".")[0] + ".meta.yaml")
@@ -470,7 +515,8 @@ check("plugin directory present", _plugin_dir_ok,
 
 _app = Path("package.json")
 check("frontend app manifest exists", _app.exists(),
-      "Playwright needs an application to drive; a contract type file is not an app")
+      "Playwright needs an application to drive; a contract type file is not an app",
+      app_only=True)
 if _app.exists():
     import json as _j
     _d = _j.loads(_app.read_text())
@@ -482,14 +528,16 @@ if _app.exists():
           "the project standardises on motion/react")
 
 _pwc = Path("playwright.config.ts")
-check("playwright config exists", _pwc.exists(), "no config means no baseURL and no viewports")
+check("playwright config exists", _pwc.exists(), "no config means no baseURL and no viewports",
+      app_only=True)
 if _pwc.exists():
     _tw = _pwc.read_text()
     check("at least two viewport projects", _tw.count("name:") >= 2,
           "a responsive claim needs more than one rendered width")
 
 _spec = list(Path("tests/e2e").glob("*.spec.ts")) if Path("tests/e2e").exists() else []
-check("browser specs exist", len(_spec) >= 1, "G6 cannot pass without committed specs")
+check("browser specs exist", len(_spec) >= 1, "G6 cannot pass without committed specs",
+      app_only=True)
 
 
 # ── 13. exit code contract + host adapter ────────────────────────────────
@@ -926,8 +974,15 @@ if _mf.exists():
         check("cached state root belongs to this checkout",
               os.path.abspath(_sr).startswith(os.getcwd()),
               f"cache points at {_sr} — a packaged tree would read another machine's state")
-check("manifest cache is gitignored",
-      Path(".gitignore").exists() and "framework/.manifest" in Path(".gitignore").read_text(),
+_MANIFEST_IGNORE_RULES = ((Path("framework/.gitignore"), ".manifest"),
+                          (Path(".gitignore"), "framework/.manifest"))
+
+
+def _manifest_cache_ignored():
+    return any(p.exists() and pat in p.read_text() for p, pat in _MANIFEST_IGNORE_RULES)
+
+
+check("manifest cache is gitignored", _manifest_cache_ignored(),
       "a committed manifest carries the packager's absolute paths into every clone")
 check("manifest cache is validated before use",
       "_cache_valid" in Path("framework/adapters/gsd_state.py").read_text(),
@@ -1588,6 +1643,7 @@ def _suite_22():
            '"statement":"full-provenance claim",'
            '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"high",'
            '"verified_by":"bash framework/gates/g11_evidence.sh",'
+           '"does_not_prove":"proves g11 accepts a well-formed record; not that the claim is generally true",'
            '"independent_check":"python3 framework/claims/ledger.py analyse",'
            '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
            '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
@@ -1626,6 +1682,7 @@ def _suite_22():
            '"statement":"corrupt claim fixed by re-append",'
            '"claim_type":"data","classification":"FACT","status":"VERIFIED","impact":"low",'
            '"verified_by":"bash framework/gates/g11_evidence.sh",'
+           '"does_not_prove":"proves latest-wins supersession only; not the underlying data",'
            '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
            '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh22(_LG + " append --json '%s'" % _gf)
@@ -1635,6 +1692,22 @@ def _suite_22():
     check("g11 passes after the corrupt claim is superseded",
           _r == 0 and "PASS" in _o, (_o or "")[-200:])
 
+
+    # A rule that postdates a record may not judge it. This writes a v1 record (no
+    # schema_version) straight to the store, the way a pre-versioning ledger holds it,
+    # and proves the v2 scope-limit rule leaves it valid while still reporting it.
+    _v1 = ('{"claim_id":"CLM-998","task_id":"V22-998","agent":"hand",'
+           '"statement":"legacy record written before scope limits were required",'
+           '"claim_type":"data","classification":"FACT","status":"VERIFIED","impact":"low",'
+           '"verified_by":"bash framework/gates/g11_evidence.sh",'
+           '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
+           '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
+    with (_bd22 / ".planning" / "claims" / "ledger.jsonl").open("a", encoding="utf-8") as _fh:
+        _fh.write(_v1 + "\n")
+    _r, _o = _wsh22(_LG + " analyse")
+    check("a v1 record escapes a v2 rule and is reported as grandfathered, not invalid",
+          _r == 0 and "CLM-998" in _o and "CLAIM_VERIFIED_NO_SCOPE_LIMIT" in _o,
+          (_o or "")[-300:])
     shutil.rmtree(_bd22, ignore_errors=True)
 
 
@@ -1831,6 +1904,7 @@ def _suite_24():
            '"statement":"recorded runtime binding",'
            '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
            '"verified_by":"bash framework/gates/g11_evidence.sh",'
+           '"does_not_prove":"proves an RT- id resolves; not that it is the production runtime",'
            '"evidence":[{"kind":"command_run","runtime":"RT-0001",'
            '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh24(_LG24 + " append --json '%s'" % _c1)
@@ -1851,6 +1925,7 @@ def _suite_24():
            '"statement":"free-form legacy runtime stays legal",'
            '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
            '"verified_by":"bash framework/gates/g11_evidence.sh",'
+           '"does_not_prove":"proves a free-form runtime string is accepted; it binds no recorded context",'
            '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
            '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh24(_LG24 + " append --json '%s'" % _c3)
@@ -2065,6 +2140,7 @@ def _suite_26():
              '"statement":"env-bound claim",'
              '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
              '"verified_by":"bash framework/gates/g11_evidence.sh",'
+             '"does_not_prove":"proves an ENV- id resolves; not that it matches the claim runtime",'
              '"evidence":[{"kind":"command_run","runtime":"local-wsl","env":"ENV-0001",'
              '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26a)
@@ -2083,6 +2159,7 @@ def _suite_26():
              '"statement":"free-form env stays legal",'
              '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
              '"verified_by":"bash framework/gates/g11_evidence.sh",'
+             '"does_not_prove":"proves a free-form env string is accepted; it resolves no recorded env",'
              '"evidence":[{"kind":"command_run","runtime":"local-wsl","env":"local-wsl",'
              '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26c)
@@ -2130,6 +2207,7 @@ def _suite_26():
              '"statement":"independently checked",'
              '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"high",'
              '"verified_by":"bash framework/gates/g11_evidence.sh",'
+             '"does_not_prove":"proves a second command is accepted; not that the two are truly independent",'
              '"independent_check":"python3 framework/claims/ledger.py analyse",'
              '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
              '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"pass"}]}')
@@ -2140,6 +2218,7 @@ def _suite_26():
              '"statement":"provenance without verdict",'
              '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
              '"verified_by":"bash framework/gates/g11_evidence.sh",'
+             '"does_not_prove":"proves inconclusive provenance is accepted; establishes nothing about the claim",'
              '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
              '"entry_point":"framework/gates/g11_evidence.sh","reproduced":true,"result":"inconclusive"}]}')
     _r, _o = _wsh26(_LG26 + " append --json '%s'" % _c26i)
@@ -2368,6 +2447,7 @@ def _suite_28():
                 '"statement":"integrity-clean claim",'
                 '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
                 '"verified_by":"bash framework/claims/ledger.py integrity",'
+                '"does_not_prove":"proves E1-E8 accept a well-formed record; not that the claim is generally true",'
                 '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
                 '"entry_point":"framework/claims/ledger.py analyse","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh28(_LG28 + " append --json '%s'" % _clean28)
@@ -2382,6 +2462,7 @@ def _suite_28():
                 '"statement":"evidence names a nonexistent artifact",'
                 '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
                 '"verified_by":"bash framework/claims/ledger.py integrity",'
+                '"does_not_prove":"proves append cannot see the filesystem; existence is judged at E2",'
                 '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
                 '"entry_point":"framework/claims/nonexistent_artifact.py","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh28(_LG28 + " append --json '%s'" % _bogus28)
@@ -2406,6 +2487,7 @@ def _suite_28():
                 '"statement":"reuses prior task evidence verbatim",'
                 '"claim_type":"behavioral","classification":"FACT","status":"VERIFIED","impact":"low",'
                 '"verified_by":"bash framework/claims/ledger.py integrity",'
+                '"does_not_prove":"proves the record is individually valid; reuse is judged at E8",'
                 '"evidence":[{"kind":"command_run","runtime":"local-wsl",'
                 '"entry_point":"framework/claims/ledger.py analyse","reproduced":true,"result":"pass"}]}')
     _r, _o = _wsh28(_LG28 + " append --json '%s'" % _reuse28)
@@ -2613,21 +2695,117 @@ check("falsy/None task id refused loudly (EXT-CRITIQUE-02)",
       "task_id_none_guard=" + str(_selftest36.get("task_id_none_guard")))
 
 print("\n[37] Contract-validator bool guard (EXT-CRITIQUE-07, bool is an int subclass)")
-_r37 = subprocess.run([sys.executable, "tests/contract/test_validator_types.py"],
+_r37 = subprocess.run([sys.executable, "framework/contracts/test_validator_types.py"],
                       capture_output=True, text=True, timeout=180)
 check("validator rejects bool for integer/number (EXT-CRITIQUE-07)",
       _r37.returncode == 0 and "3/3 contract tests passed" in _r37.stdout,
       (_r37.stdout + _r37.stderr)[-400:])
+
+print("\n[38] Verification-module state handling (EXT-CRITIQUE-03/04/05)")
+# recovery/review_loop/suspicion_log wrote shared JSON with a truncating write and
+# no lock around read-modify-write, and resolved the state root through a bare
+# `python3` addressed relative to CWD - a combination that failed silently into
+# the wrong state root rather than raising.
+_r38 = subprocess.run([sys.executable, "framework/verification/test_state_concurrency.py"],
+                      capture_output=True, text=True, timeout=300)
+check("verification state tests pass (atomic write, locked RMW, state root)",
+      _r38.returncode == 0 and "VERIFICATION-STATE-TESTS: PASS" in _r38.stdout,
+      (_r38.stdout + _r38.stderr)[-400:])
+
+print("\n[39] Standalone guard negative paths (surface accounting)")
+# standalone_check.py had only ever been observed to exit 0, so its ability to
+# refuse was unproved. Its accounting compared a count of staged entries against
+# len(REQUIRED), which the optional .gitattributes entry inflated - a scaffold
+# missing a required entry satisfied the count. Red phase: 3 of 6 checks fail.
+_r39 = subprocess.run([sys.executable, "framework/test_standalone_check.py"],
+                      capture_output=True, text=True, timeout=300)
+check("standalone guard refuses an incomplete surface and reports failures",
+      _r39.returncode == 0 and "STANDALONE-GUARD-TESTS: PASS" in _r39.stdout,
+      (_r39.stdout + _r39.stderr)[-400:])
+
+print("\n[40] Bounded atomic-replace retry (transient Windows sharing violation)")
+# os.replace raises PermissionError on Windows when the target is held open without
+# FILE_SHARE_DELETE, failing the write outright for every caller of the shared
+# primitive. The retry is PermissionError-only and finite, so a permanent ENOSPC still
+# surfaces instead of being masked. Red phase: 9 of 11 executed checks pass, 2 fail, exit 1.
+_r40 = subprocess.run([sys.executable, "framework/adapters/test_atomic_write.py"],
+                      capture_output=True, text=True, timeout=300)
+check("atomic write recovers the transient violation without masking a permanent one",
+      _r40.returncode == 0 and "ATOMIC-WRITE-TESTS: PASS" in _r40.stdout,
+      (_r40.stdout + _r40.stderr)[-400:])
+
+print("\n[41] Validation profile contract (N/A is not a renamed WARN)")
+# The five rollout checks were `warn_only=True`, which let a bare copy print
+# VALIDATION PASSED with app capabilities silently absent. They now report
+# NOT_APPLICABLE under --profile framework, the exit-4 verdict EXIT_CODES.md already
+# defines. These pin N/A as a distinct bucket so it cannot drift back into the
+# suppression it replaced.
+check("app_only under --profile framework is NOT_APPLICABLE, never WARN",
+      _verdict(False, app_only=True, profile="framework") == "NOT_APPLICABLE")
+check("app_only under --profile app is asserted, never N/A",
+      _verdict(False, app_only=True, profile="app") == "FAIL")
+check("app_only outranks PASS: a present file is still not asserted",
+      _verdict(True, app_only=True, profile="framework") == "NOT_APPLICABLE")
+check("warn_only is unaffected by the profile split",
+      _verdict(False, warn_only=True, profile="framework") == "WARN")
+check("a plain failing check still FAILs under either profile",
+      _verdict(False, profile="framework") == "FAIL" and _verdict(False, profile="app") == "FAIL")
+check("a passing check still PASSes under either profile",
+      _verdict(True, profile="framework") == "PASS" and _verdict(True, profile="app") == "PASS")
+
+_ARGV41, _ERR41 = sys.argv, sys.stderr
+try:
+    sys.argv = ["validate.py", "--profile", "bogus"]
+    _code41 = None
+    try:
+        sys.stderr = io.StringIO()
+        _resolve_profile()
+    except SystemExit as _e:
+        _code41 = _e.code
+    finally:
+        sys.stderr = _ERR41
+    check("an unknown --profile is BLOCKED (2), never silently defaulted",
+          _code41 == 2, f"got {_code41}")
+    sys.argv = ["validate.py", "--profile", "app"]
+    check("--profile app is honoured over host inference", _resolve_profile() == "app")
+    sys.argv = ["validate.py", "--profile", "framework"]
+    check("--profile framework is honoured over host inference", _resolve_profile() == "framework")
+    sys.argv = ["validate.py"]
+    check("an absent --profile still infers a valid profile from the host",
+          _resolve_profile() in ("framework", "app"))
+finally:
+    sys.argv, sys.stderr = _ARGV41, _ERR41
+
+_src41 = Path("framework/validate.py").read_text(encoding="utf-8")
+check("the summary reports the N/A count, so exit 0 is not read as 'everything ran'",
+      "not-applicable" in _src41 and "NOT_APPLICABLE under --profile" in _src41)
+
+_ROUTED41 = ("openapi schema present", "contract tests present",
+             "frontend app manifest exists", "playwright config exists", "browser specs exist")
+if _PROFILE == "framework":
+    _absent41 = [n for n in _ROUTED41 if not any(s.startswith(n) for s in SKIPS)]
+    check("all five rollout checks report NOT_APPLICABLE, none silently WARN",
+          not _absent41, f"absent from SKIPS: {_absent41}")
+else:
+    _leaked41 = [n for n in _ROUTED41 if any(s.startswith(n) for s in WARNS)]
+    check("all five rollout checks are asserted under --profile app, none downgraded to WARN",
+          not _leaked41, f"downgraded to WARN: {_leaked41}")
 
 print("\n" + "=" * 60)
 if WARNS:
     print(f"{len(WARNS)} warning(s):")
     for w in WARNS:
         print(f"  - {w}")
+if SKIPS:
+    print(f"{len(SKIPS)} check(s) NOT_APPLICABLE under --profile {_PROFILE} "
+          "(never counted as a pass; re-run with --profile app to assert them):")
+    for s in SKIPS:
+        print(f"  - {s}")
 if FAILS:
     print(f"\n{len(FAILS)} FAILURE(S) — do not use the framework until resolved:")
     for f in FAILS:
         print(f"  - {f}")
     sys.exit(1)
-print("VALIDATION PASSED")
+print(f"VALIDATION PASSED  [profile={_PROFILE}; "
+      f"{len(FAILS)} fail, {len(WARNS)} warn, {len(SKIPS)} not-applicable]")
 

@@ -22,7 +22,6 @@ import json
 import os
 import re
 import statistics as st
-import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -102,14 +101,34 @@ def legacy_gate_state(result_str):
 
 
 def state_root() -> str:
+    """Resolve the state root through the one adapter, or announce the fallback.
+
+    WHY this is not `except Exception: pass`: report.py reads the task contracts and
+    records that every other adapter wrote. Substituting a guessed root without a word
+    yields a report computed from state nothing else touches -- plausible, wrong, and
+    invisible to whoever tunes the models from it. The fallback is announced on stderr.
+
+    SystemExit (the adapter's AMBIGUOUS / UNSUPPORTED distribution contract) is
+    deliberately not caught: fail-closed beats a degraded report. Ordinary resolution
+    failures degrade to an announced fallback, because report.py only ever reads.
+    """
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
     try:
-        out = subprocess.run([sys.executable, "framework/adapters/gsd_state.py", "state-root"],
-                             cwd=ROOT, capture_output=True, text=True, timeout=20)
-        p = out.stdout.strip()
-        if p and os.path.isdir(p):
+        from framework.adapters.gsd_state import root as _gsd_state_root
+
+        p = str(_gsd_state_root())
+        if os.path.isdir(p):
             return p
-    except Exception:
-        pass
+        reason = f"resolved root is not a directory: {p}"
+    except Exception as exc:  # degrade loudly, never silently
+        reason = f"{type(exc).__name__}: {exc}"
+    print(
+        f"WARNING: could not resolve the GSD state root ({reason}); falling back to "
+        f"{os.path.join(ROOT, '.planning')}. The report below may reflect state that no "
+        f"other adapter writes to.",
+        file=sys.stderr,
+    )
     return os.path.join(ROOT, ".planning")
 
 

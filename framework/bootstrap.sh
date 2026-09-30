@@ -55,7 +55,7 @@ for cap,info in m['capabilities'].items():
 "
 
 step "5/7 Agent, tool, plugin and permission artifacts"
-for f in opencode.json AGENTS.md .opencode/tools/context-builder.ts .opencode/plugins/telemetry.ts; do
+for f in opencode.json AGENTS.md .opencode/tools/context-builder.ts .opencode/plugin/telemetry.ts; do
   [ -e "$f" ] || die "missing $f"
 done
 ls .opencode/agents/*.md | wc -l | xargs printf ' agent definitions: %s\n'

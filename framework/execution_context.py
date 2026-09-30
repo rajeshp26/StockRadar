@@ -39,16 +39,15 @@ RUNTIME_ID_RE = re.compile(r"^RT-\d+$")
 ENV_ID_RE = re.compile(r"^ENV-\d+$")
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from framework.adapters.gsd_state import root as _gsd_state_root
+
+
 def _state_root() -> Path:
-    """Resolve the GSD state root exactly the way the rest of the framework does."""
-    try:
-        r = subprocess.run(["python3", "framework/adapters/gsd_state.py", "state-root"],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-    except Exception:
-        pass
-    return Path(".planning")
+    """Delegate to the single source of GSD state-root resolution."""
+    return _gsd_state_root()
 
 
 def context_path() -> Path:

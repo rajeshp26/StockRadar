@@ -38,7 +38,9 @@ except Exception:
     sys.exit(0)
 broken = d.get('broken_tasks', 0)
 if broken:
-    print('FAIL|%d broken task(s) in store' % broken)
+    ids = d.get('broken_task_ids') or []
+    named = ', '.join(ids) if ids else 'ids not reported'
+    print('FAIL|%d broken task(s) in store: %s' % (broken, named))
     sys.exit(0)
 if d.get('tasks_total', 0) == 0 and not d.get('ledger_present', False):
     print('NOT_APPLICABLE|no tasks, no ledger')
