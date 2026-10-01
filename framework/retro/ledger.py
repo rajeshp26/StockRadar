@@ -70,7 +70,7 @@ _BACKFILL_SITES = {
     "EXT-CRITIQUE-03": "framework/gates/g_entry.sh",
     "EXT-CRITIQUE-05": ".lifecycle",
     "EXT-CRITIQUE-07": "framework/contracts/validator.py",
-    "TELEMETRY-RCA": "opencode/plugin/telemetry.ts",
+    "TELEMETRY-RCA": ".opencode/plugin/telemetry.ts",
     "PRICE-HISTORY-COMPRESSOR": "shared/price_rows.py",
 }
 
