@@ -17,9 +17,13 @@ Three constraints prevent it here:
    argue the list shorter or pad it longer.
 2. **Recommendations come from a closed list.** `containment_map.yaml` enumerates every fix
    target, each one a file plus a check that proves the change landed. Prose is not an option.
-3. **Recurrence is detected structurally.** The ledger signature is built from injection phase,
-   defect class, primary gap, and escaped checkpoints — never from the task id or the written
-   description. A rephrased finding for the same structural gap still collides.
+3. **Recurrence is detected structurally, per instance.** Two computed keys, neither built from
+   the task id or the written description. The *class* key is injection phase, defect class,
+   primary gap, and escaped checkpoints — the same structural gap in different words still
+   collides. The *instance* key appends `defect_site`, and **recurrence is judged on the instance
+   key**: two findings in different files are two instances even when the class key matches, so one
+   broken place is never read as a systemic pattern and seven unrelated places are never collapsed
+   into one.
 
 ## Routing gap versus containment miss
 
@@ -37,6 +41,30 @@ Worked example. A misaligned button reaches production. G6 exists and would have
 the requirement carried no `visible_behaviour` shape, so `shape_to_gates` never appended G6. The
 naive finding is "write better Playwright assertions." The computed finding is a routing gap
 whose fix is the requirement shape. Different fix, different cost, different outcome.
+
+## Reading the ledger
+
+**Recurrence means the gap is still open, not that history exists.** The ledger is append-only and
+has no close command, so `analyse` groups entries by instance key and reports a signature as
+recurring only when it clears `RECURRENCE_THRESHOLD` *and* at least one entry in that group still
+owes a fix. Without that second condition any signature that ever recurred would hold G7 red
+permanently.
+
+**`checkpoint_pressure`** reports, per checkpoint, how many findings escaped past it and across
+how many distinct sites. A count alone is ambiguous — seven escapes is systemic if all seven came
+from one broken place and noise if they came from seven unrelated ones — so both numbers are
+reported. It is a signal that orders attention, never a gate input: it cannot pass or fail
+anything.
+
+**Amendments are immutable.** A finding is never edited. `supersede` appends a new row naming its
+target and carrying only the fields in `AMENDABLE`; `resolve_amendments()` folds those rows into
+their target at read time, so every consumer sees one logical entry while the store keeps the full
+history of what was claimed when. An amendment naming a field outside that list is refused — the
+channel cannot become a back door for rewriting an injected phase after the fact.
+
+**A production finding must name a controlled gap type.** `counterfactual.gap_type` must appear in
+`CONTROLLED_GAP_TYPES`, so "this would have been caught had the check existed" is drawn from a
+closed set rather than invented per finding.
 
 ## Usage
 
