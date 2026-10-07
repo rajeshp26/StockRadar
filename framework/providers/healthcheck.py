@@ -260,6 +260,27 @@ def record(provider: str, model: str, cls: str, detail: str = "",
     return True, "recorded"
 
 
+def observe(error_text: str, provider: str, model: str,
+            source: str = "spawn_observer", task_id: str = "") -> dict:
+    """Producer for the health ledger: classify an observed error, record it if it is a
+    provider-level blocking failure.
+
+    The ledger had a consumer (check / g12) and a vocabulary, but no producer: on
+    2026-09-06 a human recorded the credit failure by hand and nothing has written to it
+    since, although spawns kept failing the same way. Uses classify() and record() as they
+    are -- no second lexer, no new classes. A worker-level class or unrecognised text is
+    NOT recorded: observation must not manufacture provider failures.
+    """
+    cls, _rule = classify(error_text or "")
+    if cls is None:
+        return {"class": None, "recorded": False, "reason": "no provider failure rule matched"}
+    if cls not in BLOCKING_CLASSES:
+        return {"class": cls, "recorded": False, "reason": "worker-level class, not a provider failure"}
+    ok, msg = record(provider, model, cls, detail=(error_text or "")[:300],
+                     source=source, task_id=task_id)
+    return {"class": cls, "recorded": ok, "detail": msg}
+
+
 # --- pre-flight check -------------------------------------------------------
 
 def _resolved_models() -> dict[str, str]:
@@ -405,6 +426,26 @@ def _selftest() -> int:
     cls4, _ = classify("401: insufficient credits on this key")
     t("S4 first-match order (401 -> AUTH_FAILURE)", cls4 == "AUTH_FAILURE", str(cls4))
 
+    # S9 observe: a provider failure is recorded (and then blocks); noise is not
+    with tempfile.TemporaryDirectory() as td:
+        old = os.environ.get("PROVIDER_HEALTH_FILE")
+        os.environ["PROVIDER_HEALTH_FILE"] = str(Path(td) / "health.jsonl")
+        try:
+            o1 = observe("Insufficient credits. This account never purchased credits.",
+                         "opencode", "opencode/big-pickle")
+            t("S9a observe records the credit failure", o1["class"] == "QUOTA_FAILURE" and o1["recorded"], str(o1))
+            o2 = observe("all good here", "opencode", "opencode/big-pickle")
+            t("S9b observe does not record noise", not o2["recorded"] and o2["class"] is None, str(o2))
+            o3 = observe("worker produced invalid work", "opencode", "opencode/big-pickle")
+            t("S9c observe records nothing for a non-provider text", not o3["recorded"], str(o3))
+            lines = (Path(td) / "health.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            t("S9d exactly one record was written", len(lines) == 1, str(len(lines)))
+        finally:
+            if old is None:
+                os.environ.pop("PROVIDER_HEALTH_FILE", None)
+            else:
+                os.environ["PROVIDER_HEALTH_FILE"] = old
+
     return 0 if all(res) else 1
 
 
@@ -425,6 +466,13 @@ def main() -> int:
     p_record.add_argument("--source", default="manual")
     p_record.add_argument("--task-id", default="")
 
+    p_obs = sub.add_parser("observe", help="classify an observed error and record it if it is a provider failure")
+    p_obs.add_argument("--error", required=True)
+    p_obs.add_argument("--provider", required=True)
+    p_obs.add_argument("--model", required=True)
+    p_obs.add_argument("--source", default="spawn_observer")
+    p_obs.add_argument("--task-id", default="")
+
     sub.add_parser("check", help="pre-flight verdict: pass|fail|blocked|not_applicable")
     sub.add_parser("resolve", help="print per-agent model resolution (fail-closed)")
     sub.add_parser("inventory", help="query `opencode models` (ground truth)")
@@ -441,6 +489,11 @@ def main() -> int:
         ok, msg = record(args.provider, args.model, args.cls, args.detail, args.source, args.task_id)
         print(msg)
         return 0 if ok else 1
+
+    if args.cmd == "observe":
+        out = observe(args.error, args.provider, args.model, args.source, args.task_id)
+        print(json.dumps(out))
+        return 1 if (out["class"] and out["class"] in BLOCKING_CLASSES and not out["recorded"]) else 0
 
     if args.cmd == "check":
         report = check()

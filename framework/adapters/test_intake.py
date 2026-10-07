@@ -236,6 +236,51 @@ def test_coverage_excludes_terminal_tasks(store):
     assert intake.coverage()["tasks_unbound"] == []
 
 
+# --- I2 is enforced at completion, and reported truthfully everywhere -----
+# Before this change coverage() hard-coded I2 to True and exited 0 with an open ASK, so
+# "every ASK terminates" was a documented invariant with no consumer able to fail on it.
+
+def test_coverage_reports_open_ask_but_default_exit_is_unchanged(store):
+    intake.capture({"session_id": "s", "original_text": "still open"})
+    rep = intake.coverage()
+    assert rep["invariants"]["I2_every_ask_terminates"] is False
+    assert [u["ask_id"] for u in rep["asks_unterminated"]] == ["ASK-001"]
+    assert rep["completion_mode"] is False
+
+
+def test_coverage_completion_fails_on_open_ask(store):
+    intake.capture({"session_id": "s", "original_text": "still open"})
+    with pytest.raises(SystemExit) as e:
+        intake.coverage(completion=True)
+    assert e.value.code == 1
+
+
+def test_coverage_completion_passes_when_every_ask_terminated(store):
+    a = intake.capture({"session_id": "s", "original_text": "done"})["ask_id"]
+    b = intake.capture({"session_id": "s", "original_text": "later"})["ask_id"]
+    for st in ("CONFIRMED", "PLANNED", "EXECUTING", "COMPLETED"):
+        intake.transition(a, {"status": st})
+    intake.transition(b, {"status": "DEFERRED"})
+    rep = intake.coverage(completion=True)
+    assert rep["invariants"]["I2_every_ask_terminates"] is True
+    assert rep["asks_unterminated"] == []
+
+
+def test_coverage_completion_with_no_asks_passes(store):
+    assert intake.coverage(completion=True)["asks_total"] == 0
+
+
+def test_coverage_completion_cli_exit_codes(store):
+    import os
+    env = dict(os.environ, INTAKE_ROOT=str(store))
+    intake.capture({"session_id": "s", "original_text": "open"})
+    run = lambda *a: subprocess.run([sys.executable, str(ADAPTER), *a],
+                                    capture_output=True, text=True, env=env)
+    assert run("coverage").returncode == 0
+    p = run("coverage", "--completion")
+    assert p.returncode == 1 and "I2 VIOLATED" in p.stderr and "ASK-001" in p.stderr
+
+
 # --- the gate itself ------------------------------------------------------
 
 def test_selftest_passes(store, monkeypatch):

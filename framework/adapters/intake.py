@@ -27,7 +27,7 @@ CLI:
   transition --id ASK-001 --json '{"status":"CONFIRMED"}'
   show --id ASK-001
   list
-  coverage
+  coverage [--completion]
   verify-task --id T-01
   selftest
 """
@@ -381,8 +381,16 @@ def verify_task(task_id: str) -> dict:
             "ask_status": asks()[aid]["status"]}
 
 
-def coverage() -> dict:
-    """I1 + I2 across the whole store. Exit 1 on any violation; 2 when unreadable."""
+def coverage(completion: bool = False) -> dict:
+    """I1 + I2 across the whole store. Exit 1 on any violation; 2 when unreadable.
+
+    I1 (every executable task is bound to a known ASK) always gates the exit code.
+    I2 (every ASK has terminated) is REPORTED truthfully in every mode, and gates the
+    exit code only when `completion` is true -- the caller is asserting "the work is
+    finished", and finished work with an open ASK is a violation. Without that flag an
+    open ASK is the normal state of work in progress, so the default exit code is
+    unchanged for existing callers.
+    """
     state = asks()
     unbound, executable = [], 0
     d = _tasks_dir()
@@ -408,13 +416,23 @@ def coverage() -> dict:
         "tasks_unbound": unbound,
         "invariants": {
             "I1_every_executable_task_has_ask": not unbound,
-            "I2_every_ask_terminates": True,   # asserted at completion by the caller
+            "I2_every_ask_terminates": not unterminated,
         },
+        "completion_mode": bool(completion),
     }
+    violated = False
     if unbound:
+        violated = True
         print("I1 VIOLATED: executable tasks without a bound ASK_ID:", file=sys.stderr)
         for u in unbound:
             print(f"  - {u['task_id']} ({u['state']}) ask_id={u['ask_id']}", file=sys.stderr)
+    if completion and unterminated:
+        violated = True
+        print("I2 VIOLATED: ASKs that have not terminated "
+              "(COMPLETED | DEFERRED | REJECTED):", file=sys.stderr)
+        for u in unterminated:
+            print(f"  - {u['ask_id']} ({u['status']})", file=sys.stderr)
+    if violated:
         print(json.dumps(report, indent=2))
         raise SystemExit(1)
     return report
@@ -545,7 +563,7 @@ CMDS = {
     "show": lambda a: show(a.id),
     "list": lambda a: list_asks(),
     "open": lambda a: open_asks(),
-    "coverage": lambda a: coverage(),
+    "coverage": lambda a: coverage(completion=a.completion),
     "verify-task": lambda a: verify_task(a.id),
     "selftest": lambda a: selftest(),
 }
@@ -555,6 +573,8 @@ if __name__ == "__main__":
     ap.add_argument("command", choices=sorted(CMDS))
     ap.add_argument("--id", default="")
     ap.add_argument("--json", default="")
+    ap.add_argument("--completion", action="store_true",
+                    help="coverage only: also fail (exit 1) when any ASK has not terminated")
     ap.add_argument("--json-file", default="",
                     help="read the command payload from a file instead of --json "
                          "(PowerShell-safe: avoids inline-quote mangling)")

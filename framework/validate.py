@@ -148,7 +148,22 @@ def sh(cmd, timeout=120):
 
 
 print("\n[1] Agent definitions and permissions")
-cfg = json.loads(Path("opencode.json").read_text())
+# An unreadable or unexpectedly shaped config is BLOCKED (exit 2), never a traceback and never a
+# pass: every check below reads `cfg`, so continuing on a guess would report on a different
+# project than the one under test (EXIT_CODES.md: blocked is not a pass).
+_cfg_path = Path("opencode.json")
+if not _cfg_path.exists():
+    print("BLOCKED: opencode.json not found in %s -- run validate.py from the repo root "
+          "(the .opencode/opencode.json project file is a different file)" % Path.cwd())
+    sys.exit(2)
+try:
+    cfg = json.loads(_cfg_path.read_text())
+except json.JSONDecodeError as _e:
+    print("BLOCKED: opencode.json is not valid JSON: %s" % _e)
+    sys.exit(2)
+if not isinstance(cfg.get("agent"), dict):
+    print("BLOCKED: opencode.json has no `agent` object (keys present: %s)" % ", ".join(sorted(cfg)))
+    sys.exit(2)
 agents = cfg["agent"]
 EXPECTED = ["team-lead", "researcher", "architect", "planner", "implementer", "reviewer", "verifier"]
 
