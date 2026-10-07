@@ -13,10 +13,10 @@ GATE_NAME=g1_contract
 source "$(dirname "$0")/_lib.sh"
 
 CONTRACT_DIR="$STATE_ROOT/contracts"
-[ -d "$CONTRACT_DIR" ] || { persist skip "no contracts dir"; skip "no contracts directory"; }
+[ -d "$CONTRACT_DIR" ] || { persist skip "no contracts dir"; not_applicable "no contracts directory" "{\"checked\":\"$CONTRACT_DIR\",\"exists\":false}"; }
 
 SCHEMAS=$(find "$CONTRACT_DIR" -name '*.openapi.y*ml' 2>/dev/null | sort || true)
-[ -n "$SCHEMAS" ] || { persist skip "no openapi schemas"; skip "no OpenAPI schemas"; }
+[ -n "$SCHEMAS" ] || { persist skip "no openapi schemas"; not_applicable "no OpenAPI schemas" "{\"checked\":\"*.openapi.y*ml\",\"count\":0}"; }
 
 have python3 || { persist blocked "python3 unavailable"; fail "BLOCKED: python3 required for G1"; }
 

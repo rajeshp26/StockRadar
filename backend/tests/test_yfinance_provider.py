@@ -16,7 +16,7 @@ async def test_get_stock_details_runs_in_thread():
     with mock.patch.object(provider, "get_stock_details") as mock_get:
         mock_get.return_value = mock.MagicMock(price=150.0)
 
-        # Simulate the pattern used in portfolio_service.py:enrich_holdings_with_prices
+        # Simulate the pattern used in portfolio_service.py:_enrich_holdings
         result = await asyncio.to_thread(provider.get_stock_details, "AAPL", exchange="TOR")
         assert mock_get.called
 

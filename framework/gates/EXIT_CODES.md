@@ -6,10 +6,10 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 
 | Gate | 0 | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|---|
-| G1 contract   | valid, types in sync, tests green | validation failed / CONTRACT_CHANGE | BLOCKED (python3 absent) | — | — |
-| G2 impact     | impact mapped to N tests | UNKNOWN_IMPACT | — | — | — |
-| G3 architecture | boundaries respected | boundary violation | BLOCKED (pyyaml absent) | — | — |
-| G4 executable | N checks green | ≥1 check failed | — | — | — |
+| G1 contract   | valid, types in sync, tests green | validation failed / CONTRACT_CHANGE | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no contracts dir) |
+| G2 impact     | impact mapped to N tests | UNKNOWN_IMPACT | — | — | NOT_APPLICABLE (no changes) |
+| G3 architecture | boundaries respected | boundary violation | BLOCKED (pyyaml absent) | — | NOT_APPLICABLE (no architecture rules) |
+| G4 executable | N checks green, every detected language covered by static analysis | ≥1 check failed, OR a detected language had zero checks run, OR a detected language had tests/build but no static analysis | — | — | — |
 | G5 stack      | conformant | violations found | BLOCKED (cannot evaluate) | — | NOT_APPLICABLE (no frontend) |
 | G6 browser    | specs ran and passed | specs ran and failed | **NEVER EMITTED** | UNVERIFIABLE | — |
 | G7 retro      | retros complete, no recurrence | incomplete or recurrence | BLOCKED (python3/pyyaml absent) | — | NOT_APPLICABLE (no escape trigger) |
@@ -32,6 +32,11 @@ G6 has no exit 2. Any table offering "2 = BLOCKED (no driver/config)" for G6 is 
 dangerous one: it creates a second code for the condition exit 3 exists to name. A reader who
 sees BLOCKED alongside UNVERIFIABLE will treat one of them as ignorable. Missing driver,
 missing config, and missing specs all return **3**.
+
+G6 also has no exit 4. When G6 has nothing to judge — no visible-behaviour requirement and no
+frontend source changed — it returns **3**, not 0 and not 4. Exit 0 would be the vacuous pass
+`:174` forbids; exit 4 is outside G6's vocabulary. Recording it as UNVERIFIABLE overstates the
+gap slightly and fails closed, which is the correct direction for a gate that cannot judge.
 
 ## G7 exit 4 is not a pass
 

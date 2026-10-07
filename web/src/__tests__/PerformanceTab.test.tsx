@@ -38,7 +38,7 @@ vi.mock("recharts", () => {
 vi.mock("lucide-react", () => {
     const React = require("react");
     const mkIcon = () => () => React.createElement("svg", { "data-testid": "icon" });
-    return { TrendingUp: mkIcon(), ChevronDown: mkIcon(), Check: mkIcon() };
+    return { TrendingUp: mkIcon(), ChevronDown: mkIcon(), Check: mkIcon(), BarChart3: mkIcon() };
 });
 
 import { PerformanceTab } from "@/features/portfolio/components/PerformanceTab";

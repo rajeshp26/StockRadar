@@ -1069,7 +1069,7 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> dic
     # ── 5. Fetch price_history for quarter-end close prices ───────────────
     ph_resp = (
         supabase.table("price_history")
-        .select("price_date, close_price")
+        .select("price_date, adj_close, close_price")
         .eq("company_id", company_id)
         .order("price_date", desc=False)
         .execute()
@@ -1079,7 +1079,8 @@ async def compute_and_upsert_quarterly_valuation_metrics(company_id: int) -> dic
     price_by_date: dict[str, float] = {}
     for r in ph_rows:
         d = r.get("price_date")
-        cp = _f(r.get("close_price"))
+        adj = r.get("adj_close")
+        cp = _f(adj if adj is not None else r.get("close_price"))
         if d and cp is not None:
             price_by_date[str(d)[:10]] = cp
 

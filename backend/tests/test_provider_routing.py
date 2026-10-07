@@ -1,6 +1,6 @@
 """Unit tests for DefeatBetaProvider provider routing logic."""
 
-from backend.providers.defeat_beta_provider import DefeatBetaProvider
+from providers.defeat_beta_provider import DefeatBetaProvider
 
 
 class TestProviderApplicable:

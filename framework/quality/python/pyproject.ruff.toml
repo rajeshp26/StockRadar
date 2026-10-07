@@ -1,0 +1,56 @@
+# Baseline Ruff configuration for this framework's Python code.
+#
+# Merge this [tool.ruff] block into the project's own pyproject.toml (or copy
+# this whole file to pyproject.toml if the project doesn't have one yet). G4
+# runs `ruff check .` regardless; what it actually catches depends entirely on
+# this config existing -- ruff's own defaults are pyflakes + basic pycodestyle
+# only (E4, E7, E9, F), which does NOT include magic-value or security checks.
+#
+# Verified during this framework's audit against a file containing a hardcoded
+# password, a SQL-injection-shaped string concat, subprocess(shell=True), and
+# a magic-number comparison: with this rule selection, ruff caught the
+# password (S105), the SQL pattern (S608), and the shell=True call (S602) in
+# a single fast pass -- overlapping with, and in one case catching what,
+# `bandit` on its default profile missed on the same file. G4 runs both; they
+# don't always agree, and this is a security-adjacent check worth the
+# redundancy.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "W",      # pycodestyle warnings
+    "N",      # naming conventions (pep8-naming)
+    "S",      # bandit-equivalent security rules (hardcoded passwords, SQL
+              # injection shape, shell=True, weak crypto, etc.)
+    "PLR2004",# magic-value comparisons (`if x == 42` -> name the constant)
+    "PLR0912",# too many branches
+    "PLR0913",# too many arguments
+    "B",      # flake8-bugbear (common bug-prone patterns)
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "ARG",    # unused arguments
+]
+
+# What this selection does NOT catch, so it isn't mistaken for complete:
+# - A magic number used in arithmetic rather than a comparison (`x * 86400`)
+#   is out of PLR2004's scope by design (it targets comparisons specifically).
+#   Checkstyle's MagicNumber check (java/checkstyle-magic-numbers.xml) is
+#   stricter in this respect for Java; Python has no equally strict
+#   off-the-shelf equivalent without a custom plugin.
+# - A hardcoded secret that doesn't match S105's variable-name heuristics
+#   (password/secret/token/...) or a recognizable provider format needs the
+#   gitleaks pass (framework/gates/g4_executable.sh's secrets section), not
+#   this config.
+
+ignore = [
+    "PLR0913",  # relax if the codebase already has wide constructors; tighten
+                # once real violations are triaged rather than blanket-ignored
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = ["S101", "PLR2004"]  # assert and comparison literals are normal in tests

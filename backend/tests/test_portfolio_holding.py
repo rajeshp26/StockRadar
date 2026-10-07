@@ -569,7 +569,7 @@ class TestGetHoldingAccounts:
              "symbol": "AAPL", "fiscal_year": 2024, "fiscal_month": 2},
         ]
 
-        with patch.object(service, 'enrich_holdings_with_prices') as mock_enrich:
+        with patch.object(service, '_enrich_holdings') as mock_enrich:
             mock_enrich.side_effect = lambda holdings, account_base_currency=None: [
                 {"account_id": h["account_id"], "symbol": "AAPL", "quantity": h["quantity"],
                  "total_cost": h["total_cost"], "current_value": 1800 if h["account_id"] == 1 else 900,

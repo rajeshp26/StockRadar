@@ -8,6 +8,7 @@ heavy scraping that can return partial data.
 
 import logging
 import math
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pandas as pd
@@ -40,3 +41,46 @@ def fetch_fx_rate(base: str, target: str) -> Decimal | None:
     except Exception as e:
         logger.warning("Failed to fetch FX rate for %s: %s", symbol, e)
     return None
+
+
+def fetch_fx_history(
+    base: str, target: str, start_date: date, end_date: date
+) -> list[tuple[date, Decimal]]:
+    """Fetch daily FX closes between start_date and end_date (inclusive).
+
+    Returns [(close_date, Decimal(close)), ...] ascending by close_date.
+    Every close is stamped under its ACTUAL calendar date - unlike
+    fetch_fx_rate, which only returns the most recent close. This is what
+    keeps an as-of lookup for any date in the window resolvable.
+
+    Returns an empty list on failure or empty data (never None).
+    """
+    symbol = f"{base.upper()}{target.upper()}=X"
+    try:
+        df = yf.download(
+            symbol,
+            start=start_date.isoformat(),
+            end=(end_date + timedelta(days=1)).isoformat(),
+            auto_adjust=False,
+            progress=False,
+            interval="1d",
+        )
+        if df is None or df.empty:
+            return []
+
+        close_series = df["Close"]
+        if isinstance(close_series, pd.DataFrame):
+            close_series = close_series.iloc[:, 0]
+        close_series = close_series.dropna()
+
+        out: list[tuple[date, Decimal]] = []
+        for idx, close in close_series.items():
+            ts = idx.date() if hasattr(idx, "date") else pd.Timestamp(idx).date()
+            if isinstance(close, float) and math.isnan(close):
+                continue
+            out.append((ts, Decimal(str(round(float(close), 8)))))
+        out.sort(key=lambda t: t[0])
+        return out
+    except Exception as e:
+        logger.warning("Failed to fetch FX history for %s: %s", symbol, e)
+        return []

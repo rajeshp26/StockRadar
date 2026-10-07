@@ -29,7 +29,7 @@ class PortfolioSnapshotsRepository:
                 res = (
                     self.client.table("portfolio_snapshots")
                     .select("account_id, snapshot_date, total_value, holdings_market_value, cost_basis, "
-                            "cash_balance, net_deposits, data_quality_flag")
+                            "cash_balance, net_deposits, data_quality_flag, holdings_json")
                     .in_("account_id", account_ids)
                     .gte("snapshot_date", start_date.isoformat())
                     .lte("snapshot_date", end_date.isoformat())

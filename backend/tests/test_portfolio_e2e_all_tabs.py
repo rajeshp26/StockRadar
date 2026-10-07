@@ -17,6 +17,7 @@ import os
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -575,8 +576,20 @@ def setup_mock_repo(mock_repo):
         _dividend_row("GOOGL", date(2026, 5, 1), 10.0),
         _dividend_row("XOM", date(2026, 6, 1), 30.0),
     ]
-    mock_repo.get_accounts_dividends_by_year.return_value = yr_divs
+
+    def _accounts_dividends_by_year(account_ids, fiscal_year=None):
+        if fiscal_year is None:
+            # Lifetime: YTD rows plus a prior-year dividend.
+            return yr_divs + [_dividend_row("AAPL", date(2025, 12, 1), 40.0)]
+        return yr_divs
+
+    mock_repo.get_accounts_dividends_by_year.side_effect = _accounts_dividends_by_year
     mock_repo.get_account_dividends_by_year.return_value = yr_divs
+
+    # ── Cash balances (account-currency, FX disabled in tests) ──
+    mock_repo.get_cash_balance.side_effect = (
+        lambda aid, *a, **k: Decimal("100.50") if aid == 7 else Decimal("50.25")
+    )
 
     trailing_rows = []
     for row in yr_divs:
@@ -741,6 +754,15 @@ class TestTab1_Overview:
         assert len(resp.account_breakdown) == 2
         sb = sum(a.total_value for a in resp.account_breakdown)
         assert abs(resp.net_worth - sb) < 1.0
+
+        # New fields: cash (100.50 + 50.25), lifetime dividends (YTD 65 + prior 40)
+        assert resp.cash_balance == 150.75
+        assert abs(resp.total_value - (resp.net_worth + resp.cash_balance)) < 0.01
+        assert abs(resp.ytd_dividends - 65.0) < 0.01
+        assert abs(resp.total_dividends - 105.0) < 0.01
+        cash_by_acct = {a.account_id: a.cash_balance for a in resp.account_breakdown}
+        assert cash_by_acct[7] == 100.50
+        assert cash_by_acct[8] == 50.25
 
         print(f"  [OK] Overview: worth=${resp.net_worth:,.2f}, "
               f"cost=${resp.total_cost_basis:,.2f}, "

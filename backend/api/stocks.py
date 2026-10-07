@@ -49,6 +49,8 @@ class PriceHistoryPoint(BaseModel):
     low: float | None = None
     close: float | None = None
     volume: int | None = None
+    adj_close: float | None = None
+    adjustment_factor: float | None = None
 
 
 class PriceHistoryResponse(BaseModel):
@@ -119,7 +121,10 @@ async def get_price_history(
         # Query price_history
         rows = (
             supabase.table("price_history")
-            .select("price_date, open_price, high_price, low_price, close_price, volume")
+            .select(
+                "price_date, open_price, high_price, low_price, close_price, "
+                "volume, adj_close, adjustment_factor"
+            )
             .eq("company_id", company_id)
             .gte("price_date", start.isoformat())
             .lte("price_date", end.isoformat())
@@ -136,6 +141,8 @@ async def get_price_history(
                     low=r.get("low_price"),
                     close=r.get("close_price"),
                     volume=r.get("volume"),
+                    adj_close=r.get("adj_close"),
+                    adjustment_factor=r.get("adjustment_factor"),
                 )
                 for r in rows.data
             ]

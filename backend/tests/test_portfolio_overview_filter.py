@@ -2,6 +2,7 @@
 Tests for portfolio overview account filtering.
 """
 from unittest.mock import AsyncMock, MagicMock, patch
+from decimal import Decimal
 
 import pytest
 
@@ -20,6 +21,8 @@ def mock_overview_repo():
         {"company_id": 2, "symbol": "GOOGL", "sector": "Technology", "security_type": "stock", "quantity": 5, "total_cost": 25000, "account_id": 2, "account_name": "RRSP", "currency": "USD"},
     ]
     repo.get_account_dividends_by_year.return_value = []
+    repo.get_accounts_dividends_by_year.return_value = []
+    repo.get_cash_balance.return_value = Decimal("0.00")
     return repo
 
 
@@ -59,29 +62,39 @@ MOCK_HOLDINGS = [
 class TestGetUserPortfolioOverviewFiltering:
 
     async def test_overview_no_filter(self, service, mock_overview_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_user_portfolio_overview(1)
         assert result["success"]
         assert len(result.get("account_breakdown", [])) == 2
+        # New fields present with holdings-only semantics preserved
+        assert result["net_worth"] == 80000.0
+        assert result["total_value"] == 80000.0
+        assert result["cash_balance"] == 0.0
+        assert result["total_dividends"] == 0.0
+        assert result["ytd_dividends"] == 0.0
+        assert all("cash_balance" in acct for acct in result["account_breakdown"])
 
     async def test_overview_filter_single_account(self, service, mock_overview_repo):
         mock_overview_repo.get_user_all_holdings.return_value = [
             {"company_id": 1, "symbol": "AAPL", "sector": "Technology", "security_type": "stock", "quantity": 10, "total_cost": 40000, "account_id": 1, "account_name": "TFSA", "currency": "USD"},
         ]
         single = [_make_holding("AAPL", 50000, 40000, account_id=1)]
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=single)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=single)):
             result = await service.get_user_portfolio_overview(1, account_ids=[1])
         assert result["success"]
         assert result["net_worth"] == 50000.0
+        assert result["total_value"] == 50000.0
+        assert result["cash_balance"] == 0.0
+        assert result["total_dividends"] == 0.0
 
     async def test_overview_filter_invalid_ids_returns_empty(self, service, mock_overview_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=[])):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=[])):
             result = await service.get_user_portfolio_overview(1, account_ids=[999])
         assert not result["success"]
         assert "error" in result
 
     async def test_overview_filter_multiple_accounts(self, service, mock_overview_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_user_portfolio_overview(1, account_ids=[1, 2])
         assert result["success"]
         assert len(result.get("account_breakdown", [])) == 2
@@ -94,7 +107,7 @@ class TestGetUserPortfolioOverviewFiltering:
             {"company_id": 1, "symbol": "AAPL", "sector": "Technology", "security_type": "stock", "quantity": 10, "total_cost": 40000, "account_id": 1, "account_name": "TFSA", "currency": "USD"},
         ]
         single = [_make_holding("AAPL", 50000, 40000, account_id=1)]
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=single)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=single)):
             result = await service.get_user_portfolio_overview(1, account_ids=[1, 2, 3])
         assert result["success"]
         assert result["net_worth"] == 50000.0

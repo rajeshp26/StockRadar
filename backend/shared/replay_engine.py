@@ -2,17 +2,21 @@
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, ClassVar
 
 from infrastructure.repositories.event_store import EventStore
+from shared import debug_trace
+from shared.cdr_utils import EXCHANGE_OVERRIDE_TOR, classify_lot_legs
+from shared.fx_service import UNSTAMPED_CURRENCY, convert_cash_map, normalize_currency
 from shared.snapshot_builder import (
     TIER_QUALITY_MAP,
     PriceTier,
     _resolve_holding_price,
     convert_holding_fx,
 )
+from shared.split_utils import extract_event_date
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,9 @@ class AccountState:
     cash_balance: Decimal = Decimal("0.00")
     net_deposits: Decimal = Decimal("0.00")
     holdings: dict[int, HoldingState] = field(default_factory=dict)
+    checkpoint_date: date | None = None
+    cash_by_currency: dict[str, Decimal] = field(default_factory=dict)
+    net_deposits_by_currency: dict[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass
@@ -61,20 +68,109 @@ def _decimal(val: Any) -> Decimal:
     return Decimal(str(val)) if val is not None else Decimal("0")
 
 
+def _bucket(target: dict[str, Decimal], code: str, amount: Decimal) -> None:
+    target[code] = target.get(code, Decimal("0.00")) + amount
+
+
+def _load_cash_from_checkpoint(state: AccountState, data: dict) -> None:
+    """Reset cash from a checkpoint, bucketing it as UNSTAMPED.
+
+    A checkpoint stores a single already-currency-aware total, so there is no
+    currency to attribute it to. It resets rather than accumulates because the
+    checkpoint is a state projection, not a historical fact.
+    """
+    state.cash_balance = _decimal(data.get("cash_balance"))
+    state.net_deposits = _decimal(data.get("net_deposits"))
+    state.cash_by_currency = {}
+    state.net_deposits_by_currency = {}
+    if state.cash_balance != 0:
+        state.cash_by_currency[UNSTAMPED_CURRENCY] = state.cash_balance
+    if state.net_deposits != 0:
+        state.net_deposits_by_currency[UNSTAMPED_CURRENCY] = state.net_deposits
+
+
+def _cash_view(
+    by_currency: dict[str, Decimal], scalar: Decimal
+) -> dict[str, Decimal]:
+    """Never let a populated scalar fall through an empty currency map.
+
+    Callers and tests construct AccountState directly with only `cash_balance`.
+    Treating an absent map as zero cash would silently zero those snapshots, so an
+    unmapped scalar is attributed to the account currency rather than discarded.
+    """
+    if by_currency:
+        return by_currency
+    return {UNSTAMPED_CURRENCY: scalar} if scalar != 0 else {}
+
+
+def _cdr_lot_legs(
+    holdings: dict[int, HoldingState],
+    cdr_lots: dict[int, dict[str, Decimal]] | None,
+    derived_cdr_companies: set[int] | None,
+) -> list[tuple[int, HoldingState, str | None]]:
+    """Expand replayed holdings into per-lot legs where lot evidence exists. BLK-027.
+
+    Replay cannot label its own lots: stored ``transaction_imported`` events carry no
+    ``security_name`` or ``exchange_override``, so every event lot looks direct. Taking
+    that at face value undervalues every CDR tenfold, which is the mirror image of the
+    defect being fixed. Lot provenance therefore comes from ``portfolio_transactions``
+    and must be passed in.
+
+    A leg kind of None means "no lot evidence for this company", and leaves the caller
+    on its company-keyed path, so omitting ``cdr_lots`` preserves existing behaviour
+    exactly.
+    """
+    legs: list[tuple[int, HoldingState, str | None]] = []
+    for cid, holding in holdings.items():
+        lots = cdr_lots.get(cid) if cdr_lots else None
+        if not lots:
+            legs.append((cid, holding, None))
+            continue
+
+        leg_defs, notes = classify_lot_legs(
+            quantity=holding.quantity,
+            total_cost=holding.total_cost,
+            lots=lots,
+            company_is_cdr=bool(derived_cdr_companies and cid in derived_cdr_companies),
+            context=f"company {cid} ({holding.symbol})",
+        )
+        for note in notes:
+            logger.warning("Replay lot split declined: %s", note)
+
+        for kind, leg_qty, leg_cost in leg_defs:
+            legs.append(
+                (
+                    cid,
+                    HoldingState(
+                        company_id=holding.company_id,
+                        symbol=holding.symbol,
+                        quantity=leg_qty,
+                        total_cost=leg_cost,
+                        average_cost=leg_cost / leg_qty if leg_qty else Decimal("0"),
+                        realized_gain_loss=holding.realized_gain_loss,
+                        trade_date=holding.trade_date,
+                        lots=holding.lots,
+                    ),
+                    kind,
+                )
+            )
+    return legs
+
+
 class ReplayEngine:
     """Rebuild portfolio state from the immutable event log up to any date."""
 
-    CASH_ACTIVITY_TYPES = {
+    CASH_ACTIVITY_TYPES: ClassVar[set[str]] = {
         "Trade", "Deposit", "Withdrawal", "Dividend", "MoneyMovement",
         "Interest", "Fee", "WithholdingTax", "ReorganizationDividend",
         "BonusPayment", "FxExchange", "ReturnOfCapital", "Tax",
     }
 
-    DEPOSIT_ACTIVITY_TYPES = {"MoneyMovement", "BonusPayment"}
+    DEPOSIT_ACTIVITY_TYPES: ClassVar[set[str]] = {"MoneyMovement", "BonusPayment"}
 
-    COST_REDUCTION_ACTIVITY_TYPES = {"ReturnOfCapital"}
+    COST_REDUCTION_ACTIVITY_TYPES: ClassVar[set[str]] = {"ReturnOfCapital"}
 
-    HOLDING_ACTIVITY_TYPES = {"Trade", "InternalSecurityTransfer"}
+    HOLDING_ACTIVITY_TYPES: ClassVar[set[str]] = {"Trade", "InternalSecurityTransfer"}
 
     def __init__(self, event_store: EventStore):
         self.event_store = event_store
@@ -82,11 +178,40 @@ class ReplayEngine:
     def _handle_initial_holding_set(self, state: AccountState, event: dict) -> None:
         """Set initial holdings from an initial_holding_set event (used for accounts without transaction history)."""
         data = event.get("data", {}) or {}
-        state.cash_balance = _decimal(data.get("cash_balance"))
-        state.net_deposits = _decimal(data.get("net_deposits"))
+        _load_cash_from_checkpoint(state, data)
         event_date = self._get_event_date(event)
         holdings = data.get("holdings", []) or []
         for h in holdings:
+            cid = int(h["company_id"])
+            qty = _decimal(h.get("quantity"))
+            avg_cost = _decimal(h.get("average_cost"))
+            total_cost = _decimal(h.get("total_cost"))
+            if qty > 0 and cid:
+                state.holdings[cid] = HoldingState(
+                    company_id=cid,
+                    symbol=h.get("symbol", "?"),
+                    quantity=qty,
+                    total_cost=total_cost if total_cost > 0 else qty * avg_cost,
+                    average_cost=avg_cost,
+                    trade_date=event_date,
+                )
+
+    def _handle_position_state_checkpoint(self, state: AccountState, event: dict) -> None:
+        """Replace account state with a projection captured at this event's date.
+
+        A checkpoint is a capture of already-computed state, not a historical fact: its
+        quantities already include every trade and corporate action that preceded it. It
+        therefore RESETS the account rather than adding to it, so a position fully sold
+        before capture is dropped instead of lingering from replayed history.
+        """
+        data = event.get("data", {}) or {}
+        event_date = self._get_event_date(event)
+
+        state.holdings.clear()
+        _load_cash_from_checkpoint(state, data)
+        state.checkpoint_date = event_date
+
+        for h in data.get("holdings", []) or []:
             cid = int(h["company_id"])
             qty = _decimal(h.get("quantity"))
             avg_cost = _decimal(h.get("average_cost"))
@@ -110,14 +235,17 @@ class ReplayEngine:
         quantity = _decimal(data.get("quantity"))
         unit_price = _decimal(data.get("unit_price"))
         txn_date = self._get_event_date(event)
+        currency = normalize_currency(data.get("currency"))
 
         # Cash
         if activity_type in self.CASH_ACTIVITY_TYPES:
             state.cash_balance += net_cash
+            _bucket(state.cash_by_currency, currency, net_cash)
 
         # Deposits
         if activity_type in self.DEPOSIT_ACTIVITY_TYPES and net_cash > 0:
             state.net_deposits += net_cash
+            _bucket(state.net_deposits_by_currency, currency, net_cash)
 
         # Cost basis reduction for ReturnOfCapital
         if activity_type in self.COST_REDUCTION_ACTIVITY_TYPES and company_id:
@@ -191,8 +319,11 @@ class ReplayEngine:
                     holding.quantity -= sold
                     # Recalculate average_cost from remaining lots
                     if holding.lots:
-                        total_qty = sum(l["quantity"] for l in holding.lots)
-                        total_lot_cost = sum(l["quantity"] * l["cost_per_share"] for l in holding.lots)
+                        total_qty = sum(lot["quantity"] for lot in holding.lots)
+                        total_lot_cost = sum(
+                            lot["quantity"] * lot["cost_per_share"]
+                            for lot in holding.lots
+                        )
                         holding.average_cost = total_lot_cost / total_qty if total_qty else Decimal("0")
                     if holding.quantity <= 0:
                         del state.holdings[cid]
@@ -229,7 +360,9 @@ class ReplayEngine:
             holding.total_cost -= reduction
             # Reduce each lot proportionally
             if holding.lots:
-                lot_total_cost = sum(l["quantity"] * l["cost_per_share"] for l in holding.lots)
+                lot_total_cost = sum(
+                    lot["quantity"] * lot["cost_per_share"] for lot in holding.lots
+                )
                 if lot_total_cost > 0:
                     ratio = reduction / lot_total_cost
                     for lot in holding.lots:
@@ -248,46 +381,11 @@ class ReplayEngine:
         2. data.transaction_date — for trade/dividend events
         3. data.report_date — for split/corporate-action events (historical date)
         4. event.created_at — fallback (insertion timestamp)
+
+        Delegates to shared.split_utils.extract_event_date so the replay engine
+        and the split reconciler never diverge on ordering decisions.
         """
-        data = event.get("data", {}) or {}
-        eff_date = data.get("effective_date")
-        if eff_date:
-            if isinstance(eff_date, date):
-                return eff_date
-            if isinstance(eff_date, str):
-                try:
-                    return date.fromisoformat(eff_date)
-                except (ValueError, TypeError):
-                    pass
-        txn_date = data.get("transaction_date")
-        if txn_date:
-            if isinstance(txn_date, date):
-                return txn_date
-            if isinstance(txn_date, str):
-                try:
-                    return date.fromisoformat(txn_date)
-                except (ValueError, TypeError):
-                    pass
-        # Split / corporate-action events store the historical date in report_date.
-        # Without this, bulk-inserted splits all share created_at and replay in the
-        # wrong order — AFTER buy transactions — inflating quantities by the
-        # cumulative split factor.
-        report_date = data.get("report_date")
-        if report_date:
-            if isinstance(report_date, date):
-                return report_date
-            if isinstance(report_date, str):
-                try:
-                    return date.fromisoformat(report_date)
-                except (ValueError, TypeError):
-                    pass
-        created_str = event.get("created_at", "")
-        if created_str:
-            try:
-                return datetime.fromisoformat(created_str.replace("Z", "+00:00")).date()
-            except (ValueError, TypeError):
-                pass
-        return None
+        return extract_event_date(event)
 
     def replay_to_date(
         self,
@@ -311,14 +409,36 @@ class ReplayEngine:
 
         state = AccountState(account_id=account_id)
 
+        handled: dict[str, int] = {}
+        skipped_unknown: list[str] = []
         for ev in account_events:
             event_type = ev.get("event_type", "")
             handler_name = f"_handle_{event_type}"
             handler = getattr(self, handler_name, None)
             if handler:
                 handler(state, ev)
+                handled[event_type] = handled.get(event_type, 0) + 1
             else:
-                pass  # Unknown event types are skipped
+                skipped_unknown.append(event_type)
+
+        if debug_trace.is_enabled():
+            debug_trace.trace_event(
+                "replay_engine",
+                "replay_to_date",
+                account_id=account_id,
+                target_date=target_date.isoformat(),
+                fetched=len(events),
+                matched=len(account_events),
+                filtered_out=len(events) - len(account_events),
+                handled_total=sum(handled.values()),
+                handled_by_type=handled,
+                skipped_unknown=skipped_unknown,
+                final_holdings=len(state.holdings),
+                cash_balance=state.cash_balance,
+                **debug_trace.summarize_ids(
+                    [str(e.get("id")) for e in account_events]
+                ),
+            )
 
         return state
 
@@ -332,6 +452,8 @@ class ReplayEngine:
         exchange_overrides: dict[int, str | None] | None = None,
         company_currencies: dict[int, str] | None = None,
         companies_map: dict[int, dict] | None = None,
+        derived_cdr_companies: set[int] | None = None,
+        cdr_lots: dict[int, dict[str, Decimal]] | None = None,
     ) -> dict:
         """Build a snapshot dict from replay state (compatible with build_snapshot_row output).
 
@@ -342,6 +464,9 @@ class ReplayEngine:
                 (e.g. {478: "USD", 1027: "CAD"}). Used for FX conversion.
             companies_map: Optional dict mapping company_id → companies row dict
                 (with cdr_ratio field). Used for per-company CDR ratio lookup.
+            cdr_lots: Optional per-company lot buckets as of target_date, from
+                cdr_utils.derive_account_cdr_lots_as_of. A mixed position is priced one
+                leg at a time; omit it and every position keeps its company-keyed price.
         """
         from config import settings
         from database import supabase as _sb
@@ -358,11 +483,21 @@ class ReplayEngine:
         total_cost = Decimal("0.00")
         used_tiers: list[PriceTier] = []
 
-        for cid, holding in state.holdings.items():
+        for cid, holding, leg_kind in _cdr_lot_legs(
+            state.holdings, cdr_lots, derived_cdr_companies
+        ):
             qty = holding.quantity
             cost = holding.total_cost
 
-            exch_override = exchange_overrides.get(cid) if exchange_overrides else None
+            if leg_kind is not None:
+                exch_override = EXCHANGE_OVERRIDE_TOR if leg_kind == "cdr" else None
+            else:
+                exch_override = (
+                    exchange_overrides.get(cid) if exchange_overrides else None
+                )
+                # cdr_utils owns the canonical CDR signal; the holdings flag alone can be NULL.
+                if derived_cdr_companies and cid in derived_cdr_companies:
+                    exch_override = EXCHANGE_OVERRIDE_TOR
             comp_ccy = (company_currencies.get(cid) if company_currencies else None) or "USD"
             comp_ratio = get_cdr_ratio_for_company(cid, companies_map) if companies_map else None
 
@@ -380,6 +515,12 @@ class ReplayEngine:
                 fx_service=fx_svc,
             )
             used_tiers.append(tier)
+
+            # Provenance for every tier, not just FORWARD_FILL: a stale price must
+            # never be labelled OK. Canonical form: snapshot_builder.build_snapshot_row.
+            price_age = (
+                (target_date - resolved_price_date).days if resolved_price_date else None
+            )
 
             if tier == PriceTier.UNAVAILABLE:
                 current_value = Decimal("0")
@@ -428,7 +569,6 @@ class ReplayEngine:
                 if tier == PriceTier.COST_BASIS:
                     pos_quality = "COST_FALLBACK"
                 elif tier == PriceTier.FORWARD_FILL:
-                    price_age = (target_date - resolved_price_date).days if resolved_price_date else None
                     pos_quality = "STALE_PRICE" if (price_age is not None and price_age > 30) else "OK"
                 else:
                     pos_quality = TIER_QUALITY_MAP.get(tier, "OK")
@@ -453,13 +593,25 @@ class ReplayEngine:
                 "unrealized_gain_loss_pct": float(
                     (current_value - cost) / cost * 100
                 ) if cost > 0 else 0.0,
-                "price_age_days": None,
+                "price_age_days": price_age,
                 "price_data_quality": pos_quality,
                 "trade_date": holding.trade_date.isoformat() if holding.trade_date else None,
                 "lots": lots_out,
             })
 
-        total_value = total_market_value + state.cash_balance
+        cash_total, cash_fx_applied = convert_cash_map(
+            _cash_view(state.cash_by_currency, state.cash_balance),
+            account_currency,
+            target_date,
+            fx_svc,
+        )
+        deposits_total, _ = convert_cash_map(
+            _cash_view(state.net_deposits_by_currency, state.net_deposits),
+            account_currency,
+            target_date,
+            fx_svc,
+        )
+        total_value = total_market_value + cash_total
 
         # Quality flag
         has_unavailable = PriceTier.UNAVAILABLE in used_tiers
@@ -499,8 +651,15 @@ class ReplayEngine:
         account_currency: str = "CAD",
         company_currencies: dict[int, str] | None = None,
         companies_map: dict[int, dict] | None = None,
+        derived_cdr_companies: set[int] | None = None,
+        cdr_lots: dict[int, dict[str, Decimal]] | None = None,
     ) -> ComparisonResult:
-        """Compare replay result with a stored portfolio_snapshot row."""
+        """Compare replay result with a stored portfolio_snapshot row.
+
+        cdr_lots must come from cdr_utils.derive_account_cdr_lots_as_of for
+        snapshot_date. Omitting it compares a company-keyed replay against a
+        lot-aware stored row, which reports a mismatch for every mixed position.
+        """
         replay = self.build_snapshot_from_replay(
             account_id=account_id,
             target_date=snapshot_date,
@@ -509,6 +668,8 @@ class ReplayEngine:
             account_currency=account_currency,
             company_currencies=company_currencies,
             companies_map=companies_map,
+            derived_cdr_companies=derived_cdr_companies,
+            cdr_lots=cdr_lots,
         )
 
         differences: list[str] = []

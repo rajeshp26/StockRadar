@@ -1,5 +1,6 @@
-"""Create initial_holding_set events for accounts 10 and 11 only."""
+"""Create position_state_checkpoint events for accounts 10 and 11 only."""
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -31,18 +32,18 @@ for aid in [10, 11]:
 
     try:
         event_store.append_event(
-            event_type="initial_holding_set",
+            event_type="position_state_checkpoint",
             aggregate_id=f"account_{aid}",
             aggregate_type="account",
             data={
-                "effective_date": "2020-01-01",
+                "effective_date": datetime.now(timezone.utc).date().isoformat(),
                 "account_id": aid,
                 "cash_balance": cash_balance,
                 "net_deposits": net_deposits,
                 "holdings": holdings_data,
             },
             metadata={"backfill": True, "source": "portfolio_holdings"},
-            idempotency_key=f"initial_holding_set_{aid}",
+            idempotency_key=f"position_state_checkpoint_{aid}",
         )
         print(f"Account {aid}: written ({len(holdings_data)} holdings, cash=${cash_balance:.2f})")
     except Exception as ex:

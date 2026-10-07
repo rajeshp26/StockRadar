@@ -113,7 +113,7 @@ StockerPro currently connects to a **hosted Supabase project** at `viqdqgxcumcdh
 | Variable | Location | Current Value |
 |----------|----------|---------------|
 | `SUPABASE_URL` | `backend/.env` | `https://viqdqgxcumcdhqxooplw.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | `backend/.env` | `sb_secret_NxN3ywf1RrMektnf-rq9hg_FxKFOVoG` |
+| `SUPABASE_SERVICE_ROLE_KEY` | `backend/.env` | (secret — set locally, never committed) |
 | `SUPABASE_JWT_SECRET` | `backend/.env` | (base64 HS256 secret) |
 | `NEXT_PUBLIC_SUPABASE_URL` | `web/.env.local` | `https://viqdqgxcumcdhqxooplw.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `web/.env.local` | (JWT anon key) |
@@ -1520,6 +1520,85 @@ supabase logs
 
 # Reset database (drop all tables, reapply migrations)
 supabase db reset
+```
+
+---
+
+## Price History Recovery Status (2026-10-01)
+
+### Outcome
+
+The TRUE RAW refetch completed. The row-count reduction is dominated by the intended
+10-year retention window, but two companies lost daily history that retention did not
+account for. Recovery is **blocked on an external source** — see "What is missing".
+
+### Verified numbers
+
+| Measure | Value |
+| --- | --- |
+| Rows before refetch | 881,983 |
+| Rows after refetch | 408,903 |
+| Reduction | 473,080 |
+| Attributable to the 10y retention window | ~468,103 |
+| Known genuine shortfall | 4,977 (LEG 2,490 + RMAX 2,487) |
+| Targeted regression tests | 142 passed |
+| Split/factor identity defects | 0 (394 split rows, 108 companies) |
+
+Mechanism: `backend/scripts/refetch_price_history.py:225` deletes every row for a
+company, then reinserts only the rows the provider returns inside the retention
+window. `prune_price_history()` has no active caller; the scheduler invocation is
+commented out.
+
+This classification is arithmetic over the refetch log, not a row-by-row
+reconstruction. It is consistent with intended retention; it does **not** prove the
+absence of any other in-window shortfall.
+
+A coverage guard now refuses to authorize destructive deletion when the provider
+returns materially fewer rows than are stored. TNXP and MSFT were re-applied and
+verified with zero mismatches across 3,147 dates.
+
+### Cloud source: unreachable
+
+`viqdqgxcumcdhqxooplw.supabase.co` returns NXDOMAIN via both `Resolve-DnsName` and
+`nslookup`. `supabase.com` and `api.supabase.com` resolve, so this is specific to that
+project ref and not a general DNS outage. No Supabase CLI project-ref file exists in
+the repository, and `backend/.env` points at `localhost:54321`. A current project ref is
+required to continue recovery.
+
+### Backup assessed: insufficient
+
+`C:\Documents\db_cluster-31-08-2026@19-49-47.backup.gz` (10.54 MB) is a valid gzip
+plain-SQL `pg_dump` containing 57 tables, but its `price_history` coverage is
+month-end sampled:
+
+| Company | id | Rows in dump | Range | Typical gap |
+| --- | --- | --- | --- | --- |
+| LEG | 899 | 569 | 1980-03-31 .. 2026-07-24 | 28-33 days |
+| RMAX | 3162 | 123 | 2013-10-31 .. 2026-07-24 | 28-33 days |
+
+The dump holds 40,327 `price_history` rows across 176 companies (maximum 788 for any
+one company). Company IDs match the local database (LEG 899, RMAX 3162), so identity is
+not the obstacle. The dump uses the legacy 9-column layout with neither
+`adjustment_factor` nor `adj_close`, so any row selected from it would require canonical
+re-derivation on import.
+
+**This backup cannot restore the missing daily rows.** It is a valid partial
+mitigation only, and must not be presented as equivalent to the original daily history.
+
+### What is missing
+
+1. A current Supabase project ref or URL for the live project, **or**
+2. A genuine daily `price_history` backup for LEG and RMAX covering 2016-10-01 onward.
+
+Until one is supplied, LEG and RMAX hold one row each locally. Do not import the
+sampled rows as a substitute for daily history.
+
+Reproduce the assessment with:
+
+```bash
+python backend/scripts/verify_dump_company_identity.py   # company_id + split identity
+python backend/scripts/inspect_cloud_dump.py             # columns, ranges, row counts
+python backend/scripts/inspect_dump_sampling.py          # day-of-month / gap distribution
 ```
 
 ---

@@ -248,7 +248,44 @@ check("g4 does not pass vacuously", not (rc == 0 and "no executable checks" in o
 print("\n[6] Contract gate fails on a violated contract")
 Path("framework/.manifest").mkdir(parents=True, exist_ok=True)
 rc, out = sh("./framework/gates/g1_contract.sh")
-check("g1 runs and reports", rc in (0, 1, 2), f"rc={rc}")
+# Accept the FULL vocabulary EXIT_CODES.md declares for G1, not a subset of it.
+# EXIT_CODES.md:9 declares G1 emits 0 | 1 | 2 | 4 -- "NOT_APPLICABLE (no contracts
+# dir)" in the exit-4 column -- and that file is declared AUTHORITATIVE and
+# machine-checked *here*. This check asserted only (0, 1, 2), so a repository with
+# no contracts directory, where g1 correctly returns 4, was reported as
+# "g1 runs and reports: FAIL rc=4": the checker contradicted the contract it
+# exists to enforce. Exit 3 is deliberately NOT accepted -- the G1 row leaves the
+# exit-3 cell blank, so 3 is undeclared for G1 and accepting it would widen the
+# success set the other way.
+#
+# rc=4 is a genuine non-pass verdict, not a licence to pass. Bazel reserves a
+# dedicated NO_TESTS_FOUND = 4 for exactly this condition ("build successful but
+# no tests were found even though testing was requested") while still holding
+# that every non-zero code is an error. So 4 lands in the WARN bucket and the
+# summary names it: the caller can see that nothing was judged.
+#
+# MEASURED (extract the real check()/_verdict()/tail from this file, stub rc):
+#   rc=0,1,2 -> PASS, suite exit 0
+#   rc=3     -> FAIL, suite exit 1   (exit-3 cell blank for G1; still rejected)
+#   rc=9     -> FAIL, suite exit 1   (out of contract; still rejected)
+#   rc=4     -> WARN, suite exit 0
+# Reproduce with `python .planning/patches/probe_g1_vocab.py` from the repo root;
+# it slices these blocks out of THIS file rather than reimplementing them, so it
+# tests the shipped logic and not a transcription of it.
+# The rc=3 / rc=9 rows are the point of the change: the patch widens the
+# accepted set toward the contract without widening it in the other direction.
+#
+# OPEN, and NOT settled by this patch: rc=4 leaves the SUITE exit 0, because
+# `if FAILS: sys.exit(1)` and nothing escalates a WARN. So "4 is never a pass"
+# holds per-check but not per-run. Forcing exit 1 instead would make every
+# framework-only repo -- the normal case for an install check, where no contracts
+# dir exists and 4 is the CORRECT answer -- uninstallable. Both options are
+# wrong for opposite reasons, so which one the contract wants is a decision for
+# the framework owner, recorded as D6 in .planning/decisions/DID-014.md and left
+# open here deliberately. Do not read this patch as having resolved it.
+check("g1 reports a declared exit code", rc in (0, 1, 2, 4), f"rc={rc}")
+if rc == 4:
+    WARNS.append("g1 returned 4 NOT_APPLICABLE (no contracts dir) - skipped, not passed")
 check("g1 refuses to pass without contract tests",
       not (rc == 0 and "no tests/contract" in out), "passed without tests")
 
@@ -429,8 +466,8 @@ _g5 = Path("framework/gates/g5_frontend_stack.sh")
 check("G5 gate wired", _g5.exists(), "stack contract needs an executable gate")
 if _g5.exists():
     _t5 = _g5.read_text()
-    check("G5 maps exit 4 to skip", "4) skip" in _t5,
-          "no frontend must skip, not pass")
+    check("G5 maps exit 4 to a non-passing verdict", "4) not_applicable" in _t5,
+          "no frontend must be NOT_APPLICABLE, never pass")
     check("G5 surfaces blocked separately", "exit 2" in _t5,
           "could-not-evaluate must not collapse into fail or pass")
 

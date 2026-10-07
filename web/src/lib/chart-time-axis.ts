@@ -380,7 +380,46 @@ export function getDateAxis(range: string, dates: string[], target?: number | { 
         tickFormat = fallback.format;
     }
 
-    return { ticks: collapseAdjacentDuplicateLabels(ticks, tickFormat), tickFormat };
+    return {
+        ticks: ensureTerminalTick(
+            collapseAdjacentDuplicateLabels(ticks, tickFormat),
+            keys[keys.length - 1],
+            tickFormat,
+        ),
+        tickFormat,
+    };
+}
+
+/**
+ * Guarantee the newest observation carries an x-axis label.
+ *
+ * Ideal ticks sit on calendar boundaries, so the terminal data date is rarely
+ * one: over a 1Y span ending 2026-09-26 the last ideal tick is 2026-09-01,
+ * which `snapTicksToData` maps to 2026-08-31 (1 day away) over 2026-09-26
+ * (25 days away). The chart stopped a month short of its own data.
+ *
+ * Collision handling is taken from the production libraries rather than
+ * invented. Recharts `AxisInterval` (src/util/types.ts) documents
+ * `'preserveEnd'` as "keeps the right tick on collision and ensures that the
+ * last tick is always shown", and it is the library default for `interval`.
+ * ECharts `axisLabel.showMaxLabel` forces the end label the same way, and
+ * `AxisBuilder.ts` `fixMinMaxLabelShow` breaks the tie by ignoring the INNER
+ * label. Do not reverse that direction: the interior tick yields, the terminal
+ * label survives.
+ *
+ * Costs at most one label beyond the density target, which both libraries also
+ * accept — the target sizes the grid, it does not license hiding the newest
+ * observation.
+ */
+function ensureTerminalTick(ticks: string[], terminalKey: string, tickFormat: string): string[] {
+    // Nothing survived snapping; the terminal date is all there is to show.
+    if (ticks.length === 0) return [terminalKey];
+    // `ticks` is ascending and a subset of the data keys, so a present
+    // terminal key can only already be in final position.
+    if (ticks[ticks.length - 1] === terminalKey) return ticks;
+
+    const collides = formatAxisTick(terminalKey, tickFormat) === formatAxisTick(ticks[ticks.length - 1], tickFormat);
+    return collides ? [...ticks.slice(0, -1), terminalKey] : [...ticks, terminalKey];
 }
 
 /**

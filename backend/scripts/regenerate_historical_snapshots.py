@@ -20,6 +20,7 @@ from datetime import date
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from shared.cdr_utils import derive_account_cdr_companies, derive_account_cdr_lots_as_of
 from shared.replay_engine import ReplayEngine
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s", stream=sys.stderr)
@@ -51,11 +52,14 @@ accounts = [7, 8, 9, 10, 11, 12]
 total = 0
 
 for aid in accounts:
+    derived_cdr = derive_account_cdr_companies(supabase, aid)
     for dt in target_dates:
         replay = engine.build_snapshot_from_replay(
             account_id=aid,
             target_date=dt,
             prices_by_company=prices_by_company,
+            derived_cdr_companies=derived_cdr,
+            cdr_lots=derive_account_cdr_lots_as_of(supabase, aid, dt.isoformat()),
         )
         if replay and replay.get("total_value", 0) != 0:
             snapshots_repo.upsert_snapshot(replay)

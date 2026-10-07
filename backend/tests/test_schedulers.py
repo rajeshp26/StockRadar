@@ -220,7 +220,7 @@ class TestMarketDataProcessCompany:
         self.mock_repo = mock_financial_repo
         self.mock_provider = mock_defeat_beta_provider
         self.mock_yfinance = mock_yfinance
-        patch_obj = patch.object(self.scheduler, "_upsert_monthly_price_history", return_value=0)
+        patch_obj = patch.object(self.scheduler, "_upsert_daily_price_history", return_value=0)
         self._internal_patch = patch_obj
         self._internal_patch.start()
 

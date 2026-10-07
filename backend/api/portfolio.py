@@ -61,11 +61,12 @@ from schemas_portfolio import (
     RiskMetricsResponse,
     RollingSharpeResponse,
 )
+from shared.cdr_utils import trace_division
 from shared.exceptions.base import AppException
 from shared.fx_service import FXService
 from shared.metrics import RouteTimer
 from shared.snapshot_builder import convert_holding_fx
-from shared.time_utils import now_utc
+from shared.time_utils import age_seconds, now_utc, parse_db_timestamp
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -138,29 +139,34 @@ def apply_cdr_adjustment(
     price: float,
     company_id: int,
     cdr_ratios: dict[int, float],
-    exchange_overrides: dict[int, str | None] | None = None,
+    exchange_override: str | None = None,
 ) -> float:
-    """Apply CDR ratio to a price if the company is a CDR holding.
+    """Apply the CDR ratio to a TSX share price for a holding whose override is TOR.
 
-    Used by API endpoints that fetch prices from current_market_data and need
-    to convert TSX share price to CDR price.
-
-    Args:
-        price: Raw price from current_market_data
-        company_id: Company ID to look up CDR ratio
-        cdr_ratios: Dict mapping company_id → cdr_ratio (from companies table)
-        exchange_overrides: Optional dict mapping company_id → exchange_override
-
-    Returns:
-        CDR-adjusted price (if CDR), or original price (if not CDR)
+    exchange_override is the value carried by the individual holding, never a
+    company-level lookup. portfolio_holdings.exchange_override is per-account, so
+    one company can be a TOR depositary receipt in one account and an ordinary
+    share in another; resolving it per company silently gives one account the
+    other's price. A missing override therefore means "not a CDR" rather than
+    "assume CDR", matching shared.snapshot_builder's is_cdr = override == "TOR".
     """
-    if exchange_overrides and exchange_overrides.get(company_id) != "TOR":
+    if isinstance(exchange_override, dict):
+        raise TypeError(
+            "exchange_override is one holding's value, not a company-keyed map; "
+            "resolving it per company gives one account the other account's override"
+        )
+    if exchange_override != "TOR":
         return price
     ratio = cdr_ratios.get(company_id)
     if ratio is None:
         from shared.snapshot_builder import CDR_RATIO
         ratio = float(CDR_RATIO)
-    return price / ratio
+    adjusted = price / ratio
+    trace_division(
+        "api.portfolio", company_id, price, ratio, adjusted,
+        price_source="holding_exchange_override",
+    )
+    return adjusted
 
 
 def _convert_holding_values(
@@ -213,6 +219,20 @@ def _parse_account_ids(raw: str | None) -> list[int] | None:
     return [int(x) for x in raw.split(",") if x.strip()]
 
 
+LIVE_PRICE_TTL_SECONDS = 86400
+"""Deliberately differs from snapshot_builder's 30-day default, which applies to
+historical as-of dates. Retuning this is a separate product decision."""
+
+
+def _aggregate_quality(any_stale: bool, any_cost_fallback: bool) -> str:
+    """Precedence mirrors snapshot_builder: STALE_PRICE > COST_FALLBACK > OK."""
+    if any_stale:
+        return "STALE_PRICE"
+    if any_cost_fallback:
+        return "COST_FALLBACK"
+    return "OK"
+
+
 async def _get_dashboard_from_prices(db_user_id: int) -> dict:
     repo = PortfolioRepository()
 
@@ -225,18 +245,11 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
     price_details = {}
     # Fetch CDR ratios for CDR pricing
     cdr_ratios = _get_company_cdr_ratios(cids) if cids else {}
-    # Build exchange_overrides from holdings
-    exchange_overrides_map = {}
-    for h in all_holdings:
-        cid = h.get("company_id")
-        exch = h.get("exchange_override")
-        if cid and exch:
-            exchange_overrides_map[cid] = exch
     if cids:
         try:
             cmr = (
                 supabase.table("current_market_data")
-                .select("company_id, current_price")
+                .select("company_id, current_price, last_updated")
                 .in_("company_id", cids)
                 .execute()
             )
@@ -244,7 +257,10 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
                 cid = row["company_id"]
                 px = row.get("current_price")
                 if px is not None:
-                    price_details[cid] = {"price": float(px), "fetched_at": now_utc(), "ttl_seconds": 86400}
+                    price_details[cid] = {
+                        "price": float(px),
+                        "observed_at": row.get("last_updated"),
+                    }
         except Exception:
             pass
 
@@ -255,28 +271,34 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
         return {"accounts": [], "holdings": [], "overview": {}, "data_quality_flag": "OK"}
 
     any_stale = False
+    any_cost_fallback = False
     for h in all_holdings:
         cid = h.get("company_id")
         pd = price_details.get(cid) if cid else None
         if pd is not None and pd["price"] is not None:
             price = pd["price"]
             # Apply CDR adjustment if this is a CDR holding
-            if exchange_overrides_map.get(cid) == "TOR":
-                price = apply_cdr_adjustment(price, cid, cdr_ratios, exchange_overrides_map)
+            if h.get("exchange_override") == "TOR":
+                price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
                 h["price_currency"] = "CAD"
             h["current_price"] = price
             qty = h.get("quantity", 0) or 0
             h["current_value"] = price * qty
-            age = (now_utc() - pd["fetched_at"]).total_seconds() if pd["fetched_at"] else float("inf")
+            observed_at = pd.get("observed_at")
+            try:
+                age = age_seconds(parse_db_timestamp(observed_at)) if observed_at else float("inf")
+            except (TypeError, ValueError):
+                age = float("inf")
             h["price_age_seconds"] = age
-            h["data_quality"] = "OK" if age <= pd["ttl_seconds"] else "STALE_PRICE"
+            h["data_quality"] = "OK" if age <= LIVE_PRICE_TTL_SECONDS else "STALE_PRICE"
             if h["data_quality"] == "STALE_PRICE":
                 any_stale = True
         else:
             h["current_price"] = float(h.get("average_cost") or 0)
             h["current_value"] = float(h.get("total_cost") or 0)
             h["price_age_seconds"] = None
-            h["data_quality"] = "MISSING"
+            h["data_quality"] = "COST_FALLBACK"
+            any_cost_fallback = True
         h["unrealized_gain_loss"] = h["current_value"] - float(h.get("total_cost", 0))
         h["unrealized_gain_loss_pct"] = (
             (h["unrealized_gain_loss"] / float(h.get("total_cost", 0)) * 100)
@@ -340,7 +362,7 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
         "accounts": enriched_accounts,
         "holdings": holdings_summary,
         "overview": overview | {"value_currency": "CAD"},
-        "data_quality_flag": "STALE_PRICE" if any_stale else "OK",
+        "data_quality_flag": _aggregate_quality(any_stale, any_cost_fallback),
     }
 
 
@@ -474,13 +496,6 @@ async def list_accounts(
         prices = {}
         # Fetch CDR ratios for CDR pricing
         cdr_ratios = _get_company_cdr_ratios(cids) if cids else {}
-        # Build exchange_overrides from holdings
-        exchange_overrides_map = {}
-        for h in all_holdings:
-            cid = h.get("company_id")
-            exch = h.get("exchange_override")
-            if cid and exch:
-                exchange_overrides_map[cid] = exch
         if cids:
             try:
                 cmr = (
@@ -507,8 +522,8 @@ async def list_accounts(
                 price = prices.get(cid)
                 if price is not None:
                     # Apply CDR adjustment if this is a CDR holding
-                    if exchange_overrides_map.get(cid) == "TOR":
-                        price = apply_cdr_adjustment(price, cid, cdr_ratios, exchange_overrides_map)
+                    if h.get("exchange_override") == "TOR":
+                        price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
                         h["price_currency"] = "CAD"
                     h["current_price"] = price
                     h["current_value"] = price * (h.get("quantity", 0) or 0)
@@ -795,13 +810,6 @@ async def get_account_holdings(
         prices = {}
         # Fetch CDR ratios for CDR pricing
         cdr_ratios = _get_company_cdr_ratios(cids) if cids else {}
-        # Build exchange_overrides from holdings
-        exchange_overrides_map = {}
-        for h in holdings:
-            cid = h.get("company_id")
-            exch = h.get("exchange_override")
-            if cid and exch:
-                exchange_overrides_map[cid] = exch
         if cids:
             try:
                 cmr = supabase.table("current_market_data").select("company_id, current_price").in_("company_id", cids).execute()
@@ -821,8 +829,8 @@ async def get_account_holdings(
             avg_cost = h.get("average_cost", 0) or 0
             if price is not None:
                 # Apply CDR adjustment if this is a CDR holding
-                if exchange_overrides_map.get(cid) == "TOR":
-                    price = apply_cdr_adjustment(price, cid, cdr_ratios, exchange_overrides_map)
+                if h.get("exchange_override") == "TOR":
+                    price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
                     h["price_currency"] = "CAD"
                 h["current_price"] = price
                 h["current_value"] = price * qty
@@ -877,13 +885,6 @@ async def get_all_holdings(
         prices = {}
         # Fetch CDR ratios for CDR pricing
         cdr_ratios = _get_company_cdr_ratios(cids) if cids else {}
-        # Build exchange_overrides from holdings
-        exchange_overrides_map = {}
-        for h in all_holdings:
-            cid = h.get("company_id")
-            exch = h.get("exchange_override")
-            if cid and exch:
-                exchange_overrides_map[cid] = exch
         if cids:
             try:
                 cmr = supabase.table("current_market_data").select("company_id, current_price").in_("company_id", cids).execute()
@@ -903,8 +904,8 @@ async def get_all_holdings(
             avg_cost = h.get("average_cost", 0) or 0
             if price is not None:
                 # Apply CDR adjustment if this is a CDR holding
-                if exchange_overrides_map.get(cid) == "TOR":
-                    price = apply_cdr_adjustment(price, cid, cdr_ratios, exchange_overrides_map)
+                if h.get("exchange_override") == "TOR":
+                    price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
                     h["price_currency"] = "CAD"
                 h["current_price"] = price
                 h["current_value"] = price * qty

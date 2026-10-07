@@ -189,6 +189,7 @@ class TestBuildSnapshotRow:
             holdings_state=[{
                 "company_id": 1, "symbol": "AAPL", "quantity": 10,
                 "total_cost": Decimal("1500"), "average_cost": Decimal("150"),
+                "price_currency": "CAD",
             }],
             prices_by_company={1: {"price": 200.0, "price_date": date(2024, 6, 14)}},
             snapshot_date=date(2024, 6, 15),
@@ -200,6 +201,7 @@ class TestBuildSnapshotRow:
             holdings_state=[{
                 "company_id": 1, "symbol": "AAPL", "quantity": 10,
                 "total_cost": Decimal("1500"), "average_cost": Decimal("150"),
+                "price_currency": "CAD",
             }],
             prices_by_company={1: {"price": 200.0, "price_date": date(2024, 5, 1)}},
             snapshot_date=date(2024, 6, 15),
@@ -213,10 +215,12 @@ class TestBuildSnapshotRow:
                 {
                     "company_id": 1, "symbol": "AAPL", "quantity": 10,
                     "total_cost": Decimal("1500"), "average_cost": Decimal("150"),
+                    "price_currency": "CAD",
                 },
                 {
                     "company_id": 2, "symbol": "GOOGL", "quantity": 5,
                     "total_cost": Decimal("5000"), "average_cost": Decimal("1000"),
+                    "price_currency": "CAD",
                 },
             ],
             prices_by_company={
@@ -293,63 +297,58 @@ class TestBuildSnapshotRow:
 
 
 # ============================================================================
-# Compression (integrated test via the service helper pattern)
+# Daily series is served unsampled (no interval compression)
 # ============================================================================
 
-class TestCompressSnapshotsByInterval:
-    def _compress(self, snapshots, period):
-        if not snapshots:
-            return snapshots
-        step_days = {"1D": 0, "1W": 0, "1M": 1, "3M": 3, "1Y": 7, "5Y": 14, "YTD": 7, "ALL": 30}
-        step = step_days.get(period.upper(), 7)
-        if step <= 0:
-            return snapshots
-        compressed = [snapshots[0]]
-        last_selected = date.fromisoformat(snapshots[0]["date"])
-        for s in snapshots[1:]:
-            current = date.fromisoformat(s["date"])
-            if (current - last_selected).days >= step:
-                compressed.append(s)
-                last_selected = current
-        if compressed[-1]["date"] != snapshots[-1]["date"]:
-            compressed.append(snapshots[-1])
-        return compressed
+class TestNoIntervalCompression:
+    """The DB stores daily rows, so every period must serve the daily series.
 
-    def test_weekly_compression(self):
-        snapshots = [
-            {"date": f"2024-01-{i:02d}", "value": 100.0}
-            for i in range(1, 30)
+    Interval sampling was removed: it put arbitrary day-of-month points on the chart,
+    shipped a series check_snapshot_spike had never evaluated, and derived
+    best_day/worst_day/twr from rows a month apart.
+    """
+
+    def test_compression_helper_is_not_reintroduced(self):
+        from application.services.portfolio_service import PortfolioService
+
+        assert not hasattr(PortfolioService, "_compress_snapshots_by_interval"), (
+            "interval sampling was removed on purpose; it corrupts the rendered "
+            "series, the spike check, and best_day/worst_day/twr. If payload size is "
+            "the concern, use LTTB instead. See .planning/USER-ASK.md A6."
+        )
+
+    def test_best_day_is_a_real_day_on_a_daily_series(self):
+        from application.services.portfolio_service import PortfolioService
+
+        svc = PortfolioService()
+        daily = [
+            {"date": f"2024-01-{i:02d}", "value": 100.0, "net_deposits": 0.0}
+            for i in range(1, 29)
         ]
-        result = self._compress(snapshots, "1Y")
-        assert len(result) < len(snapshots)
-        assert result[0]["date"] == "2024-01-01"
-        assert result[-1]["date"] == "2024-01-29"
+        daily[10]["value"] = 500.0
+        daily[11]["value"] = 100.0
 
-    def test_monthly_compression(self):
-        snapshots = [
-            {"date": f"2024-{m:02d}-01", "value": 100.0}
-            for m in range(1, 13)
-        ]
-        result = self._compress(snapshots, "ALL")
-        assert len(result) < 12
-        assert result[0]["date"] == "2024-01-01"
-        assert result[-1]["date"] == "2024-12-01"
+        out = svc._compute_returns_from_snapshots(daily, "ALL")
 
-    def test_sparse_snapshots(self):
-        snapshots = [
-            {"date": "2024-01-01", "value": 100.0},
-            {"date": "2024-01-05", "value": 110.0},
-            {"date": "2024-06-01", "value": 150.0},
-            {"date": "2024-12-31", "value": 200.0},
-        ]
-        result = self._compress(snapshots, "1Y")
-        # Jan 5 is only 4 days after Jan 1, so it gets dropped by 7-day stepping
-        assert 2 <= len(result) <= 4
-        assert result[0]["date"] == "2024-01-01"
-        assert result[-1]["date"] == "2024-12-31"
+        assert out["best_day"]["date"] == "2024-01-11"
+        assert out["worst_day"]["date"] == "2024-01-12"
 
-    def test_empty_input(self):
-        assert self._compress([], "1Y") == []
+    def test_monthly_sampling_would_have_hidden_the_movers(self):
+        """Pins why sampling was harmful: the two real moves fall 2 days apart.
+
+        A 30-day step keeps the first row of each window, so a 1-day spike immediately
+        followed by a 1-day reversal can be reduced to a single flat sample and vanish
+        from the series the user is shown.
+        """
+        daily = [{"date": f"2024-01-{i:02d}", "value": 100.0} for i in range(1, 29)]
+        daily[10]["value"] = 500.0
+        daily[11]["value"] = 100.0
+
+        sampled = [daily[0], daily[10], daily[-1]]
+
+        assert max(s["value"] for s in sampled) == 500.0
+        assert [s["value"] for s in daily].count(500.0) == 1
+        assert len(daily) == 28
 
 
 # ============================================================================
@@ -463,7 +462,7 @@ class TestNegativeTotalValueProducedSilently:
         cash = Decimal("-17350.00")
         row = build_snapshot_row(**_make_minimal_kwargs(
             holdings_state=holdings, cash_balance=cash,
-            prices_by_company={1: {"price": 294.30, "price_date": date(2024, 6, 22)}},
+            prices_by_company={1: {"price": 294.30, "price_date": date(2024, 6, 14)}},
         ))
         expected_mv = 50 * 294.30
         assert abs(row["holdings_market_value"] - expected_mv) < 0.01
@@ -543,9 +542,9 @@ class TestZeroDepositAccountPattern:
         row = build_snapshot_row(**_make_minimal_kwargs(
             holdings_state=holdings, cash_balance=cash_balance,
             prices_by_company={
-                1: {"price": 294.30, "price_date": date(2024, 6, 22)},
-                2: {"price": 202.93, "price_date": date(2024, 6, 22)},
-                3: {"price": 107.68, "price_date": date(2024, 6, 22)},
+                1: {"price": 294.30, "price_date": date(2024, 6, 14)},
+                2: {"price": 202.93, "price_date": date(2024, 6, 14)},
+                3: {"price": 107.68, "price_date": date(2024, 6, 14)},
             },
         ))
         total_no_deposit = row["total_value"]
@@ -579,7 +578,7 @@ class TestHoldingsStateFromDB:
         }]
         row = build_snapshot_row(**_make_minimal_kwargs(
             holdings_state=holdings,
-            prices_by_company={1: {"price": 294.30, "price_date": date(2024, 6, 22)}},
+            prices_by_company={1: {"price": 294.30, "price_date": date(2024, 6, 14)}},
         ))
         assert row["cost_basis"] == 7250.0, (
             f"Expected cost_basis=7250.0 from DB-shaped holding, "
@@ -801,11 +800,14 @@ class TestWealthSimpleAccountIndependentValidation:
 
     ACCOUNT_7_HOLDINGS = [
         {"company_id": 1, "symbol": "AAPL", "quantity": 10,
-         "total_cost": Decimal("222.30"), "average_cost": Decimal("22.23")},
+         "total_cost": Decimal("222.30"), "average_cost": Decimal("22.23"),
+         "price_currency": "CAD"},
         {"company_id": 2, "symbol": "AMZN", "quantity": 22,
-         "total_cost": Decimal("296.56"), "average_cost": Decimal("13.48")},
+         "total_cost": Decimal("296.56"), "average_cost": Decimal("13.48"),
+         "price_currency": "CAD"},
         {"company_id": 3, "symbol": "META", "quantity": 20,
-         "total_cost": Decimal("183.80"), "average_cost": Decimal("9.19")},
+         "total_cost": Decimal("183.80"), "average_cost": Decimal("9.19"),
+         "price_currency": "CAD"},
     ]
     ACCOUNT_7_CASH = Decimal("304.84")
     ACCOUNT_7_PRICES = {

@@ -5,7 +5,7 @@ source "$(dirname "$0")/_lib.sh"
 rc=0
 
 RULES="framework/architecture_rules.yaml"
-[ -f "$RULES" ] || { persist skip "no architecture rules"; skip "no $RULES"; }
+[ -f "$RULES" ] || { persist skip "no architecture rules"; not_applicable "no $RULES" "{\"checked\":\"$RULES\",\"exists\":false}"; }
 
 # Forbidden import edges, declared not inferred.
 set +e

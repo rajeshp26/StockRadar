@@ -12,9 +12,50 @@ set -uo pipefail
 GATE_NAME="${GATE_NAME:-gate}"
 STATE_ROOT="$(python3 framework/adapters/gsd_state.py state-root 2>/dev/null || echo .planning)"
 # Normalise to a cwd-relative path so it can be compared against changed_files() output.
+gsd_state_root_relative() {
+    local root="$1" pwd="$2"
+
+    local root_can pwd_can
+    root_can="$(printf '%s' "$root" | tr -d '\r' | tr '\\' '/' | tr 'A-Z' 'a-z')"
+    pwd_can="$(printf '%s' "$pwd" | tr -d '\r' | tr '\\' '/' | tr 'A-Z' 'a-z')"
+
+    local drive=""
+    case "$root_can" in
+        [a-z]:/*) drive="${root_can%%:*}"; root_can="${root_can#*:}" ;;
+    esac
+    case "$root_can" in
+        /) root_can="" ;;
+        */) root_can="${root_can%/}" ;;
+    esac
+
+    if [ -n "$drive" ]; then
+        case "$pwd_can" in
+            /mnt/"$drive"/*) root_can="/mnt/$drive$root_can" ;;
+            /"$drive"/*)     root_can="/$drive$root_can" ;;
+            "$drive":/*)     root_can="$drive:$root_can" ;;
+        esac
+    fi
+
+    case "$pwd_can" in
+        /) pwd_can="" ;;
+        */) pwd_can="${pwd_can%/}" ;;
+    esac
+
+    if [ -z "$pwd_can" ]; then
+        printf '%s\n' "$root_can"
+        return 0
+    fi
+    case "$root_can" in
+        "$pwd_can") printf '.\n' ;;
+        "$pwd_can"/*) printf '%s\n' "${root_can#"$pwd_can"/}" ;;
+        *) printf '%s\n' "$root_can" ;;
+    esac
+}
+STATE_ROOT="${STATE_ROOT%$'\r'}"
 case "$STATE_ROOT" in
   "$PWD"/*) STATE_ROOT="${STATE_ROOT#"$PWD"/}" ;;
   "$PWD")   STATE_ROOT="." ;;
+  *)        STATE_ROOT="$(gsd_state_root_relative "$STATE_ROOT" "$PWD")" ;;
 esac
 
 log()  { printf '[%s] %s\n' "$GATE_NAME" "$*"; }
@@ -57,7 +98,7 @@ gate_elapsed_ms() {
   fi
 }
 
-# Emit the canonical result line. result ∈ pass|fail|unverifiable.
+# Emit the canonical result line. result ∈ pass|fail|unverifiable|not_applicable.
 gate_result() {
   local result="$1" exit_code="${2:-0}"
   printf '[gate] %s result=%s exit=%s ms=%s\n' "$(gate_id)" "$result" "$exit_code" "$(gate_elapsed_ms)"
@@ -68,10 +109,63 @@ gate_not_reached() {
   printf '[gate] %s result=not_reached\n' "$(gate_id)"
 }
 
-# Verdicts emit the canonical line alongside the human log line. skip() is a
-# NON-FAILING verdict (exit 0, result=pass) — the gate was not applicable, not
-# failed; the human SKIP line preserves the distinction for readers.
-skip() { log "SKIP  $*"; gate_result pass 0; exit 0; }
+# Closed reason_code vocabulary for every non-judging verdict. Mirrors the
+# discipline retro/ledger.py already applies to CONTROLLED_GAP_TYPES: an
+# unrecognised value is a defect, not a new capability.
+NON_JUDGEMENT_REASONS="not_applicable precondition_missing capability_missing unverifiable"
+
+# Emit a classified non-judgement verdict. No such path exits 0 — a gate that did
+# not judge must never be recorded as EXECUTED_PASS.
+# Args: <message> <evidence-json>. Evidence is mandatory and must be a JSON object,
+# because a bare assertion gives a reader nothing to check. Requiring the shape also
+# catches the two mistakes that would otherwise pass silently: omitting evidence, and
+# swapping message with evidence.
+non_judgement() {
+  local reason="$1" exit_code="$2" evidence="$3"; shift 3
+  case " $NON_JUDGEMENT_REASONS " in
+    *" $reason "*) ;;
+    *) fail "unknown reason_code '$reason' (closed set: $NON_JUDGEMENT_REASONS)" ;;
+  esac
+  case "$evidence" in
+    '{'*) ;;
+    *) fail "reason_code '$reason' requires JSON evidence as arg 2; got '${evidence:-<empty>}'" ;;
+  esac
+  log "$* [reason=$reason evidence=$evidence]"
+  printf '[gate] %s result=%s exit=%s ms=%s evidence=%s\n' \
+    "$(gate_id)" "$reason" "$exit_code" "$(gate_elapsed_ms)" "$evidence"
+  exit "$exit_code"
+}
+
+not_applicable()       { non_judgement not_applicable       4 "${2:-}" "$1"; }
+precondition_missing() { non_judgement precondition_missing 2 "${2:-}" "$1"; }
+capability_missing()   { non_judgement capability_missing   3 "${2:-}" "$1"; }
+
+# `unverifiable` is deliberately NOT routed through non_judgement. It predates the
+# evidence rule, six live call sites pass a message only (g6_browser.sh), and
+# EXIT_CODES.md:14 declares BLOCKED "NEVER EMITTED" for G6 -- so a missing
+# evidence argument must not escalate to exit 2, which would make G6 emit a code
+# its contract forbids. Evidence is carried when supplied and omitted when not;
+# the exit is 3 unconditionally, never 0 and never 2.
+unverifiable() {
+  local message="$1" evidence="${2:-}"
+  log "$message [reason=unverifiable]"
+  if [ -n "$evidence" ]; then
+    printf '[gate] %s result=unverifiable exit=3 ms=%s evidence=%s\n' \
+      "$(gate_id)" "$(gate_elapsed_ms)" "$evidence"
+  else
+    printf '[gate] %s result=unverifiable exit=3 ms=%s\n' \
+      "$(gate_id)" "$(gate_elapsed_ms)"
+  fi
+  exit 3
+}
+
+# Retired: skip() reported a pass for an unjudged gate, which EXIT_CODES.md:176
+# ("SKIP != PASS") and :174 ("Never pass vacuously") both forbid. It is kept as a
+# hard failure so every un-migrated call site surfaces instead of passing quietly.
+skip() {
+  fail "skip() is retired: it reported result=pass for an unjudged gate. Use not_applicable / precondition_missing / capability_missing / unverifiable with evidence."
+}
+
 pass() { log "PASS  $*"; gate_result pass 0; exit 0; }
 fail() { log "FAIL  $*"; gate_result fail 1; exit 1; }
 

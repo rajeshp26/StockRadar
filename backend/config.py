@@ -144,6 +144,64 @@ class Settings(BaseSettings):
         description="Log every filtered row during deduplication"
     )
 
+    # Structured debug tracing
+    LOG_NAMESPACE: str = Field(
+        default="app",
+        description="Root logger namespace for structured tracing, producing "
+                    "<namespace>.debug.trace and <namespace>.debug.integrity. "
+                    "Generic by default so the tracing modules drop into any "
+                    "project; override to sit under this app's logger tree."
+    )
+    DEBUG_TRACE_ENABLED: bool = Field(
+        default=False,
+        description="Emit structured per-layer input/output records to the "
+                    "<LOG_NAMESPACE>.debug logger tree. Off by default because "
+                    "the emitters run inside repository pagination loops."
+    )
+    DEBUG_TRACE_ALWAYS_ON_SCOPES: tuple[str, ...] = Field(
+        default=("snapshot", "http"),
+        description="Trace scopes that emit even while DEBUG_TRACE_ENABLED is "
+                    "off. The global flag stays off because its emitters sit "
+                    "inside repository pagination loops; the daily snapshot run "
+                    "and the HTTP request lifecycle are the flows an operator "
+                    "has to be able to follow. Both are low volume -- the "
+                    "snapshot roughly one record per account per day, and one "
+                    "start/end pair per request."
+    )
+    DEBUG_LOG_ENABLED: bool = Field(
+        default=True,
+        description="Attach a rotating JSON-lines file sink for the "
+                    "<LOG_NAMESPACE>.debug tree, so debug records survive the "
+                    "process instead of scrolling away on stdout. On by default: "
+                    "a scheduled run finishes and exits, so stdout-only records "
+                    "are gone by the time anyone reads them."
+    )
+    DEBUG_LOG_DIR: str = Field(
+        default="logs",
+        description="Directory for the debug log file. A relative path is "
+                    "anchored to the backend package, not the working "
+                    "directory, so schedulers and scripts agree."
+    )
+    DEBUG_LOG_FILENAME: str = Field(
+        default="debug.jsonl",
+        description="File name of the rotating debug log inside DEBUG_LOG_DIR. "
+                    "Project-neutral by default so the logging modules carry no "
+                    "product name; override per project if desired."
+    )
+    DEBUG_LOG_LEVEL: str = Field(
+        default="DEBUG",
+        pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$",
+        description="Minimum level written to the debug log file"
+    )
+    DEBUG_LOG_MAX_BYTES: int = Field(
+        default=10_485_760,
+        description="Rotate the debug log once it reaches this size (10 MiB)"
+    )
+    DEBUG_LOG_BACKUP_COUNT: int = Field(
+        default=5,
+        description="Number of rotated debug log files to retain"
+    )
+
     # Timezone
     DEFAULT_TIMEZONE: str = Field(
         default="America/New_York",
@@ -176,6 +234,23 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Confidence score for yfinance fallback data (0.8 = 80% trust)"
+    )
+    ENABLE_PRICE_PLAUSIBILITY_GATE: bool = Field(
+        default=True,
+        description="Reject price_history / current_market_data writes whose close/current "
+                    "price exceeds the company's verified anchor (executed transaction "
+                    "prices, last verified close, or provider current price) by more than "
+                    "MAX_PRICE_UP_RATIO. Root-cause guard against provider scale errors "
+                    "reaching performance data."
+    )
+    MAX_PRICE_UP_RATIO: float = Field(
+        default=100.0,
+        ge=1.5,
+        le=10000.0,
+        description="Plausibility envelope: an incoming price is rejected when it exceeds "
+                    "the verified anchor multiplied by this ratio. 100 = a 100x jump above "
+                    "ground truth is treated as corrupt (real reverse splits widen the "
+                    "envelope via the splits table)."
     )
 
     # SSE (Server-Sent Events)
@@ -351,7 +426,9 @@ class Settings(BaseSettings):
     SNAPSHOT_SPIKE_THRESHOLD: float = Field(
         default=0.20,
         description="Maximum allowed fractional change in total_value between consecutive "
-                    "snapshots before flagging as SPIKE_DETECTED. 0.20 = 20%. "
+                    "snapshots before a write is withheld for recomputation. 0.20 = 20%. "
+                    "A value that still spikes after gap recomputation is stored with "
+                    "data_quality_flag SPIKE_CONFIRMED. "
                     "Deposits/withdrawals are excluded from spike detection."
     )
 
@@ -389,7 +466,8 @@ class Settings(BaseSettings):
         # Dev allows:
         # - localhost ports (9000, 9002, 9003, 3000)
         # - Cloud Workstation previews for both web (9000, 9002) and mobile (9003)
-        return self.DEV_ORIGINS + [
+        return [
+            *self.DEV_ORIGINS,
             "https://9000-*.cloudworkstations.dev",
             "https://9002-*.cloudworkstations.dev",
             "https://9003-*.cloudworkstations.dev",

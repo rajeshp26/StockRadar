@@ -9,6 +9,7 @@ from datetime import date
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from shared.cdr_utils import derive_account_cdr_companies, derive_account_cdr_lots_as_of
 from shared.replay_engine import ReplayEngine
 
 repo = PortfolioRepository()
@@ -41,6 +42,7 @@ for aid in sorted(accounts):
     account_match = 0
     account_diff = 0
     worst_delta = 0
+    derived_cdr = derive_account_cdr_companies(supabase, aid)
 
     for snap in snapshots.data[-3:]:
         raw_date = snap["snapshot_date"]
@@ -51,6 +53,8 @@ for aid in sorted(accounts):
             snapshot_date=snap_date,
             stored_snapshot=snap,
             prices_by_company=prices_by_company,
+            derived_cdr_companies=derived_cdr,
+            cdr_lots=derive_account_cdr_lots_as_of(supabase, aid, snap_date.isoformat()),
         )
 
         delta = float(result.delta_total_value)

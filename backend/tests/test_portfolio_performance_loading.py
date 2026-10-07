@@ -482,19 +482,19 @@ async def test_performance_before_vs_after():
     Compare old behavior (3 redundant API calls) vs new (single dashboard call).
 
     BEFORE (old code): 4 API calls:
-      GET /portfolio/accounts   (enrich_holdings_with_prices)
-      GET /portfolio/overview   (enrich_holdings_with_prices again)
-      GET /portfolio/holdings   (enrich_holdings_with_prices again)
-      GET /portfolio/dashboard  (enrich_holdings_with_prices again)
+      GET /portfolio/accounts   (_enrich_holdings)
+      GET /portfolio/overview   (_enrich_holdings again)
+      GET /portfolio/holdings   (_enrich_holdings again)
+      GET /portfolio/dashboard  (_enrich_holdings again)
 
     AFTER (new code): 1 API call:
-      GET /portfolio/dashboard  (enrich_holdings_with_prices ONCE)
+      GET /portfolio/dashboard  (_enrich_holdings ONCE)
 
     This test uses timing estimates to show the expected improvement.
     """
 
     # Simulate enrichment cost per call
-    enrichment_cost_ms = 150  # ~150ms per enrich_holdings_with_prices call
+    enrichment_cost_ms = 150  # ~150ms per _enrich_holdings call
 
     # Network + DB overhead per request
     request_overhead_ms = 300  # DNS + TLS + proxy + DB query time
@@ -514,7 +514,7 @@ async def test_performance_before_vs_after():
     dline = "-" * 40 + " " + "-" * 10 + " " + "-" * 10
     print(f"  {dline}")
     print(f"  {'API calls per page load':<40s} {before_calls:>10d} {after_calls:>10d}")
-    print(f"  {'enrich_holdings_with_prices calls':<40s} {before_calls:>10d} {after_calls:>10d}")
+    print(f"  {'_enrich_holdings calls':<40s} {before_calls:>10d} {after_calls:>10d}")
     print(f"  {'Estimated total time':<40s} {before_total:>9d}ms {after_total:>9d}ms")
     print(f"  {'TTL cache eliminates duplicate DB reads':<40s} {'NO':>10s} {'YES':>9s}")
     print(f"  {'Snapshot builder invariant fixed (500 error)':<40s} {'NO':>10s} {'YES':>9s}")

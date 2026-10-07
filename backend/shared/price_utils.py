@@ -5,6 +5,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from shared.cdr_utils import trace_division
+
 STALE_THRESHOLD_MIN = 5
 
 
@@ -32,12 +34,26 @@ def get_cdr_maps_for_companies(
 
     hold = (
         supabase_client.table("portfolio_holdings")
-        .select("company_id")
+        .select("company_id, exchange_override")
         .in_("company_id", list(ratios.keys()))
-        .eq("exchange_override", "TOR")
         .execute()
     )
-    tor_cids: set = {r["company_id"] for r in (hold.data or [])}
+    rows = hold.data or []
+    total_by_cid: dict[int, int] = {}
+    tor_by_cid: dict[int, int] = {}
+    for r in rows:
+        cid = int(r["company_id"])
+        total_by_cid[cid] = total_by_cid.get(cid, 0) + 1
+        if r.get("exchange_override") == "TOR":
+            tor_by_cid[cid] = tor_by_cid.get(cid, 0) + 1
+    # Unanimous rule: a company is company-global TOR only when ALL its
+    # holdings rows are TOR. A mixed company (CDR in one account, direct in
+    # another - e.g. AAPL) must not be divided here; per-account pricing in
+    # snapshot_builder handles those with the account-scoped override.
+    tor_cids: set = {
+        cid for cid, total in total_by_cid.items()
+        if tor_by_cid.get(cid, 0) == total
+    }
     return ratios, tor_cids
 
 
@@ -52,6 +68,10 @@ def apply_cdr_adjustment(
     if company_id in tor_cids:
         ratio = cdr_ratios.get(company_id, default_cdr)
         if ratio and ratio > 0:
+            trace_division(
+                "price_utils", company_id, price, ratio, price / ratio,
+                price_source="unanimous",
+            )
             price = price / ratio
             if prev_close is not None:
                 prev_close = prev_close / ratio

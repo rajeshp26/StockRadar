@@ -60,6 +60,7 @@ web/e2e/
 .omo/
 .opencode/
 .playwright-mcp/
+.tmp-*/
 
 # Backend log files
 backend/*.log
@@ -124,3 +125,50 @@ backend/scripts/run_earnings_batch.py
 
 # Generated telemetry analysis artifact (session/telemetry aggregates)
 telemetry_analysis.json
+
+# Ad-hoc diagnostic scripts (agent analysis; not part of application).
+# Extends the check_/verify_/investigate_/debug_/smoke_/poc_ families above.
+backend/scripts/probe_*.py
+backend/scripts/audit_*.py
+backend/scripts/diagnose_*.py
+backend/scripts/inspect_*.py
+backend/scripts/dump_*.py
+backend/scripts/analyze_*.py
+backend/scripts/census_*.py
+backend/scripts/crossvalidate_*.py
+backend/scripts/map_*.py
+backend/scripts/classify_*.py
+backend/scripts/quantify_*.py
+backend/scripts/trace_*.py
+backend/scripts/attribute_*.py
+backend/scripts/assess_*.py
+backend/scripts/refetch_*.py
+backend/scripts/purge_*.py
+backend/scripts/profile_*.py
+backend/scripts/compare_*.py
+backend/scripts/date_*.py
+backend/scripts/e2e_verify_*.py
+backend/scripts/find_*.py
+backend/scripts/_t02_*
+
+# Diagnostic outputs and scratch state
+backend/scripts/_*.out
+backend/verification_output/
+backend/uvicorn_restart.err
+backend/blk*.json
+
+# Root-level patch drafts and scratch (superseded by .planning/patches)
+/*.patch
+/.g4fix/
+/.blk*.json
+/.t01_*.json
+
+# Frontend scratch probes
+web/public/*-probe.html
+web/vitest.*.tmp.config.ts
+
+# Root-level scratch state and generated verification output
+/.blocker_*.json
+/verification_output/
+; fi; done; echo ---
+docs/*.patch

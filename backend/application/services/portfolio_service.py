@@ -26,6 +26,7 @@ from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
 from providers.base import StockDataProvider
 from providers.yfinance_provider import YFinanceProvider
+from shared.portfolio_event_payload import build_transaction_event_data
 from shared.portfolio_stats import (
     annualize_return,
     compute_annualized_volatility,
@@ -34,6 +35,8 @@ from shared.portfolio_stats import (
     compute_portfolio_mwr,
     compute_portfolio_twr,
 )
+from shared.cdr_utils import is_cdr_transaction
+from shared.price_rows import sanitize_daily_price_rows
 from shared.snapshot_builder import (
     CDR_RATIO,
     _classify_lot_action,
@@ -43,6 +46,7 @@ from shared.snapshot_builder import (
     resolve_price_forward_filled,
 )
 from shared.time_utils import now_utc, parse_db_timestamp
+from shared.transfer_reconciliation import reconcile_transfers
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +88,15 @@ class PortfolioService:
         portfolio_repo: PortfolioRepository | None = None,
         financial_repo: FinancialRepository | None = None,
         stock_provider: StockDataProvider | None = None,
+        defeat_beta_provider: Any | None = None,
     ):
         self.portfolio_repo = portfolio_repo or PortfolioRepository()
         self.financial_repo = financial_repo or FinancialRepository()
         self.stock_provider = stock_provider or YFinanceProvider()
+        if defeat_beta_provider is None:
+            from dependencies import get_defeat_beta_provider
+            defeat_beta_provider = get_defeat_beta_provider()
+        self.defeat_beta_provider = defeat_beta_provider
 
 
     # ========================================================================
@@ -304,6 +313,7 @@ class PortfolioService:
                     "direction": tx.direction,
                     "symbol": tx.symbol,
                     "security_name": tx.security_name,
+                    "exchange_override": tx.exchange_override,
                     "currency": tx.currency,
                     "quantity": float(tx.quantity) if tx.quantity else None,
                     "unit_price": float(tx.unit_price) if tx.unit_price else None,
@@ -317,6 +327,7 @@ class PortfolioService:
             # --- Write events only (legacy transactions table is frozen) ---
             inserted_count = len(db_transactions)
             duplicate_count = 0
+            transfer_reconciliation = None
             try:
                 from infrastructure.repositories.event_store import EventStore
                 event_store = EventStore()
@@ -327,17 +338,22 @@ class PortfolioService:
                         "event_type": "transaction_imported",
                         "aggregate_id": f"account_{tx_data.get('account_id')}",
                         "aggregate_type": "account",
-                        "data": {
-                            "account_id": tx_data.get("account_id"),
-                            "company_id": tx_data.get("company_id"),
-                            "transaction_date": tx_data.get("transaction_date"),
-                            "activity_type": tx_data.get("activity_type"),
-                            "symbol": tx_data.get("symbol"),
-                            "quantity": tx_data.get("quantity"),
-                            "unit_price": tx_data.get("unit_price"),
-                            "net_cash_amount": tx_data.get("net_cash_amount"),
-                            "currency": tx_data.get("currency"),
-                        },
+                        "data": build_transaction_event_data(
+                            account_id=tx_data.get("account_id"),
+                            company_id=tx_data.get("company_id"),
+                            transaction_date=tx_data.get("transaction_date"),
+                            settlement_date=tx_data.get("settlement_date"),
+                            activity_type=tx_data.get("activity_type"),
+                            activity_sub_type=tx_data.get("activity_sub_type"),
+                            direction=tx_data.get("direction"),
+                            symbol=tx_data.get("symbol"),
+                            security_name=tx_data.get("security_name"),
+                            exchange_override=tx_data.get("exchange_override"),
+                            quantity=tx_data.get("quantity"),
+                            unit_price=tx_data.get("unit_price"),
+                            net_cash_amount=tx_data.get("net_cash_amount"),
+                            currency=tx_data.get("currency"),
+                        ),
                         "metadata": {
                             "import_batch_id": str(import_batch_id),
                             "entry_source": "csv_import",
@@ -345,6 +361,7 @@ class PortfolioService:
                         "idempotency_key": event_key,
                     })
                 event_store.append_events_batch(tx_events)
+                transfer_reconciliation = reconcile_transfers(tx_events)
             except Exception as e:
                 logger.error(
                     f"Dual-write event creation failed for batch {import_batch_id}: {e}. "
@@ -374,10 +391,31 @@ class PortfolioService:
                 "symbols_created": symbols_created,
                 "companies_created_count": len(symbols_created),
                 "account_types": parse_result.account_type_summary,
+                "transfer_reconciliation": (
+                    {
+                        "transfer_count": transfer_reconciliation.transfer_count,
+                        "paired_count": transfer_reconciliation.paired_count,
+                        "unpaired_count": transfer_reconciliation.unpaired_count,
+                    }
+                    if transfer_reconciliation is not None
+                    else None
+                ),
                 "warnings": list(parse_result.warnings),
             }
 
             warnings = list(parse_result.warnings)
+            if (
+                transfer_reconciliation is not None
+                and transfer_reconciliation.transfer_count
+            ):
+                warnings.append(transfer_reconciliation.summary())
+                leg_warnings = transfer_reconciliation.warnings
+                warnings.extend(leg_warnings[:10])
+                if len(leg_warnings) > 10:
+                    warnings.append(
+                        f"...and {len(leg_warnings) - 10} further unpaired transfer "
+                        "leg(s) not listed individually"
+                    )
             if symbols_created:
                 warnings.append(
                     f"{len(symbols_created)} new compan{'y' if len(symbols_created) == 1 else 'ies'} "
@@ -676,33 +714,22 @@ class PortfolioService:
             if res.data and res.data[0].get("current_price"):
                 return {"price": float(res.data[0]["current_price"]), "source": "current_market_data"}
 
-            # Tier 2: price_history (latest close, split-adjusted)
+            # Tier 2: price_history (latest close, split-adjusted via adj_close)
             res = (
                 supabase.table("price_history")
-                .select("close_price, price_date")
+                .select("adj_close, close_price, price_date")
                 .eq("company_id", cid)
                 .order("price_date", desc=True)
                 .limit(1)
                 .execute()
             )
-            if res.data and res.data[0].get("close_price"):
-                px = float(res.data[0]["close_price"])
-                pd_str = res.data[0].get("price_date")
-                if pd_str:
-                    if isinstance(pd_str, str):
-                        pd = date.fromisoformat(pd_str)
-                    elif isinstance(pd_str, datetime):
-                        pd = pd_str.date()
-                    else:
-                        pd = pd_str
-                    split_factors = self.portfolio_repo._get_split_factors([cid])
-                    if cid in split_factors:
-                        cumulative_factor = 1.0
-                        for sd, adj in split_factors[cid]:
-                            if pd < sd:
-                                cumulative_factor *= adj
-                        px *= cumulative_factor
-                return {"price": px, "source": "price_history"}
+            if res.data:
+                row = res.data[0]
+                adj = row.get("adj_close")
+                if adj is None:
+                    adj = row.get("close_price")
+                if adj is not None:
+                    return {"price": float(adj), "source": "price_history"}
 
         except Exception as e:
             logger.error(f"Failed to get price for {symbol}: {e}")
@@ -772,11 +799,14 @@ class PortfolioService:
             if needs_history:
                 daily_rows = await self._get_daily_price_history(symbol, cid, exchange=exchange)
                 if daily_rows:
-                    monthly_rows = self._compress_daily_to_monthly_eom(daily_rows)
-                    if monthly_rows:
-                        await self.financial_repo.upsert_price_history(monthly_rows)
+                    daily_out = sanitize_daily_price_rows(daily_rows, default_source="yfinance")
+                    if daily_out:
+                        split_rows = await self.defeat_beta_provider.get_splits_optimized(symbol, cid)
+                        if split_rows:
+                            await self.financial_repo.upsert_splits(split_rows)
+                        await self.financial_repo.upsert_price_history(daily_out)
                         await self.financial_repo.update_price_refresh_marker(cid)
-                        logger.info("Price history loaded for %s: %d monthly rows", symbol, len(monthly_rows))
+                        logger.info("Price history loaded for %s: %d daily rows", symbol, len(daily_out))
 
         except Exception as e:
             logger.warning("Price provider error for %s: %s", symbol, e)
@@ -821,52 +851,6 @@ class PortfolioService:
             return []
         except Exception as e:
             logger.debug("Failed to fetch daily price history for %s: %s", symbol, e)
-            return []
-
-    @staticmethod
-    def _compress_daily_to_monthly_eom(
-        daily_rows: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """
-        Convert daily OHLCV rows to monthly EOM rows:
-          - Group by (year, month)
-          - Pick the row with the latest price_date (last trading day of the month)
-          - Preserve all OHLCV fields
-        """
-        if not daily_rows:
-            return []
-        try:
-            import pandas as pd
-            df = pd.DataFrame(daily_rows)
-            if df.empty or "price_date" not in df.columns:
-                return []
-            df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
-            df = df.dropna(subset=["price_date"])
-            if df.empty:
-                return []
-            df["year"] = df["price_date"].dt.year
-            df["month"] = df["price_date"].dt.month
-            idx = df.groupby(["year", "month"])["price_date"].idxmax()
-            last_trading_rows = df.loc[idx].copy()
-            out: list[dict[str, Any]] = []
-            for _, r in last_trading_rows.iterrows():
-                out.append({
-                    "company_id": int(r.get("company_id")),
-                    "price_date": r["price_date"].date(),
-                    "open_price": float(r["open_price"]) if pd.notna(r.get("open_price")) else None,
-                    "close_price": float(r["close_price"]) if pd.notna(r.get("close_price")) else None,
-                    "high_price": float(r["high_price"]) if pd.notna(r.get("high_price")) else None,
-                    "low_price": float(r["low_price"]) if pd.notna(r.get("low_price")) else None,
-                    "volume": int(r["volume"]) if pd.notna(r.get("volume")) else None,
-                    "data_source": str(r.get("data_source") or "yfinance"),
-                })
-            out.sort(key=lambda x: x["price_date"])
-            return out
-        except ImportError:
-            logger.error("pandas required for _compress_daily_to_monthly_eom")
-            return []
-        except Exception as e:
-            logger.error("Failed to compress daily to monthly EOM: %s", e)
             return []
 
     # ========================================================================
@@ -975,6 +959,31 @@ class PortfolioService:
             Decimal(str(d.get("amount") or 0)) for d in all_divs
         )
 
+        # Lifetime dividends (all records, no fiscal-year filter)
+        lifetime_divs = self.portfolio_repo.get_accounts_dividends_by_year(account_ids_list)
+        lifetime_dividends = sum(
+            Decimal(str(d.get("amount") or 0)) for d in lifetime_divs
+        )
+
+        # Current cash per account, FX-converted to account currency.
+        # Mirrors the snapshot path so the overview "Total Value" (holdings +
+        # cash) aligns with the performance chart's snapshot total_value.
+        today = now_utc().date()
+        cash_by_account: dict[int, Decimal] = {}
+        total_cash = Decimal("0.00")
+        try:
+            from shared.fx_service import FXService
+            _fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
+            for account in accounts:
+                acc_ccy = account.get("currency") or "CAD"
+                cb = self.portfolio_repo.get_cash_balance(
+                    account["account_id"], today, acc_ccy, _fx_svc,
+                )
+                cash_by_account[account["account_id"]] = cb
+                total_cash += cb
+        except Exception as e:
+            logger.warning(f"Cash balance computation failed for overview (user {user_id}): {e}")
+
         # Top 10 holdings by value
         top_holdings = sorted(
             holdings, key=lambda h: h.get("current_value") or 0, reverse=True
@@ -998,6 +1007,7 @@ class PortfolioService:
                 "holdings_count": len(acc_holdings),
                 "total_value": float(acc_value),
                 "total_cost": float(acc_cost),
+                "cash_balance": float(cash_by_account.get(account["account_id"], Decimal("0.00"))),
                 "gain_loss": float(acc_value - acc_cost),
                 "gain_loss_pct": (
                     float((acc_value - acc_cost) / acc_cost * 100) if acc_cost > 0 else 0
@@ -1008,10 +1018,13 @@ class PortfolioService:
         return {
             "success": True,
             "net_worth": float(total_value),
+            "total_value": float(total_value) + float(total_cash),
+            "cash_balance": float(total_cash),
             "total_cost_basis": float(total_cost),
             "total_gain_loss": float(total_gain_loss),
             "total_gain_loss_pct": float(total_gain_loss_pct),
             "ytd_dividends": float(ytd_dividends),
+            "total_dividends": float(lifetime_dividends),
             "total_holdings_count": len(holdings),
             "accounts_count": len(accounts),
             "top_holdings": top_holdings,
@@ -1266,17 +1279,17 @@ class PortfolioService:
                 event_type="transaction_imported",
                 aggregate_id=f"account_{account_id}",
                 aggregate_type="account",
-                data={
-                    "account_id": account_id,
-                    "company_id": company_id,
-                    "transaction_date": transaction_date.isoformat(),
-                    "activity_type": activity_type,
-                    "symbol": symbol,
-                    "quantity": float(quantity) if quantity else None,
-                    "unit_price": float(unit_price) if unit_price else None,
-                    "net_cash_amount": net_cash_amount,
-                    "notes": notes,
-                },
+                data=build_transaction_event_data(
+                    account_id=account_id,
+                    company_id=company_id,
+                    transaction_date=transaction_date.isoformat(),
+                    activity_type=activity_type,
+                    symbol=symbol,
+                    quantity=float(quantity) if quantity else None,
+                    unit_price=float(unit_price) if unit_price else None,
+                    net_cash_amount=net_cash_amount,
+                    notes=notes,
+                ),
                 metadata={
                     "entry_source": "manual",
                     "created_by_user_id": user_id,
@@ -1456,6 +1469,54 @@ class PortfolioService:
             dates.append(end_str)
         return dates
 
+    _RESOLUTION_BY_PERIOD = {
+        "1D": "day",
+        "1W": "day",
+        "1M": "day",
+        "3M": "day",
+        "1Y": "month",
+        "YTD": "month",
+        "5Y": "quarter",
+        "ALL": "quarter",
+    }
+
+    @classmethod
+    def _resolution_for_period(cls, period: str) -> str:
+        """Chart resolution for a period: daily for short ranges, then coarser."""
+        return cls._RESOLUTION_BY_PERIOD.get(period.upper(), "day")
+
+    @classmethod
+    def _downsample_snapshots(
+        cls, snapshots: list[dict[str, Any]], resolution: str
+    ) -> list[dict[str, Any]]:
+        """Reduce the daily series to the resolution the chart renders.
+
+        Storage stays daily; only the served series is bucketed. Each calendar
+        month/quarter contributes its last observation (period-end close), and the
+        first observation is always kept so the chart spans the requested window
+        instead of starting a bucket late.
+
+        This is presentation only. Return metrics must be computed from the full
+        daily series before this is applied -- deriving TWR or best_day from
+        month-apart rows is the defect A6 removed.
+        """
+        if resolution == "day" or len(snapshots) <= 1:
+            return snapshots
+
+        def bucket_key(iso: str) -> tuple[int, int]:
+            d = date.fromisoformat(iso)
+            period_index = d.month if resolution == "month" else (d.month - 1) // 3 + 1
+            return (d.year, period_index)
+
+        kept: list[dict[str, Any]] = [snapshots[0]]
+        for prev, snap in zip(snapshots, snapshots[1:]):
+            if bucket_key(snap["date"]) != bucket_key(prev["date"]):
+                if kept[-1] is not prev:
+                    kept.append(prev)
+        if kept[-1] is not snapshots[-1]:
+            kept.append(snapshots[-1])
+        return kept
+
     def _compute_fifo_snapshots(
         self,
         lots: dict[tuple, list],
@@ -1583,32 +1644,6 @@ class PortfolioService:
             for t in raw
         ]
 
-    def _compress_snapshots_by_interval(
-        self, snapshots: list[dict], period: str
-    ) -> list[dict]:
-        if not snapshots:
-            return snapshots
-
-        step_days = {"1D": 0, "1W": 0, "1M": 1, "3M": 3, "1Y": 7, "5Y": 14, "YTD": 7, "ALL": 30}
-        step = step_days.get(period.upper(), 7)
-
-        if step <= 0:
-            return snapshots
-
-        compressed = [snapshots[0]]
-        last_selected = date.fromisoformat(snapshots[0]["date"])
-
-        for s in snapshots[1:]:
-            current = date.fromisoformat(s["date"])
-            if (current - last_selected).days >= step:
-                compressed.append(s)
-                last_selected = current
-
-        if compressed[-1]["date"] != snapshots[-1]["date"]:
-            compressed.append(snapshots[-1])
-
-        return compressed
-
     def _compute_returns_from_snapshots(
         self, snapshots: list[dict], period: str
     ) -> dict[str, Any]:
@@ -1713,6 +1748,16 @@ class PortfolioService:
 
         use_locf = getattr(settings, "ENABLE_PERFORMANCE_LOCF", True)
 
+        # fx_applied=False => unconverted USD valued as CAD; a step onto such a date is an artifact, not a market move
+        fx_unconverted_dates: set[str] = {
+            s["snapshot_date"]
+            for s in raw_snapshots
+            if any(
+                h.get("fx_applied") is False
+                for h in (s.get("holdings_json") or [])
+            )
+        }
+
         by_account: dict[int, list[dict]] = defaultdict(list)
         for s in raw_snapshots:
             by_account[s["account_id"]].append(s)
@@ -1794,14 +1839,26 @@ class PortfolioService:
                      "snapshot_date": current_merged["date"]},
                     threshold=spike_threshold,
                 )
-                if spike and d != latest_date:
-                    # Only suppress spikes on gap-filled dates, NOT on the latest
-                    # date which has real data from the daily job.
-                    logger.warning(
-                        "LOCF merge spike on %s: %s", d, spike["message"]
-                    )
+                if spike and d != latest_date and (date_with_locf or d in fx_unconverted_dates):
+                    # Suppress only known-artifact dates (fx-conversion failure
+                    # or LOCF gap-fill). A fully-real date must NOT be
+                    # suppressed: the frozen anchor re-triggers every later check.
                     spike_detected = True
-                    # Carry forward previous values (suppress spike)
+                    if d in fx_unconverted_dates and not date_with_locf:
+                        logger.warning(
+                            "FX-unconverted spike on %s: %s", d, spike["message"]
+                        )
+                        # Keep per-account state: it holds real, fx-flawed values.
+                    else:
+                        logger.warning(
+                            "LOCF merge spike on %s: %s", d, spike["message"]
+                        )
+                        # Revert per-account state so future LOCF uses old values
+                        last_value = saved_last_value
+                        last_cost = saved_last_cost
+                        last_cash = saved_last_cash
+                        last_nd = saved_last_nd
+                        date_with_locf = False
                     current_merged = {
                         "date": d,
                         "value": prev_merged["value"],
@@ -1809,17 +1866,11 @@ class PortfolioService:
                         "cash_balance": prev_merged["cash_balance"],
                         "net_deposits": prev_merged["net_deposits"],
                     }
-                    # Revert per-account state so future LOCF uses old values
-                    last_value = saved_last_value
-                    last_cost = saved_last_cost
-                    last_cash = saved_last_cash
-                    last_nd = saved_last_nd
-                    date_with_locf = False
                 elif spike:
-                    # Spike on latest date — this is real daily job data, not a spike.
-                    # Log it but do NOT suppress.
+                    # Real, fully-converted snapshots (or the latest date) —
+                    # log it but do NOT suppress.
                     logger.info(
-                        "LOCF merge: spike on latest date %s not suppressed (real data): %s",
+                        "LOCF merge: spike on %s not suppressed (real data): %s",
                         d, spike["message"],
                     )
 
@@ -1854,13 +1905,26 @@ class PortfolioService:
                 **returns,
             }
 
-        snapshots = self._compress_snapshots_by_interval(snapshots, period)
+        # Metrics come from the FULL daily series; only the served series is bucketed.
+        # The former _compress_snapshots_by_interval was removed because it sampled one
+        # row per step days and then derived best_day/worst_day/twr from rows a month
+        # apart, so the spike threshold never saw the series it was meant to judge. That
+        # defect cannot recur while the ordering below holds: _compute_returns_from_
+        # snapshots runs on every daily row, and bucketing happens after it.
+        #
+        # Buckets are calendar month/quarter period-end closes rather than LTTB, because
+        # a portfolio value series is read as month-end and quarter-end balances; LTTB
+        # would keep shape at the cost of dates that mean nothing financially.
+        # Rationale: .planning/USER-ASK.md A6.
         returns = self._compute_returns_from_snapshots(snapshots, period)
+        chart_snapshots = self._downsample_snapshots(
+            snapshots, self._resolution_for_period(period)
+        )
 
         return {
             "success": True,
             "period": period,
-            "snapshots": snapshots,
+            "snapshots": chart_snapshots,
             "data_source": "snapshots",
             "data_quality_flag": overall_quality,
             "return_methodology": "twr",
@@ -1968,6 +2032,7 @@ class PortfolioService:
                     "quantity": float(qty), "cost_per_share": float(cost_per_share),
                     "date": t["transaction_date"].isoformat(),
                     "symbol": t.get("symbol", ""),
+                    "is_cdr": is_cdr_transaction(t.get("raw_data"), t.get("security_name")),
                 })
             elif action == "SELL":
                 sell_qty = abs(float(t.get("quantity") or 0))
@@ -2011,6 +2076,7 @@ class PortfolioService:
                             "quantity": float(qty), "cost_per_share": float(cost_per_share),
                             "date": d,
                             "symbol": t.get("symbol", ""),
+                            "is_cdr": is_cdr_transaction(t.get("raw_data"), t.get("security_name")),
                         })
                     elif action == "SELL":
                         sell_qty = abs(float(t.get("quantity") or 0))
@@ -2025,31 +2091,26 @@ class PortfolioService:
                                 remaining = 0
                 txn_index += 1
 
-            # Group holdings by account_id for per-account snapshots
-            cid_holdings_by_account: dict[int, dict[int, dict]] = defaultdict(dict)
+            # Key by (cid, is_cdr), not cid: one row can carry only one exchange_override, so a
+            # collapsed mixed position prices one lot wrongly (BLK-027's 10x overvaluation).
+            cid_holdings_by_account: dict[int, dict[tuple[int, bool], dict]] = defaultdict(dict)
             for (aid, cid), lot_list in lots.items():
-                qty_held = sum(l["quantity"] for l in lot_list)
-                if qty_held <= 0.001:
-                    continue
-                avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
-                total_cost_holding = qty_held * avg_cost
-                earliest_lot_date = min((l["date"] for l in lot_list if l.get("date")), default=None)
-                lots_for_holding = [
-                    {"quantity": l["quantity"], "cost_per_share": l["cost_per_share"], "date": l.get("date")}
-                    for l in lot_list
-                ]
-                if cid in cid_holdings_by_account[aid]:
-                    existing = cid_holdings_by_account[aid][cid]
-                    combined_qty = existing["quantity"] + qty_held
-                    existing["total_cost"] += total_cost_holding
-                    existing["quantity"] = combined_qty
-                    existing["average_cost"] = existing["total_cost"] / combined_qty if combined_qty > 0 else 0
-                    existing["lots"].extend(lots_for_holding)
-                    if earliest_lot_date and (existing.get("trade_date") is None or earliest_lot_date < existing["trade_date"]):
-                        existing["trade_date"] = earliest_lot_date
-                else:
-                    symbol = next((l.get("symbol", "") for l in lot_list if l.get("symbol")), "")
-                    cid_holdings_by_account[aid][cid] = {
+                by_cdr: dict[bool, list] = defaultdict(list)
+                for l in lot_list:
+                    by_cdr[bool(l.get("is_cdr"))].append(l)
+                for is_cdr, cdr_lots in by_cdr.items():
+                    qty_held = sum(l["quantity"] for l in cdr_lots)
+                    if qty_held <= 0.001:
+                        continue
+                    avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in cdr_lots) / qty_held
+                    total_cost_holding = qty_held * avg_cost
+                    earliest_lot_date = min((l["date"] for l in cdr_lots if l.get("date")), default=None)
+                    lots_for_holding = [
+                        {"quantity": l["quantity"], "cost_per_share": l["cost_per_share"], "date": l.get("date")}
+                        for l in cdr_lots
+                    ]
+                    symbol = next((l.get("symbol", "") for l in cdr_lots if l.get("symbol")), "")
+                    cid_holdings_by_account[aid][(cid, is_cdr)] = {
                         "company_id": cid, "symbol": symbol,
                         "quantity": qty_held,
                         "total_cost": total_cost_holding,
@@ -2057,6 +2118,7 @@ class PortfolioService:
                         "account_id": aid,
                         "trade_date": earliest_lot_date,
                         "lots": lots_for_holding,
+                        "exchange_override": "TOR" if is_cdr else None,
                     }
 
             # Build per-account snapshots and combine
@@ -2091,6 +2153,7 @@ class PortfolioService:
                     prices_by_company=prices_by_company,
                     job_id="fallback",
                     account_currency=account_currency,
+                    lot_cdr_authoritative=True,
                 )
                 total_value += Decimal(str(snapshot_row["total_value"]))
                 total_cost += Decimal(str(snapshot_row["cost_basis"]))
@@ -2316,11 +2379,9 @@ class PortfolioService:
         try:
             sym_up = symbol.upper()
             company_id = txns[0].get("company_id") if txns else None
-            split_factors = {}
             is_cdr = False
             cdr_ratio_val = None
             if company_id:
-                split_factors = self.portfolio_repo._get_split_factors([company_id])
                 # Check if this is a CDR holding
                 try:
                     hold_check = supabase.table("portfolio_holdings").select("exchange_override") \
@@ -2340,7 +2401,7 @@ class PortfolioService:
             if company_id:
                 rows = (
                     supabase.table("price_history")
-                    .select("price_date, close_price")
+                    .select("price_date, adj_close, close_price")
                     .eq("company_id", company_id)
                     .gte("price_date", (start_date - timedelta(days=7)).isoformat())
                     .lte("price_date", end_date.isoformat())
@@ -2348,9 +2409,9 @@ class PortfolioService:
                     .execute()
                 )
                 if rows.data:
-                    cid_factors = split_factors.get(company_id, [])
                     for row in rows.data:
-                        px = float(row["close_price"])
+                        adj = row.get("adj_close")
+                        px = float(adj if adj is not None else row["close_price"])
                         pd_str = row["price_date"]
                         if isinstance(pd_str, str):
                             pd = date.fromisoformat(pd_str)
@@ -2358,12 +2419,7 @@ class PortfolioService:
                             pd = pd_str.date()
                         else:
                             pd = pd_str
-                        cumulative_factor = 1.0
-                        for sd, adj in cid_factors:
-                            if pd < sd:
-                                cumulative_factor *= adj
-                        px *= cumulative_factor
-                        # Apply CDR adjustment: price_history stores US USD prices
+                        # Apply CDR adjustment: adj_close stores US USD prices
                         # CDR price = (US_price / ratio) * FX_rate (USD→CAD)
                         if is_cdr and cdr_ratio_val is not None:
                             px = px / cdr_ratio_val
@@ -2753,7 +2809,7 @@ class PortfolioService:
         try:
             resp = (
                 supabase.table("price_history")
-                .select("price_date, close_price")
+                .select("price_date, adj_close, close_price")
                 .eq("company_id", benchmark_company_id)
                 .gte("price_date", (start_date - timedelta(days=7)).isoformat())
                 .lte("price_date", end_date.isoformat())
@@ -2768,8 +2824,6 @@ class PortfolioService:
             logger.info("No price history for benchmark company_id=%s", benchmark_company_id)
             return None
 
-        benchmark_split_factors = self.portfolio_repo._get_split_factors([benchmark_company_id]).get(benchmark_company_id, [])
-
         price_map: dict[str, float] = {}
         for row in resp.data:
             pd_val = row["price_date"]
@@ -2779,14 +2833,8 @@ class PortfolioService:
                 pd_str = pd_val.isoformat()
             else:
                 continue
-            px = float(row["close_price"])
-            if benchmark_split_factors:
-                pd = date.fromisoformat(pd_str)
-                cumulative_factor = 1.0
-                for sd, adj in benchmark_split_factors:
-                    if pd < sd:
-                        cumulative_factor *= adj
-                px *= cumulative_factor
+            adj = row.get("adj_close")
+            px = float(adj if adj is not None else row["close_price"])
             price_map[pd_str] = px
 
         if not price_map:

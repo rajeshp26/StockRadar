@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<ruleset name="framework-baseline"
+    xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 http://pmd.sourceforge.net/ruleset_2_0_0.xsd">
+
+  <description>
+    Baseline PMD ruleset for this framework's Java code. Complements
+    checkstyle-magic-numbers.xml rather than duplicating it: Checkstyle here
+    is about naming/magic-values/dead-catch, PMD's job below is best-practice
+    and error-prone patterns that a naming-and-formatting tool doesn't cover.
+
+    Verified against a deliberately bad Java file during this framework's
+    audit -- AvoidLiteralsInIfCondition and SystemPrintln both fired as
+    expected. PMD's default profiles for these categories are large (>50
+    rules each); this file references the categories wholesale rather than
+    hand-picking rule names, so coverage grows automatically as PMD adds
+    rules to these categories in future releases. A project's own
+    pmd-ruleset.xml at the repo root takes precedence over this file (see
+    framework/gates/g4_executable.sh); this is the fallback baseline.
+
+    Note: neither PMD nor Checkstyle reliably catches a hardcoded credential
+    whose variable name doesn't match an obvious pattern -- that's what the
+    gitleaks pass in g4_executable.sh is for (verified: it catches known
+    secret *formats* regardless of variable name; PMD/Checkstyle catch
+    naming-heuristic and structural issues instead).
+  </description>
+
+  <rule ref="category/java/bestpractices.xml"/>
+  <rule ref="category/java/errorprone.xml"/>
+  <rule ref="category/java/security.xml"/>
+
+</ruleset>

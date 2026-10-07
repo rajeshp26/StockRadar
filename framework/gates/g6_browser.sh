@@ -15,7 +15,13 @@ shape="${REQUIREMENT_SHAPE:-}"
 fe_changed="$(changed_source_files | grep -E '^src/frontend/.*\.(tsx|ts|css)$' || true)"
 
 if [ -z "$fe_changed" ] && [ "$shape" != "visible_behaviour" ]; then
-  skip "no visible-behaviour requirement and no frontend source changed"
+  persist skip "no visible-behaviour requirement and no frontend source changed"
+  # G6 emits ONLY 0/1/3 (EXIT_CODES.md:14 row, :29). Exit 4 is outside its
+  # vocabulary and a vacuous exit 0 is forbidden, so nothing-to-judge maps to
+  # UNVERIFIABLE. This overstates the gap rather than passing vacuously.
+  unverifiable \
+    "no visible-behaviour requirement and no frontend source changed" \
+    "{\"requirement_shape\":\"${shape:-null}\",\"frontend_files_changed\":0}"
 fi
 
 # --- driver availability -------------------------------------------------------

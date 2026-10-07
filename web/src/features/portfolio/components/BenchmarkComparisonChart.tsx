@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { BENCHMARK_COLORS, FALLBACK_COLORS } from '@/lib/colors';
 import { getDateAxis, formatAxisTick } from '@/lib/chart-time-axis';
+import { formatAxisNumber } from '@/lib/compact-number';
 import { useChartWidth } from '@/lib/use-chart-width';
 import type { BenchmarkCompareResponse } from '../types/portfolio.types';
 
@@ -75,9 +76,7 @@ export function BenchmarkComparisonChart({ data }: BenchmarkComparisonChartProps
                             tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 11 }}
                             axisLine={false}
                             tickLine={false}
-                            tickFormatter={(val: number) =>
-                                val >= 1000 ? `${(val / 1000).toFixed(1)}k` : val.toFixed(0)
-                            }
+                            tickFormatter={(val: number) => formatAxisNumber(val)}
                         />
                         <Tooltip
                             contentStyle={{

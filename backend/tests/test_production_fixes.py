@@ -123,7 +123,7 @@ class TestEarningsForecastIdGeneration:
 # ============================================================================
 
 class TestPriceHistoryOverflowClamping:
-    """Verify extreme price values are clamped to numeric(12,4) limit."""
+    """Verify extreme price values are clamped to numeric(16,4) limit."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, mock_supabase_client, monkeypatch):
@@ -138,18 +138,18 @@ class TestPriceHistoryOverflowClamping:
             {
                 "company_id": 1,
                 "price_date": date(2026, 1, 31),
-                "open_price": 150_000_000.0,
-                "close_price": 160_000_000.0,
-                "high_price": 170_000_000.0,
-                "low_price": 140_000_000.0,
+                "open_price": 1.5e12,
+                "close_price": 1.6e12,
+                "high_price": 1.7e12,
+                "low_price": 1.4e12,
                 "volume": 1000,
                 "data_source": "yfinance",
             }
         ]
         await self.repo.upsert_price_history(rows)
         payload = self.client.table.return_value.upsert.call_args[0][0]
-        assert payload[0]["close_price"] == 99_999_999.9999
-        assert payload[0]["open_price"] == 99_999_999.9999
+        assert payload[0]["close_price"] == 999_999_999_999.9999
+        assert payload[0]["open_price"] == 999_999_999_999.9999
 
     async def test_normal_price_unaffected(self):
         rows = [
@@ -189,7 +189,7 @@ class TestEtfEarlyExit:
     async def test_etf_returns_early_with_complete_dict(self):
         result = await self.scheduler._process_company("SPY", 1, security_type="etf")
         assert result["skipped_etf"] is True
-        assert result["price_history_monthly"] == 0
+        assert result["price_history_daily"] == 0
         assert result["revenue_forecast"] == 0
 
     async def test_index_returns_early(self):
@@ -335,7 +335,7 @@ class TestDelistedSymbolPlannerGuard:
     async def test_process_company_returns_skipped_delisted(self):
         result = await self.scheduler._process_company("WBA", 1)
         assert result["skipped_delisted"] is True
-        assert result["price_history_monthly"] == 0
+        assert result["price_history_daily"] == 0
         assert "WBA" in self.scheduler.skipped_symbols
 
     async def test_process_company_does_not_call_providers(self):

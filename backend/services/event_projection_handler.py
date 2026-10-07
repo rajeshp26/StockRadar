@@ -12,6 +12,11 @@ from pathlib import Path
 
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
+from shared.cdr_utils import (
+    EXCHANGE_OVERRIDE_TOR,
+    derive_account_cdr_companies,
+    matches_cdr_name,
+)
 from shared.replay_engine import AccountState, ReplayEngine
 
 logger = logging.getLogger("stockerpro.services.event_projection_handler")
@@ -118,17 +123,8 @@ class EventProjectionHandler:
 
     def _atomic_write_holdings(self, account_id: int, state: AccountState) -> None:
         """DELETE + INSERT inside a transaction, using Supabase RPC if available."""
-        current_overrides = {}
-        try:
-            existing = supabase.table("portfolio_holdings")\
-                .select("company_id, exchange_override")\
-                .eq("account_id", account_id)\
-                .execute()
-            for row in existing.data or []:
-                if row.get("exchange_override"):
-                    current_overrides[row["company_id"]] = row["exchange_override"]
-        except Exception:
-            pass
+        # Union of holdings + transactions + events so replays never drop TOR.
+        overrides = self._collect_exchange_overrides(account_id)
 
         rows = []
         for cid, holding in state.holdings.items():
@@ -141,7 +137,7 @@ class EventProjectionHandler:
                 "total_cost": float(holding.total_cost),
                 "realized_gain_loss": float(holding.realized_gain_loss),
                 "currency": "CAD",
-                "exchange_override": current_overrides.get(cid),
+                "exchange_override": overrides.get(cid),
                 "first_purchase_date": holding.trade_date.isoformat() if holding.trade_date else None,
                 "last_transaction_date": datetime.now(UTC).date().isoformat(),
                 "updated_at": datetime.now(UTC).isoformat(),
@@ -162,6 +158,50 @@ class EventProjectionHandler:
         supabase.table("portfolio_holdings").delete().eq("account_id", account_id).execute()
         if rows:
             supabase.table("portfolio_holdings").insert(rows).execute()
+
+    def _collect_exchange_overrides(self, account_id: int) -> dict:
+        """Holdings + transaction-derived + event-derived CDR overrides.
+
+        Current holdings carry manual/migrated values; stored transactions carry
+        the historical CDR classification (incl. sold positions); account events
+        carry the forward-durable signal because imports write events only.
+        TOR from any source is authoritative.
+        """
+        overrides: dict[int, str] = {}
+        try:
+            existing = supabase.table("portfolio_holdings")\
+                .select("company_id, exchange_override")\
+                .eq("account_id", account_id)\
+                .execute()
+            for row in existing.data or []:
+                if row.get("exchange_override"):
+                    overrides[int(row["company_id"])] = row["exchange_override"]
+        except Exception:
+            pass
+        try:
+            for cid in derive_account_cdr_companies(supabase, account_id):
+                overrides[cid] = EXCHANGE_OVERRIDE_TOR
+        except Exception:
+            pass
+        try:
+            events = self.event_store.get_all_events(
+                aggregate_type="account",
+                aggregate_id=f"account_{account_id}",
+                event_type="transaction_imported",
+                limit=10000,
+            )
+            for ev in events:
+                data = ev.get("data", {}) or {}
+                cid = data.get("company_id")
+                if cid is None:
+                    continue
+                if data.get("exchange_override") == EXCHANGE_OVERRIDE_TOR or matches_cdr_name(
+                    data.get("security_name")
+                ):
+                    overrides[int(cid)] = EXCHANGE_OVERRIDE_TOR
+        except Exception:
+            pass
+        return overrides
 
     def rebuild_all_accounts(self) -> None:
         """Rebuild all accounts from events."""

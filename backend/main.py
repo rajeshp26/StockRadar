@@ -1,7 +1,7 @@
 # main.py
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
 import yfinance as yf
@@ -18,6 +18,12 @@ from auth import get_current_user
 from config import settings
 from database import supabase
 from dependencies import get_current_user_dep, limiter
+from shared.api_tracing import RequestTracingMiddleware
+from shared.logging_setup import (
+    CONSOLE_FORMAT,
+    install_correlation_stamping,
+    setup_debug_logging,
+)
 
 # Canadian exchange suffixes for yfinance (matches yfinance_provider.EXCHANGE_SUFFIX_MAP)
 _YF_SUFFIXES = [".TO", ".V", ".NE"]
@@ -25,27 +31,28 @@ _YF_SUFFIXES = [".TO", ".V", ".NE"]
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
-logging.basicConfig(level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO))
+# Stamp the correlation id onto every record before any handler formats it, so
+# CONSOLE_FORMAT's %(correlation_id)s is always populated. This runs before
+# basicConfig so the root handler is already using CONSOLE_FORMAT by the time
+# the first record is created. See logging_setup.install_correlation_stamping
+# for why this is a record factory rather than a Filter.
+install_correlation_stamping()
+logging.basicConfig(
+    level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO),
+    format=CONSOLE_FORMAT,
+)
 logger = logging.getLogger("stockerpro.main")
 
 # §4.8: correlation IDs — one ID per request, echoed on the response and
-# attached to every log record via a contextvar + filter so a request's logs
-# can be traced end-to-end.
-import uuid as _uuid
-from contextvars import ContextVar
-
-_request_correlation_id: ContextVar[str] = ContextVar(
-    "correlation_id", default="-"
-)
-
-
-class CorrelationIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.correlation_id = _request_correlation_id.get()
-        return True
-
-
-logging.getLogger().addFilter(CorrelationIdFilter())
+# attached to every log record via a contextvar + record factory so a request's
+# logs can be traced end-to-end.
+#
+# The contextvar lives in shared.debug_trace rather than here. It used to be
+# module-local, so no repository or service could read the active id without
+# importing main (circular) — and the nightly snapshot job, which runs in a
+# separate worker process with no request, therefore had no id at all. Jobs mint
+# one with debug_trace.trace_scope().
+setup_debug_logging()
 
 # -----------------------------------------------------------------------------
 # Background: real-time price monitor (existing)
@@ -239,18 +246,16 @@ async def lifespan(app: FastAPI):
     # See deployment docs for systemd/docker setup.
     # ──────────────────────────────────────────────────────────────────────
 
-    logger.info("ℹ️  Schedulers run in separate worker process (scheduler_worker.py)")
+    logger.info("Schedulers run in separate worker process (scheduler_worker.py)")
 
     try:
         yield
     finally:
         # SHUTDOWN ----------------------------------------------------------
         # Cancel background tasks
-        for tname, task in list(app.state.tasks.items()):
-            try:
+        for task in list(app.state.tasks.values()):
+            with suppress(Exception):
                 task.cancel()
-            except Exception:
-                pass
 
         for tname, task in list(app.state.tasks.items()):
             try:
@@ -280,19 +285,13 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.middleware("http")
-async def correlation_id_middleware(request, call_next):
-    corr_id = request.headers.get("X-Request-ID") or str(_uuid.uuid4())
-    token = _request_correlation_id.set(corr_id)
-    try:
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = corr_id
-        return response
-    finally:
-        _request_correlation_id.reset(token)
-
-
-@app.middleware("http")
 async def trace_request_middleware(request, call_next):
+    """Feeds the in-memory latency summary served by /internal/trace.
+
+    Separate from RequestTracingMiddleware on purpose: this one is a rolling
+    in-process aggregate, that one writes a durable per-request record. Dropping
+    this would leave /internal/trace reporting zero spans with no error.
+    """
     import time as _time
 
     from tracing import tracer
@@ -326,6 +325,12 @@ app.add_middleware(
     max_age=3600,
 )
 
+# Registered last so it is the OUTERMOST middleware: Starlette inserts each
+# add_middleware at index 0 and wraps user_middleware[0] last, so the final
+# registration runs first. The trace id must already be set when the cache,
+# timing, CORS and route layers run, or their records get stamped with None.
+app.add_middleware(RequestTracingMiddleware)
+
 # -----------------------------------------------------------------------------
 # System endpoints
 # -----------------------------------------------------------------------------
@@ -346,7 +351,7 @@ async def readiness_check():
         return {"status": "ready", "database": "connected"}
     except Exception as e:
         logger.error(f"Readiness failed: {e}")
-        raise HTTPException(status_code=503, detail="Service not ready")
+        raise HTTPException(status_code=503, detail="Service not ready") from e
 
 @app.get("/scheduler/status", tags=["System"])
 async def schedulers_status():

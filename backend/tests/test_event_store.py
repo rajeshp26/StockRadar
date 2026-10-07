@@ -1,8 +1,10 @@
 """Tests for EventStore: idempotency, dual-write, and orphan detection."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 from uuid import uuid4
+
+import pytest
 
 from infrastructure.repositories.event_store import EventStore
 
@@ -258,3 +260,154 @@ class TestEventQuery:
         recent = store.get_recent_events(limit=1)
         assert len(recent) == 1
         assert recent[0]["id"] == "recent"
+
+
+class TestGetAllEventsDeterministicOrdering:
+    """Deterministic pagination: (created_at, id) — regression for the replay seam-drop.
+
+    Root cause of the account_9 daily-snapshot corruption (09-13/15/18): ordering
+    by created_at ONLY lets a ~500-row same-timestamp tie group re-resolve between
+    adjacent page queries, dropping/duplicating straddling rows at the PAGE_SIZE
+    boundary (probes #13/#14). The deterministic 'id' tiebreak must be present in
+    every pagination loop and single-row ordering query.
+    """
+
+    def _table(self, mock_supabase_client):
+        return mock_supabase_client.table.return_value
+
+    def test_get_all_events_orders_by_created_at_then_id_every_page(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        # Page 1 full (1000 rows), page 2 short (1 row) -> loop terminates after 2 pages.
+        table.execute.side_effect = [
+            MagicMock(data=[{"id": f"e{i}"} for i in range(1000)]),
+            MagicMock(data=[{"id": "tail"}]),
+        ]
+        events = store.get_all_events(aggregate_type="account")
+        assert len(events) == 1001
+
+        order_args = [c.args[0] for c in table.order.call_args_list]
+        # Both pages must request created_at followed by the id tiebreak.
+        assert order_args == ["created_at", "id", "created_at", "id"]
+
+    def test_get_all_events_pagination_advances_offsets(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.side_effect = [
+            MagicMock(data=[{"id": f"e{i}"} for i in range(1000)]),
+            MagicMock(data=[]),
+        ]
+        events = store.get_all_events(aggregate_type="account")
+        assert len(events) == 1000
+        assert [c.args for c in table.range.call_args_list] == [(0, 999), (1000, 1999)]
+
+    def test_get_events_orders_by_created_at_then_id(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.return_value = MagicMock(data=[{"id": "e1"}, {"id": "e2"}])
+        events = store.get_events(aggregate_type="account")
+        assert len(events) == 2
+        assert [c.args[0] for c in table.order.call_args_list] == ["created_at", "id"]
+
+    def test_get_recent_events_orders_by_created_at_desc_then_id_desc(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.return_value = MagicMock(data=[{"id": "recent"}])
+        events = store.get_recent_events(limit=1)
+        assert len(events) == 1
+        assert [
+            (c.args[0], c.kwargs.get("desc", False)) for c in table.order.call_args_list
+        ] == [("created_at", True), ("id", True)]
+
+    def test_get_earliest_event_date_orders_by_created_at_then_id(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.return_value = MagicMock(
+            data=[{"data": {"transaction_date": "2021-02-08"}}]
+        )
+        earliest = store.get_earliest_event_date(9)
+        assert earliest == "2021-02-08"
+        assert [c.args[0] for c in table.order.call_args_list] == ["created_at", "id"]
+
+
+class TestStateImportBackdatingGuard:
+    def test_rejects_projection_import_dated_before_capture(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        with pytest.raises(ValueError, match="predates its capture date"):
+            store.append_event(
+                event_type="initial_holding_set",
+                aggregate_id="account_10",
+                aggregate_type="account",
+                data={"effective_date": "2020-01-01"},
+                metadata={"source": "portfolio_holdings", "backfill": True},
+            )
+        mock_supabase_client.table.assert_not_called()
+
+    def test_accepts_projection_import_dated_today(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        mock_supabase_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "evt-1"}]
+        )
+        captured = datetime.now(UTC).date().isoformat()
+        result = store.append_event(
+            event_type="initial_holding_set",
+            aggregate_id="account_10",
+            aggregate_type="account",
+            data={"effective_date": captured},
+            metadata={"source": "portfolio_holdings", "backfill": True},
+        )
+        assert result["id"] == "evt-1"
+
+    def test_accepts_transaction_backfill_with_historical_date(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        mock_supabase_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "evt-2"}]
+        )
+        result = store.append_event(
+            event_type="transaction_imported",
+            aggregate_id="account_1",
+            aggregate_type="account",
+            data={"transaction_date": "2021-02-08"},
+            metadata={"backfill": True, "entry_source": "csv_import"},
+        )
+        assert result["id"] == "evt-2"
+
+    def test_batch_rejects_backdated_projection_import(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        stale = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+        with pytest.raises(ValueError, match="predates its capture date"):
+            store.append_events_batch([
+                {
+                    "event_type": "initial_holding_set",
+                    "aggregate_id": "account_11",
+                    "aggregate_type": "account",
+                    "data": {"effective_date": stale},
+                    "metadata": {"source": "portfolio_holdings", "backfill": True},
+                }
+            ])
+        mock_supabase_client.table.assert_not_called()
+
+    def test_rejects_backdated_checkpoint_without_provenance_metadata(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        with pytest.raises(ValueError, match="position_state_checkpoint"):
+            store.append_event(
+                event_type="position_state_checkpoint",
+                aggregate_id="account_12",
+                aggregate_type="account",
+                data={"effective_date": "2020-01-01", "holdings": []},
+            )
+        mock_supabase_client.table.assert_not_called()
+
+    def test_accepts_checkpoint_dated_today(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        mock_supabase_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "evt-3"}]
+        )
+        captured = datetime.now(UTC).date().isoformat()
+        result = store.append_event(
+            event_type="position_state_checkpoint",
+            aggregate_id="account_12",
+            aggregate_type="account",
+            data={"effective_date": captured, "holdings": []},
+        )
+        assert result["id"] == "evt-3"

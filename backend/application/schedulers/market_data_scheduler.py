@@ -3,16 +3,16 @@ Market Data Refresh Scheduler
 Responsibilities
 ---------------
 - Runs every N hours (default: 24) to refresh market-derived datasets:
-  * Monthly price history (EOM close = last trading day's close)
+  * Daily price history (one row per provider-reported trading day)
   * Stock splits
   * Revenue forecasts
   * Earnings forecasts
   * Company summary snapshot
 - One-time bootstrap per company:
-  * If no price_history exists -> fetch FULL daily series (limited by rolling retention),
-    compress to monthly, upsert
+  * If no price_history exists -> fetch FULL daily series (limited by rolling retention)
+    and keep every trading day
 - Incremental thereafter:
-  * Fetch last ~lookback_days daily bars, recompute EOM for months in that window, upsert
+  * Fetch last ~lookback_days daily bars, keep every trading day, upsert
 Resilience & Ops
 ----------------
 - Per-company distributed locks (Supabase `scheduler_locks`) → safe for multi-replica
@@ -34,8 +34,9 @@ from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from providers.defeat_beta_provider import DefeatBetaProvider
+    from providers.yfinance_provider import YFinanceProvider
 
-import pandas as pd
+from shared.price_rows import sanitize_daily_price_rows
 
 # Derived metrics jobs
 from application.jobs.derived_financial_metrics_job import (
@@ -472,20 +473,34 @@ class MarketDataRefreshScheduler:
     # -------------------------------------------------------------------------
 
     def _refresh_fx_rates(self) -> None:
-        """Fetch and cache daily FX rates."""
-        from providers.fx_provider import fetch_fx_rate
+        """Fetch recent daily FX closes; store each under its ACTUAL close date.
+
+        Stamping under the real close date (not 'today') keeps the history
+        continuous so an as-of lookup for any recent date resolves to the
+        correct close. The previous one-row-today approach left gaps that the
+        old 7-day staleness cutoff turned into unconverted values.
+        """
+        from providers.fx_provider import fetch_fx_history
         today = now_utc().date()
+        start = today - timedelta(days=35)
 
-        usd_to_cad = fetch_fx_rate("USD", "CAD")
-        if usd_to_cad is not None and self.fx_service is not None:
-            self.fx_service._cache_rate("USD", "CAD", usd_to_cad, today)
-            logger.info("FX rate USD->CAD cached: %s", usd_to_cad)
-        else:
-            logger.error("Failed to fetch FX rate USD->CAD — rate cache not updated")
-
-        cad_to_usd = fetch_fx_rate("CAD", "USD")
-        if cad_to_usd is not None and self.fx_service is not None:
-            self.fx_service._cache_rate("CAD", "USD", cad_to_usd, today)
+        for base, target in (("USD", "CAD"), ("CAD", "USD")):
+            rows = fetch_fx_history(base, target, start, today)
+            if rows and self.fx_service is not None:
+                for rate_date, rate in rows:
+                    try:
+                        self.fx_service._cache_rate(base, target, rate, rate_date)
+                    except ValueError:
+                        continue
+                logger.info(
+                    "FX %s->%s: %d daily closes cached (%s..%s)",
+                    base, target, len(rows), rows[0][0], rows[-1][0],
+                )
+            else:
+                logger.error(
+                    "Failed to fetch FX rate %s->%s — rate history not updated",
+                    base, target,
+                )
 
     # -------------------------------------------------------------------------
     # Per-Company Process
@@ -500,7 +515,7 @@ class MarketDataRefreshScheduler:
     ) -> dict[str, Any]:
         """
         Steps:
-          1) Price history (monthly EOM compression; bootstrap or incremental)
+          1) Price history (daily rows; bootstrap or incremental)
           2) Splits
           --- stock-only below ---
           3) Revenue forecast
@@ -524,7 +539,7 @@ class MarketDataRefreshScheduler:
                 "[MARKET_DATA] %s skipped — delisted/renamed symbol", symbol,
             )
             return {
-                "price_history_monthly": 0,
+                "price_history_daily": 0,
                 "security_type": security_type,
                 "splits": 0,
                 "revenue_forecast": 0,
@@ -542,7 +557,7 @@ class MarketDataRefreshScheduler:
                 symbol, security_type,
             )
             return {
-                "price_history_monthly": 0,
+                "price_history_daily": 0,
                 "security_type": security_type,
                 "splits": 0,
                 "revenue_forecast": 0,
@@ -554,13 +569,15 @@ class MarketDataRefreshScheduler:
                 "skipped_etf": True,
             }
 
-        # 1) PRICE HISTORY — all security types
-        price_rows_written = await self._upsert_monthly_price_history(symbol, company_id, exchange=exchange)
-
-        # 2) SPLITS — all security types (ETFs and funds do split)
+        # 1) SPLITS — all security types (ETFs and funds do split). Must land
+        #    BEFORE price so upsert_price_history can apply the true-raw
+        #    recovery factors to the rows it writes (design D3).
         split_rows = await self.defeat_beta_provider.get_splits_optimized(symbol, company_id)
         if split_rows:
             await self.financial_repo.upsert_splits(split_rows)
+
+        # 2) PRICE HISTORY — all security types
+        price_rows_written = await self._upsert_daily_price_history(symbol, company_id, exchange=exchange)
 
         # 3) REVENUE FORECAST — stocks only
         rev_fcst_rows: list[dict[str, Any]] = []
@@ -745,7 +762,7 @@ class MarketDataRefreshScheduler:
                 logger.error("[VALUATION] %s failed: %s", symbol, ve)
 
         return {
-            "price_history_monthly": price_rows_written,
+            "price_history_daily":   price_rows_written,
             "security_type":         security_type,
             "splits":                len(split_rows or []),
             "revenue_forecast":      len(rev_fcst_rows or []),
@@ -760,13 +777,13 @@ class MarketDataRefreshScheduler:
     # Price History helpers (with rolling retention)
     # -------------------------------------------------------------------------
 
-    async def _upsert_monthly_price_history(self, symbol: str, company_id: int, exchange: str | None = None) -> int:
+    async def _upsert_daily_price_history(self, symbol: str, company_id: int, exchange: str | None = None) -> int:
         """
-        Bootstrap path  — no existing rows: fetch full daily history, compress to
-                          monthly EOM, upsert all (respects retention window).
-        Incremental path — rows exist: fetch last ~lookback_days, recompute EOM
-                          for any months in that window, upsert.
-        Returns the number of monthly rows attempted for upsert.
+        Bootstrap path  — no existing rows: fetch full daily history, upsert every
+                          trading day (respects retention window).
+        Incremental path — rows exist: fetch last ~lookback_days daily bars, upsert
+                          them as daily rows.
+        Returns the number of daily rows attempted for upsert.
         """
         has_any = await self._has_any_price_history(company_id)
         retention_cutoff = self._years_ago(now_utc().date(), self.retention_years)
@@ -779,15 +796,25 @@ class MarketDataRefreshScheduler:
                 r for r in (daily_rows or [])
                 if r.get("price_date") and r["price_date"] >= retention_cutoff
             ]
-            monthly_rows = self._compress_daily_to_monthly_eom(daily_rows)
-            if monthly_rows:
-                await self.financial_repo.upsert_price_history(monthly_rows)
-                await self.financial_repo.update_price_success_marker(company_id)
-                await self.financial_repo.update_price_refresh_marker(company_id)
-                logger.info("[PH][%s] Bootstrap monthly rows (>= %s): %d", symbol, retention_cutoff, len(monthly_rows))
+            daily_out = sanitize_daily_price_rows(daily_rows, default_source="defeatbeta")
+            if daily_out:
+                res = await self.financial_repo.upsert_price_history(daily_out) or {}
+                written = int(res.get("count", 0) or 0)
+                gate_rejected = res.get("gate_rejected") or {}
+                if written > 0:
+                    await self.financial_repo.update_price_success_marker(company_id)
+                    await self.financial_repo.update_price_refresh_marker(company_id)
+                    logger.info("[PH][%s] Bootstrap daily rows (>= %s): %d", symbol, retention_cutoff, written)
+                elif gate_rejected:
+                    logger.warning(
+                        "[PH][%s] Bootstrap all rows rejected by plausibility gate (%d companies)",
+                        symbol, len(gate_rejected),
+                    )
+                else:
+                    await self.financial_repo.increment_price_failures(company_id)
             else:
                 await self.financial_repo.increment_price_failures(company_id)
-            return len(monthly_rows or [])
+            return len(daily_out or [])
 
         lookback = max(self.lookback_days, 40)
         window_cutoff = now_utc().date() - timedelta(days=lookback)
@@ -797,15 +824,25 @@ class MarketDataRefreshScheduler:
             r for r in (daily_rows_recent or [])
             if r.get("price_date") and r["price_date"] >= effective_cutoff
         ]
-        monthly_recent = self._compress_daily_to_monthly_eom(daily_rows_recent)
-        if monthly_recent:
-            await self.financial_repo.upsert_price_history(monthly_recent)
-            await self.financial_repo.update_price_success_marker(company_id)
-            await self.financial_repo.update_price_refresh_marker(company_id)
-            logger.debug("[PH][%s] Incremental monthly rows (>= %s): %d", symbol, effective_cutoff, len(monthly_recent))
+        daily_recent_out = sanitize_daily_price_rows(daily_rows_recent, default_source="defeatbeta")
+        if daily_recent_out:
+            res = await self.financial_repo.upsert_price_history(daily_recent_out) or {}
+            written = int(res.get("count", 0) or 0)
+            gate_rejected = res.get("gate_rejected") or {}
+            if written > 0:
+                await self.financial_repo.update_price_success_marker(company_id)
+                await self.financial_repo.update_price_refresh_marker(company_id)
+                logger.debug("[PH][%s] Incremental daily rows (>= %s): %d", symbol, effective_cutoff, written)
+            elif gate_rejected:
+                logger.warning(
+                    "[PH][%s] Incremental all rows rejected by plausibility gate (%d companies)",
+                    symbol, len(gate_rejected),
+                )
+            else:
+                await self.financial_repo.increment_price_failures(company_id)
         else:
             await self.financial_repo.increment_price_failures(company_id)
-        return len(monthly_recent or [])
+        return len(daily_recent_out or [])
 
     async def _has_any_price_history(self, company_id: int) -> bool:
         try:
@@ -839,57 +876,6 @@ class MarketDataRefreshScheduler:
                 "income_statements existence check failed for company_id=%s", company_id
             )
             return True
-
-    @staticmethod
-    def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """
-        Convert daily OHLCV rows to monthly EOM rows:
-          - Group by (year, month)
-          - Pick the row with the latest price_date (last trading day of the month)
-          - Preserve all OHLCV fields; default data_source to 'defeatbeta'
-        """
-        if not daily_rows:
-            return []
-        df = pd.DataFrame(daily_rows)
-        if df.empty or "price_date" not in df.columns:
-            return []
-        df["price_date"] = pd.to_datetime(df["price_date"], utc=True, errors="coerce")
-        df = df.dropna(subset=["price_date"])
-        # Drop null-OHLC rows (delisted/suspended days report null prices);
-        # close_price is NOT NULL in price_history.
-        df = df.dropna(subset=["close_price"])
-        if df.empty:
-            return []
-        df["year"] = df["price_date"].dt.year
-        df["month"] = df["price_date"].dt.month
-        idx = df.groupby(["year", "month"])["price_date"].idxmax()
-        last_trading_rows = df.loc[idx].copy()
-        out: list[dict[str, Any]] = []
-        for _, r in last_trading_rows.iterrows():
-            out.append({
-                "company_id":  int(r.get("company_id")),
-                "price_date":  r["price_date"].date(),
-                "open_price":  MarketDataRefreshScheduler._safe_num(r.get("open_price")),
-                "close_price": MarketDataRefreshScheduler._safe_num(r.get("close_price")),
-                "high_price":  MarketDataRefreshScheduler._safe_num(r.get("high_price")),
-                "low_price":   MarketDataRefreshScheduler._safe_num(r.get("low_price")),
-                "volume":      int(r.get("volume")) if pd.notna(r.get("volume")) else None,
-                "data_source": str(r.get("data_source") or "defeatbeta"),
-            })
-        # Final guard: never emit a monthly row without a close price.
-        out = [r for r in out if r["close_price"] is not None]
-        out.sort(key=lambda x: x["price_date"])
-        return out
-
-    @staticmethod
-    def _safe_num(v: Any) -> float | None:
-        if v is None:
-            return None
-        try:
-            f = float(v)
-            return f if f == f else None  # NaN guard
-        except (ValueError, TypeError):
-            return None
 
     @staticmethod
     def _years_ago(from_date: date, years: int) -> date:

@@ -161,7 +161,7 @@ class TestUpsertPriceHistoryNullCloseFilter:
 
         result = await self.repo.upsert_price_history(rows)
 
-        assert result == {"count": 1}
+        assert result == {"count": 1, "gate_rejected": {}}
         payload = self.client.table.return_value.upsert.call_args[0][0]
         assert len(payload) == 1
         assert payload[0]["price_date"] == "2026-07-31"
@@ -175,7 +175,7 @@ class TestUpsertPriceHistoryNullCloseFilter:
 
         result = await self.repo.upsert_price_history(rows)
 
-        assert result == {"count": 0}
+        assert result == {"count": 0, "gate_rejected": {}}
         self.client.table.assert_not_called()
 
 class TestGetStaleFinancialCompanies:

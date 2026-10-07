@@ -1,67 +1,57 @@
-"""Replace partial transaction_imported events with initial_holding_set for accounts 9-12."""
+"""RETIRED - do not run. This script was the source of the 2020-01-01 seeding defect.
+
+It did two destructive things to accounts 9-12:
+
+  1. DELETED every existing ``portfolio_events`` row for the account (including real
+     ``transaction_imported`` history), breaking the append-only invariant the event
+     log depends on.
+  2. Wrote a replacement ``initial_holding_set`` event with ``effective_date`` hardcoded
+     to ``"2020-01-01"``, while the quantities in the payload were read from the CURRENT
+     ``portfolio_holdings`` projection.
+
+Point 2 is the defect this codebase spent a long time chasing. Replay orders events by
+effective date, so a capture of today's holdings stamped with a 2020 date is re-executed
+against every corporate action that happened since: the seeded AAPL position was inflated
+4x by its 2020-08-31 split and SHOP 10x by its 2022-06-29 split, on accounts 10-12. Total
+cost and cash were untouched, so the corruption looked plausible instead of obviously
+broken.
+
+The correct way to record what an account holds when it has no usable history is a
+``position_state_checkpoint`` whose effective date is the moment it was captured, not an
+``initial_holding_set`` stamped with an invented past date. Migration
+``backend/supabase/migrations/011_reclassify_projection_backfill_as_checkpoint.sql``
+performs that reclassification, ``EventStore`` now rejects any future attempt to date a
+projection capture before its capture instant, and the generators in
+``backfill_initial_holdings.py`` / ``backfill_missing_initial.py`` emit the checkpoint
+type. Snapshots are regenerated with ``rebuild_account_snapshots.py --apply``.
+
+This file is retained only as a tombstone so the script is not reintroduced from history.
+It is intentionally inert: every entry point refuses to run.
+"""
+
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_MESSAGE = (
+    "fix_accounts_9_12.py is RETIRED. It deleted portfolio_events and re-seeded "
+    "accounts 9-12 with a hardcoded 2020-01-01 effective_date, which replay then "
+    "re-ran against later splits. Use position_state_checkpoint via the backfill "
+    "generators, and rebuild snapshots with rebuild_account_snapshots.py. "
+    "This script will not run."
+)
 
-from database import supabase
-from infrastructure.repositories.event_store import EventStore
 
-event_store = EventStore()
+def main() -> None:
+    raise RuntimeError(_MESSAGE)
 
-# Accounts with partial/no transaction history: 9, 10, 11, 12
-target_accounts = [9, 10, 11, 12]
 
-for aid in target_accounts:
-    # 1. Delete existing transaction_imported events for this account
-    events = event_store.get_events(aggregate_id=f"account_{aid}", limit=5000)
-    for ev in events:
-        kid = ev.get("id")
-        if kid:
-            supabase.table("portfolio_events").delete().eq("id", kid).execute()
-    print(f"Account {aid}: deleted {len(events)} existing events")
+def seed_account(aid: int) -> None:
+    raise RuntimeError(_MESSAGE)
 
-    # 2. Get current holdings
-    r = supabase.table("portfolio_holdings").select("*").eq("account_id", aid).execute()
-    holdings = r.data or []
 
-    # 3. Get cash_balance from latest snapshot (or compute from transactions)
-    r = supabase.table("portfolio_snapshots").select("*").eq("account_id", aid).order("snapshot_date", desc=True).limit(1).execute()
-    snapshot = r.data[0] if r.data else {}
-    cash_balance = float(snapshot.get("cash_balance", 0)) if snapshot else 0.0
-    net_deposits = float(snapshot.get("net_deposits", 0)) if snapshot else 0.0
+def delete_events(aid: int) -> None:
+    raise RuntimeError(_MESSAGE)
 
-    # If no snapshot, compute cash from transactions
-    if not snapshot and holdings:
-        r = supabase.table("portfolio_transactions").select("net_cash_amount").eq("account_id", aid).execute()
-        cash_balance = sum(float(t.get("net_cash_amount", 0)) for t in (r.data or []))
 
-    holdings_data = [
-        {
-            "company_id": h["company_id"],
-            "symbol": h["symbol"],
-            "quantity": float(h["quantity"]),
-            "average_cost": float(h["average_cost"]),
-            "total_cost": float(h["total_cost"]),
-        }
-        for h in holdings
-    ]
-
-    # 4. Create initial_holding_set event
-    event_store.append_event(
-        event_type="initial_holding_set",
-        aggregate_id=f"account_{aid}",
-        aggregate_type="account",
-        data={
-            "effective_date": "2020-01-01",
-            "account_id": aid,
-            "cash_balance": cash_balance,
-            "net_deposits": net_deposits,
-            "holdings": holdings_data,
-        },
-        metadata={"backfill": True, "source": "portfolio_holdings"},
-        idempotency_key=f"initial_holding_set_{aid}",
-    )
-    print(f"Account {aid}: created initial_holding_set ({len(holdings_data)} holdings, cash=${cash_balance:.2f})")
-
-print("Done")
+if __name__ == "__main__":
+    print(_MESSAGE, file=sys.stderr)
+    raise SystemExit(1)

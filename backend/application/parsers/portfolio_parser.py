@@ -19,6 +19,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
+from shared.cdr_utils import CDR_PATTERNS as _SHARED_CDR_PATTERNS
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,11 +178,8 @@ class WealthsimpleParser(PortfolioParserBase):
     ]
 
     # CDR suffix patterns (Canadian Depositary Receipts)
-    CDR_PATTERNS = [
-        r"\s+CDR\s*\(CAD Hedged\)",
-        r"\s+CDR\s*\(Hedged\)",
-        r"\s+CDR",
-    ]
+    # Single source of truth: backend/shared/cdr_utils.py
+    CDR_PATTERNS = _SHARED_CDR_PATTERNS
 
     def parse_csv(self, csv_content: str, user_account_filter: list[str] | None = None) -> ParseResult:
         """Parse Wealthsimple CSV export."""

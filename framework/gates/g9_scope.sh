@@ -14,9 +14,26 @@ if [ -z "$SCOPE_PLAN" ] && [ -n "$SCOPE_TASK" ]; then
   SCOPE_PLAN="$(python3 framework/adapters/gsd_state.py plan-path --task "$SCOPE_TASK" 2>/dev/null || true)"
 fi
 
+changed="$(changed_source_files)"
+if [ -z "$changed" ]; then
+  persist skip "no source changes"
+  not_applicable \
+    "no changed source files; scope has nothing to judge" \
+    '{"changed_source_files": 0}'
+fi
+
+# Only demand a plan once there is work to check it against. Testing the input
+# first reported precondition_missing on a clean tree, trading a false pass for a
+# false blocker (V8).
 if [ ! -f "$SCOPE_PLAN" ]; then
   persist skip "no plan context"
-  skip "no plan context (SCOPE_PLAN/SCOPE_TASK unset or plan not found); scope not judged"
+  changed_count="$(printf '%s\n' "$changed" | grep -c . || true)"
+  plan_ev="${SCOPE_PLAN:-null}"; task_ev="${SCOPE_TASK:-null}"
+  [ -n "$SCOPE_PLAN" ] || plan_ev=null
+  [ -n "$SCOPE_TASK" ] || task_ev=null
+  precondition_missing \
+    "changed source files exist but no plan context; scope unjudged" \
+    "{\"SCOPE_PLAN\": $plan_ev, \"SCOPE_TASK\": $task_ev, \"changed_source_files\": $changed_count}"
 fi
 
 # Declared scope: YAML block list ("- item") and/or inline "[a, b]" form of files_or_components.
@@ -39,12 +56,6 @@ declared="$(printf '%s\n%s\n' "$declared_block" "$declared_inline" \
 if [ -z "$declared" ]; then
   persist fail "plan declares no files_or_components"
   fail "plan declares no files_or_components; scope cannot be judged"
-fi
-
-changed="$(changed_source_files)"
-if [ -z "$changed" ]; then
-  persist skip "no source changes"
-  skip "no source changes; scope not judged"
 fi
 
 violations=""

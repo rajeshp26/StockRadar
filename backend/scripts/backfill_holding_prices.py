@@ -19,7 +19,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +30,12 @@ if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
 from database import supabase
+from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from providers.defeat_beta_provider import DefeatBetaProvider
 from providers.yfinance_provider import YFinanceProvider
+from shared.constants import get_effective_skipped_symbols
+from shared.price_rows import sanitize_daily_price_rows
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,51 +62,73 @@ def _safe_num(v: Any) -> float | None:
         return None
 
 
-def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not daily_rows:
-        return []
-    df = pd.DataFrame(daily_rows)
-    if df.empty or "price_date" not in df.columns:
-        return []
-    df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
-    df = df.dropna(subset=["price_date"])
-    if df.empty:
-        return []
-    df["year"] = df["price_date"].dt.year
-    df["month"] = df["price_date"].dt.month
-    idx = df.groupby(["year", "month"])["price_date"].idxmax()
-    last_trading_rows = df.loc[idx].copy()
-    out: list[dict[str, Any]] = []
-    for _, r in last_trading_rows.iterrows():
-        out.append({
-            "company_id":  int(r.get("company_id")),
-            "price_date":  r["price_date"].date(),
-            "open_price":  _safe_num(r.get("open_price")),
-            "close_price": _safe_num(r.get("close_price")),
-            "high_price":  _safe_num(r.get("high_price")),
-            "low_price":   _safe_num(r.get("low_price")),
-            "volume":      int(r.get("volume")) if pd.notna(r.get("volume")) else None,
-            "data_source": "yfinance",
-        })
-    out.sort(key=lambda x: x["price_date"])
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Core backfill logic
 # ---------------------------------------------------------------------------
 
 def _get_all_holding_symbols() -> list[str]:
-    """Return all distinct ticker symbols across all portfolio_holdings."""
+    """Symbols behind both portfolio_holdings and the account event stream.
+
+    The two sources disagree: a holding whose events were never collapsed into
+    portfolio_holdings is absent from that table, and reading either one alone
+    under-backfills silently. Events carry company_id rather than a symbol, so
+    they resolve through companies.ticker_symbol.
+    """
+    symbols: set[str] = set()
+
     resp = (
         supabase.table("portfolio_holdings")
         .select("symbol")
         .not_.is_("symbol", "null")
         .execute()
     )
-    symbols = sorted({r["symbol"] for r in (resp.data or [])})
-    logger.info("Found %d unique symbols in portfolio_holdings", len(symbols))
-    return symbols
+    from_holdings = {str(r["symbol"]).upper() for r in (resp.data or []) if r.get("symbol")}
+    symbols |= from_holdings
+    logger.info("Found %d unique symbols in portfolio_holdings", len(from_holdings))
+
+    event_cids: set[int] = set()
+    try:
+        for ev in EventStore().get_all_events(aggregate_type="account"):
+            cid = (ev.get("data") or {}).get("company_id")
+            if cid is None:
+                continue
+            try:
+                event_cids.add(int(cid))
+            except (TypeError, ValueError):
+                continue
+    except Exception as e:
+        logger.warning("Could not read account event stream: %s", e)
+
+    from_events: set[str] = set()
+    if event_cids:
+        ordered = sorted(event_cids)
+        for i in range(0, len(ordered), 200):
+            chunk = ordered[i:i + 200]
+            try:
+                cresp = (
+                    supabase.table("companies")
+                    .select("company_id,ticker_symbol")
+                    .in_("company_id", chunk)
+                    .execute()
+                )
+            except Exception as e:
+                logger.warning("company_id lookup failed for a chunk of %d ids: %s", len(chunk), e)
+                continue
+            from_events |= {
+                str(r["ticker_symbol"]).upper()
+                for r in (cresp.data or [])
+                if r.get("ticker_symbol")
+            }
+
+    only_events = from_events - from_holdings
+    symbols |= from_events
+    logger.info(
+        "Found %d unique symbols in account events (%d absent from portfolio_holdings)",
+        len(from_events), len(only_events),
+    )
+    if only_events:
+        logger.info("Event-only holdings portfolio_holdings is missing: %s", sorted(only_events))
+    return sorted(symbols)
 
 
 def _current_market_data_exists(company_id: int) -> bool:
@@ -121,7 +147,14 @@ def _current_market_data_exists(company_id: int) -> bool:
 
 
 async def _has_price_history(repo: SupabaseFinancialRepository, company_id: int) -> bool:
-    """Check whether price_history has any rows for this company."""
+    """Check whether price_history already holds daily-resolution rows.
+
+    Existence is not sufficient: a company backfilled before the
+    month-end compression was removed has ~12 rows/year, so a presence
+    check reports it as complete while every mid-month snapshot falls
+    back to a stale quote. Density is the property that matters, so
+    compare the stored span against the trading days it should cover.
+    """
     try:
         resp = (
             supabase.table("price_history")
@@ -130,11 +163,44 @@ async def _has_price_history(repo: SupabaseFinancialRepository, company_id: int)
             .limit(1)
             .execute()
         )
-        if hasattr(resp, "count") and resp.count is not None:
-            return resp.count > 0
-        return bool(resp.data)
+        count = getattr(resp, "count", None)
+        if count is None:
+            count = len(resp.data or [])
+        if count == 0:
+            return False
     except Exception:
         return False
+
+    return await _is_daily_resolution(company_id, count)
+
+
+async def _is_daily_resolution(company_id: int, count: int) -> bool:
+    """True when stored rows are dense enough to price a snapshot on its own date."""
+    try:
+        resp = (
+            supabase.table("price_history")
+            .select("price_date")
+            .eq("company_id", company_id)
+            .order("price_date", desc=False)
+            .limit(1)
+            .execute()
+        )
+        first = (resp.data or [{}])[0].get("price_date")
+    except Exception:
+        return False
+    if first is None:
+        return False
+
+    try:
+        span_days = (date.today() - date.fromisoformat(str(first)[:10])).days
+    except ValueError:
+        return False
+    if span_days <= 0:
+        return True
+
+    # ~252 trading days per calendar year; 45% is the monthly-compression
+    # threshold, since ~12 EOM rows/year is well under it.
+    return count >= 0.45 * (span_days / 365.0) * 252
 
 
 def _yfinance_daily_to_rows(df: pd.DataFrame, company_id: int) -> list[dict[str, Any]]:
@@ -161,42 +227,13 @@ def _yfinance_daily_to_rows(df: pd.DataFrame, company_id: int) -> list[dict[str,
     return rows
 
 
-def _strip_split_artifacts(rows: list[dict[str, Any]], symbol: str) -> list[dict[str, Any]]:
-    """Strip reverse-split price artifacts where old prices dwarf recent ones.
-
-    Stocks with multiple reverse splits (e.g. XELA) produce raw price_history
-    where pre-split prices compound into absurdly high numbers ($120K for a
-    penny stock).  This removes entries whose close_price exceeds 100x the
-    median close_price of the most recent 20 trading days.
-    """
-    if len(rows) < 30:
-        return rows
-
-    # Sort by date ascending
-    sorted_rows = sorted(rows, key=lambda r: r["price_date"])
-    recent = [r for r in reversed(sorted_rows) if r.get("close_price") is not None]
-
-    # Get median of 20 most recent closes
-    recent_closes = sorted([r["close_price"] for r in recent[:20]])
-    recent_median = recent_closes[len(recent_closes) // 2]
-
-    if recent_median is None or recent_median <= 0:
-        return rows
-
-    ceiling = recent_median * 100
-    clean = [r for r in sorted_rows if r.get("close_price") is None or r["close_price"] <= ceiling]
-    removed = len(sorted_rows) - len(clean)
-    if removed:
-        logger.info("%s: stripped %d of %d rows with close_price > %.2f (100x recent median %.4f)",
-                     symbol, removed, len(sorted_rows), ceiling, recent_median)
-    return clean
-
-
 async def backfill_symbol(
     repo: SupabaseFinancialRepository,
     yf_provider: YFinanceProvider,
+    db_provider: DefeatBetaProvider,
     symbol: str,
     dry_run: bool,
+    force: bool = False,
 ) -> dict:
     """
     Backfill current_market_data and price_history for a single symbol.
@@ -213,7 +250,9 @@ async def backfill_symbol(
 
         cid = company["company_id"]
         needs_current = not _current_market_data_exists(cid)
-        needs_history = not await _has_price_history(repo, cid)
+        # force re-fetches history even when stored rows look dense, because a
+        # density check cannot see rows an earlier run wrongly removed.
+        needs_history = force or not await _has_price_history(repo, cid)
 
         if not needs_current and not needs_history:
             result["status"] = "skipped"
@@ -229,6 +268,7 @@ async def backfill_symbol(
             return result
 
         exchange = company.get("exchange")
+        wrote_any = False
 
         # ── Fetch current price ──
         if needs_current:
@@ -249,6 +289,7 @@ async def backfill_symbol(
                     market_data, on_conflict="company_id"
                 ).execute()
                 result["current_price"] = sd.price
+                wrote_any = True
                 logger.info("%s: upserted current_market_data ($%.2f)", symbol, sd.price)
             else:
                 logger.warning("%s: no current price from YFinance", symbol)
@@ -257,27 +298,40 @@ async def backfill_symbol(
         if needs_history:
             price_df = yf_provider.get_price_history_df(symbol, exchange=exchange)
             if price_df is not None and not price_df.empty:
-                daily_rows = _yfinance_daily_to_rows(price_df, cid)
-                daily_rows = _strip_split_artifacts(daily_rows, symbol)
+                daily_rows = sanitize_daily_price_rows(
+                    _yfinance_daily_to_rows(price_df, cid), default_source="yfinance"
+                )
                 if daily_rows:
-                    monthly_rows = _compress_daily_to_monthly_eom(daily_rows)
-                    if monthly_rows:
-                        await repo.upsert_price_history(monthly_rows)
-                        await repo.update_price_refresh_marker(cid)
-                        result["history_rows"] = len(monthly_rows)
-                        logger.info(
-                            "%s: upserted %d monthly price_history rows",
-                            symbol, len(monthly_rows),
-                        )
-                    else:
-                        logger.warning("%s: no monthly rows generated from %d daily rows",
-                                       symbol, len(daily_rows))
+                    split_rows = await db_provider.get_splits_optimized(symbol, cid)
+                    if split_rows:
+                        await repo.upsert_splits(split_rows)
+                    # Daily granularity is required, not optional: a mid-month
+                    # snapshot has no price of its own at month-end resolution,
+                    # and resolving one picks a stale or future quote. Month-end
+                    # rows are a subset of daily, so this upsert supersedes them.
+                    upsert = await repo.upsert_price_history(daily_rows)
+                    await repo.update_price_refresh_marker(cid)
+                    # The plausibility gate runs inside the upsert, so the fetched
+                    # count is not what landed. Reporting it as "upserted" hid
+                    # TNXP's 2980 rejections behind "history=3615" this session.
+                    gate = (upsert or {}).get("gate_rejected")
+                    rejected = int(gate.get(cid, 0)) if isinstance(gate, dict) else int(gate or 0)
+                    written = (upsert or {}).get("count")
+                    if not isinstance(written, int):
+                        written = len(daily_rows) - rejected
+                    result["history_rows"] = written
+                    result["gate_rejected"] = rejected
+                    wrote_any = True
+                    logger.info(
+                        "%s: wrote %d daily price_history rows (%d rejected by plausibility gate)",
+                        symbol, written, rejected,
+                    )
                 else:
                     logger.warning("%s: no daily rows parsed from data", symbol)
             else:
                 logger.warning("%s: empty price history from YFinance", symbol)
 
-        result["status"] = "ok"
+        result["status"] = "ok" if wrote_any else "no_data"
         return result
 
     except Exception as e:
@@ -290,23 +344,30 @@ async def backfill_symbol(
 async def run_backfill(
     symbols: list[str] | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> None:
     """Resolve symbols, then backfill price data for each."""
     repo = SupabaseFinancialRepository(supabase)
     yf_provider = YFinanceProvider()
+    db_provider = DefeatBetaProvider()
 
     if symbols:
         target_symbols = sorted(set(s.upper() for s in symbols))
     else:
         target_symbols = _get_all_holding_symbols()
 
+    delisted = sorted(s for s in target_symbols if s.upper() in get_effective_skipped_symbols())
+    if delisted:
+        target_symbols = [s for s in target_symbols if s.upper() not in get_effective_skipped_symbols()]
+        logger.info("[FILTER] Skipped %d delisted/renamed symbol(s): %s", len(delisted), delisted)
+
     if not target_symbols:
         logger.info("No symbols to process.")
         return
 
     logger.info(
-        "Target: %d symbols | dry_run=%s",
-        len(target_symbols), dry_run,
+        "Target: %d symbols | dry_run=%s | force=%s",
+        len(target_symbols), dry_run, force,
     )
 
     # Bounded concurrency to control YFinance API rate limits
@@ -314,7 +375,7 @@ async def run_backfill(
 
     async def bounded(sym: str) -> dict:
         async with sem:
-            return await backfill_symbol(repo, yf_provider, sym, dry_run=dry_run)
+            return await backfill_symbol(repo, yf_provider, db_provider, sym, dry_run=dry_run, force=force)
 
     started_at = datetime.utcnow()
     results = await asyncio.gather(*[bounded(sym) for sym in target_symbols])
@@ -323,13 +384,14 @@ async def run_backfill(
     ok = sum(1 for r in results if r["status"] == "ok")
     err = sum(1 for r in results if r["status"] == "error")
     skipped = sum(1 for r in results if r["status"] == "skipped")
+    no_data = sum(1 for r in results if r["status"] == "no_data")
     dry = sum(1 for r in results if r["status"] == "dry_run")
     elapsed = (datetime.utcnow() - started_at).total_seconds()
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info("SUMMARY: %d ok, %d errors, %d skipped, %d dry-run | %.1fs",
-                ok, err, skipped, dry, elapsed)
+    logger.info("SUMMARY: %d ok, %d errors, %d skipped, %d no-data, %d dry-run | %.1fs",
+                ok, err, skipped, no_data, dry, elapsed)
 
     if dry_run:
         for r in results:
@@ -355,6 +417,8 @@ async def run_backfill(
                 logger.warning("  [ERR] %s: %s", r["symbol"], r.get("error"))
             elif r["status"] == "skipped":
                 logger.info("  [SKIP] %s: %s", r["symbol"], r.get("reason", "?"))
+            elif r["status"] == "no_data":
+                logger.warning("  [NODATA] %s: provider returned no current price or price history", r["symbol"])
 
     if err:
         sys.exit(1)
@@ -372,11 +436,16 @@ def main() -> None:
         "--dry-run", action="store_true",
         help="Print plan; make no DB or provider calls",
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-fetch price_history even when stored rows already look dense",
+    )
     args = parser.parse_args()
 
     asyncio.run(run_backfill(
         symbols=args.symbol,
         dry_run=args.dry_run,
+        force=args.force,
     ))
 
 

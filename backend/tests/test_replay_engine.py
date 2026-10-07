@@ -6,7 +6,9 @@ from unittest.mock import MagicMock
 
 from infrastructure.repositories.event_store import EventStore
 from shared.replay_engine import (
+    HoldingState,
     ReplayEngine,
+    _cdr_lot_legs,
     _parse_account_id,
 )
 
@@ -1064,3 +1066,154 @@ class TestIstInteractions:
         assert h.average_cost == Decimal("150")
         assert len(h.lots) == 1
         assert h.lots[0]["cost_per_share"] == Decimal("150")
+
+
+class TestPositionStateCheckpoint:
+    def _checkpoint_event(self, effective: date, holdings: list[dict], cash: float) -> dict:
+        return {
+            "event_type": "position_state_checkpoint",
+            "aggregate_id": "account_1",
+            "aggregate_type": "account",
+            "data": {
+                "effective_date": effective.isoformat(),
+                "account_id": 1,
+                "cash_balance": cash,
+                "net_deposits": cash,
+                "holdings": holdings,
+            },
+            "metadata": {"source": "portfolio_holdings"},
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+
+    def test_checkpoint_replaces_prior_replayed_state(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        today = datetime.now(UTC).date()
+        buy = {
+            "event_type": "transaction_imported",
+            "aggregate_id": "account_1",
+            "aggregate_type": "account",
+            "data": {
+                "account_id": 1,
+                "company_id": 99,
+                "activity_type": "Trade",
+                "symbol": "SOLDCO",
+                "quantity": 999,
+                "unit_price": 1.0,
+                "net_cash_amount": -999.0,
+                "currency": "USD",
+                "transaction_date": (today - date.resolution * 2).isoformat(),
+            },
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        checkpoint = self._checkpoint_event(
+            today - date.resolution,
+            [{"company_id": 10, "symbol": "AAPL", "quantity": 50, "average_cost": 100, "total_cost": 5000}],
+            250.0,
+        )
+        mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(
+            data=[buy, checkpoint]
+        )
+        engine = ReplayEngine(store)
+        state = engine.replay_to_date(1, today)
+
+        assert set(state.holdings) == {10}
+        assert 99 not in state.holdings
+        assert state.holdings[10].quantity == Decimal("50")
+        assert state.cash_balance == Decimal("250.0")
+        assert state.checkpoint_date == today - date.resolution
+
+    def test_checkpoint_excluded_before_its_effective_date(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        today = datetime.now(UTC).date()
+        buy = {
+            "event_type": "transaction_imported",
+            "aggregate_id": "account_1",
+            "aggregate_type": "account",
+            "data": {
+                "account_id": 1,
+                "company_id": 99,
+                "activity_type": "Trade",
+                "symbol": "SOLDCO",
+                "quantity": 40,
+                "unit_price": 2.0,
+                "net_cash_amount": -80.0,
+                "currency": "USD",
+                "transaction_date": (today - date.resolution * 2).isoformat(),
+            },
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        checkpoint = self._checkpoint_event(
+            today,
+            [{"company_id": 10, "symbol": "AAPL", "quantity": 50, "average_cost": 100, "total_cost": 5000}],
+            250.0,
+        )
+        mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(
+            data=[buy, checkpoint]
+        )
+        engine = ReplayEngine(store)
+        state = engine.replay_to_date(1, today - date.resolution)
+
+        assert set(state.holdings) == {99}
+        assert state.checkpoint_date is None
+        assert state.cash_balance == Decimal("-80.0")
+
+
+class TestReplayCdrLotLegs:
+    """BLK-027: replay must value a mixed position one leg at a time.
+
+    Replay cannot classify its own lots -- stored transaction_imported events
+    carry no security_name or exchange_override, so every event lot looks direct
+    and a CDR position would be undervalued tenfold. Lot provenance must therefore
+    be supplied from portfolio_transactions.
+    """
+
+    @staticmethod
+    def _holdings(qty, cost):
+        qty, cost = Decimal(str(qty)), Decimal(str(cost))
+        return {
+            145: HoldingState(
+                company_id=145,
+                symbol="META",
+                quantity=qty,
+                total_cost=cost,
+                average_cost=cost / qty,
+            )
+        }
+
+    def test_no_lot_evidence_leaves_the_company_keyed_path(self):
+        legs = _cdr_lot_legs(self._holdings(27, 2700), None, {145})
+        assert len(legs) == 1
+        assert legs[0][2] is None
+
+    def test_uniform_cdr_lot_is_a_single_leg(self):
+        legs = _cdr_lot_legs(
+            self._holdings(25, 2500), {145: {"cdr": Decimal(25)}}, {145}
+        )
+        assert len(legs) == 1
+        assert legs[0][2] == "cdr"
+
+    def test_mixed_lot_splits_and_conserves_quantity_and_cost(self):
+        legs = _cdr_lot_legs(
+            self._holdings(27, 2700),
+            {145: {"cdr": Decimal(25), "direct": Decimal(2)}},
+            {145},
+        )
+        assert [kind for _, _, kind in legs] == ["cdr", "direct"]
+        assert sum((h.quantity for _, h, _ in legs), Decimal(0)) == Decimal(27)
+        assert sum((h.total_cost for _, h, _ in legs), Decimal(0)) == Decimal(2700)
+
+    def test_quantity_mismatch_refuses_to_split(self):
+        legs = _cdr_lot_legs(
+            self._holdings(73, 7300),
+            {145: {"cdr": Decimal(730)}},
+            set(),
+        )
+        assert len(legs) == 1
+        assert legs[0][1].quantity == Decimal(73)
+
+    def test_company_absent_from_lot_map_keeps_company_keyed_path(self):
+        legs = _cdr_lot_legs(
+            self._holdings(27, 2700), {999: {"cdr": Decimal(5)}}, {145}
+        )
+        assert len(legs) == 1
+        assert legs[0][2] is None

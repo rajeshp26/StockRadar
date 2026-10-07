@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from config import settings
 from database import supabase
 from supabase import Client
 
@@ -11,6 +12,27 @@ logger = logging.getLogger(__name__)
 class PriceRepository:
     def __init__(self, client: Client = supabase):
         self.client = client
+
+    def _last_verified_close(self, company_id: int) -> float | None:
+        """Latest close already in price_history; upstream rows pass the plausibility gate."""
+        try:
+            result = (
+                self.client.table("price_history")
+                .select("close_price")
+                .eq("company_id", company_id)
+                .order("price_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            if rows and rows[0].get("close_price") is not None:
+                return float(rows[0]["close_price"])
+        except Exception as e:
+            logger.error(
+                "Failed to fetch last verified close (company=%s): %s",
+                company_id, e,
+            )
+        return None
 
     def get_company_exchanges(self, company_ids: list[int]) -> dict[int, str]:
         if not company_ids:
@@ -59,6 +81,35 @@ class PriceRepository:
         currency: str = "USD",
         ttl_seconds: int = 300,
     ) -> None:
+        # Root-cause guard: provider scale errors must never reach current_market_data.
+        if getattr(settings, "ENABLE_PRICE_PLAUSIBILITY_GATE", True):
+            max_ratio = float(getattr(settings, "MAX_PRICE_UP_RATIO", 100.0))
+            anchor = self._last_verified_close(company_id)
+            if anchor is not None and price > anchor * max_ratio:
+                logger.warning(
+                    "[PRICE-GATE] Rejecting current price %s for company_id=%s: exceeds last verified close %s x %s",
+                    price, company_id, anchor, max_ratio,
+                )
+                try:
+                    self.client.table("data_quality_events").insert({
+                        "company_id": company_id,
+                        "scope": "current_market_data",
+                        "metric": "PRICE_PLAUSIBILITY_VIOLATION",
+                        "severity": "high",
+                        "message": (
+                            f"Rejected current price {price} above last verified close "
+                            f"{anchor} x {max_ratio:g} (provider scale error suspected)"
+                        ),
+                        "details": {
+                            "anchor_price": anchor,
+                            "max_ratio": max_ratio,
+                            "rejected_price": price,
+                        },
+                    }).execute()
+                except Exception as e:
+                    logger.error(f"[PRICE-GATE] event ledger write failed for {company_id}: {e!s}")
+                return
+
         try:
             self.client.table("current_market_data").upsert(
                 {

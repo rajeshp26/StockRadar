@@ -23,6 +23,11 @@ from database import supabase
 logger = logging.getLogger("rebuild")
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from shared.cdr_utils import (
+    derive_cdr_companies_by_account,
+    derive_cdr_lots_by_account_at_dates,
+    split_holdings_by_cdr_lot,
+)
 from shared.replay_engine import AccountState, ReplayEngine
 from shared.snapshot_builder import build_snapshot_row
 
@@ -149,6 +154,17 @@ for aid in AIDS:
         exchange_overrides[aid] = {}
 
 # ── Single-pass incremental replay ──
+# Both derivations are one scan each for the whole rebuild. This loop walks
+# every account x every date, so a per-account or per-date derivation would
+# re-read the paginated transaction table thousands of times.
+#
+# derived_cdr_by_account is the company-keyed FALLBACK. It is required even in lot
+# mode: a company with no lot evidence at or before a date is absent from the lot map,
+# and the cached holdings flag is NULL for accounts whose flag was never populated --
+# treating that absence as "not a CDR" re-creates the 10x overvaluation (BLK-027).
+derived_cdr_by_account = derive_cdr_companies_by_account(supabase)
+lots_by_date = derive_cdr_lots_by_account_at_dates(supabase, all_dates)
+
 MAX_BATCH = 50
 total_written = 0
 total_acct_rows = {aid: 0 for aid in AIDS}
@@ -207,13 +223,20 @@ for aid in AIDS:
                           for l in h.lots] if h.lots else None,
             })
 
+        acct_derived_cdr = derived_cdr_by_account.get(aid) or set()
+        lot_legs, lot_notes = split_holdings_by_cdr_lot(
+            holdings_state, lots_by_date.get(sd, {}).get(aid), acct_derived_cdr
+        )
+        for note in lot_notes:
+            print(f"  Account {aid} {sd}: {note}")
+
         try:
             # Pass empty prices_by_company so Tier 1 (current prices) never fires.
             # All snapshots use Tier 2 forward-fill from price_history, falling to
             # Tier 3 cost_basis — consistent pricing across ALL dates, no spike.
             snapshot = build_snapshot_row(
                 account_id=aid, snapshot_date=target_date,
-                holdings_state=holdings_state,
+                holdings_state=lot_legs,
                 cash_balance=state.cash_balance,
                 net_deposits=state.net_deposits,
                 prices_by_company={},
@@ -222,8 +245,10 @@ for aid in AIDS:
                 account_currency=acct_ccy_map[aid],
                 price_history=price_history_map,
                 exchange_overrides=exchange_overrides.get(aid, {}),
+                derived_cdr_companies=acct_derived_cdr,
                 company_currencies=company_currencies,
                 companies_map=companies_map,
+                lot_cdr_authoritative=True,
             )
         except Exception as e:
             print(f"  ERROR building snapshot {aid} {sd}: {e}")
@@ -238,6 +263,7 @@ for aid in AIDS:
             'cash_balance': snapshot.get('cash_balance', 0),
             'net_deposits': snapshot.get('net_deposits', 0),
             'holdings_json': snapshot.get('holdings_json') or [],
+            'job_id': snapshot.get('job_id'),
             'computed_at': datetime.now().isoformat(),
             'data_quality_flag': snapshot.get('data_quality_flag', 'OK'),
         }

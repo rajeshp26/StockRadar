@@ -90,7 +90,7 @@ def main():
     src = Path(a.schema)
     if not src.exists():
         print(f"[types] no schema at {src}"); return 0
-    doc = yaml.safe_load(src.read_text())
+    doc = yaml.safe_load(src.read_text(encoding="utf-8"))
 
     rc = 0
     for lang, (rel, fn) in targets_for(src).items():
@@ -99,7 +99,7 @@ def main():
         if a.check:
             if not dest.exists():
                 print(f"[types] MISSING generated {lang} types at {rel}"); rc = 1; continue
-            have = dest.read_text()
+            have = dest.read_text(encoding="utf-8")
             if have != body:
                 print(f"[types] DRIFT in {rel} — regenerate; implementation may not match contract")
                 for line in list(difflib.unified_diff(
@@ -111,7 +111,7 @@ def main():
                 print(f"[types] {rel}: in sync")
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(body)
+            dest.write_text(body, encoding="utf-8", newline="\n")
             print(f"[types] wrote {rel}")
     return rc
 

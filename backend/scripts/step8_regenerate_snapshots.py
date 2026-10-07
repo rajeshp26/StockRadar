@@ -19,6 +19,7 @@ from datetime import date
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.price_repository import PriceRepository
+from shared.cdr_utils import derive_account_cdr_companies, derive_account_cdr_lots_as_of
 from shared.replay_engine import ReplayEngine
 
 engine = ReplayEngine(EventStore())
@@ -36,7 +37,11 @@ for (cid, exch), px in price_details.items():
 today = date.today()
 print(f"=== REGENERATED SNAPSHOTS ({today}) ===")
 for aid in [7, 8, 9, 10, 11, 12]:
-    snap = engine.build_snapshot_from_replay(aid, today, prices_by_company)
+    snap = engine.build_snapshot_from_replay(
+        aid, today, prices_by_company,
+        derived_cdr_companies=derive_account_cdr_companies(supabase, aid),
+        cdr_lots=derive_account_cdr_lots_as_of(supabase, aid, today.isoformat()),
+    )
     sv = snap["total_value"]
     mv = snap["holdings_market_value"]
     cb = snap["cost_basis"]

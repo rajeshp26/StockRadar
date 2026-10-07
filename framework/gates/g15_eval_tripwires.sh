@@ -12,7 +12,8 @@ source "$(dirname "$0")/_lib.sh"
 # framework bookkeeping are excluded by changed_source_files() itself.
 changed="$(changed_source_files | grep -E '(^|/)(test|tests|eval|evaluation|harness|benchmark|candidate|variant)(/|_|-|\.)' || true)"
 if [ -z "$changed" ]; then
-  skip "no changed test/eval/harness files — nothing to scan"
+  not_applicable "no changed test/eval/harness files — nothing to scan" \
+    '{"changed_files":0,"scope":"test|tests|eval|evaluation|harness|benchmark|candidate|variant"}'
 fi
 
 if ! have grep || ! have awk; then

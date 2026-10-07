@@ -12,6 +12,7 @@ from typing import Any
 
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from shared.portfolio_event_payload import build_transaction_event_data
 
 logger = logging.getLogger("stockerpro.scripts.backfill_events")
 
@@ -45,17 +46,22 @@ def build_event_from_transaction(tx: dict, idx: int) -> dict[str, Any]:
         "event_version": 1,
         "aggregate_id": f"account_{account_id}",
         "aggregate_type": "account",
-        "data": {
-            "account_id": account_id,
-            "company_id": tx.get("company_id"),
-            "transaction_date": tx.get("transaction_date").isoformat() if hasattr(tx.get("transaction_date"), "isoformat") else tx.get("transaction_date"),
-            "activity_type": tx.get("activity_type"),
-            "symbol": tx.get("symbol"),
-            "quantity": tx.get("quantity"),
-            "unit_price": tx.get("unit_price"),
-            "net_cash_amount": tx.get("net_cash_amount"),
-            "currency": tx.get("currency", "CAD"),
-        },
+        "data": build_transaction_event_data(
+            account_id=account_id,
+            company_id=tx.get("company_id"),
+            transaction_date=tx.get("transaction_date").isoformat() if hasattr(tx.get("transaction_date"), "isoformat") else tx.get("transaction_date"),
+            settlement_date=tx.get("settlement_date").isoformat() if hasattr(tx.get("settlement_date"), "isoformat") else tx.get("settlement_date"),
+            activity_type=tx.get("activity_type"),
+            activity_sub_type=tx.get("activity_sub_type"),
+            direction=tx.get("direction"),
+            symbol=tx.get("symbol"),
+            security_name=tx.get("security_name"),
+            exchange_override=tx.get("exchange_override"),
+            quantity=tx.get("quantity"),
+            unit_price=tx.get("unit_price"),
+            net_cash_amount=tx.get("net_cash_amount"),
+            currency=tx.get("currency", "CAD"),
+        ),
         "metadata": {
             "entry_source": tx.get("entry_source", "csv_import"),
             "import_batch_id": tx.get("import_batch_id"),

@@ -17,6 +17,8 @@ from itertools import islice
 import hashlib
 from typing import Any
 
+from collections import defaultdict
+
 from application.validators.financial_data_validator import (
     verify_database_write,
 )
@@ -529,12 +531,310 @@ class SupabaseFinancialRepository:
     # ========================================================================
     # UPSERT METHODS (Market Data Scheduler) + Conflict Detection
     # ========================================================================
+
+    # PRICE PLAUSIBILITY GATE (root-cause guard): rejects closes above the
+    # company's verified anchor × MAX_PRICE_UP_RATIO. Anchor precedence: executed
+    # transaction price (immutable ground truth) → provider current quote →
+    # last verified close. Historical closes never raise a transaction-based
+    # anchor — a poisoned history would otherwise legitimise more poison.
+    async def _build_price_plausibility_anchors(self, company_ids: list[int]) -> dict[int, float | None]:
+        """Return {company_id: verified anchor price|None} (None = no ground truth)."""
+        anchors: dict[int, float | None] = {cid: None for cid in company_ids}
+        if not company_ids:
+            return anchors
+
+        try:
+            comps = (
+                self.client.table("companies")
+                .select("company_id, ticker_symbol")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            ticker_by_cid: dict[int, str] = {
+                row["company_id"]: row.get("ticker_symbol")
+                for row in (comps.data or [])
+            }
+        except Exception as e:
+            logger.error(f"[PRICE-GATE] companies lookup failed: {e!s}")
+            ticker_by_cid = {}
+
+        symbols = [t for t in set(ticker_by_cid.values()) if t]
+        tx_max_by_symbol: dict[str, float] = {}
+        if symbols:
+            try:
+                tx_rows = (
+                    self.client.table("portfolio_transactions")
+                    .select("symbol, unit_price")
+                    .in_("symbol", symbols)
+                    .not_.is_("unit_price", None)
+                    .execute()
+                )
+                for row in tx_rows.data or []:
+                    sym = row.get("symbol")
+                    try:
+                        price = float(row.get("unit_price"))
+                    except (TypeError, ValueError):
+                        continue
+                    if price is not None and price > 0 and sym:
+                        tx_max_by_symbol[sym] = max(tx_max_by_symbol.get(sym, 0.0), price)
+            except Exception as e:
+                logger.error(f"[PRICE-GATE] transaction lookup failed: {e!s}")
+
+        cur_by_cid: dict[int, float] = {}
+        try:
+            cur_rows = (
+                self.client.table("current_market_data")
+                .select("company_id, current_price")
+                .in_("company_id", company_ids)
+                .execute()
+            )
+            for row in cur_rows.data or []:
+                try:
+                    price = float(row.get("current_price"))
+                except (TypeError, ValueError):
+                    continue
+                if price is not None and price > 0:
+                    cur_by_cid[row["company_id"]] = price
+        except Exception as e:
+            logger.error(f"[PRICE-GATE] current_market_data lookup failed: {e!s}")
+
+        # Companies with a transaction anchor: transaction price is immutable
+        # user ground truth; only the provider's current quote may raise it
+        # (never the possibly-poisoned history).
+        anchorless = []
+        for cid in company_ids:
+            sym = ticker_by_cid.get(cid)
+            tx_anchor = tx_max_by_symbol.get(sym) if sym else None
+            if tx_anchor:
+                anchors[cid] = max(tx_anchor, cur_by_cid.get(cid, 0.0))
+            else:
+                anchorless.append(cid)
+
+        if anchorless:
+            try:
+                hist_rows = (
+                    self.client.table("price_history")
+                    .select("company_id, price_date, adj_close, close_price")
+                    .in_("company_id", anchorless)
+                    .order("price_date", desc=True)
+                    .limit(5000)
+                    .execute()
+                )
+                latest_close: dict[int, float] = {}
+                for row in hist_rows.data or []:
+                    cid = row.get("company_id")
+                    if cid in latest_close:
+                        continue  # rows are ordered desc; first per company is latest
+                    try:
+                        # Prefer observed adj_close; pre-refetch rows lack it (D7).
+                        adj = row.get("adj_close")
+                        close = float(adj if adj is not None else row.get("close_price"))
+                    except (TypeError, ValueError):
+                        continue
+                    if close is not None and close > 0:
+                        latest_close[cid] = close
+            except Exception as e:
+                logger.error(f"[PRICE-GATE] price_history anchor lookup failed: {e!s}")
+                latest_close = {}
+
+            for cid in anchorless:
+                if cid in cur_by_cid:
+                    anchors[cid] = cur_by_cid[cid]
+                elif cid in latest_close:
+                    anchors[cid] = latest_close[cid]
+                # else: stays None → no ground truth (cold start / watchlist-only)
+
+        return anchors
+
+    async def _apply_price_plausibility_gate(
+        self, rows: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[int, int]]:
+        """Drop rows whose close exceeds the verified anchor by
+        MAX_PRICE_UP_RATIO. Returns ``(accepted_rows, rejected_by_company)``.
+
+        Rejected companies get ``increment_price_failures`` plus a
+        high-severity data_quality_event. Companies with no anchor are accepted
+        and flagged low-confidence once (no failure increment — there is no
+        evidence either way).
+        """
+        if not rows or not getattr(settings, "ENABLE_PRICE_PLAUSIBILITY_GATE", True):
+            return rows, {}
+
+        max_ratio = float(getattr(settings, "MAX_PRICE_UP_RATIO", 100.0))
+        company_ids = list({r.get("company_id") for r in rows if r.get("company_id")})
+        anchors = await self._build_price_plausibility_anchors(company_ids)
+
+        accepted: list[dict[str, Any]] = []
+        rejected_by_company: defaultdict[int, int] = defaultdict(int)
+        low_confidence_companies: set[int] = set()
+
+        for r in rows:
+            cid = r.get("company_id")
+            # Gate on adj_close (== served series post-recovery); legacy rows
+            # without adj_close fall back to raw close (transition D7).
+            try:
+                adj = r.get("adj_close")
+                close = float(adj if adj is not None else r.get("close_price"))
+            except (TypeError, ValueError):
+                close = None
+            if close is None or close <= 0:
+                accepted.append(r)
+                continue
+
+            anchor = anchors.get(cid)
+            if anchor is None:
+                # No verifiable ground truth — accept but mark low-confidence.
+                accepted.append(r)
+                low_confidence_companies.add(cid)
+                continue
+
+            if close > anchor * max_ratio:
+                rejected_by_company[cid] += 1
+            else:
+                accepted.append(r)
+
+        # Side effects: failure counter + event ledger per rejected company.
+        for cid, count in rejected_by_company.items():
+            try:
+                await self.increment_price_failures(cid)
+            except Exception as e:
+                logger.error(f"[PRICE-GATE] failure counter increment failed for {cid}: {e!s}")
+            anchor = anchors.get(cid)
+            try:
+                self.client.table("data_quality_events").insert({
+                    "company_id": cid,
+                    "scope": "price_history",
+                    "metric": "PRICE_PLAUSIBILITY_VIOLATION",
+                    "severity": "high",
+                    "message": (
+                        f"Rejected {count} price_history close(s) above verified anchor "
+                        f"{anchor} x {max_ratio:g} (provider scale error suspected)"
+                    ),
+                    "details": {
+                        "anchor_price": anchor,
+                        "max_ratio": max_ratio,
+                        "rejected_rows": count,
+                    },
+                }).execute()
+            except Exception as e:
+                logger.error(f"[PRICE-GATE] event ledger write failed for {cid}: {e!s}")
+
+        for cid in sorted(low_confidence_companies):
+            try:
+                self.client.table("data_quality_events").insert({
+                    "company_id": cid,
+                    "scope": "price_history",
+                    "metric": "PRICE_ANCHOR_MISSING",
+                    "severity": "low",
+                    "message": (
+                        "price_history accepted with no verified anchor "
+                        "(no executed transaction, no current quote, no prior close)"
+                    ),
+                    "details": {"max_ratio": max_ratio},
+                }).execute()
+            except Exception as e:
+                logger.error(f"[PRICE-GATE] low-confidence event write failed for {cid}: {e!s}")
+
+        if rejected_by_company:
+            logger.warning(
+                f"[PRICE-GATE] Rejected {sum(rejected_by_company.values())} row(s) "
+                f"across {len(rejected_by_company)} company(ies): {dict(rejected_by_company)}"
+            )
+        return accepted, dict(rejected_by_company)
+
+    async def _fetch_existing_price_rows(
+        self, rows: list[dict[str, Any]]
+    ) -> dict[tuple[Any, str], dict[str, Any]]:
+        """Index the stored price_history rows that `rows` would overwrite.
+
+        Paginated per company: a multi-decade daily backfill spans far more than
+        the PostgREST db-max-rows cap, so an unpaged read silently returns only
+        the oldest slice and every later day compares as "no existing row".
+        """
+        span: dict[Any, tuple[str, str]] = {}
+        for r in rows:
+            cid, raw = r.get("company_id"), r.get("price_date")
+            if cid is None or raw is None:
+                continue
+            day = str(raw)[:10]
+            lo, hi = span.get(cid, (day, day))
+            span[cid] = (min(lo, day), max(hi, day))
+
+        fields = (
+            "price_date,open_price,close_price,high_price,low_price,volume,data_source"
+        )
+        found: dict[tuple[Any, str], dict[str, Any]] = {}
+        for cid, (lo, hi) in span.items():
+            offset = 0
+            while True:
+                page = (
+                    self.client.table("price_history")
+                    .select(fields)
+                    .eq("company_id", cid)
+                    .gte("price_date", lo)
+                    .lte("price_date", hi)
+                    .order("price_date", desc=False)
+                    .range(offset, offset + 999)
+                    .execute()
+                ).data or []
+                for existing in page:
+                    found[(cid, str(existing.get("price_date"))[:10])] = existing
+                if len(page) < 1000:
+                    break
+                offset += 1000
+        return found
+
+    async def _fetch_split_calendar(
+        self, company_ids: list[int]
+    ) -> dict[int, list[tuple[date, float]]]:
+        """Owned `splits` calendar for the given companies.
+
+        Returns ``{company_id: [(report_date, parse_factor), ...]}`` sorted by
+        report_date ascending. ``parse_factor`` = split_to/split_from (a 3:1
+        split → 3.0; a 1:100 reverse → 0.01). The write path multiplies served
+        OHLC by the product of these factors for splits AFTER a row's price
+        date to recover true as-traded raw (design D1). Paginated per company —
+        the PostgREST db-max-rows cap would silently truncate an unpaged
+        multi-company fetch, the same failure `_fetch_existing_price_rows`
+        guards against.
+        """
+        if not company_ids:
+            return {}
+        from shared.split_utils import get_split_factors_from_rows
+
+        all_rows: list[dict[str, Any]] = []
+        for cid in company_ids:
+            offset = 0
+            while True:
+                page = (
+                    self.client.table("splits")
+                    .select("company_id, report_date, split_factor")
+                    .eq("company_id", cid)
+                    .order("report_date", desc=False)
+                    .range(offset, offset + 999)
+                    .execute()
+                ).data or []
+                all_rows.extend(page)
+                if len(page) < 1000:
+                    break
+                offset += 1000
+        return get_split_factors_from_rows(all_rows)
+
     async def upsert_price_history(
         self, rows: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        """Upsert monthly OHLCV rows (unique by company_id, price_date)."""
+        """Upsert daily OHLCV rows (unique by company_id, price_date).
+
+        True raw (as-traded) OHLC is recoverd here, not read from the provider:
+        both yfinance and DefeatBeta serve Yahoo's split-restated series, so
+        ``raw(d) = served(d) x PI(parse(s))`` over splits ``s.report_date > d``.
+        ``adjustment_factor`` (PI(from/to), rounded to 15dp) and ``adj_close``
+        (rounded to 4dp, telescopes back to the served series) are materialized
+        at the same choke point, so every row — scheduler, backfill, or API —
+        lands scale-consistent. See docs/price-history-professional-model.md.
+        """
         if not rows:
-            return {"count": 0}
+            return {"count": 0, "gate_rejected": {}}
         # Defensive: close_price is NOT NULL; null-OHLC rows are provider garbage
         # (delisted/suspended days) and must not reach the database.
         valid_rows = [r for r in rows if r.get("close_price") is not None]
@@ -545,12 +845,46 @@ class SupabaseFinancialRepository:
                 dropped, len(rows),
             )
         if not valid_rows:
-            return {"count": 0}
+            return {"count": 0, "gate_rejected": {}}
         rows = valid_rows
 
-        # Defensive clamp: numeric(12,4) limit is 99,999,999.9999
-        _PRICE_MAX = 99_999_999.9999
-        _PRICE_FIELDS = ("open_price", "close_price", "high_price", "low_price")
+        # Recover true raw OHLC + materialize adjustment_factor/adj_close from
+        # the owned splits calendar (single adjustment authority, D1/D2).
+        company_ids = sorted({int(r["company_id"]) for r in rows if r.get("company_id") is not None})
+        split_factors_by_cid = await self._fetch_split_calendar(company_ids)
+        recovered = 0
+        from shared.split_utils import parse_split_date
+        for r in rows:
+            cid = r.get("company_id")
+            raw_day = r.get("price_date")
+            try:
+                day = parse_split_date(raw_day)
+            except (TypeError, ValueError):
+                day = None
+            recovery = 1.0
+            factor = 1.0
+            for sd, adj in split_factors_by_cid.get(cid, []):
+                if sd > day:
+                    recovery *= adj
+                    factor *= 1.0 / adj
+            if recovery != 1.0:
+                for f in ("open_price", "close_price", "high_price", "low_price"):
+                    val = r.get(f)
+                    if val is not None:
+                        r[f] = round(float(val) * recovery, 4)
+                recovered += 1
+            r["adjustment_factor"] = round(factor, 15)
+            close = r.get("close_price")
+            r["adj_close"] = round(float(close) * factor, 4) if close is not None else None
+        if recovered:
+            logger.info(
+                "[PRICE] Recovered true raw OHLC for %d row(s) across %d company(ies)",
+                recovered, len(split_factors_by_cid),
+            )
+
+        # Defensive clamp: numeric(16,4) limit is 999,999,999,999.9999
+        _PRICE_MAX = 999_999_999_999.9999
+        _PRICE_FIELDS = ("open_price", "close_price", "high_price", "low_price", "adj_close")
         clamped = 0
         for r in rows:
             for f in _PRICE_FIELDS:
@@ -564,26 +898,22 @@ class SupabaseFinancialRepository:
                     except (TypeError, ValueError):
                         pass
         if clamped:
-            logger.warning("[PRICE] Clamped %d overflow price values to numeric(12,4) limit", clamped)
+            logger.warning("[PRICE] Clamped %d overflow price values to numeric(16,4) limit", clamped)
+
+        # Plausibility gate first: rejected rows must not reach conflict detection.
+        rows, gate_rejected = await self._apply_price_plausibility_gate(rows)
+        if not rows:
+            return {"count": 0, "gate_rejected": gate_rejected}
 
         try:
-            # Optional conflict detection (row-by-row check)
+            # Bulk fetch, not .single() per row: that cost one HTTP round-trip per
+            # calendar day, so a multi-decade daily backfill never finished.
             if getattr(settings, "ENABLE_CONFLICT_DETECTION", True):
                 threshold = float(getattr(settings, "CONFLICT_DETECTION_THRESHOLD_PCT", 1.0))
+                existing_by_key = await self._fetch_existing_price_rows(rows)
                 for r in rows:
-                    cid, pdate = r.get("company_id"), r.get("price_date")
-                    existing = None
-                    try:
-                        existing = (
-                            self.client.table("price_history")
-                            .select("open_price, close_price, high_price, low_price, volume, data_source")
-                            .eq("company_id", cid)
-                            .eq("price_date", pdate)
-                            .single()
-                            .execute()
-                        ).data
-                    except Exception:
-                        existing = None
+                    cid = r.get("company_id")
+                    existing = existing_by_key.get((cid, str(r.get("price_date"))[:10]))
 
                     if existing:
                         for field in ["open_price", "close_price", "high_price", "low_price"]:
@@ -627,7 +957,7 @@ class SupabaseFinancialRepository:
                 rows=dedup,
                 on_conflict="company_id,price_date",
             )
-            return {"count": count}
+            return {"count": count, "gate_rejected": gate_rejected}
 
         except Exception as e:
             logger.error(f"Failed to upsert price_history: {e}")
@@ -1467,9 +1797,29 @@ class SupabaseFinancialRepository:
             pass
 
     async def increment_price_failures(self, company_id: int) -> None:
+        """Increment the consecutive price-failure counter (root fix).
+
+        The previous implementation *set* the counter to 1 on every failure, so
+        a company could never reach the quarantine threshold — the counter was
+        flat, not cumulative. Read the current value and write current + 1.
+        update_price_success_marker() resets it to 0 on a verified write.
+        """
         try:
+            resp = (
+                self.client.table('companies')
+                .select('consecutive_price_failures')
+                .eq('company_id', company_id)
+                .limit(1)
+                .execute()
+            )
+            current = 0
+            if resp.data:
+                try:
+                    current = int(resp.data[0].get('consecutive_price_failures') or 0)
+                except (TypeError, ValueError):
+                    current = 0
             self.client.table('companies').update({
-                'consecutive_price_failures': 1,
+                'consecutive_price_failures': current + 1,
             }).eq('company_id', company_id).execute()
         except Exception:
             pass

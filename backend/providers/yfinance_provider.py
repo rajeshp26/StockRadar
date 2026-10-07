@@ -173,7 +173,11 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         """
         tkr = yf.Ticker(self._resolve_symbol(symbol, exchange))
         try:
-            hist = tkr.history(period="max", auto_adjust=True)  # columns: Open, High, Low, Close, Volume
+            # D1 (docs/price-history-professional-model.md): store RAW OHLC as the
+            # provider serves it. Adjusted values are derived from the owned `splits`
+            # calendar at write time — provider Adj Close is unreliable (no-op for
+            # some names, mixed with dividend effects for others).
+            hist = tkr.history(period="max", auto_adjust=False)  # columns: Open, High, Low, Close, Volume
             if hist is None or hist.empty:
                 return pd.DataFrame()
             df = hist.reset_index().rename(columns={

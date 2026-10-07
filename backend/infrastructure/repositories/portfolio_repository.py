@@ -628,6 +628,81 @@ class PortfolioRepository:
             batch_size=500,
         )
 
+    def get_cdr_company_ids_by_account(self) -> dict[int, set[int]]:
+        """Company_ids traded as CDRs per account, from raw transaction names.
+
+        CDR classification stays owned by shared.cdr_utils; this only supplies
+        paginated rows. A portfolio holding is the OUTPUT of that signal, never
+        its input -- reading portfolio_holdings.exchange_override to price a
+        snapshot is what turned a stale cache into a silent 10x valuation error.
+
+        Paginated past the 1000-row Supabase page cap, which truncates silently.
+        """
+        from shared.cdr_utils import is_cdr_transaction
+
+        select = "account_id,company_id,security_name,raw_data"
+        step = 1000
+        start = 0
+        cdr_by_account: dict[int, set[int]] = {}
+        while True:
+            res = (
+                self.client.table("portfolio_transactions")
+                .select(select)
+                .order("transaction_id")
+                .range(start, start + step - 1)
+                .execute()
+            )
+            rows = res.data or []
+            for row in rows:
+                aid = row.get("account_id")
+                cid = row.get("company_id")
+                if aid is None or cid is None:
+                    continue
+                if is_cdr_transaction(row.get("raw_data"), row.get("security_name")):
+                    cdr_by_account.setdefault(int(aid), set()).add(int(cid))
+            if len(rows) < step:
+                break
+            start += step
+        return cdr_by_account
+
+    def get_cdr_lots_by_account_as_of(
+        self, as_of: str
+    ) -> dict[int, dict[int, dict[str, Decimal]]]:
+        """account_id -> company_id -> {"cdr"/"direct": signed qty} replayed to as_of.
+
+        The lot-level counterpart of get_cdr_company_ids_by_account(), and it
+        exists because the company-keyed answer cannot express a company held as
+        BOTH a CDR lot and a direct lot (BLK-027). A flat set[int] has no date
+        dimension and no per-share dimension, so it necessarily prices every share
+        of the company on the CDR scale once the company has traded as a CDR at
+        any point in the account.
+
+        Batched over all accounts in one paginated scan for the same reason the
+        company-keyed form is: a per-account call re-reads the whole table N times.
+
+        Lot arithmetic stays owned by shared.cdr_utils; this supplies rows only.
+        """
+        from shared.cdr_utils import derive_cdr_lots_by_account_as_of
+
+        return derive_cdr_lots_by_account_as_of(self.client, as_of)
+
+    def get_cdr_lots_by_account_at_dates(
+        self, dates: list[str]
+    ) -> dict[str, dict[int, dict[int, dict[str, Decimal]]]]:
+        """date -> account_id -> company_id -> {"cdr"/"direct": signed qty}.
+
+        Gap repair rebuilds several historical dates in one run and each date needs
+        its own as-of lot truth. Deriving per date means one paginated scan per date;
+        this form pays one scan for the whole batch. See
+        cdr_utils.derive_cdr_lots_by_account_at_dates() for why the per-date
+        arithmetic is still shared rather than reimplemented.
+
+        Lot arithmetic stays owned by shared.cdr_utils; this supplies rows only.
+        """
+        from shared.cdr_utils import derive_cdr_lots_by_account_at_dates
+
+        return derive_cdr_lots_by_account_at_dates(self.client, dates)
+
     def get_monthly_dividends(
         self, account_id: int, months: int = 12
     ) -> list[dict[str, Any]]:
@@ -1250,39 +1325,15 @@ class PortfolioRepository:
                     else:
                         next_month = date(current.year, current.month + 1, 1)
                         month_end = next_month - timedelta(days=1)
-                    if month_end >= earliest:
+                    # The loop guard compares first-of-month, but the value appended
+                    # here is month-end, which can still be in the future.
+                    if earliest <= month_end <= today:
                         event_dates.add(month_end)
                     current = next_month
         except Exception as e:
             logger.error(f"Failed to get event dates for account {account_id}: {e}")
 
         return sorted(event_dates)
-
-    def _get_split_factors(
-        self, company_ids: list[int]
-    ) -> dict[int, list[tuple]]:
-        """
-        Fetch reverse/forward split data for the given companies.
-
-        Returns {company_id: [(split_date, adjustment_factor), ...]} sorted by date asc.
-        adjustment_factor = split_to / split_from (e.g. 1:50 reverse = 0.02).
-        Prices BEFORE this date must be multiplied by this factor to get
-        the post-split-equivalent price.
-        """
-        if not company_ids:
-            return {}
-        from shared.split_utils import get_split_factors_from_rows
-        try:
-            res = (
-                self.client.table("splits")
-                .select("company_id, report_date, split_factor")
-                .in_("company_id", company_ids)
-                .execute()
-            )
-            return get_split_factors_from_rows(res.data or [])
-        except Exception as e:
-            logger.error(f"Failed to fetch split factors: {e}")
-            return {}
 
     def get_all_prices_historical(
         self, company_ids: list[int], target_date: date
@@ -1298,78 +1349,43 @@ class PortfolioRepository:
         if not company_ids:
             return price_map
 
+        PAGE = 1000
+        offset = 0
         try:
-            result = (
-                self.client.table("price_history")
-                .select("company_id, price_date, close_price")
-                .in_("company_id", company_ids)
-                .lte("price_date", target_date.isoformat())
-                .order("price_date", desc=False)
-                .limit(50000)
-                .execute()
-            )
-            for row in (result.data or []):
-                cid = row["company_id"]
-                pd = row["price_date"]
-                if isinstance(pd, str):
-                    pd = date.fromisoformat(pd)
-                elif isinstance(pd, datetime):
-                    pd = pd.date()
-                price_map.setdefault(cid, []).append((pd, float(row["close_price"])))
+            # PostgREST caps every response at db-max-rows (1000 by default) and a
+            # client-side .limit() does not raise that cap, so a single fetch
+            # silently returns only the OLDEST page. At month-end resolution a
+            # company held ~68 rows and never hit it; at daily resolution a
+            # multi-decade series exceeds 1000 and every price after the first
+            # page vanishes, which then reads as the latest price. Page through.
+            while True:
+                result = (
+                    self.client.table("price_history")
+                    .select("company_id, price_date, adj_close, close_price")
+                    .in_("company_id", company_ids)
+                    .lte("price_date", target_date.isoformat())
+                    .order("company_id", desc=False)
+                    .order("price_date", desc=False)
+                    .range(offset, offset + PAGE - 1)
+                    .execute()
+                )
+                page = result.data or []
+                for row in page:
+                    cid = row["company_id"]
+                    pd = row["price_date"]
+                    if isinstance(pd, str):
+                        pd = date.fromisoformat(pd)
+                    elif isinstance(pd, datetime):
+                        pd = pd.date()
+                    # Prefer the materialized adjusted close (== served series);
+                    # legacy rows pre-refetch lack it (transition D7).
+                    adj = row.get("adj_close")
+                    px = adj if adj is not None else row.get("close_price")
+                    price_map.setdefault(cid, []).append((pd, float(px)))
+                if len(page) < PAGE:
+                    break
+                offset += PAGE
         except Exception as e:
             logger.error(f"Failed to get all prices historical: {e}")
-
-        # --- Adjust prices for stock splits ---
-        split_factors = self._get_split_factors(company_ids)
-        if split_factors:
-            for cid, prices in price_map.items():
-                cid_splits = split_factors.get(cid, [])
-                if not cid_splits:
-                    continue
-                adjusted = []
-                for pd, pr in prices:
-                    adj = 1.0
-                    for split_date, factor in cid_splits:
-                        if split_date > pd:
-                            adj *= factor
-                    adjusted.append((pd, pr * adj))
-                price_map[cid] = adjusted
-
-        # --- Detect and normalize price unit inconsistencies ---
-        # Some price data was loaded in different units (e.g. monthly prices
-        # at ~5-10% of actual value vs. correct weekly prices).  If consecutive
-        # records within 60 days differ by more than 5x, we assume a unit
-        # mismatch and scale older records to match the newer anchor.
-        MAX_PRICE_RATIO = 5.0
-        MIN_ANOMALY_DAYS = 60
-        for cid, prices in price_map.items():
-            if len(prices) < 2:
-                continue
-            prices.sort(key=lambda x: x[0])
-            # Find the newest anomalous boundary from right to left
-            fix_up_to = 0
-            for i in range(len(prices) - 1, 0, -1):
-                newer = prices[i]
-                older = prices[i - 1]
-                days = (newer[0] - older[0]).days
-                if days > MIN_ANOMALY_DAYS:
-                    break
-                if older[1] > 0 and newer[1] / older[1] > MAX_PRICE_RATIO:
-                    ratio = newer[1] / older[1]
-                    logger.info(
-                        f"Normalising price unit cid={cid}: {older[0]}={older[1]:.2f} "
-                        f"-> {newer[0]}={newer[1]:.2f} (x{ratio:.1f}, {days}d)"
-                    )
-                    fix_up_to = i
-            if fix_up_to > 0:
-                anchor = prices[fix_up_to]
-                scale = anchor[1] / prices[fix_up_to - 1][1] if prices[fix_up_to - 1][1] > 0 else 1.0
-                fixed = []
-                for j, (pd_, pr_) in enumerate(prices):
-                    if j < fix_up_to:
-                        fixed.append((pd_, pr_ * scale))
-                    else:
-                        fixed.append((pd_, pr_))
-                price_map[cid] = fixed
 
         return price_map

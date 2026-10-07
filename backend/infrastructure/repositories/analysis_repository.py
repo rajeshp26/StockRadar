@@ -357,13 +357,29 @@ class AnalysisRepository:
             cutoff = (now_utc().date() - timedelta(days=months * 31)).isoformat()
             resp = (
                 supabase.table("price_history")
-                .select("price_date, close_price, high_price, volume")
+                .select("price_date, adj_close, close_price, high_price, volume, adjustment_factor")
                 .eq("company_id", company_id)
                 .gte("price_date", cutoff)
                 .order("price_date", desc=False)
                 .execute()
             )
-            return resp.data or []
+            out: list[dict[str, Any]] = []
+            for r in resp.data or []:
+                adj_close = r.get("adj_close")
+                factor = r.get("adjustment_factor")
+                close = adj_close if adj_close is not None else r.get("close_price")
+                high = r.get("high_price")
+                if high is not None and factor is not None:
+                    high = float(high) * float(factor)
+                out.append(
+                    {
+                        "price_date": r["price_date"],
+                        "close_price": close,
+                        "high_price": high,
+                        "volume": r.get("volume"),
+                    }
+                )
+            return out
         except Exception as e:
             logger.error(
                 "get_price_history_monthly failed for company_id=%d: %s", company_id, e

@@ -106,182 +106,97 @@ async def refresh_all_prices():
 
 
 async def _update_cdr_ratios():
-    """Auto-update CDR ratios for all CDR holdings after price refresh.
+    """Maintain the structural CDR ratio for CDR companies after price refresh.
 
-    Computes cdr_ratio = TSX_share_price / CDR_average_cost and stores in companies table.
-    Called automatically after daily price refresh.
+    The CDR ratio is a fixed structural property of the instrument (1 CDR =
+    1/CDR_RATIO of an underlying US share), fixed by the depositary at issuance.
+    It is NOT a market measurement and is NEVER derived from TSX price, CDR
+    average cost, or any other price/cost data. This function writes ONLY the
+    structural constant ``shared.cdr_utils.CDR_RATIO``. A market-derived value
+    written here is a bug.
+
+    A company is CDR when EVERY one of its holdings rows carries
+    exchange_override="TOR" (unanimous, company-global rule). Per-account CDR
+    classification is owned by shared.cdr_utils.derive_cdr_companies_by_account;
+    this function only maintains the company-level reference value, which
+    per-account pricing (snapshot_builder) applies via each holding's
+    exchange_override.
     """
-    try:
-        # Find all CDR companies (those with exchange_override="TOR" in holdings)
-        hold_result = (
-            repo.client.table("portfolio_holdings")
-            .select("company_id")
-            .eq("exchange_override", "TOR")
-            .execute()
-        )
-        cdr_cids = list(set(row["company_id"] for row in (hold_result.data or [])))
-        if not cdr_cids:
-            return
+    from shared.cdr_utils import CDR_RATIO, EXCHANGE_OVERRIDE_TOR
 
-        # Get current TSX share prices
-        cmr_result = (
-            repo.client.table("current_market_data")
-            .select("company_id, current_price")
-            .in_("company_id", cdr_cids)
-            .execute()
-        )
-        tsx_prices = {row["company_id"]: float(row["current_price"])
-                      for row in (cmr_result.data or [])
-                      if row.get("current_price")}
+    hold_result = repo.client.table("portfolio_holdings").select(
+        "company_id, exchange_override"
+    ).execute()
+    total_by_cid: dict[int, int] = {}
+    tor_by_cid: dict[int, int] = {}
+    for row in (hold_result.data or []):
+        cid = int(row["company_id"])
+        total_by_cid[cid] = total_by_cid.get(cid, 0) + 1
+        if row.get("exchange_override") == EXCHANGE_OVERRIDE_TOR:
+            tor_by_cid[cid] = tor_by_cid.get(cid, 0) + 1
 
-        # Get weighted average CDR cost per company
-        hold_detail = (
-            repo.client.table("portfolio_holdings")
-            .select("company_id, average_cost, quantity")
-            .in_("company_id", cdr_cids)
-            .eq("exchange_override", "TOR")
-            .execute()
-        )
-        cost_data: dict[int, dict] = {}
-        for row in (hold_detail.data or []):
-            cid = row["company_id"]
-            avg = float(row.get("average_cost") or 0)
-            qty = float(row.get("quantity") or 0)
-            if qty > 0 and avg > 0:
-                if cid not in cost_data:
-                    cost_data[cid] = {"total_cost": 0.0, "total_qty": 0.0}
-                cost_data[cid]["total_cost"] += avg * qty
-                cost_data[cid]["total_qty"] += qty
+    cdr_cids = {
+        cid for cid, total in total_by_cid.items()
+        if tor_by_cid.get(cid, 0) == total
+    }
+    if not cdr_cids:
+        return
 
-        updated = 0
-        for cid in cdr_cids:
-            tsx_price = tsx_prices.get(cid)
-            if not tsx_price or cid not in cost_data:
-                continue
-            cd = cost_data[cid]
-            if cd["total_qty"] <= 0:
-                continue
-            cdr_avg_cost = cd["total_cost"] / cd["total_qty"]
-            if cdr_avg_cost <= 0:
-                continue
+    today = date.today().isoformat()
+    updated = 0
+    for cid in cdr_cids:
+        try:
+            repo.client.table("companies").update(
+                {
+                    "cdr_ratio": float(CDR_RATIO),
+                    "cdr_ratio_date": today,
+                    # Required by the companies_cdr_ratio_range CHECK; not read back here
+                    "cdr_ratio_source": "structural_constant",
+                }
+            ).eq("company_id", cid).execute()
+            updated += 1
+        except Exception as e:
+            logger.warning("[CDR-RATIO] failed to update company %d: %s", cid, e)
 
-            ratio = tsx_price / cdr_avg_cost
-            # Sanity check: ratio should be between 1 and 100
-            if ratio < 1 or ratio > 100:
-                logger.warning(
-                    "[CDR-RATIO] company=%d ratio=%.2f out of range, skipping",
-                    cid, ratio,
-                )
-                continue
-
-            try:
-                repo.client.table("companies").update({
-                    "cdr_ratio": round(ratio, 2),
-                    "cdr_ratio_date": date.today().isoformat(),
-                }).eq("company_id", cid).execute()
-                updated += 1
-            except Exception as e:
-                logger.warning("[CDR-RATIO] failed to update company %d: %s", cid, e)
-
-        if updated:
-            logger.info("[CDR-RATIO] updated %d/%d CDR ratios", updated, len(cdr_cids))
-
-    except Exception as e:
-        logger.error("[CDR-RATIO] update failed: %s", e)
+    logger.info(
+        "[CDR-RATIO] wrote structural ratio %s for %d/%d CDR companies",
+        CDR_RATIO, updated, len(cdr_cids),
+    )
 
 
 def _emit_split_events() -> None:
-    """For each unprocessed split, emit a split event per affected account."""
-    from infrastructure.repositories.event_store import EventStore
-    from shared.split_utils import parse_split_factor
+    """Emit split events for every (split, account) pair that lacks one.
 
-    event_store = EventStore()
+    Delegates to shared.split_sync.reconcile_split_events: the account set is
+    derived from the immutable event stream (holding evidence), never from
+    current portfolio_holdings, so accounts that sold the split security before
+    the job ran are still covered. The splits.processed latch is updated by the
+    reconciler only after a successful emission and is a hint, not a gate —
+    reconciliation re-scans ALL splits regardless of latch state.
+    """
+    from shared.split_sync import reconcile_split_events
 
     try:
-        splits_res = (
-            repo.client.table("splits")
-            .select("company_id, report_date, split_factor")
-            .eq("processed", False)
-            .execute()
-        )
+        report = reconcile_split_events(client=repo.client, dry_run=False)
     except Exception as e:
-        logger.error("[SPLIT-EVENT] failed to fetch unprocessed splits: %s", e)
+        logger.error("[SPLIT-EVENT] reconciliation failed: %s", e)
         return
 
-    if not splits_res.data:
+    if report.error:
+        logger.error("[SPLIT-EVENT] reconciliation error: %s", report.error)
         return
 
-    for split in splits_res.data:
-        cid = split["company_id"]
-        report_date = split["report_date"]
-        split_factor_str = split.get("split_factor") or ""
-
-        factor = parse_split_factor(split_factor_str)
-        if factor <= 0 or factor == 1:
-            continue
-
-        try:
-            holdings_res = (
-                repo.client.table("portfolio_holdings")
-                .select("account_id")
-                .eq("company_id", cid)
-                .execute()
-            )
-        except Exception as e:
-            logger.error("[SPLIT-EVENT] failed to fetch holdings for company %d: %s", cid, e)
-            continue
-
-        account_ids = list({h["account_id"] for h in (holdings_res.data or [])})
-        if not account_ids:
-            continue
-
-        events = []
-        for aid in account_ids:
-            idempotency_key = f"split_{cid}_{report_date}_{aid}"
-            events.append({
-                "event_type": "split",
-                "event_version": 1,
-                "aggregate_id": f"account_{aid}",
-                "aggregate_type": "account",
-                "data": {
-                    "company_id": cid,
-                    "split_factor": str(factor),
-                    "report_date": report_date,
-                },
-                "metadata": {},
-                "idempotency_key": idempotency_key,
-            })
-
-        if events:
-            try:
-                event_store.append_events_batch(events)
-                logger.info(
-                    "[SPLIT-EVENT] emitted %d split events for company %d (factor=%s)",
-                    len(events), cid, factor,
-                )
-            except Exception as e:
-                # Duplicate-key means a previous cycle already emitted these events
-                # (e.g. a crash between append and mark-processed). Not fatal: fall
-                # through and mark the split processed so the cycle self-heals instead
-                # of retrying the same batch on every run.
-                if "duplicate key" in str(e).lower():
-                    logger.warning(
-                        "[SPLIT-EVENT] events for company %d already exist (factor=%s) - marking processed",
-                        cid, factor,
-                    )
-                else:
-                    logger.error(
-                        "[SPLIT-EVENT] failed to emit events for company %d: %s", cid, e,
-                    )
-                    continue
-
-        try:
-            repo.client.table("splits").update({"processed": True}) \
-                .eq("company_id", cid) \
-                .eq("report_date", report_date) \
-                .execute()
-        except Exception as e:
-            logger.error("[SPLIT-EVENT] failed to mark split processed for company %d: %s", cid, e)
+    if report.emitted_events:
+        logger.info(
+            "[SPLIT-EVENT] emitted %d split events for %d companies",
+            report.emitted_events,
+            len(report.companies_with_gaps),
+        )
+    else:
+        logger.info(
+            "[SPLIT-EVENT] no missing split events (checked %d account-company pairs)",
+            report.checked_splits,
+        )
 
 
 async def _fetch_yfinance_batch(

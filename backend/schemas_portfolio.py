@@ -112,6 +112,7 @@ class AccountBreakdown(BaseModel):
     holdings_count: int
     total_value: float
     total_cost: float
+    cash_balance: float = 0.0
     gain_loss: float
     gain_loss_pct: float
     value_currency: str | None = None
@@ -122,10 +123,13 @@ class PortfolioOverviewResponse(BaseModel):
 
     success: bool
     net_worth: float
+    total_value: float = 0.0
+    cash_balance: float = 0.0
     total_cost_basis: float
     total_gain_loss: float
     total_gain_loss_pct: float
     ytd_dividends: float
+    total_dividends: float = 0.0
     total_holdings_count: int
     accounts_count: int
     top_holdings: list[dict[str, Any]]

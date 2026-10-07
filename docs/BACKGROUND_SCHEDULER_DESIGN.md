@@ -1056,9 +1056,9 @@ WHERE c.company_id IS NULL;
 
 | Test | What it validates | Current status |
 |------|-------------------|----------------|
-| `_compress_daily_to_monthly_eom` | One row per month, last trading day selected | Missing — needs test |
-| `_upsert_monthly_price_history` bootstrap | Full fetch when no rows exist | Missing — needs test |
-| `_upsert_monthly_price_history` incremental | Only recent months updated | Missing — needs test |
+| `sanitize_daily_price_rows` | One row per trading day; coalesces NaN/zero, numeric coercion | Existing (test_price_rows.py) |
+| `_upsert_daily_price_history` bootstrap | Full daily-grain fetch when no rows exist (>= retention cutoff) | Covered (integration, test_price_history_daily_density_integration.py) |
+| `_upsert_daily_price_history` incremental | Recent-window daily rows supersede monthly-EOM rows at same PK | Covered (integration, test_price_history_daily_density_integration.py) |
 | `_has_any_financials` | Correctly detects existing/annual rows | Missing — needs test |
 | `_process_company` stock skips for ETF | Only prices + splits, no financials/ratios | Existing (test_non_stock_skips_stock_only_operations) |
 | `_process_company` bootstrap triggers financial sync | get_all_financials_optimized called when no financials exist | Existing (test_bootstrap_uses_min_fiscal_year_2021) |
@@ -1066,19 +1066,20 @@ WHERE c.company_id IS NULL;
 
 #### Integration tests
 
-**1. Price history — no monthly gaps**
+**1. Price history — daily grain, no monthly compression**
 
 ```
 Given: Company X has daily data from 2020 to 2026
 When:  Market data refresh runs
-Then:  price_history has exactly one row per month (no gaps)
-And:   Each row's price_date falls on or after month end (last trading day)
+Then:  price_history has one row per trading day (no monthly EOM compression)
+And:   Every month holds multiple rows (>= 5 trading days), never a single
+       monthly-EOM row
 ```
 
 SQL validation:
 
 ```sql
--- Detect gaps in monthly price history
+-- Detect monthly compression (the defect: exactly one row per month)
 WITH monthly AS (
     SELECT company_id,
            DATE_TRUNC('month', price_date) AS month,
@@ -1087,9 +1088,9 @@ WITH monthly AS (
     WHERE company_id = :company_id
     GROUP BY company_id, DATE_TRUNC('month', price_date)
 )
-SELECT * FROM monthly WHERE rows_in_month != 1;
+SELECT * FROM monthly WHERE rows_in_month < 5;
 
--- Expected: zero rows (one row per month)
+-- Expected: zero rows (daily grain preserved)
 ```
 
 ```sql

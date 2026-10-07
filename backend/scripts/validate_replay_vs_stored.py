@@ -10,6 +10,7 @@ from datetime import date
 from database import supabase
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
+from shared.cdr_utils import derive_account_cdr_companies, derive_account_cdr_lots_as_of
 from shared.replay_engine import ReplayEngine
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
@@ -48,6 +49,7 @@ for aid in sorted(accounts):
         continue
 
     total_snapshots += len(snapshots.data)
+    derived_cdr = derive_account_cdr_companies(supabase, aid)
 
     # Compare latest 3 snapshots per account
     for snap in snapshots.data[-3:]:
@@ -59,6 +61,8 @@ for aid in sorted(accounts):
             snapshot_date=snap_date,
             stored_snapshot=snap,
             prices_by_company=prices_by_company,
+            derived_cdr_companies=derived_cdr,
+            cdr_lots=derive_account_cdr_lots_as_of(supabase, aid, snap_date.isoformat()),
         )
 
         total_compared += 1

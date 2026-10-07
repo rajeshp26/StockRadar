@@ -66,7 +66,7 @@ MOCK_HOLDINGS = [
 class TestGetPortfolioAllocation:
 
     async def test_allocation_by_sector_returns_types(self, service, mock_alloc_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         assert result["success"]
         assert "types" in result
@@ -75,7 +75,7 @@ class TestGetPortfolioAllocation:
         assert result["types"][0]["type_label"] == "Stocks"
 
     async def test_allocation_by_sector_sectors_inside_type(self, service, mock_alloc_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         stock_type = result["types"][0]
         sector_names = {s["segment"] for s in stock_type["sectors"]}
@@ -83,13 +83,13 @@ class TestGetPortfolioAllocation:
         assert "Energy" in sector_names
 
     async def test_allocation_total_value(self, service, mock_alloc_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         assert result["success"]
         assert result["total_value"] == 23000
 
     async def test_allocation_by_account_flat(self, service, mock_alloc_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_portfolio_allocation(1, group_by="account")
         assert result["success"]
         assert len(result["segments"]) > 0
@@ -97,14 +97,14 @@ class TestGetPortfolioAllocation:
 
     async def test_allocation_filter_account_ids(self, service, mock_alloc_repo):
         filtered = [_make_holding("AAPL", "Technology", 10000, 8000)]
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=filtered)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=filtered)):
             result = await service.get_portfolio_allocation(1, group_by="sector", account_ids=[1])
         assert result["success"]
         total = sum(s["value"] for s in result["segments"])
         assert total == 10000
 
     async def test_allocation_no_holdings(self, service, mock_alloc_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=[])):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=[])):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         assert result["success"]
         assert len(result["segments"]) == 0
@@ -119,7 +119,7 @@ class TestGetPortfolioAllocationEdgeCases:
             {"account_id": 1, "account_name": "TFSA", "is_active": True},
         ]
         filtered = [_make_holding("AAPL", "Technology", 5000, 4000)]
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=filtered)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=filtered)):
             result = await service.get_portfolio_allocation(1, account_ids=[1, 999])
         assert result["success"]
         assert result["total_value"] == 5000
@@ -140,7 +140,7 @@ class TestGetPortfolioAllocationEdgeCases:
         no_sector = [
             _make_holding("ETHY", None, 1000, 900, security_type="etf"),
         ]
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=no_sector)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=no_sector)):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         assert result["success"]
         assert len(result["types"]) == 1
@@ -156,7 +156,7 @@ class TestGetPortfolioAllocationEdgeCases:
             _make_holding("QQQ", None, 5000, 4500, security_type="etf"),
             _make_holding("SPY", None, 3000, 2800, security_type="etf"),
         ]
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=mixed)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=mixed)):
             result = await service.get_portfolio_allocation(1, group_by="sector")
         assert result["success"]
         assert len(result["types"]) == 2
@@ -168,7 +168,7 @@ class TestGetPortfolioAllocationEdgeCases:
         assert type_map["etf"]["count"] == 2
 
     async def test_allocation_geography_still_flat(self, service, mock_alloc_repo):
-        with patch.object(service, 'enrich_holdings_with_prices', new=AsyncMock(return_value=MOCK_HOLDINGS)):
+        with patch.object(service, '_enrich_holdings', new=AsyncMock(return_value=MOCK_HOLDINGS)):
             result = await service.get_portfolio_allocation(1, group_by="geography")
         assert result["success"]
         assert "types" not in result or result["types"] == []

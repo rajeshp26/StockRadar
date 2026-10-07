@@ -8,6 +8,7 @@ import React from "react";
 // assert on the wired `ticks` / `tickFormatter` per chart and per period.
 // ═════════════════════════════════════════════════════════════════════════
 const xAxisCaptures: { dataKey?: string; ticks?: string[]; tickFormatter?: (v: string) => string; minTickGap?: number }[] = [];
+const yAxisCaptures: { tickFormatter?: (v: number) => string }[] = [];
 
 vi.mock("recharts", () => {
     const React = require("react");
@@ -29,7 +30,10 @@ vi.mock("recharts", () => {
             });
             return null;
         },
-        YAxis: () => null,
+        YAxis: (props: any) => {
+            yAxisCaptures.push({ tickFormatter: props.tickFormatter });
+            return null;
+        },
         Tooltip: () => null,
         CartesianGrid: () => null,
         Legend: () => null,
@@ -262,6 +266,7 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
     beforeEach(() => {
         vi.clearAllMocks();
         xAxisCaptures.length = 0;
+        yAxisCaptures.length = 0;
 
         mockUsePortfolioPerformance.mockImplementation((period: string) => ({
             data: makePortfolioPerformance(period),
@@ -314,6 +319,19 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         expect(axes[0].tickFormatter!("2018-07-01")).toBe(format(new Date(2018, 6, 1), "yyyy"));
     });
 
+    it("PortfolioPerformanceChart: bar variant keeps XAxis ticks wired to data dates", () => {
+        render(<PortfolioPerformanceChart />);
+
+        fireEvent.click(screen.getByRole("button", { name: "Bar" }));
+        const axes = dateAxesSince(0);
+        expect(axes.length).toBeGreaterThan(0);
+        const axis = axes[axes.length - 1];
+        const dataDates = new Set(makePortfolioPerformance("1Y").snapshots.map((s) => s.date));
+        expect(axis.ticks!.length).toBeGreaterThan(0);
+        expect(axis.ticks!.every((t) => dataDates.has(t))).toBe(true);
+        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM"));
+    });
+
     it("BenchmarkComparisonChart: passes 1Y MMM ticks ⊆ merged data dates", () => {
         render(<BenchmarkComparisonChart data={makeBenchmarkCompare() as any} />);
         const axes = dateAxesSince(0);
@@ -362,5 +380,15 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
             expect(axis.tickFormatter!("2023-07-01")).toBe(format(new Date(2023, 6, 1), "MMM yyyy"));
             expect(axis.minTickGap).toBeUndefined();
         }
+    });
+
+    it("PortfolioPerformanceChart: Y axis uses scale-aware compact formatter (k/M tiers)", () => {
+        render(<PortfolioPerformanceChart />);
+        const yAxis = yAxisCaptures[yAxisCaptures.length - 1];
+        expect(yAxis.tickFormatter).toBeDefined();
+        expect(yAxis.tickFormatter!(500)).toBe("500");
+        expect(yAxis.tickFormatter!(20_000)).toBe("20k");
+        expect(yAxis.tickFormatter!(197_667)).toBe("197.7k");
+        expect(yAxis.tickFormatter!(1_500_000)).toBe("1.5M");
     });
 });

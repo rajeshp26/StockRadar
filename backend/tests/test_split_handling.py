@@ -279,6 +279,7 @@ class TestReplayWithSplit:
                 "unit_price": 300.0,
                 "net_cash_amount": -3000.0,
                 "currency": "USD",
+                "transaction_date": "2026-05-01",
             },
             "created_at": now.isoformat(),
         }
@@ -322,6 +323,7 @@ class TestReplayWithSplit:
                 "account_id": 1, "company_id": 10, "activity_type": "Trade",
                 "symbol": "AAPL", "quantity": 10, "unit_price": 300.0,
                 "net_cash_amount": -3000.0, "currency": "USD",
+                "transaction_date": "2026-05-01",
             },
             "created_at": now.isoformat(),
         }
@@ -340,6 +342,7 @@ class TestReplayWithSplit:
                 "account_id": 1, "company_id": 10, "activity_type": "Trade",
                 "symbol": "AAPL", "quantity": -15, "unit_price": 100.0,
                 "net_cash_amount": 1500.0, "currency": "USD",
+                "transaction_date": "2026-07-01",
             },
             "created_at": now.isoformat(),
         }
@@ -365,257 +368,100 @@ class TestReplayWithSplit:
 # ---------------------------------------------------------------------------
 
 class TestEmitSplitEvents:
-    def _make_mock_repo(self, splits_data=None, holdings_data=None):
-        repo = MagicMock()
-        client = MagicMock()
-        repo.client = client
+    """_emit_split_events delegates to shared.split_sync.reconcile_split_events.
 
-        # Mock splits query
-        splits_table = MagicMock()
-        splits_table.select.return_value = splits_table
-        splits_table.eq.return_value = splits_table
-        splits_table.execute.return_value = MagicMock(data=splits_data or [])
+    The legacy behavior (project current portfolio_holdings, gate the splits
+    .processed latch) is gone: the affected-account set now comes from the
+    immutable event stream and the latch is only a post-success hint, never a
+    gate. These tests pin the delegation contract — reconcile is called with
+    client=repo.client and dry_run=False — and the failure handling: a reconcile
+    exception or report.error is logged without crashing the run.
+    """
 
-        # Mock holdings query
-        holdings_table = MagicMock()
-        holdings_table.select.return_value = holdings_table
-        holdings_table.eq.return_value = holdings_table
-        holdings_table.execute.return_value = MagicMock(data=holdings_data or [])
+    @staticmethod
+    def _report(**overrides):
+        from shared.split_sync import ReconcileReport
 
-        # Mock update
-        update_table = MagicMock()
-        update_table.update.return_value = update_table
-        update_table.eq.return_value = update_table
-        update_table.execute.return_value = MagicMock(data=[])
-
-        def table_side_effect(name):
-            if name == "splits":
-                return splits_table
-            elif name == "portfolio_holdings":
-                return holdings_table
-            else:
-                return update_table
-
-        client.table.side_effect = table_side_effect
-        return repo, client
-
-    @patch("infrastructure.repositories.event_store.EventStore")
-    @patch("application.jobs.price_ingestion_job.repo")
-    def test_emit_events_for_unprocessed_split(self, mock_repo, MockEventStore):
-        from application.jobs.price_ingestion_job import _emit_split_events
-
-        splits_data = [{"company_id": 10, "report_date": "2026-06-01", "split_factor": "3:1"}]
-        holdings_data = [{"account_id": 7}, {"account_id": 8}]
-
-        mock_repo.client = MagicMock()
-        splits_table = MagicMock()
-        splits_table.select.return_value = splits_table
-        splits_table.eq.return_value = splits_table
-        splits_table.execute.return_value = MagicMock(data=splits_data)
-
-        holdings_table = MagicMock()
-        holdings_table.select.return_value = holdings_table
-        holdings_table.eq.return_value = holdings_table
-        holdings_table.execute.return_value = MagicMock(data=holdings_data)
-
-        update_table = MagicMock()
-        update_table.update.return_value = update_table
-        update_table.eq.return_value = update_table
-        update_table.execute.return_value = MagicMock(data=[])
-
-        def table_fn(name):
-            if name == "splits":
-                return splits_table
-            elif name == "portfolio_holdings":
-                return holdings_table
-            else:
-                return update_table
-
-        mock_repo.client.table.side_effect = table_fn
-
-        mock_store = MagicMock()
-        MockEventStore.return_value = mock_store
-
-        _emit_split_events()
-
-        assert mock_store.append_events_batch.called
-        events = mock_store.append_events_batch.call_args[0][0]
-        assert len(events) == 2
-        assert events[0]["event_type"] == "split"
-        agg_ids = {e["aggregate_id"] for e in events}
-        assert agg_ids == {"account_7", "account_8"}
-        keys = {e["idempotency_key"] for e in events}
-        assert keys == {"split_10_2026-06-01_7", "split_10_2026-06-01_8"}
-
-    @patch("infrastructure.repositories.event_store.EventStore")
-    @patch("application.jobs.price_ingestion_job.repo")
-    def test_no_unprocessed_splits(self, mock_repo, MockEventStore):
-        from application.jobs.price_ingestion_job import _emit_split_events
-
-        mock_repo.client = MagicMock()
-        splits_table = MagicMock()
-        splits_table.select.return_value = splits_table
-        splits_table.eq.return_value = splits_table
-        splits_table.execute.return_value = MagicMock(data=[])
-        mock_repo.client.table.return_value = splits_table
-
-        mock_store = MagicMock()
-        MockEventStore.return_value = mock_store
-
-        _emit_split_events()
-
-        assert not mock_store.append_events_batch.called
-
-    @patch("infrastructure.repositories.event_store.EventStore")
-    @patch("application.jobs.price_ingestion_job.repo")
-    def test_no_accounts_holding_company(self, mock_repo, MockEventStore):
-        from application.jobs.price_ingestion_job import _emit_split_events
-
-        splits_data = [{"company_id": 10, "report_date": "2026-06-01", "split_factor": "3:1"}]
-
-        mock_repo.client = MagicMock()
-        splits_table = MagicMock()
-        splits_table.select.return_value = splits_table
-        splits_table.eq.return_value = splits_table
-        splits_table.execute.return_value = MagicMock(data=splits_data)
-
-        holdings_table = MagicMock()
-        holdings_table.select.return_value = holdings_table
-        holdings_table.eq.return_value = holdings_table
-        holdings_table.execute.return_value = MagicMock(data=[])
-
-        def table_fn(name):
-            if name == "splits":
-                return splits_table
-            elif name == "portfolio_holdings":
-                return holdings_table
-            else:
-                return MagicMock()
-
-        mock_repo.client.table.side_effect = table_fn
-
-        mock_store = MagicMock()
-        MockEventStore.return_value = mock_store
-
-        _emit_split_events()
-
-        assert not mock_store.append_events_batch.called
-
-    @patch("infrastructure.repositories.event_store.EventStore")
-    @patch("application.jobs.price_ingestion_job.repo")
-    def test_no_op_factor_skipped(self, mock_repo, MockEventStore):
-        from application.jobs.price_ingestion_job import _emit_split_events
-
-        splits_data = [{"company_id": 10, "report_date": "2026-06-01", "split_factor": "1:1"}]
-
-        mock_repo.client = MagicMock()
-        splits_table = MagicMock()
-        splits_table.select.return_value = splits_table
-        splits_table.eq.return_value = splits_table
-        splits_table.execute.return_value = MagicMock(data=splits_data)
-        mock_repo.client.table.return_value = splits_table
-
-        mock_store = MagicMock()
-        MockEventStore.return_value = mock_store
-
-        _emit_split_events()
-
-        assert not mock_store.append_events_batch.called
-
-    @patch("infrastructure.repositories.event_store.EventStore")
-    @patch("application.jobs.price_ingestion_job.repo")
-    def test_duplicate_key_from_append_is_self_healing(self, mock_repo, MockEventStore):
-        """Regression: duplicate-key (23505) must mark the split processed, not retry forever."""
-        from postgrest.exceptions import APIError
-
-        from application.jobs.price_ingestion_job import _emit_split_events
-
-        splits_data = [{"company_id": 10, "report_date": "2026-06-01", "split_factor": "3:1"}]
-        holdings_data = [{"account_id": 7}]
-
-        mock_repo.client = MagicMock()
-        splits_table = MagicMock()
-        splits_table.select.return_value = splits_table
-        splits_table.eq.return_value = splits_table
-        splits_table.execute.return_value = MagicMock(data=splits_data)
-
-        holdings_table = MagicMock()
-        holdings_table.select.return_value = holdings_table
-        holdings_table.eq.return_value = holdings_table
-        holdings_table.execute.return_value = MagicMock(data=holdings_data)
-
-        update_payloads = []
-        def update_side_effect(payload):
-            update_payloads.append(payload)
-            return splits_table
-
-        splits_table.update.side_effect = update_side_effect
-        splits_table.update.return_value = splits_table
-
-        def table_fn(name):
-            if name == "splits":
-                return splits_table
-            elif name == "portfolio_holdings":
-                return holdings_table
-            return MagicMock()
-
-        mock_repo.client.table.side_effect = table_fn
-
-        mock_store = MagicMock()
-        mock_store.append_events_batch.side_effect = APIError(
-            {"code": "23505", "message": "duplicate key value violates unique constraint", "details": ""}
+        kwargs = dict(
+            checked_splits=0,
+            missing_events=0,
+            emitted_events=0,
+            companies_with_gaps=set(),
+            error=None,
         )
-        MockEventStore.return_value = mock_store
+        kwargs.update(overrides)
+        return ReconcileReport(**kwargs)
 
-        _emit_split_events()
-
-        assert mock_store.append_events_batch.called
-        # Events already existed -> split must still be marked processed (self-heal).
-        assert update_payloads == [{"processed": True}]
-
-    @patch("infrastructure.repositories.event_store.EventStore")
+    @patch("shared.split_sync.reconcile_split_events")
     @patch("application.jobs.price_ingestion_job.repo")
-    def test_non_duplicate_append_failure_keeps_split_unprocessed(self, mock_repo, MockEventStore):
-        """A genuine append failure must NOT mark the split processed."""
+    def test_delegates_to_reconcile_split_events(self, mock_repo, mock_reconcile):
         from application.jobs.price_ingestion_job import _emit_split_events
 
-        splits_data = [{"company_id": 10, "report_date": "2026-06-01", "split_factor": "3:1"}]
-        holdings_data = [{"account_id": 7}]
-
         mock_repo.client = MagicMock()
-        splits_table = MagicMock()
-        splits_table.select.return_value = splits_table
-        splits_table.eq.return_value = splits_table
-        splits_table.execute.return_value = MagicMock(data=splits_data)
-
-        holdings_table = MagicMock()
-        holdings_table.select.return_value = holdings_table
-        holdings_table.eq.return_value = holdings_table
-        holdings_table.execute.return_value = MagicMock(data=holdings_data)
-
-        update_payloads = []
-        def update_side_effect(payload):
-            update_payloads.append(payload)
-            return splits_table
-
-        splits_table.update.side_effect = update_side_effect
-        splits_table.update.return_value = splits_table
-
-        def table_fn(name):
-            if name == "splits":
-                return splits_table
-            elif name == "portfolio_holdings":
-                return holdings_table
-            return MagicMock()
-
-        mock_repo.client.table.side_effect = table_fn
-
-        mock_store = MagicMock()
-        mock_store.append_events_batch.side_effect = RuntimeError("provider down")
-        MockEventStore.return_value = mock_store
+        mock_reconcile.return_value = self._report(missing_events=0)
 
         _emit_split_events()
 
-        assert mock_store.append_events_batch.called
-        # Not a duplicate-key failure -> split stays unprocessed for the next cycle.
-        assert update_payloads == []
+        mock_reconcile.assert_called_once_with(client=mock_repo.client, dry_run=False)
+
+    @patch("shared.split_sync.reconcile_split_events")
+    @patch("application.jobs.price_ingestion_job.repo")
+    def test_reconcile_exception_logged_no_crash(self, mock_repo, mock_reconcile, caplog):
+        import logging
+
+        from application.jobs.price_ingestion_job import _emit_split_events
+
+        mock_repo.client = MagicMock()
+        mock_reconcile.side_effect = RuntimeError("provider down")
+
+        with caplog.at_level(logging.ERROR, logger="stockerpro.price.ingestion"):
+            _emit_split_events()
+
+        assert "[SPLIT-EVENT] reconciliation failed: provider down" in caplog.text
+
+    @patch("shared.split_sync.reconcile_split_events")
+    @patch("application.jobs.price_ingestion_job.repo")
+    def test_report_error_logged_no_crash(self, mock_repo, mock_reconcile, caplog):
+        import logging
+
+        from application.jobs.price_ingestion_job import _emit_split_events
+
+        mock_repo.client = MagicMock()
+        mock_reconcile.return_value = self._report(error="failed to fetch splits: boom")
+
+        with caplog.at_level(logging.ERROR, logger="stockerpro.price.ingestion"):
+            _emit_split_events()
+
+        assert "[SPLIT-EVENT] reconciliation error: failed to fetch splits" in caplog.text
+
+    @patch("shared.split_sync.reconcile_split_events")
+    @patch("application.jobs.price_ingestion_job.repo")
+    def test_emitted_events_logged(self, mock_repo, mock_reconcile, caplog):
+        import logging
+
+        from application.jobs.price_ingestion_job import _emit_split_events
+
+        mock_repo.client = MagicMock()
+        mock_reconcile.return_value = self._report(
+            missing_events=2, emitted_events=2, companies_with_gaps={10}
+        )
+
+        with caplog.at_level(logging.INFO, logger="stockerpro.price.ingestion"):
+            _emit_split_events()
+
+        assert "[SPLIT-EVENT] emitted 2 split events for 1 companies" in caplog.text
+
+    @patch("shared.split_sync.reconcile_split_events")
+    @patch("application.jobs.price_ingestion_job.repo")
+    def test_no_missing_events_logged(self, mock_repo, mock_reconcile, caplog):
+        import logging
+
+        from application.jobs.price_ingestion_job import _emit_split_events
+
+        mock_repo.client = MagicMock()
+        mock_reconcile.return_value = self._report(checked_splits=42)
+
+        with caplog.at_level(logging.INFO, logger="stockerpro.price.ingestion"):
+            _emit_split_events()
+
+        assert "[SPLIT-EVENT] no missing split events (checked 42" in caplog.text

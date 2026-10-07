@@ -5,8 +5,11 @@
     Uses Supabase REST API directly to insert seed data.
 #>
 
-$SUPABASE_URL = "https://viqdqgxcumcdhqxooplw.supabase.co"
-$SERVICE_KEY = "sb_secret_NxN3ywf1RrMektnf-rq9hg_FxKFOVoG"
+$SERVICE_KEY = $env:SUPABASE_SERVICE_ROLE_KEY
+$SUPABASE_URL = $env:SUPABASE_URL
+if (-not $SERVICE_KEY -or -not $SUPABASE_URL) {
+    throw "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in the environment. Credentials are not stored in this repository."
+}
 $FIREBASE_UID = "OVUH9KDf7TORSB4KuvrGEIRAvTI2"
 
 $HEADERS = @{

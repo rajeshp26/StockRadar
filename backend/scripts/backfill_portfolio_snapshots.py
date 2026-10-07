@@ -30,6 +30,11 @@ from typing import Any
 
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
 from infrastructure.repositories.portfolio_snapshots_repository import PortfolioSnapshotsRepository
+from shared.cdr_utils import (
+    derive_account_cdr_companies,
+    derive_account_cdr_lots_as_of,
+    split_holdings_by_cdr_lot,
+)
 from shared.snapshot_builder import (
     _classify_lot_action,
     build_snapshot_row,
@@ -38,6 +43,41 @@ from shared.snapshot_builder import (
 from shared.time_utils import now_utc
 
 logger = logging.getLogger("stockerpro.portfolio.backfill")
+
+_CDR_TRUTH_CACHE: dict[tuple[int, str], tuple[set[int], dict]] = {}
+
+
+def _split_into_cdr_lots(
+    portfolio_repo: PortfolioRepository,
+    account_id: int,
+    as_of: date,
+    holdings_state: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], set[int]]:
+    """Split holdings into per-lot CDR legs for one account and date (BLK-027).
+
+    Memoised per (account, date) because a backfill walks one account across many
+    dates and each derivation re-reads the whole paginated transaction table. This
+    script refuses to run in production (see the ENVIRONMENT guard above), so paying
+    a scan per distinct date is an acceptable trade for not duplicating the lot rule.
+
+    Returns the legs and the company-keyed CDR set, which the caller must also pass to
+    build_snapshot_row: a company with no lot evidence at or before this date is
+    absent from the lot map, and the cached holdings flag is NULL for accounts whose
+    flag was never populated, so that absence must not read as "not a CDR".
+    """
+    key = (account_id, as_of.isoformat())
+    if key not in _CDR_TRUTH_CACHE:
+        client = portfolio_repo.client
+        _CDR_TRUTH_CACHE[key] = (
+            derive_account_cdr_companies(client, account_id),
+            derive_account_cdr_lots_as_of(client, account_id, as_of.isoformat()),
+        )
+    derived_cdr, lots = _CDR_TRUTH_CACHE[key]
+
+    legs, notes = split_holdings_by_cdr_lot(holdings_state, lots, derived_cdr)
+    for note in notes:
+        logger.warning("Account %s %s: %s", account_id, as_of.isoformat(), note)
+    return legs, derived_cdr
 
 
 def reconstruct_holdings_at_date(
@@ -198,15 +238,21 @@ def repair_corrupted_snapshots(dry_run: bool = False) -> int:
         account_info = portfolio_repo.get_account_by_id(account_id)
         account_currency = (account_info or {}).get("currency", "CAD")
 
+        lot_legs, derived_cdr = _split_into_cdr_lots(
+            portfolio_repo, account_id, sd, holdings_state
+        )
+
         corrected = build_snapshot_row(
             account_id=account_id,
             snapshot_date=sd,
-            holdings_state=holdings_state,
+            holdings_state=lot_legs,
             cash_balance=cash_balance,
             net_deposits=net_deposits,
             prices_by_company=prices_by_company,
             job_id=f"repair_{now_utc().isoformat()}",
             account_currency=account_currency,
+            derived_cdr_companies=derived_cdr,
+            lot_cdr_authoritative=True,
         )
         if not dry_run:
             snapshots_repo.upsert_snapshot(corrected)
@@ -279,15 +325,21 @@ def backfill_account(account_id: int, force: bool = False, validate_only: bool =
             if result:
                 prices_by_company[cid] = result
 
+        lot_legs, derived_cdr = _split_into_cdr_lots(
+            portfolio_repo, account_id, d, holdings_state
+        )
+
         snapshot_row = build_snapshot_row(
             account_id=account_id,
             snapshot_date=d,
-            holdings_state=holdings_state,
+            holdings_state=lot_legs,
             cash_balance=cash_balance,
             net_deposits=net_deposits,
             prices_by_company=prices_by_company,
             job_id="backfill_20260622",
             account_currency=account_currency,
+            derived_cdr_companies=derived_cdr,
+            lot_cdr_authoritative=True,
         )
 
         if not validate_only:
@@ -304,15 +356,21 @@ def backfill_account(account_id: int, force: bool = False, validate_only: bool =
             if result:
                 prices_by_company[cid] = result
 
+        lot_legs, derived_cdr = _split_into_cdr_lots(
+            portfolio_repo, account_id, today, holdings_state
+        )
+
         snapshot_row = build_snapshot_row(
             account_id=account_id,
             snapshot_date=today,
-            holdings_state=holdings_state,
+            holdings_state=lot_legs,
             cash_balance=cash_balance,
             net_deposits=net_deposits,
             prices_by_company=prices_by_company,
             job_id="backfill_20260622",
             account_currency=account_currency,
+            derived_cdr_companies=derived_cdr,
+            lot_cdr_authoritative=True,
         )
 
         if not validate_only:
@@ -442,16 +500,22 @@ def repair_all_snapshots(
                     if result:
                         prices_by_company[cid] = result
 
+                lot_legs, derived_cdr = _split_into_cdr_lots(
+                    portfolio_repo, account_id, sd, holdings_state
+                )
+
                 recomputed = build_snapshot_row(
                     account_id=account_id,
                     snapshot_date=sd,
-                    holdings_state=holdings_state,
+                    holdings_state=lot_legs,
                     cash_balance=cash_balance,
                     net_deposits=net_deposits,
                     prices_by_company=prices_by_company,
                     job_id=f"repair_all_{now_utc().isoformat()}",
                     account_currency=account_currency,
                     price_history=price_map,
+                    derived_cdr_companies=derived_cdr,
+                    lot_cdr_authoritative=True,
                 )
 
 

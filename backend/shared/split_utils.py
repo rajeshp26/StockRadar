@@ -36,6 +36,44 @@ def parse_split_date(raw) -> date:
     raise ValueError(f"Cannot parse date: {raw!r}")
 
 
+def extract_event_date(event: dict) -> date | None:
+    """Extract the relevant date from an event.
+
+    Priority:
+    1. data.effective_date — explicit override
+    2. data.transaction_date — for trade/dividend events
+    3. data.report_date — for split/corporate-action events (historical date)
+    4. event.created_at — fallback (insertion timestamp)
+
+    This is the canonical implementation shared by the replay engine and the
+    split reconciler so ordering decisions never diverge between the two.
+    """
+    data = event.get("data", {}) or {}
+
+    def _parse_field(value) -> date | None:
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value)
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    for key in ("effective_date", "transaction_date", "report_date"):
+        parsed = _parse_field(data.get(key))
+        if parsed is not None:
+            return parsed
+
+    created_str = event.get("created_at", "")
+    if created_str:
+        try:
+            return datetime.fromisoformat(created_str.replace("Z", "+00:00")).date()
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def get_split_factors_from_rows(
     rows: list[dict],
 ) -> dict[int, list[tuple[date, float]]]:

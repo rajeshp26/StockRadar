@@ -5,6 +5,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+from shared.cdr_utils import trace_division
 from shared.time_utils import now_utc
 
 
@@ -59,6 +60,13 @@ def convert_holding_fx(
     price_currency = (holding.get("price_currency") or holding.get("currency") or "USD").upper()
     acct = account_currency.upper()
 
+    # fx_applied=False = conversion needed but no rate found; value is
+    # unconverted. WARNING flag and the spike guard depend on this marker.
+    holding["fx_currency_pair"] = f"{price_currency}->{acct}"
+    holding["fx_applied"] = True
+    holding["fx_cost_applied"] = True
+    holding["fx_rate"] = None
+
     needs_fx = enable_fx and price_currency != acct and fx_service is not None
 
     if not needs_fx:
@@ -67,11 +75,14 @@ def convert_holding_fx(
     # Market value: always at snapshot_date (current price)
     converted_value = raw_value
     if raw_value > 0:
-        conv_val, _ = fx_service.convert_or_warn(
+        market_rate = fx_service.get_rate(price_currency, acct, snapshot_date)
+        holding["fx_rate"] = market_rate
+        conv_val, applied = fx_service.convert_or_warn(
             raw_value, price_currency, acct,
             as_of=snapshot_date, holding_id=str(holding.get("company_id")),
         )
         converted_value = conv_val
+        holding["fx_applied"] = applied
 
     # Cost basis: per-lot when lots exist, single-date fallback otherwise
     converted_cost = total_cost
@@ -79,6 +90,7 @@ def convert_holding_fx(
         lots = holding.get("lots") or []
         if lots:
             total_cost_converted = Decimal("0")
+            cost_fully_applied = True
             for lot in lots:
                 lot_cost = Decimal(str(lot["quantity"])) * Decimal(str(lot["cost_per_share"]))
                 lot_date = _normalise_trade_date(lot.get("date")) or snapshot_date
@@ -87,14 +99,17 @@ def convert_holding_fx(
                     total_cost_converted += lot_cost * lot_fx_rate
                 else:
                     total_cost_converted += lot_cost
+                    cost_fully_applied = False
             converted_cost = total_cost_converted
+            holding["fx_cost_applied"] = cost_fully_applied
         else:
             cost_fx_date = _normalise_trade_date(holding.get("trade_date")) or snapshot_date
-            conv_cost, _ = fx_service.convert_or_warn(
+            conv_cost, cost_applied = fx_service.convert_or_warn(
                 total_cost, price_currency, acct,
                 as_of=cost_fx_date, holding_id=str(holding.get("company_id")),
             )
             converted_cost = conv_cost
+            holding["fx_cost_applied"] = cost_applied
 
     return converted_value, converted_cost
 
@@ -154,6 +169,7 @@ def _resolve_holding_price(
     company_currency: str | None = None,
     price_source: str | None = None,
     fx_service: Any | None = None,
+    audit: dict | None = None,
 ) -> tuple[Decimal | None, PriceTier, date | None]:
     """4-tier price cascade.
 
@@ -180,41 +196,60 @@ def _resolve_holding_price(
         """Apply CDR ratio (and FX if needed) to convert market price to CDR price in CAD."""
         result = price_val / effective_ratio
         # For price_history source: price is US USD, need FX to convert to CAD
+        fx_applied: float | None = None
         if is_cdr and src == "price_history" and fx_service is not None:
             fx_rate = fx_service.get_rate("USD", "CAD", snapshot_date)
             if fx_rate is not None:
                 result = result * fx_rate
+                fx_applied = float(fx_rate)
+        if audit is not None:
+            # Records the pre-adjustment price so a stored row reconciles offline as
+            # raw_price / cdr_ratio_applied * fx_rate_applied.
+            audit["raw_price"] = float(price_val)
+            audit["cdr_ratio_applied"] = float(effective_ratio)
+            audit["fx_rate_applied"] = fx_applied
+        trace_division(
+            "snapshot_builder", company_id, float(price_val),
+            float(effective_ratio), float(result),
+            price_source=src or "unknown",
+        )
         return result
 
-    # Tier 1: current market price — only for recent snapshots
+    def _record_and_return(price, tier, price_date, src):
+        if audit is not None:
+            # setdefault: the CDR path above records these explicitly and must win.
+            audit.setdefault("raw_price", float(price) if price is not None else None)
+            audit.setdefault("cdr_ratio_applied", None)
+            audit.setdefault("fx_rate_applied", None)
+            audit["price_source"] = src
+            audit["price_tier"] = getattr(tier, "value", str(tier))
+            audit["price_date"] = (
+                price_date.isoformat() if isinstance(price_date, date) else None
+            )
+        return price, tier, price_date
+
+    # Tier 1: the most recent price KNOWABLE on snapshot_date. The age bound is
+    # measured backwards into the past on purpose -- bounding it towards the
+    # future instead let a later quote be stamped CURRENT/OK, making history
+    # unreproducible. Locked by tests/test_price_lookahead_guard.py.
     info = latest_prices.get(company_id, {})
+    candidate: tuple[Decimal, date, str | None] | None = None
     if info.get("price") is not None:
         pd = info.get("price_date")
         tier1_source = info.get("source") or price_source
-        if pd is not None:
-            if isinstance(pd, str):
-                pd = date.fromisoformat(pd)
-            elif isinstance(pd, datetime):
-                pd = pd.date()
-            if pd > snapshot_date:
-                max_age = timedelta(days=stale_threshold_days)
-                if (pd - snapshot_date) <= max_age:
-                    price = Decimal(str(info["price"]))
-                    if is_cdr:
-                        price = _apply_cdr(price, tier1_source)
-                    return price, PriceTier.CURRENT, pd
-            else:
-                # current price is from before or same as snapshot — safe to use
-                price = Decimal(str(info["price"]))
-                if is_cdr:
-                    price = _apply_cdr(price, tier1_source)
-                return price, PriceTier.CURRENT, pd
-        else:
-            # no price_date — use current price as best-effort
-            price = Decimal(str(info["price"]))
+        if isinstance(pd, str):
+            pd = date.fromisoformat(pd)
+        elif isinstance(pd, datetime):
+            pd = pd.date()
+        if pd is not None and pd <= snapshot_date:
+            candidate = (Decimal(str(info["price"])), pd, tier1_source)
+
+    if candidate is not None:
+        price, pd, src = candidate
+        if (snapshot_date - pd) <= timedelta(days=stale_threshold_days):
             if is_cdr:
-                price = _apply_cdr(price, tier1_source)
-            return price, PriceTier.CURRENT, None
+                price = _apply_cdr(price, src)
+            return _record_and_return(price, PriceTier.CURRENT, pd, src)
 
     # Tier 2: forward-fill from price_history (most recent price <= snapshot_date)
     result = resolve_price_forward_filled(company_id, snapshot_date, price_history)
@@ -227,7 +262,18 @@ def _resolve_holding_price(
             result_date = date.fromisoformat(result_date)
         elif isinstance(result_date, datetime):
             result_date = result_date.date()
-        return price, PriceTier.FORWARD_FILL, result_date
+        return _record_and_return(
+            price, PriceTier.FORWARD_FILL, result_date, "price_history"
+        )
+
+    # Tier 2b: a stale quote still beats zeroing the holding, which would make a
+    # priced position indistinguishable from an unpriced one. The quality flag
+    # above already reports STALE_PRICE once age exceeds the threshold.
+    if candidate is not None:
+        price, pd, src = candidate
+        if is_cdr:
+            price = _apply_cdr(price, src)
+        return _record_and_return(price, PriceTier.FORWARD_FILL, pd, src)
 
     # Tier 3: average_cost as price proxy — DISABLED.
     # Using cost basis as a price produces wildly incorrect values (e.g., TNXP
@@ -236,7 +282,7 @@ def _resolve_holding_price(
     # will capture them once current_market_data has their prices.
 
     # Tier 4: unavailable — skip this holding entirely
-    return None, PriceTier.UNAVAILABLE, None
+    return _record_and_return(None, PriceTier.UNAVAILABLE, None, None)
 
 
 def _validate_snapshot(
@@ -330,14 +376,27 @@ def build_snapshot_row(
     exchange_overrides: dict[int, str | None] | None = None,
     company_currencies: dict[int, str] | None = None,
     companies_map: dict[int, dict] | None = None,
+    derived_cdr_companies: set[int] | None = None,
+    lot_cdr_authoritative: bool = False,
 ) -> dict[str, Any]:
     from config import settings
+    # Data-integrity invariant: a snapshot cannot describe a day that has not
+    # happened. Enforced here, at the single funnel every writer shares (job,
+    # rebuild script, backfill, service), so no caller can bypass it.
+    today = now_utc().date()
+    if snapshot_date > today:
+        raise ValueError(
+            f"Account {account_id}: refusing future snapshot_date {snapshot_date.isoformat()} "
+            f"(today is {today.isoformat()}). A snapshot prices holdings with information "
+            f"that does not exist yet, so it cannot be reconciled later."
+        )
     enable_fx = getattr(settings, "ENABLE_FX_CONVERSION", False)
     total_market_value = Decimal("0.00")
     total_cost = Decimal("0.00")
     holdings_detail = []
     used_tiers: list[PriceTier] = []
     non_zero_holdings_count = 0
+    cdr_discrepancies: list[str] = []
 
     for h in holdings_state:
         cid = h.get("company_id")
@@ -368,10 +427,43 @@ def build_snapshot_row(
 
         # 4-tier price resolution
         avg_cost = Decimal(str(h.get("average_cost") or 0))
-        exch_override = exchange_overrides.get(cid) if exchange_overrides else None
+        # CDR-ness comes from raw transactions (shared/cdr_utils.py is canonical);
+        # portfolio_holdings.exchange_override is only a cache of that signal. A cache
+        # must never overrule the truth it caches, so a supplied classification --
+        # including an EMPTY one, which is a real "not a CDR" answer -- is
+        # authoritative, and the flag is consulted only when none was supplied.
+        #
+        # lot_cdr_authoritative switches the key from company to lot. The two modes
+        # need OPPOSITE precedence and a NULL flag alone cannot tell them apart, so
+        # neither mode may be used without its caller having resolved the ambiguity:
+        #   False (default) -- derived company truth outranks the cached flag. A NULL
+        #     flag means "never populated", and honouring it caused a 10x overvaluation.
+        #   True -- each holdings_state row carries its own lot verdict, supplied by a
+        #     caller that replayed transactions as-of the snapshot date. Required for
+        #     mixed positions, where company-keyed truth divides the direct lot too.
+        if lot_cdr_authoritative:
+            exch_override = h.get("exchange_override")
+            _has_derived = False
+        else:
+            exch_override = exchange_overrides.get(cid) if exchange_overrides else None
+            _has_derived = derived_cdr_companies is not None
+        _flag_cdr = exch_override == "TOR"
+        _derived_cdr = cid in derived_cdr_companies if _has_derived else False
+        _is_cdr = _derived_cdr if _has_derived else _flag_cdr
+        # A TOR flag the transactions contradict is dropped, not echoed back as applied.
+        _applied_override = (
+            "TOR" if _is_cdr else (None if exch_override == "TOR" else exch_override)
+        )
+        if _has_derived and _derived_cdr != _flag_cdr:
+            cdr_discrepancies.append(
+                f"Company {cid} ({h.get('symbol', '?')}): holdings.exchange_override="
+                f"{exch_override!r} disagrees with transaction-derived CDR="
+                f"{_derived_cdr}; derived truth applied"
+            )
         comp_ccy = (company_currencies.get(cid) if company_currencies else None) or h.get("price_currency") or h.get("currency") or "USD"
         # Look up per-company CDR ratio
         comp_ratio = get_cdr_ratio_for_company(cid, companies_map) if companies_map else None
+        _audit: dict = {}
 
         current_price, tier, resolved_price_date = _resolve_holding_price(
             company_id=cid,
@@ -381,13 +473,28 @@ def build_snapshot_row(
             price_history=price_history or {},
             snapshot_date=snapshot_date,
             stale_threshold_days=stale_threshold_days,
-            exchange_override=exch_override,
+            exchange_override=_applied_override,
             cdr_ratio=comp_ratio,
             company_currency=comp_ccy,
             price_source=prices_by_company.get(cid, {}).get("source"),
             fx_service=fx_service,
+            audit=_audit,
         )
         used_tiers.append(tier)
+
+        # Write-time invariant: a PRICED CDR row must record the ratio that was
+        # applied. An unpriced holding is legitimately exempt -- it is recorded
+        # INCOMPLETE and excluded, so it must not abort the snapshot.
+        if (
+            _is_cdr
+            and tier != PriceTier.UNAVAILABLE
+            and not (_audit.get("cdr_ratio_applied") or 0) > 0
+        ):
+            raise ValueError(
+                f"Account {account_id} company {cid} ({h.get('symbol', '?')}): CDR "
+                f"position resolved with no ratio applied (audit={_audit!r}). "
+                f"Refusing to store an unauditable CDR valuation."
+            )
 
         # Tier 4: UNAVAILABLE — skip this holding entirely (not counted as $0)
         if tier == PriceTier.UNAVAILABLE:
@@ -417,7 +524,7 @@ def build_snapshot_row(
         # For CDR holdings: the CDR-adjusted price is already in CAD.
         # Override price_currency to prevent convert_holding_fx from re-converting.
         _orig_price_currency = h.get("price_currency")
-        if exch_override == "TOR":
+        if _is_cdr:
             h["price_currency"] = "CAD"
 
         try:
@@ -430,25 +537,26 @@ def build_snapshot_row(
                 "FX conversion failed for %s on %s; using unconverted value",
                 cid, snapshot_date,
             )
+            h["fx_applied"] = False
+            h["fx_rate"] = None
             current_value = raw_value
 
         # Restore original price_currency
-        if exch_override == "TOR" and _orig_price_currency is not None:
+        if _is_cdr and _orig_price_currency is not None:
             h["price_currency"] = _orig_price_currency
 
         total_market_value += current_value
         total_cost += cost
 
-        # Price age for quality flag — context-aware staleness
-        price_info = prices_by_company.get(cid, {})
-        price_date = price_info.get("price_date")
-        if price_date is None and price_history:
-            ph_entries = price_history.get(cid, [])
-            if ph_entries:
-                last_entry = max(ph_entries, key=lambda x: x[0] if isinstance(x, (list, tuple)) else x.get("price_date", ""))
-                if isinstance(last_entry, (list, tuple)):
-                    price_date = last_entry[0]
-        price_age_days = (snapshot_date - price_date).days if isinstance(price_date, date) else None
+        # From the resolved price, never prices_by_company: a raw entry dated after
+        # the snapshot yields a negative age and a false OK. Every tier returns
+        # None or a date <= snapshot_date, so this is >= 0. See
+        # tests/test_price_lookahead_guard.py.
+        price_age_days = (
+            (snapshot_date - resolved_price_date).days
+            if isinstance(resolved_price_date, date)
+            else None
+        )
 
         # Quality flag: context-aware staleness
         # - COST_BASIS and UNAVAILABLE are always their respective flags
@@ -471,6 +579,13 @@ def build_snapshot_row(
             if pos_quality == "OK" and price_age_days is not None and price_age_days > stale_threshold_days:
                 pos_quality = "STALE_PRICE"
 
+        fx_audit = {}
+        if enable_fx:
+            fx_audit = {
+                "fx_applied": h.get("fx_applied", True),
+                "fx_rate": float(h["fx_rate"]) if h.get("fx_rate") is not None else None,
+            }
+
         holdings_detail.append({
             "company_id": cid,
             "symbol": h.get("symbol", "?"),
@@ -484,6 +599,18 @@ def build_snapshot_row(
                 float((current_value - cost) / cost * 100) if cost > 0 else 0.0,
             "price_age_days": price_age_days,
             "price_data_quality": pos_quality,
+            "price_date": _audit.get("price_date"),
+            "price_tier": _audit.get("price_tier"),
+            "price_source": _audit.get("price_source"),
+            "price_unit_raw": _audit.get("raw_price"),
+            "exchange_override": _applied_override,
+            "cdr_ratio": _audit.get("cdr_ratio_applied"),
+            "cdr_ratio_source": (
+                "transactions" if _is_cdr and _has_derived
+                else "holdings_flag" if _is_cdr and _flag_cdr
+                else None
+            ),
+            **fx_audit,
         })
 
     total_value = total_market_value + cash_balance
@@ -497,6 +624,16 @@ def build_snapshot_row(
         holdings_count=non_zero_holdings_count,
         used_tiers=used_tiers,
     )
+
+    fx_unconverted_count = sum(
+        1 for h in holdings_detail if h.get("fx_applied") is False
+    )
+    validation_warnings.extend(cdr_discrepancies)
+    if fx_unconverted_count:
+        validation_warnings.append(
+            f"FX rate unavailable for {fx_unconverted_count} holding(s); "
+            f"values left unconverted (treated as {account_currency.upper()})"
+        )
 
     # Determine quality flag
     has_unavailable = PriceTier.UNAVAILABLE in used_tiers
@@ -546,14 +683,7 @@ def check_snapshot_spike(
     current: dict[str, Any],
     threshold: float = 0.20,
 ) -> dict[str, Any] | None:
-    """Compare consecutive snapshots and detect suspicious value spikes.
-
-    A spike is detected when total_value changes by more than `threshold`
-    (fractional) AND net_deposits did not change proportionally — i.e., the
-    jump is NOT explained by a deposit or withdrawal.
-
-    Returns a dict with spike metadata if detected, None otherwise.
-    """
+    """Detect value changes between consecutive snapshots that deposits cannot explain."""
     prev_total = float(previous.get("total_value", 0))
     curr_total = float(current.get("total_value", 0))
     prev_nd = float(previous.get("net_deposits", 0))
@@ -562,14 +692,13 @@ def check_snapshot_spike(
     if prev_total <= 0:
         return None
 
+    deposits_delta = curr_nd - prev_nd
     change = curr_total - prev_total
+    unexplained = change - deposits_delta
     change_pct = abs(change) / prev_total
+    unexplained_pct = abs(unexplained) / prev_total
 
-    if change_pct <= threshold:
-        return None
-
-    nd_change = abs(curr_nd - prev_nd)
-    if nd_change > 0.01:
+    if unexplained_pct <= threshold:
         return None
 
     return {
@@ -579,8 +708,11 @@ def check_snapshot_spike(
         "current_total": round(curr_total, 2),
         "change": round(change, 2),
         "change_pct": round(change_pct * 100, 2),
+        "unexplained": round(unexplained, 2),
+        "deposits": round(deposits_delta, 2),
+        "unexplained_pct": round(unexplained_pct * 100, 2),
         "message": (
             f"Value spike detected: ${prev_total:,.2f} to ${curr_total:,.2f} "
-            f"({change_pct:.1%} change) with no deposit/withdrawal activity"
+            f"(${unexplained:,.2f} unexplained, {unexplained_pct:.1%})"
         ),
     }

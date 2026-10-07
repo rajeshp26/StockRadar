@@ -1,6 +1,12 @@
-"""Create initial_holding_set events for accounts that have holdings but no transactions (9-12)."""
+"""Create position_state_checkpoint events for accounts that have holdings but no transactions (9-12).
+
+These accounts have no transaction history, so the only honest record of their state is a
+capture of what they hold today. That is a checkpoint, not a historical opening position:
+the captured quantities already reflect every corporate action to date.
+"""
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -66,23 +72,23 @@ def main():
             })
 
         event_store.append_event(
-            event_type="initial_holding_set",
+            event_type="position_state_checkpoint",
             aggregate_id=f"account_{aid}",
             aggregate_type="account",
             data={
-                "effective_date": "2020-01-01",
+                "effective_date": datetime.now(timezone.utc).date().isoformat(),
                 "account_id": aid,
                 "cash_balance": cash_balance,
                 "net_deposits": net_deposits,
                 "holdings": holdings_data,
             },
             metadata={"backfill": True, "source": "portfolio_holdings"},
-            idempotency_key=f"initial_holding_set_{aid}",
+            idempotency_key=f"position_state_checkpoint_{aid}",
         )
-        logger.info(f"Account {aid}: wrote initial_holding_set with {len(holdings_data)} holdings, cash=${cash_balance:.2f}")
+        logger.info(f"Account {aid}: wrote position_state_checkpoint with {len(holdings_data)} holdings, cash=${cash_balance:.2f}")
         written += 1
 
-    logger.info(f"Done. Wrote {written} initial_holding_set events")
+    logger.info(f"Done. Wrote {written} position_state_checkpoint events")
 
 if __name__ == "__main__":
     main()

@@ -1,11 +1,11 @@
 """
-StockerPro — Backfill monthly EOM price history for benchmark/index ETFs.
+StockerPro — Backfill daily price history for benchmark/index ETFs.
 
 Fetches daily price data via DefeatBeta (primary) / YFinance (fallback),
-compresses to monthly end-of-month bars, and upserts into price_history.
+normalizes to daily trading-day rows, and upserts into price_history.
 
-Follows the exact same logic as MarketDataRefreshScheduler._upsert_monthly_price_history
-to keep both code paths aligned.
+Follows the same row semantics as MarketDataRefreshScheduler._upsert_daily_price_history
+(shared sanitize_daily_price_rows) to keep both code paths aligned.
 
 Usage:
   cd backend
@@ -13,6 +13,11 @@ Usage:
   python scripts/backfill_benchmark_prices.py --symbol SPY QQQ
   python scripts/backfill_benchmark_prices.py --symbol SPY --dry-run
   python scripts/backfill_benchmark_prices.py --retention-years 5 --concurrency 2
+  python scripts/backfill_benchmark_prices.py --symbol NYCB CMA WBA --force-bootstrap
+
+--force-bootstrap re-fetches the full retained history even when price_history
+already has rows (the incremental path would only look back ~45 days and would
+never densify a company whose stored rows are month-end closes).
 
 Default symbols: SPY QQQ IWM VTI DIA
 """
@@ -26,8 +31,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 _backend = Path(__file__).resolve().parent.parent
 if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
@@ -37,6 +40,7 @@ from database import supabase
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 from providers.defeat_beta_provider import DefeatBetaProvider
 from providers.yfinance_provider import YFinanceProvider
+from shared.price_rows import sanitize_daily_price_rows
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,19 +58,8 @@ DEFAULT_LOOKBACK_DAYS = int(getattr(settings, "MARKET_DATA_PRICE_LOOKBACK_DAYS",
 
 
 # ---------------------------------------------------------------------------
-# Static helpers — identical to MarketDataRefreshScheduler
+# Static helpers
 # ---------------------------------------------------------------------------
-
-def _safe_num(v: Any) -> float | None:
-    """Safely convert a value to float, handling None / NaN / bad types."""
-    if v is None:
-        return None
-    try:
-        f = float(v)
-        return f if f == f else None  # NaN guard
-    except (ValueError, TypeError):
-        return None
-
 
 def _years_ago(from_date: date, years: int) -> date:
     """Return a date `years` years before `from_date`, handling Feb 29 safely."""
@@ -75,42 +68,6 @@ def _years_ago(from_date: date, years: int) -> date:
     except ValueError:
         target_year = from_date.year - years
         return date(target_year, 3, 1) - timedelta(days=1)
-
-
-def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    Convert daily OHLCV rows to monthly EOM rows:
-      - Group by (year, month)
-      - Pick the row with the latest price_date (last trading day of the month)
-      - Preserve all OHLCV fields; default data_source to 'defeatbeta'
-    """
-    if not daily_rows:
-        return []
-    df = pd.DataFrame(daily_rows)
-    if df.empty or "price_date" not in df.columns:
-        return []
-    df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
-    df = df.dropna(subset=["price_date"])
-    if df.empty:
-        return []
-    df["year"] = df["price_date"].dt.year
-    df["month"] = df["price_date"].dt.month
-    idx = df.groupby(["year", "month"])["price_date"].idxmax()
-    last_trading_rows = df.loc[idx].copy()
-    out: list[dict[str, Any]] = []
-    for _, r in last_trading_rows.iterrows():
-        out.append({
-            "company_id":  int(r.get("company_id")),
-            "price_date":  r["price_date"].date(),
-            "open_price":  _safe_num(r.get("open_price")),
-            "close_price": _safe_num(r.get("close_price")),
-            "high_price":  _safe_num(r.get("high_price")),
-            "low_price":   _safe_num(r.get("low_price")),
-            "volume":      int(r.get("volume")) if pd.notna(r.get("volume")) else None,
-            "data_source": str(r.get("data_source") or "defeatbeta"),
-        })
-    out.sort(key=lambda x: x["price_date"])
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -147,15 +104,21 @@ async def backfill_symbol(
     retention_years: int,
     lookback_days: int,
     dry_run: bool,
+    force_bootstrap: bool = False,
 ) -> dict:
     """
-    Backfill monthly EOM price history for a single symbol.
+    Backfill daily price history for a single symbol.
 
-    Mirrors MarketDataRefreshScheduler._upsert_monthly_price_history exactly:
+    Mirrors MarketDataRefreshScheduler._upsert_daily_price_history exactly:
       1. Check if any price_history exists (bootstrap vs incremental)
       2. Apply rolling retention window filter
-      3. Compress daily → monthly EOM
+      3. Normalize daily rows (sanitize_daily_price_rows)
       4. Upsert + update price refresh marker
+
+    force_bootstrap: take the full-history path even when rows already exist.
+    Without it, a company whose stored rows are month-end closes is treated as
+    "has history" and only gets the ~lookback_days incremental window, so its
+    month-level compression is never densified.
     """
     result = {"symbol": symbol, "company_id": company_id, "status": "pending"}
 
@@ -163,7 +126,7 @@ async def backfill_symbol(
         has_any = await _has_any_price_history(repo, company_id)
         retention_cutoff = _years_ago(date.today(), retention_years)
 
-        if not has_any:
+        if force_bootstrap or not has_any:
             # ── Bootstrap: no existing rows → full daily history ──
             if dry_run:
                 logger.info(
@@ -178,20 +141,23 @@ async def backfill_symbol(
                 r for r in (daily_rows or [])
                 if r.get("price_date") and r["price_date"] >= retention_cutoff
             ]
-            monthly_rows = _compress_daily_to_monthly_eom(daily_rows)
-            if monthly_rows:
-                await repo.upsert_price_history(monthly_rows)
+            daily_out = sanitize_daily_price_rows(daily_rows, default_source="defeatbeta")
+            if daily_out:
+                split_rows = await provider.get_splits_optimized(symbol, company_id)
+                if split_rows:
+                    await repo.upsert_splits(split_rows)
+                await repo.upsert_price_history(daily_out)
                 await repo.update_price_refresh_marker(company_id)
                 logger.info(
-                    "[Bootstrap] %s: %d monthly rows (>= %s)",
-                    symbol, len(monthly_rows), retention_cutoff,
+                    "[Bootstrap] %s: %d daily rows (>= %s)",
+                    symbol, len(daily_out), retention_cutoff,
                 )
             else:
-                logger.warning("[Bootstrap] %s: no monthly rows generated", symbol)
+                logger.warning("[Bootstrap] %s: no daily rows generated", symbol)
 
             result["status"] = "ok"
             result["mode"] = "bootstrap"
-            result["rows"] = len(monthly_rows or [])
+            result["rows"] = len(daily_out or [])
             return result
 
         # ── Incremental: rows exist → fetch recent window ──
@@ -212,23 +178,26 @@ async def backfill_symbol(
             r for r in (daily_rows_recent or [])
             if r.get("price_date") and r["price_date"] >= effective_cutoff
         ]
-        monthly_recent = _compress_daily_to_monthly_eom(daily_rows_recent)
-        if monthly_recent:
-            await repo.upsert_price_history(monthly_recent)
+        daily_recent_out = sanitize_daily_price_rows(daily_rows_recent, default_source="defeatbeta")
+        if daily_recent_out:
+            split_rows = await provider.get_splits_optimized(symbol, company_id)
+            if split_rows:
+                await repo.upsert_splits(split_rows)
+            await repo.upsert_price_history(daily_recent_out)
             await repo.update_price_refresh_marker(company_id)
             logger.info(
-                "[Incremental] %s: %d monthly rows (>= %s)",
-                symbol, len(monthly_recent), effective_cutoff,
+                "[Incremental] %s: %d daily rows (>= %s)",
+                symbol, len(daily_recent_out), effective_cutoff,
             )
         else:
             logger.info(
-                "[Incremental] %s: no new monthly rows in window (>= %s)",
+                "[Incremental] %s: no new daily rows in window (>= %s)",
                 symbol, effective_cutoff,
             )
 
         result["status"] = "ok"
         result["mode"] = "incremental"
-        result["rows"] = len(monthly_recent or [])
+        result["rows"] = len(daily_recent_out or [])
         return result
 
     except Exception as e:
@@ -244,6 +213,7 @@ async def run_backfill(
     lookback_days: int,
     concurrency: int,
     dry_run: bool,
+    force_bootstrap: bool = False,
 ) -> None:
     """Resolve symbols to company_ids, then backfill concurrently."""
     repo = SupabaseFinancialRepository(supabase)
@@ -281,9 +251,9 @@ async def run_backfill(
         return
 
     logger.info(
-        "Backfill targets: %s | retention=%sy | lookback=%sd | concurrency=%d | dry_run=%s",
+        "Backfill targets: %s | retention=%sy | lookback=%sd | concurrency=%d | dry_run=%s | force_bootstrap=%s",
         [c["ticker_symbol"] for c in companies],
-        retention_years, lookback_days, concurrency, dry_run,
+        retention_years, lookback_days, concurrency, dry_run, force_bootstrap,
     )
 
     # ── Run with bounded concurrency ──
@@ -300,6 +270,7 @@ async def run_backfill(
                 retention_years=retention_years,
                 lookback_days=lookback_days,
                 dry_run=dry_run,
+                force_bootstrap=force_bootstrap,
             )
 
     results = await asyncio.gather(*[bounded(c) for c in companies])
@@ -316,7 +287,7 @@ async def run_backfill(
     for r in results:
         if r["status"] == "ok":
             logger.info(
-                "  [OK] %s (cid=%s): [%s] %d monthly rows",
+                "  [OK] %s (cid=%s): [%s] %d daily rows",
                 r["symbol"], r["company_id"], r.get("mode", "?"), r.get("rows", 0),
             )
         elif r["status"] == "error":
@@ -330,7 +301,7 @@ async def run_backfill(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Backfill monthly EOM price history for benchmark/index ETFs.",
+        description="Backfill daily price history for benchmark/index ETFs.",
     )
     parser.add_argument(
         "--symbol", type=str, nargs="*", default=None,
@@ -352,6 +323,12 @@ def main() -> None:
         "--dry-run", action="store_true",
         help="Print plan; make no DB or provider calls",
     )
+    parser.add_argument(
+        "--force-bootstrap", action="store_true",
+        help="Re-fetch full retained history even when rows already exist "
+             "(densifies monthly-compressed companies; incremental path alone "
+             "would only look back ~45 days)",
+    )
     args = parser.parse_args()
 
     symbols = args.symbol or DEFAULT_SYMBOLS
@@ -362,6 +339,7 @@ def main() -> None:
         lookback_days=args.lookback_days,
         concurrency=args.concurrency,
         dry_run=args.dry_run,
+        force_bootstrap=args.force_bootstrap,
     ))
 
 

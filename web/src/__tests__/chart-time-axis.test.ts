@@ -281,7 +281,10 @@ describe('getDateAxis (end-to-end)', () => {
         const dates = ['2021-01-01', '2022-01-01', '2023-01-01', '2024-01-01', '2025-01-01', '2026-01-01', '2026-07-01'];
         const axis = getDateAxis('ALL', dates, 4);
         expect(axis.tickFormat).toBe('yyyy');
-        expect(axis.ticks).toEqual(['2021-01-01', '2023-01-01', '2025-01-01']);
+        // The 2-year grid stops at 2025; 2026-07-01 is appended by the terminal-tick
+        // guarantee so the newest observation is labelled. Before that guarantee the
+        // array ended at 2025-01-01 and the chart showed a tick two years stale.
+        expect(axis.ticks).toEqual(['2021-01-01', '2023-01-01', '2025-01-01', '2026-07-01']);
     });
 
     it('1W over daily data -> weekday labels', () => {
@@ -360,14 +363,20 @@ describe('getDateAxis with { widthPx } target', () => {
     it('narrow panel (320px -> 4 ticks) relaxes a 5.49y ALL span to every 2 years', () => {
         const axis = getDateAxis('ALL', fiveYearMonthlyKeys(), { widthPx: 320 });
         expect(axis.tickFormat).toBe('yyyy');
-        expect(axis.ticks).toEqual(['2021-01-01', '2023-01-01', '2025-01-01']);
+        // 2026-07-01 is the last data key and is appended by the terminal-tick
+        // guarantee; the 2-year grid itself stops at 2025.
+        expect(axis.ticks).toEqual(['2021-01-01', '2023-01-01', '2025-01-01', '2026-07-01']);
     });
 
     it('wide panel (640px -> 8 ticks) keeps yearly labels on a 5.49y ALL span', () => {
         const axis = getDateAxis('ALL', fiveYearMonthlyKeys(), { widthPx: 640 });
         expect(axis.tickFormat).toBe('yyyy');
+        // 2026-01-01 and the terminal 2026-07-01 both render "2026", so the interior
+        // tick yields and the last data key is kept — the documented ECharts
+        // `fixMinMaxLabelShow` tie-break. Without the guarantee this ended at 2026-01-01,
+        // a label sitting six months short of the data it described.
         expect(axis.ticks).toEqual([
-            '2021-01-01', '2022-01-01', '2023-01-01', '2024-01-01', '2025-01-01', '2026-01-01',
+            '2021-01-01', '2022-01-01', '2023-01-01', '2024-01-01', '2025-01-01', '2026-07-01',
         ]);
     });
 
@@ -401,7 +410,9 @@ describe('getDateAxis with { widthPx } target', () => {
         }
         const axis = getDateAxis('ALL', quarterlyMonthKeys);
         expect(axis.tickFormat).toBe('yyyy');
-        expect(axis.ticks).toEqual(['2021-01', '2022-01', '2023-01', '2024-01', '2025-01', '2026-01']);
+        // 2026-01 and the terminal 2026-10 both render "2026"; the interior tick
+        // yields so the newest key is labelled, matching the yearly-key test above.
+        expect(axis.ticks).toEqual(['2021-01', '2022-01', '2023-01', '2024-01', '2025-01', '2026-10']);
         for (const tick of axis.ticks) {
             expect(quarterlyMonthKeys).toContain(tick);
         }
@@ -439,5 +450,65 @@ describe('adjacent duplicate label collapse', () => {
         expect(labels[0]).toBe('Jan');
         expect(labels[12]).toBe('Jan');
         expect(new Set(labels).size).toBe(12);
+    });
+});
+
+describe('terminal tick guarantee (newest observation is always labelled)', () => {
+    const MONTHLY_TO_AUG31 = [
+        '2025-10-01', '2025-11-01', '2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01',
+        '2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01', '2026-08-31',
+    ];
+
+    it('labels a terminal date that is not a calendar boundary (regression: axis stopped at Aug while data ran to Sep 26)', () => {
+        // The 2026-09-01 ideal tick is 1 day from 2026-08-31 and 25 days from
+        // 2026-09-26, so snapping lands on Aug and the newest point goes unlabelled.
+        const axis = getDateAxis('1Y', [...MONTHLY_TO_AUG31, '2026-09-26']);
+
+        expect(axis.ticks).toContain('2026-08-31');
+        expect(axis.ticks[axis.ticks.length - 1]).toBe('2026-09-26');
+    });
+
+    it('drops the interior tick when the terminal label would collide, keeping the newest date', () => {
+        // 2026-09-01 snaps to 2026-09-05; the terminal 2026-09-26 renders the same
+        // "Sep". Recharts `preserveEnd` and ECharts `fixMinMaxLabelShow` both keep
+        // the outmost label and drop the inner one.
+        const dates = [...MONTHLY_TO_AUG31.slice(0, -1), '2026-08-05', '2026-09-05', '2026-09-26'];
+        const axis = getDateAxis('1Y', dates);
+        const labels = axis.ticks.map((t) => formatAxisTick(t, axis.tickFormat));
+
+        expect(axis.ticks[axis.ticks.length - 1]).toBe('2026-09-26');
+        expect(axis.ticks).not.toContain('2026-09-05');
+        expect(new Set(labels).size).toBe(labels.length);
+    });
+
+    it('leaves ticks untouched when the terminal date is already the final tick', () => {
+        const dates = [...MONTHLY_TO_AUG31];
+        const axis = getDateAxis('1Y', dates);
+
+        expect(axis.ticks[axis.ticks.length - 1]).toBe('2026-08-31');
+        expect(new Set(axis.ticks).size).toBe(axis.ticks.length);
+    });
+
+    it('labels the final intraday observation on the 1D axis', () => {
+        const dates: string[] = [];
+        for (let m = 9 * 60 + 30; m <= 15 * 60 + 30; m += 30) {
+            const h = String(Math.floor(m / 60)).padStart(2, '0');
+            const min = String(m % 60).padStart(2, '0');
+            dates.push(`2026-09-16T${h}:${min}:00`);
+        }
+        const axis = getDateAxis('1D', dates);
+
+        expect(axis.tickFormat).toBe('h:mm a');
+        expect(axis.ticks[axis.ticks.length - 1]).toBe('2026-09-16T15:30:00');
+    });
+
+    it('still labels both edges for a single observation', () => {
+        const axis = getDateAxis('1Y', ['2026-09-16']);
+
+        expect(axis.ticks).toEqual(['2026-09-16']);
+    });
+
+    it('emits no ticks when there is no data', () => {
+        expect(getDateAxis('1Y', [])).toEqual({ ticks: [], tickFormat: 'MMM d' });
     });
 });

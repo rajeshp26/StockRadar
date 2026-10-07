@@ -10,7 +10,7 @@ if echo "$FRESH" | grep -q '"stale": true'; then
 fi
 
 CHANGED=$(changed_source_files | wc -l | tr -d ' ')
-[ "$CHANGED" -gt 0 ] || { persist skip "no changes"; skip "no changes"; }
+[ "$CHANGED" -gt 0 ] || { persist skip "no changes"; not_applicable "no changes" '{"changed_source_files":0}'; }
 
 TESTS=$(python3 framework/adapters/code_intel.py affected-tests 2>/dev/null || echo '{}')
 TIER=$(echo "$TESTS" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("tier",4))' 2>/dev/null || echo 4)

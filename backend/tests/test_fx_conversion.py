@@ -32,6 +32,9 @@ def mock_supabase():
     client.table.return_value.select.return_value.eq.return_value.eq.return_value \
         .lte.return_value.order.return_value.limit.return_value.execute.return_value = \
         MagicMock(data=[])
+    client.table.return_value.select.return_value.eq.return_value.eq.return_value \
+        .gte.return_value.order.return_value.limit.return_value.execute.return_value = \
+        MagicMock(data=[])
     return client
 
 
@@ -173,15 +176,17 @@ class TestFXService:
         rate = fx_service._query_cached_rate("USD", "CAD", date(2026, 6, 22))
         assert rate == Decimal("1.3645")
 
-    def test_stale_rate_rejected(self, fx_service, mock_supabase):
-        """Rate 10 days old with MAX_STALE_DAYS=7 returns None."""
+    def test_stale_rate_forward_filled(self, fx_service, mock_supabase, caplog):
+        """Rate 10 days old with MAX_STALE_DAYS=7 is forward-filled, not dropped."""
+        caplog.set_level(logging.WARNING)
         fx_service.MAX_STALE_DAYS = 7
         mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value \
             .lte.return_value.order.return_value.limit.return_value.execute.return_value = \
             MagicMock(data=[{"rate": "1.36", "rate_date": "2026-06-10"}])
 
         rate = fx_service._query_cached_rate("USD", "CAD", date(2026, 6, 20))
-        assert rate is None
+        assert rate == Decimal("1.36")
+        assert "forward-filling" in caplog.text
 
     def test_fresh_rate_accepted(self, fx_service, mock_supabase):
         """Rate 3 days old with MAX_STALE_DAYS=7 returns the rate."""
@@ -268,11 +273,46 @@ class TestFXService:
         assert result == Decimal("1234.56789")
 
     def test_historical_as_of_does_not_live_fetch(self, fx_service, mock_supabase):
-        """Live fetch NOT called for historical as_of."""
-        with patch("providers.fx_provider.fetch_fx_rate") as mock_fetch:
+        """Live fetch NOT called for historical as_of outside the live window."""
+        with patch("providers.fx_provider.fetch_fx_history") as mock_fetch:
             result = fx_service.get_rate("USD", "CAD", as_of=date(2025, 1, 1))
             assert result is None
             mock_fetch.assert_not_called()
+
+    def test_get_rate_uses_nearest_future_rate_when_no_past(self, fx_service):
+        """as_of before the earliest stored rate resolves via nearest-future."""
+        fx_service._query_cached_rate = lambda b, t, a: None
+        fx_service._query_future_rate = (
+            lambda b, t, a: Decimal("1.35")
+            if (b, t) == ("USD", "CAD") else None
+        )
+        rate = fx_service.get_rate("USD", "CAD", as_of=date(2020, 1, 1))
+        assert rate == Decimal("1.35")
+
+    def test_get_rate_live_fetch_heals_recent_gap(self, fx_service):
+        """Recent as_of with no stored rate fetches history once and resolves."""
+        today = now_utc().date()
+        as_of = today - timedelta(days=3)
+        fetched_date = today - timedelta(days=2)
+        calls = {"query": 0}
+
+        def query_cached(base, target, as_of_d):
+            calls["query"] += 1
+            if (base, target) == ("USD", "CAD") and calls["query"] >= 2:
+                return Decimal("1.3742")
+            return None
+
+        fx_service._query_cached_rate = query_cached
+        fx_service._query_future_rate = lambda b, t, a: None
+
+        with patch("providers.fx_provider.fetch_fx_history", return_value=[
+            (fetched_date, Decimal("1.3742")),
+        ]) as mock_fetch, patch.object(fx_service, "_cache_rate") as mock_cache:
+            rate = fx_service.get_rate("USD", "CAD", as_of=as_of)
+
+        assert rate == Decimal("1.3742")
+        mock_fetch.assert_called_once()
+        mock_cache.assert_called_once_with("USD", "CAD", Decimal("1.3742"), fetched_date)
 
     def test_round_trip_via_inverse(self, fx_service, mock_supabase):
         """USD->CAD then CAD->USD returns original amount within tolerance."""
@@ -424,6 +464,70 @@ class TestSnapshotBuilderFX:
         assert row["holdings_market_value"] == 0.0
         assert row["total_value"] == 100.0
 
+    def test_snapshot_builder_fx_failure_sets_warning_flag(self):
+        """USD holding with no rate: fx_applied False, WARNING flag surfaced."""
+        from shared.fx_service import FXService
+        from shared.snapshot_builder import build_snapshot_row
+
+        client = MagicMock()
+        client.table.return_value.select.return_value.eq.return_value.eq.return_value \
+            .lte.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+        client.table.return_value.select.return_value.eq.return_value.eq.return_value \
+            .gte.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+        fx = FXService(client)
+
+        row = build_snapshot_row(
+            account_id=1,
+            snapshot_date=date(2026, 6, 20),
+            holdings_state=[{
+                "company_id": 7, "symbol": "AAPL", "quantity": 10,
+                "total_cost": 1000, "price_currency": "USD",
+            }],
+            cash_balance=Decimal("0"),
+            net_deposits=Decimal("0"),
+            prices_by_company={7: {"price": 200.0, "price_date": date(2026, 6, 20)}},
+            job_id="test",
+            account_currency="CAD",
+            fx_service=fx,
+        )
+        assert row["data_quality_flag"] == "WARNING"
+        holding = row["holdings_json"][0]
+        assert holding["fx_applied"] is False
+        assert holding["fx_rate"] is None
+        assert any("FX rate unavailable" in w for w in row["validation_warnings"])
+
+    def test_snapshot_builder_fx_success_records_rate(self):
+        """USD holding converts at snapshot-date rate; fx_rate recorded."""
+        from shared.fx_service import FXService
+        from shared.snapshot_builder import build_snapshot_row
+
+        client = MagicMock()
+        client.table.return_value.select.return_value.eq.return_value.eq.return_value \
+            .lte.return_value.order.return_value.limit.return_value.execute.return_value = \
+            MagicMock(data=[{"rate": "1.36", "rate_date": "2026-06-20"}])
+        fx = FXService(client)
+
+        row = build_snapshot_row(
+            account_id=1,
+            snapshot_date=date(2026, 6, 20),
+            holdings_state=[{
+                "company_id": 7, "symbol": "AAPL", "quantity": 10,
+                "total_cost": 1000, "price_currency": "USD",
+            }],
+            cash_balance=Decimal("0"),
+            net_deposits=Decimal("0"),
+            prices_by_company={7: {"price": 200.0, "price_date": date(2026, 6, 20)}},
+            job_id="test",
+            account_currency="CAD",
+            fx_service=fx,
+        )
+        holding = row["holdings_json"][0]
+        assert holding["fx_applied"] is True
+        assert holding["fx_rate"] == 1.36
+        assert holding["current_value"] == pytest.approx(2720.0)
+        assert holding["cost_basis"] == pytest.approx(1360.0)
+        assert row["data_quality_flag"] == "OK"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 5. Scheduler FX Refresh Tests
@@ -432,7 +536,7 @@ class TestSnapshotBuilderFX:
 class TestSchedulerFX:
 
     def test_refresh_fx_rates_stores_rates(self):
-        """Calling _refresh_fx_rates stores rates in exchange_rates."""
+        """Calling _refresh_fx_rates caches daily closes under their close dates."""
         from config import settings
         original = settings.ENABLE_FX_CONVERSION
         try:
@@ -440,9 +544,9 @@ class TestSchedulerFX:
             from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
             scheduler = MarketDataRefreshScheduler()
 
-            with patch("providers.fx_provider.fetch_fx_rate") as mock_fetch, \
+            with patch("providers.fx_provider.fetch_fx_history") as mock_fetch, \
                  patch("shared.fx_service.FXService._cache_rate") as mock_cache:
-                mock_fetch.return_value = Decimal("1.3645")
+                mock_fetch.return_value = [(date(2026, 6, 20), Decimal("1.3645"))]
                 scheduler._refresh_fx_rates()
 
             assert scheduler.fx_service is not None
@@ -457,8 +561,8 @@ class TestSchedulerFX:
         from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
         scheduler = MarketDataRefreshScheduler()
 
-        with patch("providers.fx_provider.fetch_fx_rate") as mock_fetch:
-            mock_fetch.return_value = None
+        with patch("providers.fx_provider.fetch_fx_history") as mock_fetch:
+            mock_fetch.return_value = []
             scheduler._refresh_fx_rates()
 
         assert "Failed to fetch FX rate USD->CAD" in caplog.text
@@ -470,11 +574,12 @@ class TestSchedulerFX:
 
         called_pairs = []
 
-        def mock_fetch(base, target):
+        def mock_fetch(base, target, start, end):
             called_pairs.append((base, target))
-            return Decimal("1.3645") if base == "USD" else Decimal("0.7328")
+            return [(date(2026, 6, 20), Decimal("1.3645"))]
 
-        with patch("providers.fx_provider.fetch_fx_rate", side_effect=mock_fetch):
+        with patch("providers.fx_provider.fetch_fx_history", side_effect=mock_fetch), \
+             patch("shared.fx_service.FXService._cache_rate"):
             scheduler._refresh_fx_rates()
 
         assert ("USD", "CAD") in called_pairs
@@ -672,11 +777,28 @@ class TestFXWarnings:
 
 # TestFXService addition
 def _test_today_live_fetch_success(self, fx_service, mock_supabase):
-    """When as_of == today, live fetch is called and result is cached."""
-    with patch("providers.fx_provider.fetch_fx_rate", return_value=Decimal("1.36")) as mock_fetch:
+    """When as_of == today, history is fetched and the rate is cached."""
+    today = now_utc().date()
+    fetched_date = today - timedelta(days=1)
+    calls = {"query": 0}
+
+    def query_cached(base, target, as_of_d):
+        calls["query"] += 1
+        if (base, target) == ("USD", "CAD") and calls["query"] >= 2:
+            return Decimal("1.36")
+        return None
+
+    fx_service._query_cached_rate = query_cached
+    fx_service._query_future_rate = lambda b, t, a: None
+
+    with patch("providers.fx_provider.fetch_fx_history", return_value=[
+        (fetched_date, Decimal("1.36")),
+    ]) as mock_fetch, patch.object(fx_service, "_cache_rate") as mock_cache:
         result = fx_service.get_rate("USD", "CAD")
-        assert result == Decimal("1.36")
-        mock_fetch.assert_called_once_with("USD", "CAD")
+
+    assert result == Decimal("1.36")
+    mock_fetch.assert_called_once()
+    mock_cache.assert_called_once_with("USD", "CAD", Decimal("1.36"), fetched_date)
 
 TestFXService.test_today_live_fetch_success = _test_today_live_fetch_success
 

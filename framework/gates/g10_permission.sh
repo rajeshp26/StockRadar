@@ -25,7 +25,8 @@ fi
 
 if [ ! -f opencode.json ]; then
   persist skip "opencode.json absent; nothing to judge"
-  exit 4
+  not_applicable "opencode.json absent; nothing to judge" \
+    '{"checked":"opencode.json","found":false}'
 fi
 
 out="$(python3 - "$PWD" <<'PY' 2>&1 || true

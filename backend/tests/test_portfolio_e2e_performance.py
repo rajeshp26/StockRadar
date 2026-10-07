@@ -17,17 +17,23 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 # Read real Supabase credentials directly from .env (bypass conftest mocks)
 _env_file = Path(__file__).resolve().parent.parent / ".env"
-_SUPABASE_URL = "https://viqdqgxcumcdhqxooplw.supabase.co"
-_SUPABASE_KEY = "sb_secret_NxN3ywf1RrMektnf-rq9hg_FxKFOVoG"
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+_SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 if _env_file.exists():
     import dotenv
     _env_vars = dotenv.dotenv_values(_env_file)
     _SUPABASE_URL = _env_vars.get("SUPABASE_URL") or _SUPABASE_URL
     _SUPABASE_KEY = _env_vars.get("SUPABASE_SERVICE_ROLE_KEY") or _SUPABASE_KEY
 
-import pytest
+if not _SUPABASE_URL or not _SUPABASE_KEY:
+    pytest.skip(
+        "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for live perf tests",
+        allow_module_level=True,
+    )
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

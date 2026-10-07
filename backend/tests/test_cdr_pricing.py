@@ -19,6 +19,8 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ============================================================================
 # Bug 1: Per-company CDR ratio (not hardcoded)
 # ============================================================================
@@ -227,36 +229,51 @@ class TestApplyCdrAdjustment:
     def test_apply_cdr_with_ratio(self):
         from api.portfolio import apply_cdr_adjustment
         cdr_ratios = {1: 12.0}
-        exchange_overrides = {1: "TOR"}
 
-        result = apply_cdr_adjustment(360.0, 1, cdr_ratios, exchange_overrides)
+        result = apply_cdr_adjustment(360.0, 1, cdr_ratios, "TOR")
         assert result == 360.0 / 12.0
 
     def test_apply_cdr_with_default_ratio(self):
         from api.portfolio import apply_cdr_adjustment
         cdr_ratios = {}  # No ratio in DB
-        exchange_overrides = {1: "TOR"}
 
-        result = apply_cdr_adjustment(350.0, 1, cdr_ratios, exchange_overrides)
+        result = apply_cdr_adjustment(350.0, 1, cdr_ratios, "TOR")
         # Falls back to CDR_RATIO = 10
         assert result == 350.0 / 10.0
 
     def test_apply_cdr_non_cdr_holding(self):
         from api.portfolio import apply_cdr_adjustment
         cdr_ratios = {1: 12.0}
-        exchange_overrides = {2: "TOR"}  # Different company
 
-        result = apply_cdr_adjustment(350.0, 1, cdr_ratios, exchange_overrides)
+        result = apply_cdr_adjustment(350.0, 1, cdr_ratios, "XTSE")
         # Not a CDR: price unchanged
         assert result == 350.0
 
-    def test_apply_cdr_no_exchange_overrides(self):
+    def test_apply_cdr_missing_override_is_not_a_cdr(self):
         from api.portfolio import apply_cdr_adjustment
         cdr_ratios = {1: 12.0}
 
         result = apply_cdr_adjustment(350.0, 1, cdr_ratios, None)
-        # No exchange_overrides: treated as CDR (TOR)
-        assert result == 350.0 / 12.0
+        # A holding with no TOR override must not be assumed to be a CDR: doing
+        # so overvalues it by the ratio, which is the error this change removes.
+        assert result == 350.0
+
+    def test_apply_cdr_uses_the_holding_not_the_company(self):
+        from api.portfolio import apply_cdr_adjustment
+
+        cdr_ratios = {7: 10.0}
+
+        tor_holding = apply_cdr_adjustment(350.0, 7, cdr_ratios, "TOR")
+        plain_holding = apply_cdr_adjustment(350.0, 7, cdr_ratios, None)
+
+        assert tor_holding == 35.0
+        assert plain_holding == 350.0
+
+    def test_apply_cdr_rejects_a_company_keyed_map(self):
+        from api.portfolio import apply_cdr_adjustment
+
+        with pytest.raises(TypeError):
+            apply_cdr_adjustment(350.0, 7, {7: 10.0}, {7: "TOR"})
 
 
 # ============================================================================

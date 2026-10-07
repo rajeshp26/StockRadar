@@ -2620,7 +2620,7 @@ CSV Import / Manual Trade
 
 Market Data Scheduler (every 24h)
   └── get_active_companies_for_market_data()  ← ~150 companies
-        └── _upsert_monthly_price_history()   ← refreshes price_history
+        └── _upsert_daily_price_history()     ← refreshes price_history (daily grain)
 
 Portfolio Overview (API)
   └── portfolio_holdings.current_value  ← always set (never NULL)
@@ -2635,7 +2635,7 @@ Portfolio Overview (API)
 | `portfolio_service.py:_recalculate_account_holdings()` | Tier 3 else clause + exception guard (~line 446) |
 | `portfolio_service.py:_fetch_prices_on_import()` | On-demand YFinance price fetch background task |
 | `portfolio_service.py:_fetch_and_store_prices()` | Single-symbol price fetch + DB upsert |
-| `portfolio_service.py:_compress_daily_to_monthly_eom()` | Daily OHLCV → monthly EOM compression |
+| `shared/price_rows.py:sanitize_daily_price_rows()` | Shared daily-grain sanitizer (replaced 4 drifting compressor copies) |
 | `financial_repository.py:get_active_companies_for_market_data()` | Portfolio ∪ Watchlist company query |
 | `market_data_scheduler.py:_refresh_cycle()` | Uses active companies instead of all 3,114 |
 | `scripts/backfill_holding_prices.py` | One-time CLI backfill for existing holdings (118 symbols) |

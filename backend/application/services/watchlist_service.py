@@ -13,14 +13,13 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-import pandas as pd
-
 from database import supabase
 from domain.entities.watchlist import StockPriceInfo, WatchlistWithStocks
 from domain.interfaces.repository import UserRepository, WatchlistRepository
 from domain.interfaces.stock_provider import StockProvider
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 from shared.exceptions.base import ExternalServiceError, NotFoundError
+from shared.price_rows import sanitize_daily_price_rows
 from shared.price_utils import build_price_snapshot
 
 if TYPE_CHECKING:
@@ -921,15 +920,18 @@ class WatchlistService:
                 logger.info("[PRICE_HISTORY][%s] Incremental from %s: %d daily rows",
                           symbol, start_date, len(daily_rows or []))
 
-            monthly_rows = self._compress_daily_to_monthly_eom(daily_rows or [])
+            daily_out = sanitize_daily_price_rows(daily_rows, default_source="defeatbeta")
 
-            if monthly_rows:
-                await self.financial_repo.upsert_price_history(monthly_rows)
+            if daily_out:
+                split_rows = await self.defeat_beta_provider.get_splits_optimized(symbol, company_id)
+                if split_rows:
+                    await self.financial_repo.upsert_splits(split_rows)
+                await self.financial_repo.upsert_price_history(daily_out)
                 await self.financial_repo.update_price_refresh_marker(company_id)
-                logger.info("[PRICE_HISTORY][%s] ✅ %d monthly rows upserted (full=%s)",
-                         symbol, len(monthly_rows), is_full_load)
+                logger.info("[PRICE_HISTORY][%s] %d daily rows upserted (full=%s)",
+                         symbol, len(daily_out), is_full_load)
             else:
-                logger.info("[PRICE_HISTORY][%s] No monthly rows to upsert", symbol)
+                logger.info("[PRICE_HISTORY][%s] No daily rows to upsert", symbol)
 
         except Exception as e:
             logger.warning("[PRICE_HISTORY][%s] Failed: %s", symbol, e)
@@ -948,50 +950,6 @@ class WatchlistService:
         except Exception as e:
             logger.debug("_has_price_history failed for %s: %s", company_id, e)
             return False
-
-    @staticmethod
-    def _compress_daily_to_monthly_eom(daily_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """
-        Convert daily OHLCV rows to monthly EOM rows:
-          - Group by (year, month)
-          - Pick the row with the latest price_date (last trading day of the month)
-          - Preserve all OHLCV fields; default data_source to 'defeatbeta'
-        """
-        if not daily_rows:
-            return []
-        df = pd.DataFrame(daily_rows)
-        if df.empty or "price_date" not in df.columns:
-            return []
-        df["price_date"] = pd.to_datetime(df["price_date"], errors="coerce")
-        df = df.dropna(subset=["price_date"])
-        if df.empty:
-            return []
-        df["year"] = df["price_date"].dt.year
-        df["month"] = df["price_date"].dt.month
-        idx = df.groupby(["year", "month"])["price_date"].idxmax()
-        last_trading_rows = df.loc[idx].copy()
-        out: list[dict[str, Any]] = []
-        for _, r in last_trading_rows.iterrows():
-            def _safe_num(v: Any) -> float | None:
-                if v is None:
-                    return None
-                try:
-                    f = float(v)
-                    return f if f == f else None
-                except (ValueError, TypeError):
-                    return None
-            out.append({
-                "company_id": int(r.get("company_id")),
-                "price_date": r["price_date"].date(),
-                "open_price": _safe_num(r.get("open_price")),
-                "close_price": _safe_num(r.get("close_price")),
-                "high_price": _safe_num(r.get("high_price")),
-                "low_price": _safe_num(r.get("low_price")),
-                "volume": int(r.get("volume")) if pd.notna(r.get("volume")) else None,
-                "data_source": str(r.get("data_source") or "defeatbeta"),
-            })
-        out.sort(key=lambda x: x["price_date"])
-        return out
 
     async def _compute_valuations_background(self, symbol: str, user_id: int) -> None:
         try:
