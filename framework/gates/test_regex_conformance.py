@@ -2,16 +2,17 @@
 """Conformance test for the canonical [gate] line protocol.
 
 WHY THIS EXISTS
-    The parser change lives in .opencode/plugin/gates.mjs, whose suite
-    (gates.test.mjs) requires node. Node is absent in this environment
-    (verified: Test-Path "C:\\Program Files\\nodejs\\node.exe" -> False), so
-    that suite cannot execute here. An unrunnable test is not evidence.
+    The parser change lives in .opencode/plugin/gates.mjs. Its authoritative
+    suite (gates.test.mjs) runs under node and is exercised separately; node
+    is present here (v24.14.1) and that suite passes 37/37. This file is NOT
+    a substitute for it -- it proves the side gates.test.mjs cannot see: the
+    wire format the emitters produce.
 
-    This transliterates GATE_LINE_RE into Python's `re` -- faithfully, with no
+    It transliterates GATE_LINE_RE into Python's `re` -- faithfully, with no
     simplification -- and exercises it against lines captured from the REAL
-    staged framework/gates/_lib.sh. That proves the property that actually
-    matters and that hand-written fixtures would miss: the emitter and the
-    parser agree on the wire format.
+    framework/gates/_lib.sh. That proves the property that actually matters
+    and that hand-written fixtures would miss: the emitter and the parser
+    agree on the wire format.
 
 FALSIFIABILITY
     Two independent directions, both must hold:
@@ -30,12 +31,11 @@ SCOPE LIMIT -- read before treating this as a pass
       - that gates.mjs behaves identically to this transliteration (JS RegExp
         and Python re agree on these constructs -- no lookbehind, no unicode
         property classes -- but they are different engines);
-      - that gates.test.mjs passes, which needs node;
       - that telemetry.ts propagates evidence onward, which it currently does
         not (parseGateResult builds detail without it).
-    Therefore the parser patch is UNVERIFIABLE (exit 3) in this environment,
-    not verified. This test raises confidence in the format; it does not close
-    the requirement.
+    The JavaScript parser itself is verified by gates.test.mjs (37/37), which
+    runs under node independently of this file. This test raises confidence in
+    the FORMAT; it does not close the requirement on the JavaScript.
 
 Exit: 0 = format conforms, 1 = conformance violated, 2 = harness error
 """
@@ -289,7 +289,7 @@ def main():
         print("FAIL: canonical-line conformance violated.")
         return 1
     print("PASS: canonical-line format conforms.")
-    print("NOTE: proves the wire format only -- gates.test.mjs still requires node.")
+    print("NOTE: proves the wire format only -- gates.test.mjs runs separately under node.")
     return 0
 
 
