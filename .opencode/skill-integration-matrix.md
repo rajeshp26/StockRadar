@@ -15,11 +15,11 @@ section 5, file in construction).
 
 | Role | Mandatory skills | Source |
 | --- | --- | --- |
-| team-lead | requirements-authoring for every feature request; karpathy-guidelines when ambiguity/uncertainty exist; consult routing matrix for every delegation; record required skills in Tool Plan | skill-routing.md:59-62 |
+| team-lead | requirements-authoring for every feature request; karpathy-guidelines per its routing condition (skill-routing.md:24); consult routing matrix for every delegation; record required skills in Tool Plan | skill-routing.md:59-62 |
 | researcher | technical-validation for any material unknown | skill-routing.md:66 |
 | architect | software-architecture-design for L3/L4; technical-validation; api-design before contract-authoring; database-schema-design for data-model changes | skill-routing.md:64-68 |
 | planner | verify required skills listed per task; consume architect outputs (architecture + contracts + data design); never redesign architecture | skill-routing.md:70-73 |
-| implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; unit-test-authoring for business logic; karpathy-guidelines for surgical changes and avoiding overcomplication | skill-routing.md:75-78 |
+| implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; unit-test-authoring for business logic; karpathy-guidelines per its routing condition (skill-routing.md:24) | skill-routing.md:75-78 |
 | reviewer | verify implementation vs architecture; contract compliance; required-skills-used; unit-test-authoring adequacy standards | skill-routing.md:80-84 |
 | verifier | performance-testing when material; browser-verification for visible behavior; name applicable evidence class per requirement shape | skill-routing.md:86-89; evidence.md:1-19 |
 

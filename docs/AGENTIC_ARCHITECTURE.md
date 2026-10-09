@@ -356,16 +356,16 @@ session via `opencode.json` `instructions`.
 
 ---
 
-## 8. The eighty-six skills
+## 8. The eighty-seven skills
 
-There are **86 skills** in `.opencode/skills/`:
+There are **87 skills** in `.opencode/skills/`:
 
-- **15 framework-authored skills** — specialist knowledge for engineering domains:
+- **16 framework-authored skills** — specialist knowledge for engineering domains:
   `api-design`, `apple-ui`, `architecture-right-sizing`, `backend-python`,
   `browser-verification`, `contract-authoring`, `database-schema-design`,
-  `frontend-react`, `instinct`, `performance-testing`, `requirements-authoring`,
-  `retrospective`, `software-architecture-design`, `technical-validation`,
-  `unit-test-authoring`.
+  `frontend-react`, `instinct`, `karpathy-guidelines`, `performance-testing`,
+  `requirements-authoring`, `retrospective`, `software-architecture-design`,
+  `technical-validation`, `unit-test-authoring`.
 - **71 `gsd-*` distribution skills** — the GSD workflow system (planning, execution,
   review, docs, security, UI, debugging, etc.).
 
@@ -414,9 +414,11 @@ Matrix highlights (role → loads → produces):
 - **verifier** → `browser-verification`, `performance-testing` → verification
   artifacts with tool evidence (G-T1).
 
-> Note: the routing table above lists `security-research` for security concerns. In
-> this repository the actual skill directories are the 85 under `.opencode/skills/`;
-> a security-scoped agent should confirm the exact skill name before loading.
+> Note: the routing table lists `security-research` for security concerns, but this skill is
+> environment-provided (builtin/user scope) — it is not one of the 87 under `.opencode/skills/`,
+> so a fresh checkout may not have it. The canonical name is `security-research` (`security-review`
+> is an alias). Resolve it before loading; if it is absent, apply the Team Lead skill-availability
+> rule (`.opencode/agents/team-lead.md`): record the gap, never silently skip, never deadlock.
 
 ---
 
@@ -1151,7 +1153,7 @@ framework/
 .opencode/
   agents/                         40 agent definitions (7 core + 33 gsd-*)
   rules/                          9 standing rules
-  skills/                         86 skills (15 framework + 71 gsd-*)
+  skills/                         87 skills (16 framework + 71 gsd-*)
   skill-routing.md                central registry: condition → skill → agent
   skill-integration-matrix.md     binding contract: role → skill → artifact → gate
   tools/context-builder.ts        pointer resolver, capped excerpts

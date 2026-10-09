@@ -32,9 +32,21 @@ For each ask, determine:
 | Security research | yes/no | `security-research` |
 | Browser verification | yes/no | `browser-verification` |
 | Contract authoring | yes/no | `contract-authoring` |
+| Karpathy guidelines | yes/no | `karpathy-guidelines` |
 
 Record the matrix in the delegation prompt. The delegated agent MUST load every skill marked
 "yes". If an agent returns work without loading a required skill, reject the work.
+
+### Skill availability
+
+A skill marked "yes" may be environment-provided (builtin/user scope), not vendored in this
+repository, so it can be absent in a fresh checkout. Resolve each before delegating. If one
+cannot be resolved: never silently skip it and never deadlock silently - record a blocker
+(`write-blocker`, signal `CONTEXT_INSUFFICIENT`) naming the skill and the task, then either
+obtain the skill or, when the capability is not material to the declared depth, re-mark that
+matrix dimension "no" with the reason recorded and carry the limitation as an explicit
+assumption. A security-sensitive ask is never downgraded this way: it blocks until the skill
+is available.
 
 ### Ambiguity and Assumptions
 - State your assumptions explicitly. If uncertain, ask rather than guess. Do NOT guess.
