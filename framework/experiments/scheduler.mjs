@@ -12,8 +12,8 @@
 //
 // Ledger contract (state/ledger/runs.jsonl, append-only):
 //   { run_id, run_order, arm, profile, task_id, task_type, attempt_id,
-//     driver, status: STARTED|COMPLETED|FAILED, started_at, completed_at,
-//     pid }
+//     driver, framework_commit, status: STARTED|COMPLETED|FAILED, started_at,
+//     completed_at, pid }
 //   - the STARTED record is appended only AFTER the worker process exists,
 //     carrying its pid, so a killed scheduler always leaves an attributable
 //     trace of a run that actually began; the terminal record (last for the
@@ -48,7 +48,7 @@ import { fileURLToPath } from "node:url"
 import { buildPlan } from "./plan.mjs"
 import {
   stateDirs, ensureDirs, readLedger, readExcluded, appendLine,
-  loadManifestCorpus, readJson,
+  loadManifestCorpus, readJson, frameworkCommit,
 } from "./experiment_state.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -132,7 +132,7 @@ async function runOne(stateDir, manifestFile, corpusFile, driver, run, resolvedO
   const startRecord = {
     run_id: run.run_id, run_order: run.run_order, arm: run.arm,
     profile: run.profile, task_id: run.task_id, task_type: run.task_type,
-    attempt_id, driver, status: "STARTED", pid,
+    attempt_id, driver, framework_commit: frameworkCommit(), status: "STARTED", pid,
     started_at: startedAt, completed_at: null,
   }
   await appendLine(dirs.ledger, startRecord)

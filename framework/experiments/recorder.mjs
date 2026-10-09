@@ -101,6 +101,7 @@ async function reconcile(stateDir, manifestFile, corpusFile) {
       task_id: run.task_id,
       session_id: tele ? tele.session_id : null,
       attempt_id: led.attempt_id,
+      framework_commit: led.framework_commit ?? null,
       seed: manifest.seed,
       run_order: run.run_order,
       model_requested: tele ? tele.model_requested : null,

@@ -59,11 +59,19 @@ async function freeze(stateDir, manifestFile, corpusFile) {
   }
   const checksum = sha256Hex(raw.join("\n"))
 
+  // Control-plane provenance: the framework commit(s) that produced the runs.
+  // A single commit is the provenance; a mixed set is disclosed, never hidden.
+  const commits = [...new Set(
+    dataset.map((r) => r.framework_commit).filter((c) => c !== null && c !== undefined),
+  )].sort()
+
   const marker = {
     frozen: true,
     frozen_at: new Date().toISOString(),
     manifest_version: manifest.manifest_version,
     corpus_version: corpus.corpus_version,
+    framework_commit: commits.length === 1 ? commits[0] : null,
+    framework_commits: commits,
     run_count: dataset.length,
     dataset_file: "dataset/runs.jsonl",
     dataset_checksum: checksum,

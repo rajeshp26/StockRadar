@@ -5,6 +5,8 @@
 // are append-only JSONL; the dataset and the ledger are never rewritten.
 import { readFile, appendFile, mkdir } from "node:fs/promises"
 import { createHash } from "node:crypto"
+import { spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 import path from "node:path"
 
 export const LEDGER_FILE = "ledger/runs.jsonl"
@@ -23,6 +25,36 @@ export async function readJson(file) {
 
 export function sha256Hex(data) {
   return createHash("sha256").update(data).digest("hex")
+}
+
+// The framework (control-plane) commit under which a run executes. This is the
+// provenance that ties an experiment run to the agent/skill/rule set that
+// produced it - without it, a control-plane change between runs is invisible in
+// the frozen dataset. Precedence: an explicit FRAMEWORK_COMMIT override
+// (detached installs, tests), else the git HEAD of the repository containing
+// this module. Returns null when neither is available: capture records an
+// unknown, it never fabricates a version. Memoised - resolved at most once per
+// process, so a 40-run schedule does not shell out 40 times.
+let _frameworkCommit
+export function frameworkCommit() {
+  if (_frameworkCommit !== undefined) return _frameworkCommit
+  const override = process.env.FRAMEWORK_COMMIT
+  if (override && override.trim().length > 0) {
+    _frameworkCommit = override.trim()
+    return _frameworkCommit
+  }
+  try {
+    const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
+    const r = spawnSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" })
+    if (r.status === 0 && typeof r.stdout === "string" && r.stdout.trim().length > 0) {
+      _frameworkCommit = r.stdout.trim()
+      return _frameworkCommit
+    }
+  } catch {
+    // git unavailable - the commit is unknown, never fabricated
+  }
+  _frameworkCommit = null
+  return _frameworkCommit
 }
 
 export function stateDirs(state) {
