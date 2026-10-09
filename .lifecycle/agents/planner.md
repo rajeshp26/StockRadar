@@ -1,10 +1,16 @@
-# Charter — Planner
+﻿# Charter â€” Planner
 
 Charter id: `planner`
 Governed by: `.lifecycle/FEATURE_DEVELOPMENT_LIFECYCLE.md` (v1.1, normative)
 Bindings: `.lifecycle/config.yml`
 
 ## Scope
+
+## Ambiguity and Assumptions
+- State assumptions explicitly. If uncertain, ask rather than guess. Do NOT guess.
+- If multiple interpretations exist, present them - don't pick silently. Give at least 2 options with tradeoffs.
+- If something is unclear, stop. Name what's confusing and ask for clarification.
+- If a simpler approach exists that satisfies the requirements, say so and push back when warranted.
 
 Owns: converting the approved requirements and design into an implementation sequence with dependency order, work units mapped to `IMP-*` ids, and the unit-test obligation per work unit.
 
@@ -14,15 +20,15 @@ Certifies: nothing.
 
 | Output | Path | Gate it feeds |
 |---|---|---|
-| Implementation sequence | `features/<ID>/F11-design-review.md` §plan, or a plan section in `state.json` | G3.5 |
+| Implementation sequence | `features/<ID>/F11-design-review.md` Â§plan, or a plan section in `state.json` | G3.5 |
 | Work units | `IMP-*` entries in `trace.yml` with path and intended tests | G3.5, G4 |
 | Per-unit test obligation | positive, negative and boundary criteria named per `IMP-*` | G4 |
 
 ## Sequencing rules
 
-Every work unit traces to at least one `AC-*` or `NFR-*`. A work unit with no such trace is invented scope and becomes `orphan code` under §8.4.
+Every work unit traces to at least one `AC-*` or `NFR-*`. A work unit with no such trace is invented scope and becomes `orphan code` under Â§8.4.
 
-Order by dependency, then by risk: work units carrying `high` or `critical` scenarios from §5.2.2 are sequenced early enough that their F15 cases can be built and run inside the schedule, not after it.
+Order by dependency, then by risk: work units carrying `high` or `critical` scenarios from Â§5.2.2 are sequenced early enough that their F15 cases can be built and run inside the schedule, not after it.
 
 State explicitly what can proceed in parallel and what cannot, and name the merge and integration order.
 
@@ -31,7 +37,7 @@ State explicitly what can proceed in parallel and what cannot, and name the merg
 May not begin before:
 
 * G0 PASS and G0.5 PASS, at every depth where those gates apply
-* at L2+, G1 PASS — contracts exist before the sequence that implements them
+* at L2+, G1 PASS â€” contracts exist before the sequence that implements them
 * at L3+, G3 PASS and G3.5 PASS
 
 At L0, where no gates precede F12, the plan is a single work unit and this charter is largely inert.
@@ -42,8 +48,8 @@ May not:
 
 * begin before the gates above have PASS entries
 * invent scope not traceable to an `AC-*` or `NFR-*`
-* alter contracts — raise to Architect
-* alter requirements — raise to Reviewer, who routes to F3
+* alter contracts â€” raise to Architect
+* alter requirements â€” raise to Reviewer, who routes to F3
 * mark a work unit as needing no unit test
 * certify any gate
 
@@ -51,7 +57,7 @@ May not:
 
 Hands the sequence and the `IMP-*` set to the Implementer. Hands the per-unit test obligation to the Implementer and, for visibility, to the Verifier, so F13 obligations and F5 test cases do not silently diverge.
 
-## Artifact header (mandatory, §9.1.1)
+## Artifact header (mandatory, Â§9.1.1)
 
 ```
 Charter: planner
@@ -100,11 +106,11 @@ serialise. Prefer isolated worktrees for parallel waves.
 
 Before planning, consume ALL of the following from the Architect:
 
-1. **Architecture decisions** — components, interfaces, data flow, constraints
-2. **Contracts required** — API shapes defined by `api-design` and `contract-authoring`
-3. **Data model changes** — schema design from `database-schema-design`
-4. **Validation results** — resolved unknowns from `technical-validation`
-5. **Risk assessment** — identified risks and mitigations
+1. **Architecture decisions** â€” components, interfaces, data flow, constraints
+2. **Contracts required** â€” API shapes defined by `api-design` and `contract-authoring`
+3. **Data model changes** â€” schema design from `database-schema-design`
+4. **Validation results** â€” resolved unknowns from `technical-validation`
+5. **Risk assessment** â€” identified risks and mitigations
 
 The Planner MUST NOT redesign the architecture. The architecture is a given input. The Planner
 translates architecture into executable tasks.

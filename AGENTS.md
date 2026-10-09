@@ -1,14 +1,14 @@
-# Agent framework rules
+﻿# Agent framework rules
 
 Stable global rules only. Requirements, architecture, research, plans, and task history are
 retrieved dynamically through the GSD state adapter. Never inline them here.
 
-## Rule zero — non-duplication
+## Rule zero â€” non-duplication
 
 Do not duplicate capabilities already provided by OpenCode, GSD, the code intelligence provider,
 Git, or the host. Extend them through adapters and gates.
 
-## Rule one — do not invoke agents gratuitously
+## Rule one â€” do not invoke agents gratuitously
 
 An agent must not be invoked merely because it exists. Name the specific information or execution
 need that cannot be satisfied by the active agent, an existing skill, GSD, the code intelligence
@@ -32,7 +32,13 @@ the file in this run.
 
 Prefer pointers over copied content. Retrieve what you need; do not read broadly. Before acting,
 confirm the plan, referenced requirements, touched contracts, and relevant tests are readable.
-If something critical is missing, do not guess — return `CONTEXT_INSUFFICIENT` naming the item.
+If something critical is missing, do not guess â€” return `CONTEXT_INSUFFICIENT` naming the item.
+
+## Rule - ambiguity and assumptions
+State assumptions explicitly. If uncertain, ask rather than guess. Do NOT guess.
+If multiple interpretations exist, present them - don't pick silently. Give at least 2 options with tradeoffs.
+If something is unclear, stop. Name what's confusing and ask for clarification.
+If a simpler approach exists that satisfies the requirements, say so and push back when warranted.
 
 ## Gate evidence persistence
 
@@ -84,7 +90,7 @@ opportunistically inside an unrelated task.
 Magic UI, Aceternity, GSAP, and React Three Fiber are conditional. They require an entry in
 `framework/frontend/effect_justifications.yaml` naming a requirement ID, a file scope, and an
 approver. GSAP additionally requires a measured reason Motion is insufficient. An empty ledger
-means conditional tools are not permitted — permission is granted per requirement, not once
+means conditional tools are not permitted â€” permission is granted per requirement, not once
 per repository.
 
 Visible-behaviour requirements need browser evidence. `g6_browser.sh` exit 3 means

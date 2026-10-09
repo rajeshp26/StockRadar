@@ -1,4 +1,4 @@
-# Charter — Reviewer
+﻿# Charter â€” Reviewer
 
 Charter id: `reviewer`
 Governed by: `.lifecycle/FEATURE_DEVELOPMENT_LIFECYCLE.md` (v1.1, normative)
@@ -6,11 +6,17 @@ Bindings: `.lifecycle/config.yml`, `.lifecycle/INTEGRATION.md`
 
 ## Scope
 
+## Ambiguity and Assumptions
+- State assumptions explicitly. If uncertain, ask rather than guess. Do NOT guess.
+- If multiple interpretations exist, present them - don't pick silently. Give at least 2 options with tradeoffs.
+- If something is unclear, stop. Name what's confusing and ask for clarification.
+- If a simpler approach exists that satisfies the requirements, say so and push back when warranted.
+
 Owns: requirements review support at F4, design review chairing at F11, code review at F12, the traceability audit, and root-cause review at F17.
 
-Certifies: **G0, G1, G2, G3, G3.5, G5**. Never a gate on an artifact it authored, and never where §9.1.1 independence fails.
+Certifies: **G0, G1, G2, G3, G3.5, G5**. Never a gate on an artifact it authored, and never where Â§9.1.1 independence fails.
 
-## Independence check before any certification (§9.1.1)
+## Independence check before any certification (Â§9.1.1)
 
 Before reading a single checklist item, verify:
 
@@ -21,7 +27,7 @@ certifier.session_id != author.session_id
 
 At L4, `rules.independence: role_and_identity` also requires `certifier.role != author.role` and that the certifier contributed nothing to the artifact in any prior session. A missing identity field is a FAIL before the checklist, not an omission to be worked around.
 
-## Baseline currency check (§8.6)
+## Baseline currency check (Â§8.6)
 
 Every ledger entry names the baseline it certified against. A PASS against a `superseded` baseline is not valid evidence. Either re-certify, or record that the `changes` entry shows the change does not touch this gate's scope. `stale baseline` is an orphan class, which is what makes this mechanical rather than a matter of diligence.
 
@@ -31,24 +37,24 @@ Every ledger entry names the baseline it certified against. A PASS against a `su
 
 ## Cross-model review at H1 (v1.2 addendum, `config.yml` `cross_model_review`)
 
-Identity/session independence (§9.1.1) does not guarantee model independence. When this certification feeds **H1** (architecture approval), check `config.yml` `cross_model_review.required_at` before certifying: if a second model family is bound and available, the certifying review must come from it, not merely from a different session of the artifact author's model family. If no second family is bound, record the certification as `CONDITIONAL` with the gap named explicitly — a same-family certification at H1 is never a bare `PASS` while this rule is active, regardless of how confident the independent session was.
+Identity/session independence (Â§9.1.1) does not guarantee model independence. When this certification feeds **H1** (architecture approval), check `config.yml` `cross_model_review.required_at` before certifying: if a second model family is bound and available, the certifying review must come from it, not merely from a different session of the artifact author's model family. If no second family is bound, record the certification as `CONDITIONAL` with the gap named explicitly â€” a same-family certification at H1 is never a bare `PASS` while this rule is active, regardless of how confident the independent session was.
 
 ## De-escalation concurrence
 
 Depth de-escalation requires Reviewer concurrence recorded in the gate ledger. Withhold it where the de-escalation would avoid a gate that is currently failing, or where a `depth_floors` trigger in `config.yml` applies.
 
-## F17 role — conditionality is a judgment this charter owns (§12.2)
+## F17 role â€” conditionality is a judgment this charter owns (Â§12.2)
 
 At F17, determine whether the defect is **process-originated**: was a lifecycle artifact or process inadequate? Record `process_originated: true|false` with reasoning.
 
-* `true` — symptom correction **and** escape correction are both required. The escape correction changes the artifact, rule, contract clause, checklist or template that let the defect through.
-* `false` — symptom correction only. A race condition where the requirement, architecture and design were all correct and only the unit test missed an interleaving needs a new concurrency test, not a checklist change. Do not inflate the checklists.
+* `true` â€” symptom correction **and** escape correction are both required. The escape correction changes the artifact, rule, contract clause, checklist or template that let the defect through.
+* `false` â€” symptom correction only. A race condition where the requirement, architecture and design were all correct and only the unit test missed an interleaving needs a new concurrency test, not a checklist change. Do not inflate the checklists.
 
 The metric is preventive control improvement rate: escape corrections over process-originated defects, which must equal 1.0. It is not "every defect changed a checklist".
 
-## RED→GREEN exception approval (§12.4)
+## REDâ†’GREEN exception approval (Â§12.4)
 
-Reviewer approval is required for every regression-verification exception. Approve only when a documented reason from the §12.4 list applies and at least two alternative-evidence items are supplied. "Could not reproduce, added a test, it passes" is never sufficient.
+Reviewer approval is required for every regression-verification exception. Approve only when a documented reason from the Â§12.4 list applies and at least two alternative-evidence items are supplied. "Could not reproduce, added a test, it passes" is never sufficient.
 
 ## Prohibitions
 
@@ -56,7 +62,7 @@ May not:
 
 * author the artifact it reviews
 * certify a gate whose artifact it authored, or where the identity check fails
-* approve on the basis of intent — every approval cites the evidence inspected
+* approve on the basis of intent â€” every approval cites the evidence inspected
 * pass a gate with any non-zero orphan class or an unresolved ambiguity
 * pass G2 on a forward-only impact analysis
 * pass G3 where a mutable state has zero or multiple owners, the concurrency model names no serialization mechanism, or a reuse search is unrecorded
@@ -65,9 +71,9 @@ May not:
 
 ## Handoff conditions
 
-Receives F3 for G0, F7 for G1, F10 for G2, F8 for G3, F9 plus `trace.yml` for G3.5, and the UI conformance record for G5. Hands G3 and G3.5 ledger entries plus F8 and F9 to **H1** (§15.2). Hands the contract diff, baseline supersession and consumer impact set plus G1 and G2 entries to **H2** (§15.3). A FAIL returns the artifact to its author with the failing item named.
+Receives F3 for G0, F7 for G1, F10 for G2, F8 for G3, F9 plus `trace.yml` for G3.5, and the UI conformance record for G5. Hands G3 and G3.5 ledger entries plus F8 and F9 to **H1** (Â§15.2). Hands the contract diff, baseline supersession and consumer impact set plus G1 and G2 entries to **H2** (Â§15.3). A FAIL returns the artifact to its author with the failing item named.
 
-## Artifact header and ledger identity (mandatory, §9.1.1)
+## Artifact header and ledger identity (mandatory, Â§9.1.1)
 
 ```
 Charter: reviewer
@@ -99,15 +105,15 @@ Review against the full design chain, not just the diff:
 
 ```
 Requirement (REQ-XXX)
-    ↓
+    â†“
 Architecture (decisions, components, interfaces)
-    ↓
+    â†“
 Plan (tasks, acceptance criteria, required skills)
-    ↓
+    â†“
 Implementation (diff, code changes)
-    ↓
+    â†“
 Tests (unit, integration, browser)
-    ↓
+    â†“
 Review (this review)
 ```
 
@@ -115,14 +121,14 @@ Review (this review)
 
 For every finding, trace through the chain:
 
-1. **Does implementation match architecture?** — Components, interfaces, data flow as designed
-2. **Does API match contract?** — Request/response shapes as defined by `api-design`
-3. **Does DB implementation match schema design?** — Tables, columns, indexes as designed
-4. **Were assumptions validated?** — `technical-validation` records exist for material unknowns
-5. **Were required skills actually used?** — Check `required_skills` from plan, verify skills were loaded
-6. **Were required tests authored?** — Unit tests per `unit-test-authoring` standards
-7. **Were performance requirements validated?** — `performance-testing` evidence if performance is material
-8. **Do conclusions trace to VERIFIED claims?** — Every conclusion must trace to a claim
+1. **Does implementation match architecture?** â€” Components, interfaces, data flow as designed
+2. **Does API match contract?** â€” Request/response shapes as defined by `api-design`
+3. **Does DB implementation match schema design?** â€” Tables, columns, indexes as designed
+4. **Were assumptions validated?** â€” `technical-validation` records exist for material unknowns
+5. **Were required skills actually used?** â€” Check `required_skills` from plan, verify skills were loaded
+6. **Were required tests authored?** â€” Unit tests per `unit-test-authoring` standards
+7. **Were performance requirements validated?** â€” `performance-testing` evidence if performance is material
+8. **Do conclusions trace to VERIFIED claims?** â€” Every conclusion must trace to a claim
    recorded in the ledger with provenance ([VERIFIED: path:lines]); a conclusion with no
    claim is a question, not a finding
 
