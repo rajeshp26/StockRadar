@@ -725,6 +725,234 @@ class TestIstHandling:
 
 
 # ---------------------------------------------------------------------------
+# IST relocation pairing tests
+# ---------------------------------------------------------------------------
+
+class TestIstRelocationPairing:
+    """Paired InternalSecurityTransfer legs relocate instead of selling.
+
+    A leg is PAIRED when its (symbol, currency, |quantity|) key has an
+    opposite-sign leg in the same account's COMPLETE event log. Paired legs are
+    a transfer, not a trade: the outbound leg leaves the account without a sale
+    (the dip stays visible, no fake realized loss) and parks its original cost
+    basis; the matching inbound leg restores that basis. Unpaired legs keep
+    today's buy/FIFO-sell behavior exactly.
+    """
+
+    def _make_engine(self, mock_client):
+        store = EventStore(client=mock_client)
+        return ReplayEngine(store)
+
+    def _replay(self, mock_client, events, target_date):
+        mock_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
+        return self._make_engine(mock_client).replay_to_date(1, target_date)
+
+    def _buy_event(self, account_id, company_id, qty, price, symbol="PLTR", txn_date="2024-11-01"):
+        return {
+            "event_type": "transaction_imported",
+            "aggregate_id": f"account_{account_id}",
+            "aggregate_type": "account",
+            "data": {
+                "account_id": account_id, "company_id": company_id,
+                "activity_type": "Trade", "symbol": symbol,
+                "quantity": qty, "unit_price": float(price),
+                "commission": 0, "net_cash_amount": float(-(qty * price)),
+                "currency": "USD", "transaction_date": txn_date,
+            },
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+
+    def _sell_event(self, account_id, company_id, qty, price, symbol="PLTR", txn_date="2025-01-15"):
+        return {
+            "event_type": "transaction_imported",
+            "aggregate_id": f"account_{account_id}",
+            "aggregate_type": "account",
+            "data": {
+                "account_id": account_id, "company_id": company_id,
+                "activity_type": "Trade", "symbol": symbol,
+                "quantity": qty, "unit_price": float(price),
+                "commission": 0, "net_cash_amount": float(abs(qty) * price),
+                "currency": "USD", "transaction_date": txn_date,
+            },
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+
+    def _ist_event(self, account_id, company_id, qty, net_cash_amount, symbol="PLTR", txn_date="2024-12-23"):
+        return {
+            "event_type": "transaction_imported",
+            "aggregate_id": f"account_{account_id}",
+            "aggregate_type": "account",
+            "data": {
+                "account_id": account_id, "company_id": company_id,
+                "activity_type": "InternalSecurityTransfer", "symbol": symbol,
+                "quantity": qty, "unit_price": None,
+                "commission": None, "net_cash_amount": float(net_cash_amount),
+                "currency": "USD", "transaction_date": txn_date,
+            },
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+
+    def test_paired_round_trip_restores_original_basis(self, mock_supabase_client):
+        """Out 2024-12-23, in 2025-05-13: position returns with its original cost.
+
+        Original lot date and trade date survive the round trip, and no gain or
+        loss was realized at the gap in between.
+        """
+        events = [
+            self._buy_event(1, 10, 40, 26.99, txn_date="2024-11-01"),
+            self._ist_event(1, 10, -40, -1079.60, txn_date="2024-12-23"),
+            self._ist_event(1, 10, 40, 1079.60, txn_date="2025-05-13"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2025, 6, 30))
+
+        h = state.holdings[10]
+        assert h.quantity == Decimal("40")
+        assert h.total_cost == Decimal("1079.60")
+        assert h.average_cost == Decimal("26.99")
+        assert h.realized_gain_loss == Decimal("0")
+        assert len(h.lots) == 1
+        assert h.lots[0]["quantity"] == Decimal("40")
+        assert h.lots[0]["cost_per_share"] == Decimal("26.99")
+        assert h.lots[0]["date"] == date(2024, 11, 1)  # original lot date preserved
+        assert h.trade_date == date(2024, 11, 1)       # original trade date preserved
+
+    def test_gap_date_replay_keeps_dip_visible_and_basis_parked(self, mock_supabase_client):
+        """At 2024-12-31 the position has genuinely left -- no fake $0 sale.
+
+        The dip stays visible (too many shares to hold during the gap), the
+        original basis is parked rather than booked as a realized loss, and the
+        pair key is known from the COMPLETE log even before the inbound leg's
+        date.
+        """
+        events = [
+            self._buy_event(1, 10, 40, 26.99, txn_date="2024-11-01"),
+            self._ist_event(1, 10, -40, -1079.60, txn_date="2024-12-23"),
+            self._ist_event(1, 10, 40, 1079.60, txn_date="2025-05-13"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2024, 12, 31))
+
+        # Pairing sees the complete log, so the key is already known at the gap.
+        assert state.ist_paired_keys == {("PLTR", "USD", 40.0)}
+        # The securities genuinely left the tracked account.
+        assert 10 not in state.holdings
+        # Original basis is parked, not booked as a fake $0 realized loss.
+        parked = state.relocated_basis[("PLTR", "USD", 40.0)]
+        assert len(parked) == 1
+        assert parked[0]["quantity"] == Decimal("40")
+        assert parked[0]["total_cost"] == Decimal("1079.60")
+        assert parked[0]["average_cost"] == Decimal("26.99")
+        assert parked[0]["trade_date"] == date(2024, 11, 1)
+        assert len(parked[0]["lots"]) == 1
+        assert parked[0]["lots"][0]["date"] == date(2024, 11, 1)
+
+    def test_unpaired_outbound_keeps_fifo_sale(self, mock_supabase_client):
+        """A lone outbound IST leg is not a relocation: today's FIFO sale stays.
+
+        Zero-proceeds sale (@ unit_price None) books the full cost as realized
+        loss -- the pre-fix behavior for legs whose counterpart is elsewhere.
+        """
+        events = [
+            self._buy_event(1, 10, 10, 100, txn_date="2024-11-01"),
+            self._ist_event(1, 10, -4, -400.00, txn_date="2024-12-23"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2024, 12, 31))
+
+        assert state.ist_paired_keys == frozenset()
+        assert state.relocated_basis == {}
+        h = state.holdings[10]
+        assert h.quantity == Decimal("6")
+        assert h.total_cost == Decimal("600")
+        assert h.realized_gain_loss == Decimal("-400")
+
+    def test_unpaired_inbound_keeps_nca_cost(self, mock_supabase_client):
+        """A lone inbound IST leg buys at net_cash_amount / quantity as before."""
+        events = [
+            self._ist_event(1, 10, 5, 500.00, txn_date="2025-05-13"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2025, 6, 30))
+
+        assert state.ist_paired_keys == frozenset()
+        h = state.holdings[10]
+        assert h.quantity == Decimal("5")
+        assert h.average_cost == Decimal("100")
+        assert h.total_cost == Decimal("500")
+
+    def test_trade_sell_never_relocates(self, mock_supabase_client):
+        """A Trade sell is never relocated, even with an IST inbound of matching
+        quantity: reconciliation counts transfer legs only, so the keys cannot
+        collide, and the handler only consults pairing for transfer events."""
+        events = [
+            self._buy_event(1, 10, 40, 26.99, txn_date="2024-11-01"),
+            self._sell_event(1, 10, -40, 30, txn_date="2025-01-15"),
+            self._ist_event(1, 10, 40, 1079.60, txn_date="2025-05-13"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2025, 6, 30))
+
+        assert state.ist_paired_keys == frozenset()  # lone IST inbound, no IST outbound
+        assert state.relocated_basis == {}
+        # Trade sell: buy 40 @ 26.99 = -1079.60; sell 40 @ 30 = +1200 proceeds.
+        assert state.cash_balance == Decimal("120.40")
+        # The lone IST inbound is unpaired, so it buys at nca on 2025-05-13 --
+        # it does NOT restore the 2024-11-01 Trade basis.
+        h = state.holdings[10]
+        assert h.quantity == Decimal("40")
+        assert h.total_cost == Decimal("1079.60")
+        assert len(h.lots) == 1
+        assert h.lots[0]["date"] == date(2025, 5, 13)
+
+    def test_float_noise_outbound_still_pairs(self, mock_supabase_client):
+        """-10.0000001 and +10.0 round to the same pair key (6dp precision)."""
+        events = [
+            self._buy_event(1, 10, 10, 100, txn_date="2024-11-01"),
+            self._ist_event(1, 10, -10.0000001, -1000.00001, txn_date="2024-12-23"),
+            self._ist_event(1, 10, 10.0, 1000.00, txn_date="2025-05-13"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2025, 6, 30))
+
+        assert state.ist_paired_keys == {("PLTR", "USD", 10.0)}
+        h = state.holdings[10]
+        assert h.quantity == Decimal("10")
+        assert h.total_cost == Decimal("1000")
+        assert h.realized_gain_loss == Decimal("0")
+
+    def test_partial_outbound_parks_only_sold_and_inbound_merges(self, mock_supabase_client):
+        """Out -4 of a 10-share holding parks 4; inbound +4 merges into the 6 left."""
+        events = [
+            self._buy_event(1, 10, 10, 100, txn_date="2024-11-01"),
+            self._ist_event(1, 10, -4, -400.00, txn_date="2024-12-23"),
+            self._ist_event(1, 10, 4, 400.00, txn_date="2025-05-13"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2025, 6, 30))
+
+        h = state.holdings[10]
+        assert h.quantity == Decimal("10")
+        assert h.total_cost == Decimal("1000")
+        assert h.average_cost == Decimal("100")
+        assert h.realized_gain_loss == Decimal("0")
+        assert len(h.lots) == 2
+        assert h.lots[0]["quantity"] == Decimal("6")
+        assert h.lots[1]["quantity"] == Decimal("4")
+        assert h.lots[1]["date"] == date(2024, 11, 1)  # restored fragment keeps original date
+
+    def test_inbound_before_outbound_falls_back_to_nca_buy(self, mock_supabase_client):
+        """An inbound leg processed before anything is parked cannot be restored:
+        it buys at nca; the later outbound relocates that fresh basis. No crash."""
+        events = [
+            self._ist_event(1, 10, 40, 5000.00, txn_date="2025-05-13"),
+            self._ist_event(1, 10, -40, -5000.00, txn_date="2025-06-11"),
+        ]
+        state = self._replay(mock_supabase_client, events, date(2025, 7, 1))
+
+        # inbound: restore finds nothing parked -> nca buy 40 @ 125
+        # outbound: paired -> relocates the nca basis out; nothing left to hold
+        assert 10 not in state.holdings
+        parked = state.relocated_basis[("PLTR", "USD", 40.0)]
+        assert parked[0]["quantity"] == Decimal("40")
+        assert parked[0]["total_cost"] == Decimal("5000")
+        assert parked[0]["average_cost"] == Decimal("125")
+
+
+# ---------------------------------------------------------------------------
 # FIFO sell fallback tests
 # ---------------------------------------------------------------------------
 

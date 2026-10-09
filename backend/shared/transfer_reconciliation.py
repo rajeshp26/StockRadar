@@ -41,6 +41,7 @@ __all__ = [
     "TRANSFER_ACTIVITY_TYPE",
     "TransferReconciliation",
     "UnpairedTransfer",
+    "pair_key",
     "reconcile_transfers",
 ]
 
@@ -87,6 +88,7 @@ class TransferReconciliation:
 
     transfer_count: int = 0
     paired_count: int = 0
+    paired_keys: frozenset[tuple[Any, ...]] = frozenset()
     unpaired: tuple[UnpairedTransfer, ...] = ()
 
     @property
@@ -139,6 +141,17 @@ def _pair_key(payload: Mapping[str, Any]) -> tuple[Any, ...] | None:
         str(currency).upper(),
         round(abs(quantity), _QUANTITY_PRECISION),
     )
+
+
+def pair_key(payload: Mapping[str, Any]) -> tuple[Any, ...] | None:
+    """Public pairing identity of a transfer payload.
+
+    ``(symbol, currency, |quantity| rounded to 6dp)``, or None when the quantity
+    is missing or unparseable. Exposed so consumers (the replay engine's IST
+    relocation) key events with exactly the identity reconciliation paired its
+    legs on, instead of re-deriving a private copy.
+    """
+    return _pair_key(payload)
 
 
 def _unpaired(payload: Mapping[str, Any], reason: str) -> UnpairedTransfer:
@@ -194,12 +207,15 @@ def reconcile_transfers(
         (outbound if quantity < 0 else inbound)[key].append(payload)
 
     paired_legs = 0
+    paired_keys: set[tuple[Any, ...]] = set()
     unpaired: list[UnpairedTransfer] = []
 
     for key in set(outbound) | set(inbound):
         outs = outbound.get(key, [])
         ins = inbound.get(key, [])
         pairs = min(len(outs), len(ins))
+        if pairs:
+            paired_keys.add(key)
         paired_legs += pairs * 2
         if pairs < len(outs):
             unpaired.extend(
@@ -223,5 +239,6 @@ def reconcile_transfers(
     return TransferReconciliation(
         transfer_count=len(transfers),
         paired_count=paired_legs,
+        paired_keys=frozenset(paired_keys),
         unpaired=tuple(unpaired),
     )

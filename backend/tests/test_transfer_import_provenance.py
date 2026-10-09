@@ -395,3 +395,36 @@ class TestTransferReconciliation:
         assert report.paired_count == 2
         assert "2/3" in report.summary()
         assert "1 unpaired" in report.summary()
+
+
+class TestReplayExposesPairedKeys:
+    """The replay state exposes the pair keys reconciliation derived.
+
+    ``replay_to_date`` precomputes ``AccountState.ist_paired_keys`` from the
+    account's complete event log so the IST relocation handler can decide each
+    leg without re-scanning history. This pins that exposure: the same set
+    ``reconcile_transfers`` pairs must be visible on the replayed state, and a
+    single unpaired leg must leave it empty rather than None (computed, no
+    pairs) -- the distinction the relocation handler relies on.
+    """
+
+    def test_within_account_pair_exposes_key_on_replay_state(self, mock_supabase_client):
+        # _replay_state wraps each payload in {"data": p}, so bare payloads
+        # are required -- not the {"data": {...}} envelopes _transfer returns.
+        state = _replay_state(
+            mock_supabase_client,
+            [
+                _transfer(account_id=1, symbol="PLTR", quantity=-40.0, net_cash_amount=-1079.60)["data"],
+                _transfer(account_id=1, symbol="PLTR", quantity=40.0, net_cash_amount=1079.60)["data"],
+            ],
+        )
+        assert state.ist_paired_keys == {("PLTR", "USD", 40.0)}
+
+    def test_single_leg_leaves_pair_keys_empty(self, mock_supabase_client):
+        state = _replay_state(
+            mock_supabase_client,
+            [
+                _transfer(account_id=1, symbol="PLTR", quantity=-40.0, net_cash_amount=-1079.60)["data"],
+            ],
+        )
+        assert state.ist_paired_keys == frozenset()

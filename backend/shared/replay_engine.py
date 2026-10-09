@@ -17,6 +17,7 @@ from shared.snapshot_builder import (
     convert_holding_fx,
 )
 from shared.split_utils import extract_event_date
+from shared.transfer_reconciliation import pair_key, reconcile_transfers
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,10 @@ class AccountState:
     checkpoint_date: date | None = None
     cash_by_currency: dict[str, Decimal] = field(default_factory=dict)
     net_deposits_by_currency: dict[str, Decimal] = field(default_factory=dict)
+    #: None = not yet computed; empty = computed, no pairs. replay_to_date
+    #: precomputes it; manual dispatch fills it lazily on first IST leg.
+    ist_paired_keys: frozenset[tuple[Any, ...]] | None = None
+    relocated_basis: dict[tuple[Any, ...], list[dict]] = field(default_factory=dict)
 
 
 @dataclass
@@ -157,6 +162,47 @@ def _cdr_lot_legs(
     return legs
 
 
+def _fifo_cost_and_removed(
+    lots: list[dict],
+    qty: Decimal,
+    fallback_average_cost: Decimal,
+) -> tuple[Decimal, list[dict], Decimal]:
+    """Remove ``qty`` shares FIFO from ``lots`` in place.
+
+    Mirrors the sell loop exactly: full lots are popped, a partially consumed
+    front lot is reduced in place, and any quantity the lots could not cover is
+    priced at ``fallback_average_cost``. Returns
+    ``(cost_of_sold, removed_fragments, leftover_qty)`` where ``removed_fragments``
+    are *copies* of the consumed lot pieces (full or partial) and ``leftover_qty``
+    is the uncovered remainder after the fallback is priced in --, so a relocation
+    can park the fragments plus a synthetic fallback lot without aliasing the
+    live lots.
+    """
+    cost_of_sold = Decimal("0")
+    remaining_to_remove = qty
+    removed_fragments: list[dict] = []
+    while remaining_to_remove > 0 and lots:
+        front = lots[0]
+        lot_qty = front["quantity"]
+        lot_cost = front["cost_per_share"]
+        if lot_qty <= remaining_to_remove:
+            cost_of_sold += lot_qty * lot_cost
+            remaining_to_remove -= lot_qty
+            removed_fragments.append(dict(front))
+            lots.pop(0)
+        else:
+            cost_of_sold += remaining_to_remove * lot_cost
+            removed_fragments.append({**front, "quantity": remaining_to_remove})
+            front["quantity"] -= remaining_to_remove
+            remaining_to_remove = Decimal("0")
+    leftover_qty = remaining_to_remove
+    if qty > 0 and leftover_qty > 0 and fallback_average_cost:
+        cost_of_sold += leftover_qty * fallback_average_cost
+    elif cost_of_sold == 0 and qty > 0 and fallback_average_cost:
+        cost_of_sold = qty * fallback_average_cost
+    return cost_of_sold, removed_fragments, leftover_qty
+
+
 class ReplayEngine:
     """Rebuild portfolio state from the immutable event log up to any date."""
 
@@ -257,6 +303,12 @@ class ReplayEngine:
             holding = state.holdings.get(cid)
 
             if quantity > 0:  # Buy or inbound IST
+                if (
+                    activity_type == "InternalSecurityTransfer"
+                    and self._is_paired_leg(state, data)
+                    and self._restore_relocated(state, cid, data, txn_date)
+                ):
+                    return
                 if activity_type == "InternalSecurityTransfer":
                     # IST: derive cost from net_cash_amount (value of securities transferred)
                     nca = abs(_decimal(data.get("net_cash_amount")))
@@ -287,6 +339,12 @@ class ReplayEngine:
             elif quantity < 0:  # Sell or outbound IST
                 sell_qty = abs(quantity)
                 if holding:
+                    if (
+                        activity_type == "InternalSecurityTransfer"
+                        and self._is_paired_leg(state, data)
+                    ):
+                        self._relocate_outbound(state, cid, holding, data, sell_qty)
+                        return
                     sold = min(sell_qty, holding.quantity)
                     if sell_qty > holding.quantity:
                         logger.warning(
@@ -294,26 +352,9 @@ class ReplayEngine:
                             state.account_id, cid, sell_qty, holding.quantity,
                         )
                     sale_proceeds = sold * unit_price
-                    # FIFO cost basis: remove lots from front, accumulate cost
-                    cost_of_sold = Decimal("0")
-                    remaining_to_remove = sold
-                    while remaining_to_remove > 0 and holding.lots:
-                        front = holding.lots[0]
-                        lot_qty = front["quantity"]
-                        lot_cost = front["cost_per_share"]
-                        if lot_qty <= remaining_to_remove:
-                            cost_of_sold += lot_qty * lot_cost
-                            remaining_to_remove -= lot_qty
-                            holding.lots.pop(0)
-                        else:
-                            cost_of_sold += remaining_to_remove * lot_cost
-                            front["quantity"] -= remaining_to_remove
-                            remaining_to_remove = Decimal("0")
-                    # Fallback: if lots didn't cover the full sell, use average_cost for remainder
-                    if sold > 0 and remaining_to_remove > 0 and holding.average_cost:
-                        cost_of_sold += remaining_to_remove * holding.average_cost
-                    elif cost_of_sold == 0 and sold > 0 and holding.average_cost:
-                        cost_of_sold = sold * holding.average_cost
+                    cost_of_sold, _, _ = _fifo_cost_and_removed(
+                        holding.lots, sold, holding.average_cost
+                    )
                     holding.realized_gain_loss += sale_proceeds - cost_of_sold
                     holding.total_cost -= cost_of_sold
                     holding.quantity -= sold
@@ -327,6 +368,137 @@ class ReplayEngine:
                         holding.average_cost = total_lot_cost / total_qty if total_qty else Decimal("0")
                     if holding.quantity <= 0:
                         del state.holdings[cid]
+
+    def _is_paired_leg(self, state: AccountState, data: dict) -> bool:
+        """Whether this IST leg's pair key is in the account's paired set.
+
+        The paired set is normally precomputed by ``replay_to_date`` from the
+        account's complete log. When it is absent -- a caller drove the handler
+        directly without replaying -- it is computed lazily from the account's
+        full event log, so pairing is identical to a replay.
+        """
+        if state.ist_paired_keys is None:
+            state.ist_paired_keys = self._pair_keys_for_account(state.account_id)
+        key = pair_key(data)
+        return key is not None and key in state.ist_paired_keys
+
+    def _pair_keys_for_account(self, account_id: int) -> frozenset[tuple[Any, ...]]:
+        """IST pair keys for an account from its complete event log."""
+        events = self.event_store.get_all_events(aggregate_type="account")
+        account_events = [
+            ev
+            for ev in events
+            if _parse_account_id(ev.get("aggregate_id", "")) == account_id
+        ]
+        return reconcile_transfers(account_events).paired_keys
+
+    def _take_parked(self, state: AccountState, key: tuple[Any, ...]) -> dict | None:
+        """Pop the FIFO head of the parked relocation batches for a pair key."""
+        batches = state.relocated_basis.get(key)
+        if not batches:
+            return None
+        return batches.pop(0)
+
+    def _relocate_outbound(
+        self,
+        state: AccountState,
+        cid: int,
+        holding: HoldingState,
+        data: dict,
+        sell_qty: Decimal,
+    ) -> None:
+        """Move a paired outbound IST leg out of the account without a sale.
+
+        The securities genuinely leave the tracked account, so the portfolio dip
+        at the gap date stays visible; no gain or loss is realized. The removed
+        shares' original basis is parked by pair key, and the inbound leg
+        restores it when it arrives.
+        """
+        sold = min(sell_qty, holding.quantity)
+        if sell_qty > holding.quantity:
+            logger.warning(
+                "IST relocation truncation: account=%s company=%s sell_qty=%s > holding_qty=%s",
+                state.account_id, cid, sell_qty, holding.quantity,
+            )
+        cost_of_sold, removed_fragments, leftover = _fifo_cost_and_removed(
+            holding.lots, sold, holding.average_cost
+        )
+        if leftover > 0 and holding.average_cost:
+            removed_fragments = [
+                *removed_fragments,
+                {
+                    "quantity": leftover,
+                    "cost_per_share": holding.average_cost,
+                    "date": holding.trade_date,
+                },
+            ]
+        key = pair_key(data)
+        batches = state.relocated_basis.setdefault(key, [])
+        batches.append(
+            {
+                "symbol": data.get("symbol"),
+                "quantity": sold,
+                "total_cost": cost_of_sold,
+                "average_cost": cost_of_sold / sold if sold else Decimal("0"),
+                "lots": removed_fragments,
+                "trade_date": holding.trade_date,
+            }
+        )
+        holding.total_cost -= cost_of_sold
+        holding.quantity -= sold
+        if holding.lots:
+            total_qty = sum(lot["quantity"] for lot in holding.lots)
+            total_lot_cost = sum(
+                lot["quantity"] * lot["cost_per_share"]
+                for lot in holding.lots
+            )
+            holding.average_cost = total_lot_cost / total_qty if total_qty else Decimal("0")
+        if holding.quantity <= 0:
+            del state.holdings[cid]
+
+    def _restore_relocated(
+        self,
+        state: AccountState,
+        cid: int,
+        data: dict,
+        txn_date: date | None,
+    ) -> bool:
+        """Restore a paired inbound IST leg from its parked basis.
+
+        Re-applies the original lot records, total cost and trade date the
+        matching outbound leg parked, so the position returns with its original
+        cost basis (merged into a holding re-bought in the meantime). Returns
+        False when nothing is parked yet -- e.g. the inbound leg precedes its
+        outbound in the stream -- and the caller falls back to the normal
+        purchase path.
+        """
+        key = pair_key(data)
+        parked = self._take_parked(state, key)
+        if parked is None:
+            return False
+        restored_qty = parked["quantity"]
+        restored_cost = parked["total_cost"]
+        lots = [dict(lot) for lot in parked.get("lots", [])]
+        trade_date = parked.get("trade_date") or txn_date
+        holding = state.holdings.get(cid)
+        if holding:
+            new_qty = holding.quantity + restored_qty
+            new_cost = holding.total_cost + restored_cost
+            holding.quantity = new_qty
+            holding.total_cost = new_cost
+            holding.average_cost = new_cost / new_qty if new_qty else Decimal("0")
+            holding.lots.extend(lots)
+        else:
+            state.holdings[cid] = HoldingState(
+                company_id=cid,
+                symbol=data.get("symbol") or "?",
+                quantity=restored_qty,
+                total_cost=restored_cost,
+                average_cost=restored_cost / restored_qty if restored_qty else Decimal("0"),
+                trade_date=trade_date,
+                lots=lots,
+            )
+        return True
 
     def _handle_split(self, state: AccountState, event: dict) -> None:
         """Adjust holdings for a stock split event."""
@@ -396,11 +568,13 @@ class ReplayEngine:
         events = self.event_store.get_all_events(
             aggregate_type="account",
         )
+        all_account_events = []
         account_events = []
         for ev in events:
             ev_account_id = _parse_account_id(ev.get("aggregate_id", ""))
             if ev_account_id != account_id:
                 continue
+            all_account_events.append(ev)
             ev_date = self._get_event_date(ev)
             if ev_date is not None and ev_date <= target_date:
                 account_events.append(ev)
@@ -408,6 +582,10 @@ class ReplayEngine:
         account_events.sort(key=lambda e: self._get_event_date(e) or date.min)
 
         state = AccountState(account_id=account_id)
+        # Pairing sees the account's COMPLETE log, not just what happened by the
+        # target date: the two legs of a relocation can straddle any single date,
+        # and the pair decision must be identical at every replay date.
+        state.ist_paired_keys = reconcile_transfers(all_account_events).paired_keys
 
         handled: dict[str, int] = {}
         skipped_unknown: list[str] = []
