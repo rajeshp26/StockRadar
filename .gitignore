@@ -151,6 +151,20 @@ backend/scripts/e2e_verify_*.py
 backend/scripts/find_*.py
 backend/scripts/_t02_*
 
+# IST/snapshot investigation tooling (one-off; superseded by
+# committed rebuild_account_snapshots.py / reconcile_snapshots.py)
+backend/scripts/adjudicate_blk026_claims.py
+backend/scripts/apply_sql_migration.py
+backend/scripts/diff_holding_provenance_keys.py
+backend/scripts/fix_cdr_holdings.py
+backend/scripts/introspect_provenance_columns.py
+backend/scripts/inventory_mixed_cdr_lots.py
+backend/scripts/reconcile_split_events.py
+backend/scripts/report_price_history_coverage.py
+backend/scripts/report_snapshot_spikes.py
+backend/scripts/repro_merge_tail.py
+backend/scripts/run_snapshot_traced.py
+
 # Diagnostic outputs and scratch state
 backend/scripts/_*.out
 backend/verification_output/
@@ -166,6 +180,10 @@ backend/blk*.json
 # Frontend scratch probes
 web/public/*-probe.html
 web/vitest.*.tmp.config.ts
+
+# Raw financial data analysis workstream (personal portfolio data; not an
+# application asset). Contains real-performance.json / baseline exports.
+web/scripts/
 
 # Root-level scratch state and generated verification output
 /.blocker_*.json
