@@ -252,6 +252,8 @@ class TestDelistedSymbolFiltering:
         assert "CS" in scheduler.skipped_symbols
         assert "CMA" in scheduler.skipped_symbols
         assert "WBA" in scheduler.skipped_symbols
+        assert "PSYK" in scheduler.skipped_symbols
+        assert "HYLD" in scheduler.skipped_symbols
 
     def test_max_price_failures_default(self):
         from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
@@ -359,3 +361,51 @@ class TestDelistedSymbolPlannerGuard:
         assert "AAPL" in symbols
         assert "BK" in symbols
         assert "WBA" not in symbols
+
+
+class TestStockdex403Handling:
+    def test_403_blocks_after_three_consecutive(self, monkeypatch):
+        from providers.stockdex_provider import StockdexMacrotrendsProvider
+
+        p = StockdexMacrotrendsProvider()
+        calls = []
+
+        def bad(*args, **kwargs):
+            calls.append(1)
+            raise RuntimeError("Failed to fetch URL (status 403)")
+
+        monkeypatch.setattr(p, "_get_raw_dataframe", bad)
+
+        assert p.get_quarterly_income_statement_df("TBD").empty
+        assert p.get_quarterly_income_statement_df("TBD").empty
+        assert p.get_quarterly_income_statement_df("TBD").empty
+        assert p.get_quarterly_income_statement_df("TBD").empty
+
+        assert p.is_symbol_blocked("TBD")
+        assert len(calls) == 3
+
+    def test_403_does_not_block_other_symbol(self, monkeypatch):
+        from providers.stockdex_provider import StockdexMacrotrendsProvider
+
+        p = StockdexMacrotrendsProvider()
+        calls = []
+
+        def bad_tbd(*args, **kwargs):
+            calls.append("tbd")
+            raise RuntimeError("Failed to fetch URL (status 403)")
+
+        def ok_other(*args, **kwargs):
+            calls.append("other")
+            import pandas as pd
+            return pd.DataFrame({"2024-01-01": [1.0]}, index=["Total Revenue"])
+
+        monkeypatch.setattr(p, "_get_raw_dataframe", bad_tbd)
+        p.get_quarterly_income_statement_df("TBD")
+        p.get_quarterly_income_statement_df("TBD")
+        p.get_quarterly_income_statement_df("TBD")
+
+        monkeypatch.setattr(p, "_get_raw_dataframe", ok_other)
+        res = p.get_quarterly_income_statement_df("OTHER")
+        assert not res.empty
+        assert p.is_symbol_blocked("TBD")
+        assert not p.is_symbol_blocked("OTHER")

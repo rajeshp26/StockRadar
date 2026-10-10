@@ -98,10 +98,37 @@ class StockdexMacrotrendsProvider:
         self._cooldown_until: float = 0.0
         self._finviz_cooldown_until: float = 0.0
         self._consecutive_429: int = 0
+        self._symbol_403_counts: dict[str, int] = {}
+        self._symbol_403_until: dict[str, float] = {}
+        self._blocked_403_symbols: set[str] = set()
         logger.info("StockdexMacrotrendsProvider initialized")
 
     def is_rate_limited(self) -> bool:
         return time.monotonic() < self._cooldown_until
+
+    def is_symbol_blocked(self, symbol: str) -> bool:
+        now = time.monotonic()
+        until = self._symbol_403_until.get(symbol)
+        if until is not None and now >= until:
+            self._symbol_403_counts.pop(symbol, None)
+            self._symbol_403_until.pop(symbol, None)
+            self._blocked_403_symbols.discard(symbol)
+        return symbol in self._blocked_403_symbols
+
+    def _register_symbol_failure(self, symbol: str) -> None:
+        now = time.monotonic()
+        c = self._symbol_403_counts.get(symbol, 0) + 1
+        self._symbol_403_counts[symbol] = c
+        if c >= 3:
+            self._blocked_403_symbols.add(symbol)
+            self._symbol_403_until[symbol] = now + 300
+            self._symbol_403_counts.pop(symbol, None)
+
+    def _handle_fetch_error(self, symbol: str, err: Exception) -> None:
+        estr = str(err)
+        if "403" in estr or "Forbidden" in estr or "forbidden" in estr:
+            self._register_symbol_failure(symbol)
+
 
     # ------------------------------------------------------------------
     # Public statement accessors
@@ -179,6 +206,11 @@ class StockdexMacrotrendsProvider:
                 "[STOCKDEX][%s] Macrotrends rate-limited, skipping", symbol,
             )
             return pd.DataFrame()
+        if self.is_symbol_blocked(symbol):
+            logger.debug(
+                "[STOCKDEX][%s] symbol blocked by 403 history, skipping", symbol,
+            )
+            return pd.DataFrame()
         try:
             raw_df = self._get_raw_dataframe(period, statement, symbol)
             if raw_df is None or raw_df.empty:
@@ -203,6 +235,7 @@ class StockdexMacrotrendsProvider:
             )
             return pd.DataFrame()
         except Exception as e:
+            self._handle_fetch_error(symbol, e)
             estr = str(e)
             if "429" in estr or "Too Many Requests" in estr:
                 self._consecutive_429 += 1
