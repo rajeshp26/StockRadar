@@ -269,13 +269,17 @@ class EdgarToolsProvider(StockDataProvider):
         """
         self._ensure_initialized()
         try:
-            from edgar import Company
+            from edgar import Company, Financials
             company = Company(symbol.upper())
-            financials = (
-                company.get_financials()
-                if period == "annual"
-                else company.get_quarterly_financials()
-            )
+            if period == "annual":
+                financials = company.get_financials()
+            else:
+                filings = company.get_filings(form="10-Q", amendments=False, trigger_full_load=False)
+                latest = filings.latest()
+                if latest is None:
+                    logger.debug("[EDGAR][%s] no 10-Q filings found", symbol)
+                    return pd.DataFrame()
+                financials = Financials.extract(latest)
             if financials is None:
                 logger.debug("[EDGAR][%s] no %s financials returned", symbol, period)
                 return pd.DataFrame()
