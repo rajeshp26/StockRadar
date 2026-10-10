@@ -179,6 +179,12 @@ class TestFormatHelpers:
 
 class TestOpenRouterProvider:
 
+    @pytest.fixture(autouse=True)
+    def _reset_credits_breaker(self):
+        OpenRouterProvider._credits_exhausted = False
+        yield
+        OpenRouterProvider._credits_exhausted = False
+
     @patch("providers.ai_provider.httpx.AsyncClient")
     @patch("providers.ai_provider.settings")
     async def test_generate_text_success(self, mock_settings, mock_httpx):
@@ -279,24 +285,18 @@ class TestOpenRouterProvider:
 
     @patch("providers.ai_provider.httpx.AsyncClient")
     @patch("providers.ai_provider.settings")
-    async def test_generate_json_bad_json(self, mock_settings, mock_httpx):
+    async def test_generate_text_skips_when_credits_exhausted(self, mock_settings, mock_httpx):
+        OpenRouterProvider._credits_exhausted = True
         mock_settings.OPEN_ROUTER_KEY = "test-key"
         mock_settings.OPEN_ROUTER_MODEL = "test-model"
 
-        mock_response = MagicMock()
-        mock_response.is_success = True
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "not valid json"}, "finish_reason": "stop"}],
-        }
-
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.post.return_value = mock_response
         mock_httpx.return_value = mock_client
 
         provider = OpenRouterProvider()
-        result = await provider.generate_json("Test")
+        result = await provider.generate_text("Test")
         assert result is None
+        mock_client.post.assert_not_called()
 
 
 class TestAIProviderABC:

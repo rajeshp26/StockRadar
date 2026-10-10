@@ -61,6 +61,8 @@ class AIProvider(ABC):
 class OpenRouterProvider(AIProvider):
 
     _BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+    _credits_exhausted = False
+    _credits_warned = False
 
     def __init__(self) -> None:
         self._api_key = settings.OPEN_ROUTER_KEY or ""
@@ -74,6 +76,9 @@ class OpenRouterProvider(AIProvider):
         temperature: float = 0.1,
         timeout: float = 10.0,
     ) -> str | None:
+        if OpenRouterProvider._credits_exhausted:
+            logger.warning("[AI] OpenRouter credits exhausted — skipping text generation")
+            return None
         if not self._api_key:
             logger.info("[AI] OPEN_ROUTER_KEY not set — text generation disabled")
             return None
@@ -101,6 +106,10 @@ class OpenRouterProvider(AIProvider):
                     },
                 )
                 if not resp.is_success:
+                    if resp.status_code == 402 or "Insufficient credits" in resp.text:
+                        OpenRouterProvider._credits_exhausted = True
+                        OpenRouterProvider._credits_warned = True
+                        logger.warning("[AI] OpenRouter credits exhausted (402) — opening breaker")
                     logger.warning(
                         "[AI] OpenRouter %s | body: %s",
                         resp.status_code, resp.text[:500],
@@ -173,6 +182,9 @@ class OpenRouterProvider(AIProvider):
         temperature: float = 0.1,
         timeout: float = 15.0,
     ) -> AsyncGenerator[dict[str, Any], None]:
+        if OpenRouterProvider._credits_exhausted:
+            logger.warning("[AI] OpenRouter credits exhausted — skipping stream generation")
+            return
         if not self._api_key:
             logger.info("[AI] OPEN_ROUTER_KEY not set — streaming disabled")
             return
@@ -202,6 +214,10 @@ class OpenRouterProvider(AIProvider):
                     },
                 ) as resp:
                     if not resp.is_success:
+                        if resp.status_code == 402 or "Insufficient credits" in resp.text:
+                            OpenRouterProvider._credits_exhausted = True
+                            OpenRouterProvider._credits_warned = True
+                            logger.warning("[AI] OpenRouter credits exhausted (402) — opening breaker")
                         logger.warning(
                             "[AI] OpenRouter stream %s | body: %s",
                             resp.status_code, resp.text[:500],
