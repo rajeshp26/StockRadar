@@ -26,6 +26,13 @@ def _safe_int(x) -> int | None:
         return None
 
 
+def _sign_normalised_capex(x) -> Decimal | None:
+    d = _safe_decimal(x)
+    if d is None:
+        return None
+    return -abs(d)
+
+
 def normalize_period(fiscal_year: int | None, fiscal_quarter: int | None, period_end_date: date | None) -> tuple[int | None, int | None, date | None]:
     """
     Canonical period rules:
@@ -141,7 +148,7 @@ def normalize_cashflow_row(row: CashFlowRow) -> CashFlowRow:
         "change_in_working_capital":      _safe_decimal(row.change_in_working_capital),
         "deferred_taxes":                 _safe_decimal(row.deferred_taxes),
         "stock_based_compensation":       _safe_decimal(row.stock_based_compensation),
-        "capital_expenditures":           _safe_decimal(row.capital_expenditures),
+        "capital_expenditures":           _sign_normalised_capex(row.capital_expenditures),
         "acquisitions":                   _safe_decimal(row.acquisitions),
         "asset_sales":                    _safe_decimal(row.asset_sales),
         "investment_purchases":           _safe_decimal(row.investment_purchases),
