@@ -13,7 +13,7 @@ BEARER_PREFIX = "Bearer "
 # NOTE: BK is intentionally NOT here — it is Canadian Banc Corp Class A
 # (trades as BK.TO on TSX), a live listing, not the delisted BNY Mellon.
 # ---------------------------------------------------------------------------
-DELISTED_SYMBOLS: frozenset[str] = frozenset({"NYCB", "CS", "CMA", "WBA"})
+DELISTED_SYMBOLS: frozenset[str] = frozenset({"NYCB", "CS", "CMA", "WBA", "PSYK", "HYLD"})
 
 
 def get_effective_skipped_symbols() -> set[str]:
