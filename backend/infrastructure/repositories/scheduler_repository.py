@@ -889,21 +889,48 @@ class SchedulerRepository:
             logger.error(f"[JANITOR] Failed to reclaim leases: {e}")
             return 0
 
+    def _delete_prunable_jobs(self, status: str, cutoff_days: int) -> int:
+        """
+        Delete old jobs of a given status FK-safely: attempt rows first, then
+        the jobs themselves.
+
+        Supabase enforces ``job_attempts_job_id_fkey`` — a job cannot be
+        deleted while its ``job_attempts`` rows still exist. The generic
+        attempt prune only removes rows whose ``finished_at`` is older than
+        the window, so a job that is old but whose attempts are newer (or
+        have NULL ``finished_at``) used to violate the FK on every prune cycle.
+        """
+        cutoff = (now_utc() - timedelta(days=cutoff_days)).isoformat()
+        r = supabase.table(self.JOBS_TABLE) \
+            .select("id") \
+            .eq("status", status) \
+            .lt("updated_at", cutoff) \
+            .execute()
+        job_ids = [row["id"] for row in (r.data or [])]
+        if not job_ids:
+            return 0
+
+        supabase.table(self.JOB_ATTEMPTS_TABLE) \
+            .delete() \
+            .in_("job_id", job_ids) \
+            .execute()
+        r = supabase.table(self.JOBS_TABLE) \
+            .delete() \
+            .in_("id", job_ids) \
+            .execute()
+        return len(r.data or [])
+
     def prune_old_records(self) -> dict[str, int]:
         results = {}
         now = now_utc()
 
         try:
-            cutoff = (now - timedelta(days=90)).isoformat()
-            r = supabase.table(self.JOBS_TABLE).delete().eq("status", "succeeded").lt("updated_at", cutoff).execute()
-            results["jobs_succeeded"] = len(r.data or [])
+            results["jobs_succeeded"] = self._delete_prunable_jobs("succeeded", 90)
         except Exception as e:
             logger.error(f"[PRUNE] jobs_succeeded: {e}")
 
         try:
-            cutoff = (now - timedelta(days=180)).isoformat()
-            r = supabase.table(self.JOBS_TABLE).delete().eq("status", "dead_letter").lt("updated_at", cutoff).execute()
-            results["jobs_dead_letter"] = len(r.data or [])
+            results["jobs_dead_letter"] = self._delete_prunable_jobs("dead_letter", 180)
         except Exception as e:
             logger.error(f"[PRUNE] jobs_dead_letter: {e}")
 

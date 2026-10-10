@@ -356,15 +356,50 @@ class TestJanitor:
 
     def test_prune_old_records(self, repo, mock_supabase):
         mock_supabase.table.return_value.execute.side_effect = [
-            _make_response([{"id": "x"}]),
-            _make_response([{"id": "x"}]),
-            _make_response([{"id": "x"}]),
-            _make_response([{"id": "x"}]),
-            _make_response([{"id": "x"}]),
+            _make_response([{"id": "j1"}]),
+            _make_response([{"id": "a1"}]),
+            _make_response([{"id": "j1"}]),
+            _make_response([]),
+            _make_response([]),
+            _make_response([]),
+            _make_response([]),
         ]
         counts = repo.prune_old_records()
         assert isinstance(counts, dict)
         assert "jobs_succeeded" in counts
+        assert counts["jobs_succeeded"] == 1
+
+    def test_prune_deletes_attempts_before_jobs(self, repo, mock_supabase):
+        """FK job_attempts_job_id_fkey: attempts must be deleted before the job."""
+        mock_supabase.table.return_value.execute.side_effect = [
+            _make_response([{"id": "j1"}]),
+            _make_response([{"id": "a1"}]),
+            _make_response([{"id": "j1"}]),
+            _make_response([]),
+            _make_response([]),
+            _make_response([]),
+            _make_response([]),
+        ]
+        repo.prune_old_records()
+        table_names = [call.args[0] for call in mock_supabase.table.call_args_list]
+        assert table_names[1] == "job_attempts"
+        assert table_names[2] == "jobs"
+        assert mock_supabase.table.return_value.in_.call_args_list[0] == (("job_id", ["j1"]),)
+
+    def test_prune_skips_job_delete_when_no_jobs(self, repo, mock_supabase):
+        mock_supabase.table.return_value.execute.side_effect = [
+            _make_response([]),
+            _make_response([]),
+            _make_response([]),
+            _make_response([]),
+            _make_response([]),
+        ]
+        counts = repo.prune_old_records()
+        assert counts["jobs_succeeded"] == 0
+        table_names = [call.args[0] for call in mock_supabase.table.call_args_list]
+        assert table_names == [
+            "jobs", "jobs", "job_attempts", "scheduler_run_history", "worker_heartbeats",
+        ]
 
     def test_get_oldest_pending(self, repo, mock_supabase):
         created = (datetime.utcnow() - timedelta(hours=2)).isoformat()
