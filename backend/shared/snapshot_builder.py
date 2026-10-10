@@ -5,8 +5,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from shared.cdr_utils import trace_division
+from shared.cdr_utils import CDR_RATIO as _STRUCTURAL_CDR_RATIO
 from shared.time_utils import now_utc
+from shared.valuation import adjust_cdr_price, is_cad_native_source
 
 
 def _normalise_trade_date(val: Any) -> date | None:
@@ -135,7 +136,7 @@ TIER_ORDER = [PriceTier.CURRENT, PriceTier.FORWARD_FILL,
               PriceTier.COST_BASIS, PriceTier.UNAVAILABLE]
 
 
-CDR_RATIO = Decimal("10")
+CDR_RATIO = Decimal(str(_STRUCTURAL_CDR_RATIO))
 """CDR ratio for CIBC CAD-Hedged CDRs. A CDR represents 1/CDR_RATIO of the underlying US share.
 Applies when holding.exchange_override == "TOR" and the company's primary exchange is US-listed."""
 
@@ -193,27 +194,34 @@ def _resolve_holding_price(
     effective_ratio = cdr_ratio if cdr_ratio is not None else CDR_RATIO
 
     def _apply_cdr(price_val: Decimal, src: str | None = None) -> Decimal:
-        """Apply CDR ratio (and FX if needed) to convert market price to CDR price in CAD."""
-        result = price_val / effective_ratio
-        # For price_history source: price is US USD, need FX to convert to CAD
-        fx_applied: float | None = None
-        if is_cdr and src == "price_history" and fx_service is not None:
+        """Divide by the CDR ratio (FX-converting US sources) via the single rule.
+
+        Delegates to shared.valuation.adjust_cdr_price so the snapshot, replay
+        and live paths cannot drift. The audit record keeps the pre-adjustment
+        price so a stored row reconciles offline as
+        raw_price / cdr_ratio_applied * fx_rate_applied.
+        """
+        fx_rate = None
+        if fx_service is not None and not is_cad_native_source(src, None):
             fx_rate = fx_service.get_rate("USD", "CAD", snapshot_date)
-            if fx_rate is not None:
-                result = result * fx_rate
-                fx_applied = float(fx_rate)
+        adjusted = adjust_cdr_price(
+            price_val,
+            is_cdr=True,
+            cdr_ratio=effective_ratio,
+            price_source=src,
+            fx_rate=fx_rate,
+            layer="snapshot_builder",
+            company_id=company_id,
+        )
         if audit is not None:
-            # Records the pre-adjustment price so a stored row reconciles offline as
-            # raw_price / cdr_ratio_applied * fx_rate_applied.
             audit["raw_price"] = float(price_val)
             audit["cdr_ratio_applied"] = float(effective_ratio)
-            audit["fx_rate_applied"] = fx_applied
-        trace_division(
-            "snapshot_builder", company_id, float(price_val),
-            float(effective_ratio), float(result),
-            price_source=src or "unknown",
-        )
-        return result
+            audit["fx_rate_applied"] = (
+                float(adjusted.fx_rate_applied)
+                if adjusted.fx_rate_applied is not None
+                else None
+            )
+        return adjusted.price
 
     def _record_and_return(price, tier, price_date, src):
         if audit is not None:

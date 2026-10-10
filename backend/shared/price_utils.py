@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from shared.cdr_utils import trace_division
+from shared.valuation import adjust_cdr_price
 
 STALE_THRESHOLD_MIN = 5
 
@@ -65,17 +65,24 @@ def apply_cdr_adjustment(
     tor_cids: set,
     default_cdr: float = 10.0,
 ) -> tuple[float, float | None]:
-    if company_id in tor_cids:
-        ratio = cdr_ratios.get(company_id, default_cdr)
-        if ratio and ratio > 0:
-            trace_division(
-                "price_utils", company_id, price, ratio, price / ratio,
-                price_source="unanimous",
-            )
-            price = price / ratio
-            if prev_close is not None:
-                prev_close = prev_close / ratio
-    return price, prev_close
+    if company_id not in tor_cids:
+        return price, prev_close
+    ratio = cdr_ratios.get(company_id, default_cdr)
+    if not ratio or ratio <= 0:
+        return price, prev_close
+    adjusted = adjust_cdr_price(
+        price, is_cdr=True, cdr_ratio=ratio,
+        price_source="price_utils", layer="price_utils", company_id=company_id,
+    )
+    new_prev = None
+    if prev_close is not None:
+        new_prev = float(
+            adjust_cdr_price(
+                prev_close, is_cdr=True, cdr_ratio=ratio,
+                price_source="price_utils", layer="price_utils", company_id=company_id,
+            ).price
+        )
+    return float(adjusted.price), new_prev
 
 
 def _is_price_fresh(last_updated: Any) -> bool:

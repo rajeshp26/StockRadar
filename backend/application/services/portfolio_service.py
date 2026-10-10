@@ -35,10 +35,10 @@ from shared.portfolio_stats import (
     compute_portfolio_mwr,
     compute_portfolio_twr,
 )
-from shared.cdr_utils import is_cdr_transaction
+from shared.cdr_utils import CDR_RATIO, is_cdr_transaction
+from shared.fx_service import FXService
 from shared.price_rows import sanitize_daily_price_rows
 from shared.snapshot_builder import (
-    CDR_RATIO,
     _classify_lot_action,
     build_snapshot_row,
     check_snapshot_spike,
@@ -47,6 +47,7 @@ from shared.snapshot_builder import (
 )
 from shared.time_utils import now_utc, parse_db_timestamp
 from shared.transfer_reconciliation import reconcile_transfers
+from shared.valuation import adjust_cdr_price
 
 logger = logging.getLogger(__name__)
 
@@ -535,6 +536,23 @@ class PortfolioService:
                         cdr_ratios[cid] = float(ratio)
             except Exception:
                 pass
+        # Resolve currencies + FX before pricing: CDR prices FX-convert inside the
+        # single valuation rule, and price_currency stays "CAD" afterwards so the
+        # already-CAD cost basis is not re-converted below.
+        account_ids = list(set(h.get("account_id") for h in holdings if h.get("account_id")))
+        account_currency_map: dict[int, str] = {}
+        if account_ids:
+            try:
+                acc_result = supabase.table("portfolio_accounts").select("account_id, currency") \
+                    .in_("account_id", account_ids).execute()
+                account_currency_map = {
+                    a["account_id"]: a.get("currency", "CAD") for a in (acc_result.data or [])
+                }
+            except Exception:
+                pass
+        today = now_utc().date()
+        fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
+
         for h in holdings:
             cid = h.get("company_id")
             price = prices.get(cid)
@@ -544,33 +562,33 @@ class PortfolioService:
             if price is not None:
                 effective_price = price
                 if h.get("exchange_override") == "TOR":
-                    # Use per-company ratio if available, fallback to hardcoded CDR_RATIO
-                    ratio = cdr_ratios.get(cid, float(CDR_RATIO))
-                    effective_price = price / ratio
+                    acc_currency = account_currency_map.get(h.get("account_id"), "CAD")
+                    fx_rate = None
+                    if fx_svc is not None:
+                        try:
+                            fx_rate = fx_svc.get_rate("USD", acc_currency, today)
+                        except Exception:
+                            fx_rate = None
+                    adjusted = adjust_cdr_price(
+                        price,
+                        is_cdr=True,
+                        cdr_ratio=cdr_ratios.get(cid),
+                        price_source="current_market_data",
+                        account_currency=acc_currency,
+                        fx_rate=fx_rate,
+                        layer="portfolio_service.enrich",
+                        company_id=cid,
+                    )
+                    effective_price = float(adjusted.price)
+                    h["price_currency"] = "CAD"  # CAD now; do not re-convert below
                 h["current_price"] = effective_price
                 h["current_value"] = effective_price * qty
-                # For CDR holdings: price is now in CAD (after ratio division)
-                # Set price_currency so FX conversion doesn't re-convert
-                if h.get("exchange_override") == "TOR":
-                    h["price_currency"] = "CAD"
             else:
                 h["current_price"] = float(avg_cost) if avg_cost else 0.0
                 h["current_value"] = float(total_cost) if total_cost else 0.0
 
         # Apply FX conversion per-account
         if settings.ENABLE_FX_CONVERSION:
-            from shared.fx_service import FXService
-            fx_svc = FXService(supabase)
-            account_ids = list(set(h.get("account_id") for h in holdings if h.get("account_id")))
-            account_currency_map = {}
-            if account_ids:
-                try:
-                    acc_result = supabase.table("portfolio_accounts").select("account_id, currency") \
-                        .in_("account_id", account_ids).execute()
-                    account_currency_map = {a["account_id"]: a.get("currency", "CAD") for a in (acc_result.data or [])}
-                except Exception:
-                    pass
-            today = now_utc().date()
             for h in holdings:
                 acc_id = h.get("account_id")
                 acc_currency = account_currency_map.get(acc_id, "CAD") if acc_id else "CAD"
@@ -2394,8 +2412,7 @@ class PortfolioService:
                         if comp_res.data and comp_res.data.get("cdr_ratio") is not None:
                             cdr_ratio_val = float(comp_res.data["cdr_ratio"])
                         else:
-                            from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
-                            cdr_ratio_val = float(_CDR_RATIO)
+                            cdr_ratio_val = float(CDR_RATIO)
                 except Exception:
                     pass
             if company_id:
@@ -2419,19 +2436,29 @@ class PortfolioService:
                             pd = pd_str.date()
                         else:
                             pd = pd_str
-                        # Apply CDR adjustment: adj_close stores US USD prices
-                        # CDR price = (US_price / ratio) * FX_rate (USD→CAD)
-                        if is_cdr and cdr_ratio_val is not None:
-                            px = px / cdr_ratio_val
-                            # Apply FX conversion (USD→CAD) for historical prices
+                        # Apply CDR adjustment via the single valuation rule:
+                        # CDR price = (US_price / ratio) * FX (USD→CAD) when a
+                        # rate is available -- the same kernel the snapshot and
+                        # live overview paths use (shared.valuation).
+                        if is_cdr:
+                            fx_rate = None
                             try:
                                 from shared.fx_service import FXService
                                 fx_svc = FXService(supabase)
                                 fx_rate = fx_svc.get_rate("USD", "CAD", pd)
-                                if fx_rate is not None:
-                                    px = px * fx_rate
                             except Exception:
                                 pass
+                            px = float(
+                                adjust_cdr_price(
+                                    px, is_cdr=True, cdr_ratio=cdr_ratio_val,
+                                    price_source="price_history",
+                                    price_currency="USD",
+                                    account_currency="CAD",
+                                    fx_rate=fx_rate,
+                                    layer="portfolio_service.historical",
+                                    company_id=company_id,
+                                ).price
+                            )
                         price_map.setdefault(sym_up, {})[row["price_date"]] = px
         except Exception as e:
             logger.warning(f"Failed to fetch price_history for {symbol}: {e}")

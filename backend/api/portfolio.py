@@ -61,12 +61,12 @@ from schemas_portfolio import (
     RiskMetricsResponse,
     RollingSharpeResponse,
 )
-from shared.cdr_utils import trace_division
 from shared.exceptions.base import AppException
 from shared.fx_service import FXService
 from shared.metrics import RouteTimer
 from shared.snapshot_builder import convert_holding_fx
 from shared.time_utils import age_seconds, now_utc, parse_db_timestamp
+from shared.valuation import adjust_cdr_price
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -140,8 +140,18 @@ def apply_cdr_adjustment(
     company_id: int,
     cdr_ratios: dict[int, float],
     exchange_override: str | None = None,
+    *,
+    fx_rate: float | None = None,
+    account_currency: str = "CAD",
 ) -> float:
-    """Apply the CDR ratio to a TSX share price for a holding whose override is TOR.
+    """Divide a US price by the CDR ratio via the single valuation rule.
+
+    Delegates to shared.valuation.adjust_cdr_price - the same rule the snapshot
+    builder and replay engine use - so this endpoint cannot drift from them
+    again. A CDR whose quote comes from a US source (current_market_data) is USD
+    and must also be FX-converted to the account currency; callers pass
+    ``fx_rate`` (USD->account) when FX is enabled. Without a rate the ratio-only
+    price is returned, matching the historical fallback.
 
     exchange_override is the value carried by the individual holding, never a
     company-level lookup. portfolio_holdings.exchange_override is per-account, so
@@ -157,16 +167,28 @@ def apply_cdr_adjustment(
         )
     if exchange_override != "TOR":
         return price
-    ratio = cdr_ratios.get(company_id)
-    if ratio is None:
-        from shared.snapshot_builder import CDR_RATIO
-        ratio = float(CDR_RATIO)
-    adjusted = price / ratio
-    trace_division(
-        "api.portfolio", company_id, price, ratio, adjusted,
-        price_source="holding_exchange_override",
+    adjusted = adjust_cdr_price(
+        price,
+        is_cdr=True,
+        cdr_ratio=cdr_ratios.get(company_id),
+        price_source="current_market_data",
+        account_currency=account_currency,
+        fx_rate=fx_rate,
+        layer="api.portfolio",
+        company_id=company_id,
     )
-    return adjusted
+    return float(adjusted.price)
+
+
+def _cdr_fx_rate(fx_svc: FXService | None, account_currency: str, as_of) -> float | None:
+    """USD->account FX rate for CDR pricing; None when FX is disabled/unavailable."""
+    if fx_svc is None:
+        return None
+    try:
+        rate = fx_svc.get_rate("USD", account_currency, as_of)
+        return float(rate) if rate is not None else None
+    except Exception:
+        return None
 
 
 def _convert_holding_values(
@@ -270,6 +292,10 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
     if not account_ids:
         return {"accounts": [], "holdings": [], "overview": {}, "data_quality_flag": "OK"}
 
+    today = now_utc().date()
+    fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
+    account_currency_map = {a["account_id"]: a.get("currency", "CAD") for a in accounts}
+
     any_stale = False
     any_cost_fallback = False
     for h in all_holdings:
@@ -279,7 +305,12 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
             price = pd["price"]
             # Apply CDR adjustment if this is a CDR holding
             if h.get("exchange_override") == "TOR":
-                price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
+                acc_currency = account_currency_map.get(h.get("account_id"), "CAD")
+                price = apply_cdr_adjustment(
+                    price, cid, cdr_ratios, h["exchange_override"],
+                    fx_rate=_cdr_fx_rate(fx_svc, acc_currency, today),
+                    account_currency=acc_currency,
+                )
                 h["price_currency"] = "CAD"
             h["current_price"] = price
             qty = h.get("quantity", 0) or 0
@@ -306,7 +337,6 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
         )
 
     # Apply FX conversion per-account: convert USD values to account currency
-    fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
     for acc in accounts:
         acc_holdings = [h for h in all_holdings if h.get("account_id") == acc["account_id"]]
         acc_currency = acc.get("currency", "CAD")
@@ -513,6 +543,7 @@ async def list_accounts(
                 pass
 
         enriched_accounts = []
+        today = now_utc().date()
         fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
         for acc in accounts:
             acc_holdings = holdings_by_account.get(acc["account_id"], [])
@@ -523,7 +554,11 @@ async def list_accounts(
                 if price is not None:
                     # Apply CDR adjustment if this is a CDR holding
                     if h.get("exchange_override") == "TOR":
-                        price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
+                        price = apply_cdr_adjustment(
+                            price, cid, cdr_ratios, h["exchange_override"],
+                            fx_rate=_cdr_fx_rate(fx_svc, acc_currency, today),
+                            account_currency=acc_currency,
+                        )
                         h["price_currency"] = "CAD"
                     h["current_price"] = price
                     h["current_value"] = price * (h.get("quantity", 0) or 0)
@@ -821,6 +856,9 @@ async def get_account_holdings(
             except Exception:
                 pass
 
+        acc_currency = account.get("currency", "CAD")
+        today = now_utc().date()
+        fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
         for h in holdings:
             cid = h.get("company_id")
             price = prices.get(cid)
@@ -830,7 +868,11 @@ async def get_account_holdings(
             if price is not None:
                 # Apply CDR adjustment if this is a CDR holding
                 if h.get("exchange_override") == "TOR":
-                    price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
+                    price = apply_cdr_adjustment(
+                        price, cid, cdr_ratios, h["exchange_override"],
+                        fx_rate=_cdr_fx_rate(fx_svc, acc_currency, today),
+                        account_currency=acc_currency,
+                    )
                     h["price_currency"] = "CAD"
                 h["current_price"] = price
                 h["current_value"] = price * qty
@@ -838,8 +880,6 @@ async def get_account_holdings(
                 h["current_price"] = float(avg_cost) if avg_cost else 0.0
                 h["current_value"] = float(total_cost) if total_cost else 0.0
 
-        acc_currency = account.get("currency", "CAD")
-        fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
         _convert_holding_values(holdings, acc_currency, fx_svc)
 
         for h in holdings:
@@ -896,6 +936,9 @@ async def get_all_holdings(
             except Exception:
                 pass
 
+        today = now_utc().date()
+        fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
+        account_currency_map = {a["account_id"]: a.get("currency", "CAD") for a in accounts}
         for h in all_holdings:
             cid = h.get("company_id")
             price = prices.get(cid)
@@ -905,7 +948,12 @@ async def get_all_holdings(
             if price is not None:
                 # Apply CDR adjustment if this is a CDR holding
                 if h.get("exchange_override") == "TOR":
-                    price = apply_cdr_adjustment(price, cid, cdr_ratios, h["exchange_override"])
+                    acc_currency = account_currency_map.get(h.get("account_id"), "CAD")
+                    price = apply_cdr_adjustment(
+                        price, cid, cdr_ratios, h["exchange_override"],
+                        fx_rate=_cdr_fx_rate(fx_svc, acc_currency, today),
+                        account_currency=acc_currency,
+                    )
                     h["price_currency"] = "CAD"
                 h["current_price"] = price
                 h["current_value"] = price * qty
@@ -914,8 +962,6 @@ async def get_all_holdings(
                 h["current_value"] = float(total_cost) if total_cost else 0.0
 
         # Apply FX conversion per-account
-        fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None
-        account_currency_map = {a["account_id"]: a.get("currency", "CAD") for a in accounts}
         for h in all_holdings:
             acc_id = h.get("account_id")
             acc_currency = account_currency_map.get(acc_id, "CAD") if acc_id else "CAD"

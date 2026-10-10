@@ -21,6 +21,7 @@ from infrastructure.repositories.financial_repository import SupabaseFinancialRe
 from shared.exceptions.base import ExternalServiceError, NotFoundError
 from shared.price_rows import sanitize_daily_price_rows
 from shared.price_utils import build_price_snapshot
+from shared.valuation import adjust_cdr_price
 
 if TYPE_CHECKING:
     from providers.defeat_beta_provider import DefeatBetaProvider
@@ -186,10 +187,19 @@ class WatchlistService:
 
             # Apply CDR adjustment if this is a CDR holding
             if exchange_overrides.get(cid) == "TOR":
-                from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
-                ratio = cdr_ratios.get(cid, float(_CDR_RATIO))
-                current_price = current_price / ratio
-                previous_close = previous_close / ratio
+                adjusted = adjust_cdr_price(
+                    current_price, is_cdr=True,
+                    cdr_ratio=cdr_ratios.get(cid), price_source="watchlist",
+                )
+                current_price = float(adjusted.price)
+                if adjusted.cdr_ratio_applied and previous_close is not None:
+                    previous_close = float(
+                        adjust_cdr_price(
+                            previous_close, is_cdr=True,
+                            cdr_ratio=adjusted.cdr_ratio_applied,
+                            price_source="watchlist",
+                        ).price
+                    )
 
             change = current_price - previous_close
             change_percent = (change / previous_close) * 100 if previous_close else 0

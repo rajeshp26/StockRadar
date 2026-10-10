@@ -264,14 +264,28 @@ def get_stock_quote(
     prev_close  = row.get("close_price")
     last_updated = row.get("last_updated")
 
-    # Apply CDR adjustment if this is a CDR holding
+    # Apply CDR adjustment via the single valuation rule (shared.valuation) so
+    # this endpoint cannot drift from the snapshot/live paths again.
+    # current_market_data is a US (USD) quote source; without an FX rate the
+    # kernel returns the ratio-only price, matching this endpoint's contract.
     if is_cdr:
-        from shared.snapshot_builder import CDR_RATIO as _CDR_RATIO
-        ratio = float(cdr_ratio) if cdr_ratio is not None else float(_CDR_RATIO)
+        from shared.valuation import adjust_cdr_price
         if price is not None:
-            price = float(price) / ratio
+            price = float(
+                adjust_cdr_price(
+                    price, is_cdr=True, cdr_ratio=cdr_ratio,
+                    price_source="current_market_data",
+                    layer="api.watchlists.quote",
+                ).price
+            )
         if prev_close is not None:
-            prev_close = float(prev_close) / ratio
+            prev_close = float(
+                adjust_cdr_price(
+                    prev_close, is_cdr=True, cdr_ratio=cdr_ratio,
+                    price_source="current_market_data",
+                    layer="api.watchlists.quote",
+                ).price
+            )
 
     change = change_percent = None
     try:
