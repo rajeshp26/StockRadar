@@ -200,15 +200,24 @@ class FinancialDataValidator:
         # 3. VALUE RANGE VALIDATION
         revenue = _safe_float(row.get("revenue"))
         if revenue is not None:
-            min_val, max_val = VALUE_RANGES["revenue"]
-            if not (min_val <= revenue <= max_val):
+            if revenue <= 0:
                 issues.append(ValidationIssue(
-                    severity=Severity.ERROR,
+                    severity=Severity.CRITICAL,
                     field="revenue",
-                    message="Revenue out of expected range",
-                    expected=f"${min_val:,} to ${max_val:,}",
+                    message="Revenue must be positive (got $0) - treated as missing",
+                    suggestion="Use YFinance fallback",
                     actual=f"${revenue:,.0f}"
                 ))
+            else:
+                min_val, max_val = VALUE_RANGES["revenue"]
+                if not (min_val <= revenue <= max_val):
+                    issues.append(ValidationIssue(
+                        severity=Severity.ERROR,
+                        field="revenue",
+                        message="Revenue out of expected range",
+                        expected=f"${min_val:,} to ${max_val:,}",
+                        actual=f"${revenue:,.0f}"
+                    ))
 
         net_income = _safe_float(row.get("net_income"))
         if net_income is not None:
