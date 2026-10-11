@@ -1,5 +1,5 @@
 # split_framework_repo.ps1
-# Phase C app carve — StockerPro framework-repo split (USER-EXECUTED).
+# Phase C app carve - StockerPro framework-repo split (USER-EXECUTED).
 #
 # Converts this repo from the merged framework layout to the pinned-package
 # dependency model: framework/, .lifecycle/ and the reference-app scaffold
@@ -16,7 +16,7 @@
 #
 # Preconditions (asserted by step 1 in BOTH modes):
 #   - clean working tree (the in-flight Phase 2 valuation files must be
-#     committed or stashed first — `git status --porcelain` must be empty)
+#     committed or stashed first - `git status --porcelain` must be empty)
 #   - `agentic-lifecycle` installed in the active python env from the pin
 #     (pip install "agentic-lifecycle @ git+https://github.com/rajeshp26/agentic-lifecycle.git@v0.1.0")
 #   - user-approved app `opencode.json`, `AGENTS.md`, `.opencode/plugin/bootstrap.ts`
@@ -39,7 +39,7 @@ function Write-Ok   { param([string]$Msg) Write-Host "  [PASS]  $Msg" -Foregroun
 function Write-Warn { param([string]$Msg) Write-Host "  [WARN]  $Msg" -ForegroundColor Yellow }
 function Write-Fail { param([string]$Msg) Write-Host "  [FAIL]  $Msg" -ForegroundColor Red }
 
-# Set-Utf8NoBom — PS 5.1's Set-Content -Encoding UTF8 writes a BOM, which would
+# Set-Utf8NoBom - PS 5.1's Set-Content -Encoding UTF8 writes a BOM, which would
 # corrupt .gitignore first-line matching, JSON parsing, and Python sources.
 # .NET WriteAllText with UTF8Encoding($false) writes UTF-8 without BOM.
 function Set-Utf8NoBom {
@@ -62,7 +62,7 @@ function Invoke-Check {
         return $false
     }
     catch {
-        Write-Fail "$Label — $($_.Exception.Message)"
+        Write-Fail "$Label - $($_.Exception.Message)"
         return $false
     }
 }
@@ -84,7 +84,7 @@ function Invoke-Step {
         Write-Ok $Label
     }
     catch {
-        Write-Fail "$Label FAILED — $($_.Exception.Message)"
+        Write-Fail "$Label FAILED - $($_.Exception.Message)"
         Write-Host "Carve aborted. Re-run after resolving; completed steps are committed and reversible via git." -ForegroundColor Magenta
         exit 1
     }
@@ -113,11 +113,11 @@ function Commit-Atomic {
 }
 
 # ---------------------------------------------------------------------------
-# STEP 1 — Preflight (asserts in both modes; archives gate evidence only on apply)
+# STEP 1 - Preflight (asserts in both modes; archives gate evidence only on apply)
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "   Framework Repo Split — Phase C carve (StockerPro)" -ForegroundColor Cyan
+Write-Host "   Framework Repo Split - Phase C carve (StockerPro)" -ForegroundColor Cyan
 Write-Host "   Mode: $(if ($Apply) { 'EXECUTE' } else { 'DRY RUN (no changes)' })" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
@@ -135,7 +135,7 @@ if (-not (Invoke-Check "clean working tree" {
     return $false
 })) { $preflightOk = $false }
 
-# 1b. framework package installed from the pin (distribution check, not import —
+# 1b. framework package installed from the pin (distribution check, not import -
 # the local framework/ dir would shadow an import pre-carve)
 if (-not (Invoke-Check "agentic-lifecycle installed (pip show)" {
     $show = & python -m pip show agentic-lifecycle 2>&1
@@ -148,11 +148,11 @@ if (-not (Invoke-Check "agentic-lifecycle installed (pip show)" {
 # 1c. working branch warning (not a block; carve is reversible per step)
 $branch = (& git -C $ProjectRoot branch --show-current 2>&1)
 if ($branch -and $branch.Trim() -eq 'main') {
-    Write-Warn "on branch 'main' — consider a carve branch; every step is an atomic commit so this is safe, but a branch makes rollback trivially visible"
+    Write-Warn "on branch 'main' - consider a carve branch; every step is an atomic commit so this is safe, but a branch makes rollback trivially visible"
 }
 
 if (-not $preflightOk) {
-    Write-Fail "preflight failed — resolve the items above (commit/stash the dirty tree, install the pinned package), then re-run"
+    Write-Fail "preflight failed - resolve the items above (commit/stash the dirty tree, install the pinned package), then re-run"
     exit 1
 }
 
@@ -165,8 +165,8 @@ if ($Apply) {
         $vc = $LASTEXITCODE
         & python $ProjectRoot\framework\security\check_enforcement_plane.py *> "$VerificationDir\split-pre-$stamp-plane.txt"
         $pc = $LASTEXITCODE
-        Write-Ok "validate.py exit $vc (baseline — recorded, not enforced)"
-        Write-Warn "check_enforcement_plane exit $pc (RED expected pre-carve: framework/** in app plane) — recorded as known pre-state"
+        Write-Ok "validate.py exit $vc (baseline - recorded, not enforced)"
+        Write-Warn "check_enforcement_plane exit $pc (RED expected pre-carve: framework/** in app plane) - recorded as known pre-state"
     }
 }
 else {
@@ -174,7 +174,7 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# STEP 2 — Remove framework/, .lifecycle/, reference-app scaffold, framework docs
+# STEP 2 - Remove framework/, .lifecycle/, reference-app scaffold, framework docs
 # ---------------------------------------------------------------------------
 Write-Step "2. Remove framework-owned tree + reference-app scaffold (git rm)"
 
@@ -205,7 +205,7 @@ if ($Apply) {
             if ($LASTEXITCODE -eq 0) { $existing += $p }
             else { Write-Warn "path not tracked (skipped): $p" }
         }
-        if ($existing.Count -eq 0) { throw "nothing to remove — already carved?" }
+        if ($existing.Count -eq 0) { throw "nothing to remove - already carved?" }
         & git -C $ProjectRoot rm -r --quiet -- $existing
         if ($LASTEXITCODE -ne 0) { throw "git rm failed (exit $LASTEXITCODE)" }
         # untracked framework-owned artifacts: docs/PR-CONCURRENCY-surgical.patch
@@ -221,7 +221,7 @@ if ($Apply) {
         # safety: refuse to silently delete untracked NON-ignored files
         $stray = @(& git -C $ProjectRoot ls-files --others --exclude-standard -- framework .lifecycle src 2>$null)
         if ($stray.Count -gt 0) {
-            throw "untracked non-ignored files would be lost: $($stray -join ', ') — review and commit or move them first"
+            throw "untracked non-ignored files would be lost: $($stray -join ', ') - review and commit or move them first"
         }
         foreach ($dir in @('framework', '.lifecycle', 'src')) {
             $full = Join-Path $ProjectRoot $dir
@@ -240,7 +240,7 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# STEP 3 — Write app framework.config.json (the ONE config; D3, D5-D8)
+# STEP 3 - Write app framework.config.json (the ONE config; D3, D5-D8)
 # ---------------------------------------------------------------------------
 Write-Step "3. Write framework.config.json (app_root / state_folder / gate + surface settings)"
 
@@ -278,7 +278,7 @@ $ConfigTemplate = @'
 if ($Apply) {
     Invoke-Step "write $ConfigPath (skip if present)" {
         if (Test-Path -LiteralPath $ConfigPath) {
-            Write-Warn "framework.config.json already exists — left untouched"
+            Write-Warn "framework.config.json already exists - left untouched"
         }
         else {
             Set-Utf8NoBom $ConfigPath $ConfigTemplate
@@ -292,7 +292,7 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# STEP 4 — Run `python -m framework.init` (binding bootstrap + state migration)
+# STEP 4 - Run `python -m framework.init` (binding bootstrap + state migration)
 # Needs the INSTALLED package: the local framework/ was removed in step 2.
 # ---------------------------------------------------------------------------
 Write-Step "4. python -m framework.init (migrate .planning -> .framework/state, generate shims)"
@@ -315,7 +315,7 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# STEP 5 — Assert user-authored plane files (NEVER authored by this script)
+# STEP 5 - Assert user-authored plane files (NEVER authored by this script)
 # ---------------------------------------------------------------------------
 Write-Step "5. Verify user-approved plane files (opencode.json / AGENTS.md / bootstrap.ts)"
 
@@ -341,14 +341,14 @@ if (-not (Invoke-Check ".opencode/plugin/bootstrap.ts present" {
 
 if (-not $PlaneOk) {
     if ($Apply) {
-        Write-Fail "plane files are missing/incomplete — place the user-approved opencode.json, AGENTS.md, and .opencode/plugin/bootstrap.ts, then re-run"
+        Write-Fail "plane files are missing/incomplete - place the user-approved opencode.json, AGENTS.md, and .opencode/plugin/bootstrap.ts, then re-run"
         exit 1
     }
     Write-Warn "[dry-run] these markers are checked in -Execute mode; missing markers will abort the carve"
 }
 
 # ---------------------------------------------------------------------------
-# STEP 6 — .gitignore: add .framework runtime, scope .opencode ignore to plugin/*.js,
+# STEP 6 - .gitignore: add .framework runtime, scope .opencode ignore to plugin/*.js,
 #          drop obsolete framework lines
 # ---------------------------------------------------------------------------
 Write-Step "6. Update .gitignore"
@@ -376,7 +376,7 @@ if ($Apply) {
         # idempotent append of the .framework runtime block
         $block = @(
             '',
-            '# Framework runtime (agentic-lifecycle) — committed state lives in .framework/state',
+            '# Framework runtime (agentic-lifecycle) - committed state lives in .framework/state',
             '.framework/telemetry/',
             '.framework/tasks/',
             '.framework/blockers.yaml',
@@ -400,11 +400,11 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# STEP 7 — Cosmetic cleanup: re-point 4 comment references to post-split paths
+# STEP 7 - Cosmetic cleanup: re-point 4 comment references to post-split paths
 # ---------------------------------------------------------------------------
 Write-Step "7. Re-point cosmetic comment references"
 
-# (path-relative, old-exact, new) — each old must match EXACTLY once
+# (path-relative, old-exact, new) - each old must match EXACTLY once
 $cosmeticEdits = @(
     @{
         Path = 'backend/scripts/gate_chart_series_integrity.py'
@@ -414,7 +414,7 @@ $cosmeticEdits = @(
     @{
         Path = 'backend/application/services/portfolio_service.py'
         Old  = '# Rationale: .planning/USER-ASK.md A6.'
-        New  = '# Rationale: user ask A6 (migrated state: .framework/state/ — see committed DID referencing A6).'
+        New  = '# Rationale: user ask A6 (migrated state: .framework/state/ - see committed DID referencing A6).'
     },
     @{
         Path = 'backend/tests/test_portfolio_snapshots.py'
@@ -423,8 +423,8 @@ $cosmeticEdits = @(
     },
     @{
         Path = 'web/src/app/globals.css'
-        Old  = '— Values verbatim from `.opencode/skills/apple-ui/tokens.css`.'
-        New  = '— Values verbatim from `framework/opencode/skills/apple-ui/tokens.css` (installed package surface).'
+        Old  = 'Values verbatim from `.opencode/skills/apple-ui/tokens.css`.'
+        New  = 'Values verbatim from `framework/opencode/skills/apple-ui/tokens.css` (installed package surface).'
     }
 )
 
@@ -434,10 +434,10 @@ if ($Apply) {
         foreach ($e in $cosmeticEdits) {
             $full = Join-Path $ProjectRoot $e.Path
             if (-not (Test-Path -LiteralPath $full)) { Write-Warn "skip (missing): $($e.Path)"; continue }
-            $content = Get-Content -LiteralPath $full -Raw
+            $content = [System.IO.File]::ReadAllText($full)
             $count = ([regex]::Matches($content, [regex]::Escape($e.Old))).Count
             if ($count -eq 0) { Write-Warn "skip (old string absent): $($e.Path)"; continue }
-            if ($count -gt 1) { throw "ambiguous (found $count matches): $($e.Path) — manual review required" }
+            if ($count -gt 1) { throw "ambiguous (found $count matches): $($e.Path) - manual review required" }
             $content = $content.Replace($e.Old, $e.New)
             Set-Utf8NoBom $full $content
             Write-Ok "re-pointed $($e.Path)"
@@ -453,14 +453,14 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# STEP 8 — Final: assert CI untouched, tag post-split
+# STEP 8 - Final: assert CI untouched, tag post-split
 # ---------------------------------------------------------------------------
 Write-Step "8. Finalize (CI untouched, tag post-split)"
 
-# 8a. CI unchanged assertion — .github/workflows must not be staged/moved
+# 8a. CI unchanged assertion - .github/workflows must not be staged/moved
 if (-not (Invoke-Check "app CI (backend-only workflows) untouched" {
     $wf = Join-Path $ProjectRoot '.github\workflows'
-    if (-not (Test-Path -LiteralPath $wf)) { Write-Warn ".github/workflows missing — nothing to check"; return $true }
+    if (-not (Test-Path -LiteralPath $wf)) { Write-Warn ".github/workflows missing - nothing to check"; return $true }
     $unexpected = & git -C $ProjectRoot status --porcelain -- .github 2>$null
     return [string]::IsNullOrWhiteSpace(($unexpected -join ''))
 })) { $preflightOk = $false }
@@ -474,7 +474,7 @@ if (-not (Invoke-Check ".planning/ and .omo/ still ignored (legacy + agent scrat
 if ($preflightOk -and $Apply) {
     Invoke-Step "tag post-split (skip if exists)" {
         $tagExists = & git -C $ProjectRoot tag --list 'post-split'
-        if ($tagExists) { Write-Warn "tag 'post-split' already exists — left untouched" }
+        if ($tagExists) { Write-Warn "tag 'post-split' already exists - left untouched" }
         else {
             & git -C $ProjectRoot tag 'post-split'
             if ($LASTEXITCODE -ne 0) { throw "git tag failed (exit $LASTEXITCODE)" }
@@ -483,7 +483,7 @@ if ($preflightOk -and $Apply) {
     }
 }
 elseif ($Apply) {
-    Write-Fail "final assertions failed — not tagging post-split"
+    Write-Fail "final assertions failed - not tagging post-split"
     exit 1
 }
 else {
@@ -501,6 +501,6 @@ if ($Apply) {
     Write-Host "   3. Phase D joint evidence on both repos" -ForegroundColor Gray
 }
 else {
-    Write-Host "   DRY RUN — no changes made. Re-run with -Execute to apply." -ForegroundColor Yellow
+    Write-Host "   DRY RUN - no changes made. Re-run with -Execute to apply." -ForegroundColor Yellow
 }
 Write-Host "============================================================" -ForegroundColor Cyan
