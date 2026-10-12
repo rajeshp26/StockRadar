@@ -65,10 +65,10 @@ verified by `framework/security/check_enforcement_plane.py` (must exit 0 - run i
 plane change).
 
 <!-- enforcement-plane: begin -->
-    framework/**        gates, claims, retro, security, adapters, policy
     .opencode/**        agents, rules, skills, plugin, config
     opencode.json       permission model
     AGENTS.md           stable global rules
+    framework.config.jsonframework binding (one config)
 <!-- enforcement-plane: end -->
 
 Enforced by edit permissions in opencode.json (narrow allowlists with deny fallback, and an

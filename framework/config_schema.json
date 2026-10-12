@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/rajeshp26/agentic-lifecycle/schemas/framework.config.schema.json",
+  "title": "framework.config.json",
+  "description": "The ONE config the framework reads from the app repo (plan D3/D5-D8). The framework never assumes where it lives; everything app-scoped is declared here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["app_root", "state_folder"],
+  "properties": {
+    "framework": {
+      "type": "object",
+      "description": "Pin/version metadata for the installed agentic-lifecycle distribution.",
+      "properties": {
+        "distribution": { "type": "string", "default": "agentic-lifecycle" },
+        "version": { "type": "string", "description": "Pinned version, e.g. 0.1.0" },
+        "source": { "type": "string", "description": "git+https URL or index used to install the pin" }
+      },
+      "additionalProperties": true
+    },
+    "app_root": {
+      "type": "string",
+      "description": "Application root, relative to this config file (or absolute). '.' means the config's own directory."
+    },
+    "state_folder": {
+      "type": "string",
+      "description": "GSD state root, relative to app_root (or absolute). Plan D3 uses '.framework/state'."
+    },
+    "gate_settings": {
+      "type": "object",
+      "description": "Gate behaviour overrides (browser output dir, environment bindings).",
+      "properties": {
+        "browser_output_dir": { "type": "string" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "surface": {
+      "type": "object",
+      "description": "How the framework surface (agents/skills/rules/commands) is injected at OpenCode config-build time.",
+      "properties": {
+        "inject_skills": { "type": "boolean", "default": true },
+        "inject_agents": { "type": "boolean", "default": true },
+        "inject_rules": { "type": "boolean", "default": true },
+        "skills_paths": { "type": "array", "items": { "type": "string" } },
+        "commands": { "type": "string", "enum": ["shims", "none"], "default": "shims" }
+      },
+      "additionalProperties": true
+    },
+    "readiness": {
+      "type": "object",
+      "description": "App-specific paths the five readiness checks target (Phase A step 4).",
+      "properties": {
+        "openapi_schema": { "type": "string" },
+        "contract_tests": { "type": "string" },
+        "frontend_manifest": { "type": "string" },
+        "playwright_config": { "type": "string" },
+        "browser_specs": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

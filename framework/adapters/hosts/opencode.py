@@ -70,7 +70,7 @@ def permission_map() -> dict:
 
 def plugin_paths() -> list:
     """Write BOTH; the loader globs {plugin,plugins} and versions disagree."""
-    return [".opencode/plugin/telemetry.ts", ".opencode/plugins/telemetry.ts"]
+    return ["framework/opencode/plugin/telemetry.ts", ".opencode/plugins/telemetry.ts"]
 
 
 def capabilities() -> dict:

@@ -36,7 +36,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 REWORK_SIGNALS = ("review_rejection", "test_failure", "integration_failure")
 
 # P0-1 (§3): canonical taxonomy vocabulary and the rework subset. The vocabulary is frozen in
-# .opencode/plugin/taxonomy.mjs (EVENTS); this tuple mirrors it for the report's aggregation.
+# framework/opencode/plugin/taxonomy.mjs (EVENTS); this tuple mirrors it for the report's aggregation.
 TAXONOMY_EVENTS = (
     "WORK_ATTEMPTED", "TEST_FAILED", "REVIEW_REJECTED", "VERIFICATION_FAILED",
     "INTEGRATION_FAILED", "BLOCKER_DETECTED", "CONTEXT_INSUFFICIENT",

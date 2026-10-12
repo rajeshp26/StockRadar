@@ -1,3 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-lifecycle"
+dynamic = ["version"]
+description = "Agentic engineering lifecycle framework for OpenCode: agents, skills, gates, and an agent-immutable enforcement plane."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Rajesh P" }]
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+framework = "framework.cli:main"
+
+[project.urls]
+Repository = "https://github.com/rajeshp26/agentic-lifecycle"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "framework.__version__"}
+
+# Discover every real subpackage under framework/ (framework, framework.claims, framework.retro,
+# framework.contracts, framework.adapters.hosts, framework.opencode, ...). namespaces=false keeps
+# data-only subdirectories (gates/, models/, opencode/skills/, ...) OUT of the package set so their
+# files ship as package data rather than as empty namespace packages.
+[tool.setuptools.packages.find]
+include = ["framework*"]
+namespaces = false
+
+# Non-.py runtime data. Gates are bash, the surface is Markdown/TypeScript; none is importable,
+# all of it is required at runtime. `framework.opencode` is the relocated surface, shipped whole.
+[tool.setuptools.package-data]
+framework = ["**/*.json", "**/*.yaml", "**/*.yml", "**/*.sh", "**/*.md", "**/*.txt", "**/*.ts", "**/*.mjs", "**/*.js"]
+"framework.opencode" = ["**/*"]
+
 [tool.pytest.ini_options]
 # Canonical suites: framework contract tests + consolidated backend tests.
 # Diagnostic scripts live outside these paths and are never collected.

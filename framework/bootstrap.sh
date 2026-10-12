@@ -55,15 +55,15 @@ for cap,info in m['capabilities'].items():
 "
 
 step "5/7 Agent, tool, plugin and permission artifacts"
-for f in opencode.json AGENTS.md .opencode/tools/context-builder.ts .opencode/plugin/telemetry.ts; do
+for f in opencode.json AGENTS.md framework/opencode/tools/context-builder.ts framework/opencode/plugin/telemetry.ts; do
   [ -e "$f" ] || die "missing $f"
 done
-ls .opencode/agents/*.md | wc -l | xargs printf ' agent definitions: %s\n'
+ls framework/opencode/agents/*.md | wc -l | xargs printf ' agent definitions: %s\n'
 chmod +x framework/gates/*.sh framework/adapters/*.py framework/*.sh 2>/dev/null || true
 
 step "6/7 Skills and rules"
-ls -1 .opencode/skills | xargs printf ' skill: %s\n'
-ls -1 .opencode/rules | xargs printf ' rule: %s\n'
+ls -1 framework/opencode/skills | xargs printf ' skill: %s\n'
+ls -1 framework/opencode/rules | xargs printf ' rule: %s\n'
 chmod +x framework/retro/*.py 2>/dev/null || true
 printf ' gates: '; ls -1 framework/gates/g*.sh | wc -l | tr -d "\n"; printf ' (g1-g8)\n'
 # Retro subsystem: report open defect-escape triggers so an install inherits nothing silently.

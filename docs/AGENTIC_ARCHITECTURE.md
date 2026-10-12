@@ -68,7 +68,7 @@ The framework is split into two cooperating halves:
 Everything an agent can do is bounded by a **permission model** in `opencode.json`.
 Everything an agent claims is checked by an **executable gate** in `framework/gates/`.
 A claim that was not proven by executing something is not a done task — this is the
-single most important idea in the framework (see the rules in `.opencode/rules/`).
+single most important idea in the framework (see the rules in `framework/opencode/rules/`).
 
 The framework deliberately does **not** rebuild things that already exist. It builds on:
 
@@ -130,7 +130,7 @@ Key terms to understand before reading on:
 |---|---|
 | Agent | A persona definition with its own permissions and model. Many are "subagents" the team-lead delegates work to. |
 | Gate | An executable script that returns a real exit code. It either proves something or it does not. |
-| Rule | A standing instruction agents must obey (in `.opencode/rules/`). |
+| Rule | A standing instruction agents must obey (in `framework/opencode/rules/`). |
 | Skill | A packaged body of specialist knowledge agents load when a task needs it. |
 | Plan | The GSD document that says what will be built, which files, and how we will know it works. |
 | Evidence | The recorded result of an executed check. Reasoning alone is never evidence. |
@@ -194,7 +194,7 @@ gates a task must pass based on its impact and its change shape.
 
 ## 5. The forty agents
 
-There are **40 agent definitions** in `.opencode/agents/`:
+There are **40 agent definitions** in `framework/opencode/agents/`:
 
 - **7 core agents** — the hand-written orchestration crew.
 - **33 `gsd-*` agents** — distribution agents owned by the GSD workflow system
@@ -228,7 +228,7 @@ Their configured permissions (in `opencode.json`) are:
 | reviewer | deny | `*` deny | git diff/log/show + grep only | reads, never writes |
 | verifier | deny except `.planning/**/VERIFICATION.md` allow; `tests/**` ask | `*` deny | test/build/audit/playwright/gates allowed; destructive + history-mutating denied | runs gates, records exit codes |
 
-The core-agent *charters* (`.opencode/agents/*.md`) add standing instructions on top of
+The core-agent *charters* (`framework/opencode/agents/*.md`) add standing instructions on top of
 the JSON permissions:
 
 - **team-lead**: classifies (Phase 1 ask discovery, Phase 2 outcome discovery, Phase 3
@@ -289,10 +289,10 @@ instead of doing it inline. They are invoked by GSD orchestrator skills (for exa
 **Star topology.** Only `team-lead` delegates. All subagents have the `task` tool
 denied — a subagent can never spawn another subagent. Delegation happens through
 `task(...)` invocations with an explicit prompt, and handoffs are written as
-structured records to GSD state (`.opencode/rules/handoff.md`) — never by passing raw
+structured records to GSD state (`framework/opencode/rules/handoff.md`) — never by passing raw
 reasoning transcripts between agents.
 
-**Delegation protocol** (`.opencode/rules/delegation-protocol.md`):
+**Delegation protocol** (`framework/opencode/rules/delegation-protocol.md`):
 
 1. **Register before you delegate.** Every supervised task is registered with
    `task-register` into `<state_root>/tasks/` as an immutable contract (agent,
@@ -339,7 +339,7 @@ that authors any of them is rejected (exit 1) and the SUMMARY is not written.
 
 ## 7. The nine agent rules
 
-`.opencode/rules/` contains nine standing rules. They are loaded into every agent
+`framework/opencode/rules/` contains nine standing rules. They are loaded into every agent
 session via `opencode.json` `instructions`.
 
 | Rule file | What it says |
@@ -358,7 +358,7 @@ session via `opencode.json` `instructions`.
 
 ## 8. The eighty-seven skills
 
-There are **87 skills** in `.opencode/skills/`:
+There are **87 skills** in `framework/opencode/skills/`:
 
 - **16 framework-authored skills** — specialist knowledge for engineering domains:
   `api-design`, `apple-ui`, `architecture-right-sizing`, `backend-python`,
@@ -373,7 +373,7 @@ A skill is a directory with a `SKILL.md` plus supporting files. Skills are loade
 agent when a task matches the skill's description (the `skill` tool) or via the
 `task(..., load_skills=[...])` parameter.
 
-**Skill routing** (`.opencode/skill-routing.md`) is the central registry mapping a
+**Skill routing** (`framework/opencode/skill-routing.md`) is the central registry mapping a
 *condition* to a *skill* and an *agent*:
 
 | Condition | Skill(s) | Agent |
@@ -393,7 +393,7 @@ agent when a task matches the skill's description (the `skill` tool) or via the
 | Code review | `gsd-code-review` | reviewer |
 | Defect escape | `retrospective` | implementer |
 
-**Skill integration matrix** (`.opencode/skill-integration-matrix.md`, ratified v1.0)
+**Skill integration matrix** (`framework/opencode/skill-integration-matrix.md`, ratified v1.0)
 is the single binding contract: *which role loads which skill, produces which
 artifact, and is judged by which gate*. It is verified by gate reviewers and by
 **G-T1** (tool utilization). It encodes critic findings #3 (skills as verifiable
@@ -415,10 +415,10 @@ Matrix highlights (role → loads → produces):
   artifacts with tool evidence (G-T1).
 
 > Note: the routing table lists `security-research` for security concerns, but this skill is
-> environment-provided (builtin/user scope) — it is not one of the 87 under `.opencode/skills/`,
+> environment-provided (builtin/user scope) — it is not one of the 87 under `framework/opencode/skills/`,
 > so a fresh checkout may not have it. The canonical name is `security-research` (`security-review`
 > is an alias). Resolve it before loading; if it is absent, apply the Team Lead skill-availability
-> rule (`.opencode/agents/team-lead.md`): record the gap, never silently skip, never deadlock.
+> rule (`framework/opencode/agents/team-lead.md`): record the gap, never silently skip, never deadlock.
 
 ---
 
@@ -699,7 +699,7 @@ Supporting scripts:
 **The claim ledger** (`framework/claims/ledger.py`, append-only JSONL under the state
 root) is where conclusions live. A conclusion that is not recorded as a claim with
 reproducible provenance is not a conclusion — it is an unverified observation
-(`.opencode/rules/evidence-provenance.md`).
+(`framework/opencode/rules/evidence-provenance.md`).
 
 - **Claim classes**: environment / behavioral / data / causal.
 - **Classification vocabulary**: FACT | HYPOTHESIS | ASSUMPTION | UNKNOWN. The default
@@ -759,7 +759,7 @@ recurrence (1).
 
 ## 17. The telemetry plugin and model tuning
 
-**Telemetry plugin** (`.opencode/plugin/telemetry.ts`, registered in `opencode.json`):
+**Telemetry plugin** (`framework/opencode/plugin/telemetry.ts`, registered in `opencode.json`):
 a v2 collector that writes one lifecycle record per session to
 `<state_root>/telemetry/records.jsonl` in a series: `started` → `heartbeat` (every 60s
 and at compaction) → `final`. Optional `TASK_ID` environment variable tags a session to
@@ -910,7 +910,7 @@ stage. Seven stages:
 4. **Resolve code intelligence capabilities** — `code_intel.py resolve`; prints the
    provider and capability tiers.
 5. **Agent, tool, plugin and permission artifacts** — verifies `opencode.json`,
-   `AGENTS.md`, `.opencode/tools/context-builder.ts`, `.opencode/plugins/telemetry.ts`
+   `AGENTS.md`, `framework/opencode/tools/context-builder.ts`, `.opencode/plugins/telemetry.ts`
    exist; counts agent definitions; marks scripts executable.
 6. **Skills and rules** — lists skills and rules; chmods retro scripts; reports open
    retro triggers ("an install inherits nothing silently") and open blockers (an
@@ -962,7 +962,7 @@ The frontend stack is a **contract**, not a preference (`AGENTS.md`,
 
 ## 24. The context builder tool
 
-`.opencode/tools/context-builder.ts` resolves a task pointer set (requirements,
+`framework/opencode/tools/context-builder.ts` resolves a task pointer set (requirements,
 contracts, decisions, symbols, GSD task id) into paths, symbol locations, contract
 files, and impact sets — returning pointers plus capped excerpts. It:
 
@@ -976,7 +976,7 @@ files, and impact sets — returning pointers plus capped excerpts. It:
 
 ## 25. Delegated task supervision
 
-Supervision is executable state, not conversation (`.opencode/rules/delegation-protocol.md`).
+Supervision is executable state, not conversation (`framework/opencode/rules/delegation-protocol.md`).
 Every supervised `task(...)` is registered in `<state_root>/tasks/` as an immutable
 contract plus an append-only lifecycle event stream. `session_info` is not progress.
 
@@ -1173,18 +1173,18 @@ tests/                            tests
 
 ## 28. How to add a skill
 
-A skill is a directory under `.opencode/skills/<name>/` with a `SKILL.md` (plus
+A skill is a directory under `framework/opencode/skills/<name>/` with a `SKILL.md` (plus
 supporting files). To add one:
 
-1. **Write the skill** in `.opencode/skills/<name>/SKILL.md`:
+1. **Write the skill** in `framework/opencode/skills/<name>/SKILL.md`:
    - a one-paragraph description that states **when to use it** (the `skill` tool and
      agent delegation match on this),
    - the workflow or rules the agent should follow,
    - any supporting files (templates, scripts, reference docs) in the same directory.
-2. **Register it in the routing table** (`.opencode/skill-routing.md`): add a row
+2. **Register it in the routing table** (`framework/opencode/skill-routing.md`): add a row
    mapping the triggering *condition* → your skill → the *agent* that should load it.
    This is the file agents consult to know which skill matches which task.
-3. **Update the integration matrix** (`.opencode/skill-integration-matrix.md`): add the
+3. **Update the integration matrix** (`framework/opencode/skill-integration-matrix.md`): add the
    role → skill → artifact → gate row. The matrix is the binding contract; a skill that
    is not in the matrix is not verifiable by G-T1.
 4. **Reference it where needed**:
@@ -1206,15 +1206,15 @@ supporting files). To add one:
 ## 29. How to modify the flow
 
 The flow (§2) is produced by the interaction of: the permission model (`opencode.json`),
-the team-lead charter (`.opencode/agents/team-lead.md`), the routing and integration
+the team-lead charter (`framework/opencode/agents/team-lead.md`), the routing and integration
 matrices, the gate wiring, and the verifier profiles. Changing the flow means changing
 one of those, and each has a check:
 
 | You want to change… | You edit… | You must then verify… |
 |---|---|---|
 | Who may do what (permissions) | `opencode.json` (permission blocks) | G10 + the manual smoke test (§10) + `check_enforcement_plane.py` (exit 0) if the plane fence is touched |
-| How asks are classified | `.opencode/agents/team-lead.md` | agents reload instructions on next session; validate.py checks instructions reference the rules |
-| Which skill a task uses | `.opencode/skill-routing.md` + `.opencode/skill-integration-matrix.md` | G-T0 / G-T1 |
+| How asks are classified | `framework/opencode/agents/team-lead.md` | agents reload instructions on next session; validate.py checks instructions reference the rules |
+| Which skill a task uses | `framework/opencode/skill-routing.md` + `framework/opencode/skill-integration-matrix.md` | G-T0 / G-T1 |
 | Which gate proves a requirement | `framework/verifier/profiles.yaml` (profile → commands/gates) + `framework/gates/*.sh` | run the gate, record its exit code; `framework/validate.py`; `EXIT_CODES.md` stays authoritative |
 | Declared boundaries | `framework/architecture_rules.yaml` | G3 on affected tasks |
 | Retry behaviour / escalation | `framework/retry_policy.yaml` | validate.py checks retry counts and escalation exist |

@@ -10,7 +10,7 @@
 # default: their budgets are task-specific and MUST be named in the contract.
 #
 # checkpoint_vocabulary is the shared C0-C8 lifecycle vocabulary documented in
-# .opencode/rules/delegation-protocol.md. Each type declares a default progression;
+# framework/opencode/rules/delegation-protocol.md. Each type declares a default progression;
 # a contract that names its own `checkpoints` overrides the type default.
 checkpoint_vocabulary:
   - C0-TASK_ACCEPTED
@@ -25,7 +25,7 @@ checkpoint_vocabulary:
 
 # recovery_routes is the CLOSED vocabulary of recovery actions a task-type
 # policy may reference. Names mirror the health-table actions in
-# .opencode/rules/delegation-protocol.md and retry_policy.yaml's
+# framework/opencode/rules/delegation-protocol.md and retry_policy.yaml's
 # `on_exhaustion: escalate_to_human`. A route name outside this list is a
 # config error (TASK_CONFIG_INVALID), never a silent fallback.
 #

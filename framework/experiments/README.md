@@ -20,7 +20,7 @@ The experiment's whole output is the telemetry report (tokens per session,
 rework rate). A collector whose agent attribution is regressed produces a
 report that is wrong per-bucket, so the comparison would be built on noise.
 `run_experiment.mjs` therefore runs the synthetic-execution attribution metric
-(`.opencode/plugin/attribution_harness.mjs`, see ATTRIBUTION-METRIC.md) as a
+(`framework/opencode/plugin/attribution_harness.mjs`, see ATTRIBUTION-METRIC.md) as a
 preflight and REFUSES to schedule on failure (exit 2). Preflight failure means
 "fix the collector first", never "run anyway".
 

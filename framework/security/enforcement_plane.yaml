@@ -15,11 +15,11 @@
 
 version: 1
 paths:
-  - path: "framework/**"
-    note: "gates, claims, retro, security, adapters, policy"
   - path: ".opencode/**"
     note: "agents, rules, skills, plugin, config"
   - path: "opencode.json"
     note: "permission model"
   - path: "AGENTS.md"
     note: "stable global rules"
+  - path: "framework.config.json"
+    note: "framework binding (one config)"

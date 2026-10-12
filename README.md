@@ -9,24 +9,36 @@ first if you want the whole picture).
 
 ## Install
 
+The framework is a package. Install it, then bind an application repository to it with
+`framework init`, which materialises the framework's OpenCode surface into the app's
+`.opencode/` with every include path rewritten to the app root — so nothing resolves against
+the machine the package was built on.
+
 ```bash
-cp -r . /path/to/your/repo/        # merge into the repository root
-cd /path/to/your/repo
-bash framework/bootstrap.sh        # detect, resolve, emit, validate
+pip install "agentic-lifecycle @ git+https://github.com/<org>/agentic-lifecycle@v0.1.0"
+cd /path/to/your/app
+framework init            # bind this repo (alias: framework bootstrap)
+framework validate --profile app
 opencode --agent team-lead
 ```
 
-Bootstrap is sequential and stops on the first failed stage. Stage 3 prints the
-adopt-before-extend audit — complete it before implementing Reviewer, Verifier profiles, or
-graph access.
+`framework init` writes `framework.config.json`, scaffolds `.framework/state/{decisions,contracts}`,
+materialises the OpenCode surface (`gsd-core`, `skills`, `commands`, `agents`, `rules`) under
+`.opencode/`, installs `.opencode/plugins/bootstrap.ts`, and migrates any legacy
+`.planning/{decisions,contracts}`. The materialised surface is generated and its `@`-includes are
+rewritten to the app root; the plugin resolves this app-local surface first (falling back to the
+installed package) at startup, never a hard-coded path, so it is safe to commit. Restart OpenCode
+after init. The command is idempotent — re-run it after an upgrade to refresh the surface.
+
+`framework standalone` proves the installed wheel binds and validates a bare consumer app.
 
 ### Prerequisites
 
-- **bash** — the gates (`framework/gates/*.sh`) and `bootstrap.sh` are bash scripts and refuse
-  to run under `sh` or PowerShell (exit 2, BLOCKED). On Windows use Git Bash or WSL.
-- **python3 on PATH** — the gates shell out to `python3 framework/adapters/gsd_state.py`; on
-  Windows a bare `python3` may not resolve (use `python` or install the launcher). Gate invocations
-  are the documented contract — see `framework/gates/EXIT_CODES.md`.
+- **python3 on PATH** — the CLI and the gates resolve their interpreter at runtime, and the OpenCode
+  plugin shells out to locate the installed package (it tries `python` then `python3`, so either
+  works on Windows). Gate invocations are the documented contract — see `framework/gates/EXIT_CODES.md`.
+- **bash** — the gates (`framework/gates/*.sh`) are bash scripts and refuse to run under `sh`
+  or PowerShell (exit 2, BLOCKED). On Windows use Git Bash or WSL.
 - **LF line endings** — the repo is stored LF (`* text=auto eol=lf` in `.gitattributes`); a
   machine-global `core.autocrlf=true` rewrites checked-out files to CRLF even though nothing is
   committed CRLF. If a working tree shows CRLF after clone, run `git add --renormalize .` once.
@@ -38,18 +50,21 @@ opencode.json                     runtime config: model, instructions, permissio
                                   MCP servers, references, skills paths, plugin, compaction
 AGENTS.md                         stable global rules only (rule zero, do-not-invoke, evidence)
                                   + the enforcement-plane fence
-.opencode/
-  agents/                         40 agent definitions (7 core + 33 gsd-*)
-  rules/                          evidence applicability, DoD vs verification, handoff shape,
+framework/
+  opencode/                       THE OpenCode surface, authored here. `framework init`
+                                  materialises it into an app's `.opencode/`, rewriting every
+                                  include to the app root.
+    agents/                       40 agent definitions (7 core + 33 gsd-*)
+    rules/                        evidence applicability, DoD vs verification, handoff shape,
                                   blockers, bash hygiene, background tasks, delegation protocol,
                                   retrospective, evidence provenance (9 rules)
-  skills/                         86 skills (15 framework-authored + 71 gsd-* distribution)
-  skill-routing.md                central registry: condition -> skill -> agent
-  skill-integration-matrix.md     binding contract: role -> skill -> artifact -> gate
-  tools/context-builder.ts        pointer resolver, capped excerpts
-  plugin/telemetry.ts             v2 collector, one record per session
-  commands/ hooks/ scripts/       OpenCode project configuration (skills-as-commands, hooks)
-framework/
+    skills/                       86 skills (15 framework-authored + 71 gsd-* distribution)
+    skill-routing.md              central registry: condition -> skill -> agent
+    skill-integration-matrix.md   binding contract: role -> skill -> artifact -> gate
+    tools/context-builder.ts      pointer resolver, capped excerpts
+    plugin/telemetry.ts           v2 collector, one record per session
+    plugin/bootstrap.ts           startup surface resolver (materialised to the app)
+    commands/ hooks/ scripts/     OpenCode project configuration (skills-as-commands, hooks)
   gates/                          EXIT_CODES.md (AUTHORITATIVE contract) + 20 executable gates:
                                   g1_contract, g2_impact, g3_architecture, g4_executable,
                                   g5_frontend_stack, g6_browser, g7_retro, g8_blockers,
@@ -75,6 +90,7 @@ framework/
   audit_check.py                  adopt-before-extend audit completeness (exit 3 = undecided)
   ADOPT_AUDIT.md                  required install step
   bootstrap.sh / validate.py      install and validation suite
+  cli.py / init.py / __main__.py  the `framework` CLI: bind an app, validate a wheel
 .lifecycle/                       feature-development lifecycle integration (G0/G0.5/G3.5/G7/G8,
                                   human gates H1-H3; config.yml, INTEGRATION.md)
 .planning/                        GSD state root (phases, plans, decisions, contracts,

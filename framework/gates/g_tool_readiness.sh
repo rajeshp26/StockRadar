@@ -37,7 +37,7 @@ try:
         sys.exit(1)
     
     # Check if team-lead has tool applicability analysis
-    team_lead_path = '.opencode/agents/team-lead.md'
+    team_lead_path = 'framework/opencode/agents/team-lead.md'
     if not os.path.exists(team_lead_path):
         print('MISSING:team-lead.md not found')
         sys.exit(1)
@@ -53,7 +53,7 @@ try:
     core_agents = ['implementer.md', 'verifier.md', 'researcher.md', 'architect.md', 'planner.md', 'reviewer.md']
     missing_contracts = []
     for agent in core_agents:
-        agent_path = f'.opencode/agents/{agent}'
+        agent_path = f'framework/opencode/agents/{agent}'
         if os.path.exists(agent_path):
             with open(agent_path, 'r') as f:
                 if '## Tool Contract' not in f.read():

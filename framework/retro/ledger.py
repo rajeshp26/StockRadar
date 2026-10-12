@@ -70,14 +70,16 @@ _BACKFILL_SITES = {
     "EXT-CRITIQUE-03": "framework/gates/g_entry.sh",
     "EXT-CRITIQUE-05": ".lifecycle",
     "EXT-CRITIQUE-07": "framework/contracts/validator.py",
-    "TELEMETRY-RCA": ".opencode/plugin/telemetry.ts",
+    "TELEMETRY-RCA": "framework/opencode/plugin/telemetry.ts",
     "PRICE-HISTORY-COMPRESSOR": "shared/price_rows.py",
 }
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
 from framework.adapters.gsd_state import root as _gsd_state_root
 
 

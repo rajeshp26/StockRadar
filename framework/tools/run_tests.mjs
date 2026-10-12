@@ -22,7 +22,7 @@ const ROOT = resolve(import.meta.dirname, "..", "..");
 // Declared suites. Each MUST contain at least one *.test.mjs file or the run
 // refuses to start - a missing suite is a FAIL, never a silent skip.
 const SUITES = [
-  { name: "plugin", defaultDir: ".opencode/plugin" },
+  { name: "plugin", defaultDir: "framework/opencode/plugin" },
   { name: "experiments", defaultDir: "framework/experiments" },
 ];
 

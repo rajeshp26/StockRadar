@@ -20,11 +20,19 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-# Anchored on __file__, never on the CWD. The manifest location, state-root detection,
-# and the resolved root were all CWD-relative, so running any framework script from a
-# subdirectory addressed a different tree and silently wrote state outside the repo.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = REPO_ROOT / "framework" / ".manifest" / "gsd.json"
+# The app root is config-driven: framework.locate reads framework.config.json,
+# else falls back to the framework's own install root. Anchored on __file__ via
+# locate, never on the CWD, so running a framework script from a subdirectory
+# cannot address a different tree.
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
+from framework import locate as _locate
+
+REPO_ROOT = _locate.app_root()
+MANIFEST = _locate.manifest_dir() / "gsd.json"
 
 # (state_root, distribution, mode). Recognised for detection; see SUPPORTED for implemented.
 DISTRIBUTIONS = ((".planning", "gsd-core", "files"), (".gsd", "gsd-pi", "db"))
@@ -376,7 +384,7 @@ _TASK_REQUIRED = ("agent", "objective", "expected_artifact")
 
 
 # Health-level escalation signals for recovery. Mirrors the health table in
-# .opencode/rules/delegation-protocol.md; a type recovery policy in
+# framework/opencode/rules/delegation-protocol.md; a type recovery policy in
 # task_types.yaml must declare a route for each of these. FAILED splits by
 # taxonomy class into FAILED_PROVIDER / FAILED_WORKER for policy lookup.
 _RECOVERY_SIGNALS = ("FAILED_PROVIDER", "FAILED_WORKER", "STALLED", "OVERDUE", "LOST")

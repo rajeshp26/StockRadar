@@ -22,7 +22,7 @@ dispatch in a window is the probe; its outcome is recorded, and a blocking outco
 refuses the next dispatch. Inventory (opencode models) confirms the model exists;
 the health ledger confirms it has not recently failed.
 
-Failure taxonomy (from the Team Lead decision model, .opencode/agents/team-lead.md):
+Failure taxonomy (from the Team Lead decision model, framework/opencode/agents/team-lead.md):
 
   SUSPECTED_STALL          process exists, no output (worker-level, not provider)
   AUTH_FAILURE             401/403, invalid or missing api key
@@ -62,8 +62,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(ROOT / "framework"))
+# framework/providers/healthcheck.py -> framework/ (package-relative)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
     from models import resolve as _res
@@ -110,9 +110,11 @@ def classify(text: str) -> tuple[str | None, str]:
 
 # --- health ledger ----------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
 from framework.adapters.gsd_state import root as _gsd_state_root
 
 

@@ -107,9 +107,9 @@ anti-pattern: calling `background_output` on a `bg_xxx` task before the
 
 This framework cannot remove those paths from the tool. What it can do, and does:
 
-* `.opencode/rules/background-tasks.md` declares the contract: fire -> END RESPONSE
+* `framework/opencode/rules/background-tasks.md` declares the contract: fire -> END RESPONSE
   -> wait for system-reminder -> collect.
-* `.opencode/plugin/telemetry.ts` measures `bg_poll_total` per session, classifying
+* `framework/opencode/plugin/telemetry.ts` measures `bg_poll_total` per session, classifying
   every background_output call as poll or collect.
 * `framework/validate.py` section 15c checks the rule, the telemetry field, and the
   agent instruction surface all exist.

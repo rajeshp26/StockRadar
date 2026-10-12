@@ -186,28 +186,28 @@ The Reviewer Agent must NOT be the same logical agent that implemented the featu
 
 | Agent | File | Tier | Role |
 |-------|------|------|------|
-| Team Lead | `.opencode/agents/team-lead.md` | — | Governance and orchestration |
-| Architect | `.opencode/agents/architect.md` | Strategic | Read-only architecture |
-| Reviewer | `.opencode/agents/reviewer.md` | Strategic | Independent engineering review |
-| Frontend | `.opencode/agents/frontend.md` | Domain | React, Next.js, UI/UX |
-| Backend | `.opencode/agents/backend.md` | Domain | Python, FastAPI, business logic |
-| Database | `.opencode/agents/database.md` | Domain | Supabase, PostgreSQL, schema |
-| QA | `.opencode/agents/qa.md` | Quality/Risk | Testing strategy |
-| Security | `.opencode/agents/security.md` | Quality/Risk | Threat modeling, blocking |
-| Design Reviewer | `.opencode/agents/design-reviewer.md` | Quality/Risk | Visual/UX review |
-| Debugger | `.opencode/agents/debugger.md` | Tactical | Root cause investigation |
-| RCA Reviewer | `.opencode/agents/rca-reviewer.md` | Tactical | RCA adversarial review |
-| Implementer | `.opencode/agents/implementer.md` | Tactical | Bounded-scope executor |
-| Test Engineer | `.opencode/agents/test-engineer.md` | Tactical | Test implementation |
+| Team Lead | `framework/opencode/agents/team-lead.md` | — | Governance and orchestration |
+| Architect | `framework/opencode/agents/architect.md` | Strategic | Read-only architecture |
+| Reviewer | `framework/opencode/agents/reviewer.md` | Strategic | Independent engineering review |
+| Frontend | `framework/opencode/agents/frontend.md` | Domain | React, Next.js, UI/UX |
+| Backend | `framework/opencode/agents/backend.md` | Domain | Python, FastAPI, business logic |
+| Database | `framework/opencode/agents/database.md` | Domain | Supabase, PostgreSQL, schema |
+| QA | `framework/opencode/agents/qa.md` | Quality/Risk | Testing strategy |
+| Security | `framework/opencode/agents/security.md` | Quality/Risk | Threat modeling, blocking |
+| Design Reviewer | `framework/opencode/agents/design-reviewer.md` | Quality/Risk | Visual/UX review |
+| Debugger | `framework/opencode/agents/debugger.md` | Tactical | Root cause investigation |
+| RCA Reviewer | `framework/opencode/agents/rca-reviewer.md` | Tactical | RCA adversarial review |
+| Implementer | `framework/opencode/agents/implementer.md` | Tactical | Bounded-scope executor |
+| Test Engineer | `framework/opencode/agents/test-engineer.md` | Tactical | Test implementation |
 
 ## 16. Command Reference
 
 | Command | File | Purpose |
 |---------|------|---------|
-| `/team-status` | `.opencode/commands/team-status.md` | Project status dashboard |
-| `/team-review` | `.opencode/commands/team-review.md` | Orchestrate team review |
-| `/team-ship` | `.opencode/commands/team-ship.md` | Pre-ship quality gates + ship |
-| `/bugfix` | `.opencode/commands/bugfix.md` | 10-gate bugfix workflow |
-| `/debug` | `.opencode/commands/debug.md` | 10-gate debugging workflow |
-| `/feature` | `.opencode/commands/feature.md` | 10-gate feature development |
-| `/verify` | `.opencode/commands/verify.md` | Final quality verification |
+| `/team-status` | `framework/opencode/commands/team-status.md` | Project status dashboard |
+| `/team-review` | `framework/opencode/commands/team-review.md` | Orchestrate team review |
+| `/team-ship` | `framework/opencode/commands/team-ship.md` | Pre-ship quality gates + ship |
+| `/bugfix` | `framework/opencode/commands/bugfix.md` | 10-gate bugfix workflow |
+| `/debug` | `framework/opencode/commands/debug.md` | 10-gate debugging workflow |
+| `/feature` | `framework/opencode/commands/feature.md` | 10-gate feature development |
+| `/verify` | `framework/opencode/commands/verify.md` | Final quality verification |

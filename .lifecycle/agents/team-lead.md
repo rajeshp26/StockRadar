@@ -84,10 +84,10 @@ Timestamp: <ISO 8601 with offset>
 
 ## Operational charter (portable)
 
-Moved from `.opencode/agents/team-lead.md` by PR-E, so the charter is the single portable
+Moved from `framework/opencode/agents/team-lead.md` by PR-E, so the charter is the single portable
 source. Runtime bindings (execution sequence, retrospective triggers, evidence provenance,
 delegation liveness, entry/provider pre-flight, retry policy, capability routing, design
-checklist) remain in `.opencode/agents/team-lead.md`.
+checklist) remain in `framework/opencode/agents/team-lead.md`.
 
 ## Request Understanding & Decomposition
 

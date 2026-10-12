@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Negative-path tests for framework/standalone_check.py.
+"""Negative-path and contract tests for framework/standalone_check.py.
 
-The exit-0 path is proved by running the guard itself, which needs a real validate.py
-and a full copy of the framework surface. These tests cover the two paths that make the
-guard mean anything:
+The exit-0 path is proved by running the guard itself: it builds the wheel, installs it into a
+throwaway venv, binds the reference application with `framework init`, and runs
+`validate --profile app`. That is deliberate, expensive evidence and it lives with the guard.
+These tests pin the cheap, deterministic half the guard must never lose - it refuses to proceed
+whenever it cannot produce that evidence:
 
-  - exit 2  an incomplete declared surface is refused, not silently trimmed
-  - exit 1  a failing validation is reported NOT STANDALONE, never passed vacuously
+  - exit 2  an incomplete reference application is refused, not silently trimmed
+  - exit 2  an unknown flag is refused with usage
+  - exit 2  a --wheel that does not exist is refused
+  - the guard reaches the wheel step only when the reference application is complete
+  - _parse accepts --keep / --wheel PATH / --wheel=PATH and rejects everything else
 
-A guard only ever observed to exit 0 has not been shown to work. The regression pinned
-here is the accounting defect: four of five required entries plus the optional entry is
-NOT a complete surface. An earlier version compared a count against len(REQUIRED) and
-would have proceeded with a hole in the surface.
-
-ROOT is redirected onto a synthetic tree so the real repository is never staged and
-validate.py is never really executed. The module global is restored in a finally block.
+ROOT is redirected onto a synthetic tree so the real repository is never staged and no wheel is
+built. The module global is restored in a finally block.
 
 Exit codes: 0 all checks pass | 1 a check failed.
 """
@@ -29,8 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import standalone_check
 
-DIRS = ("framework", ".opencode", ".lifecycle")
-FILES = ("opencode.json", "AGENTS.md")
+# The reference application the guard stages: the `--profile app` self-fixture (plan 4.1).
+DIRS = ("src", "tests", ".planning/contracts")
+FILES = ("package.json", "vite.config.ts", "playwright.config.ts",
+         "tsconfig.json", "components.json", "index.html")
 OPTIONAL = ".gitattributes"
 
 _results: list[tuple[str, bool]] = []
@@ -42,35 +44,39 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{suffix}")
 
 
-def build_root(base: Path, *, omit: str = "", validate_rc: int | None = None) -> Path:
-    """Synthetic framework root. `omit` drops one REQUIRED entry; validate_rc, if given,
-    writes a framework/validate.py stub exiting with that code."""
+def build_root(base: Path, *, omit: str = "") -> Path:
+    """Synthetic framework root holding the reference application. `omit` drops one required
+    entry so the guard must refuse rather than trim the surface."""
     root = base / "root"
     root.mkdir(parents=True)
     for name in (*DIRS, *FILES, OPTIONAL):
         if name == omit:
             continue
+        target = root / name
         if name in DIRS:
-            (root / name).mkdir()
+            target.mkdir(parents=True)
         else:
-            (root / name).write_text("stub\n", encoding="utf-8")
-    if validate_rc is not None:
-        (root / "framework" / "validate.py").write_text(
-            "import sys\n"
-            "print('FAIL stub check never satisfied')\n"
-            f"sys.exit({validate_rc})\n",
-            encoding="utf-8",
-        )
+            target.write_text("stub\n", encoding="utf-8")
     return root
 
 
-def run_guard(root: Path) -> tuple[int, str]:
+def stage(root: Path, scaffold: Path) -> tuple[list[str], list[str]]:
+    original = standalone_check.ROOT
+    standalone_check.ROOT = root
+    try:
+        scaffold.mkdir(parents=True, exist_ok=True)
+        return standalone_check._stage(scaffold)
+    finally:
+        standalone_check.ROOT = original
+
+
+def run_main(root: Path, argv: list[str]) -> tuple[int, str]:
     original = standalone_check.ROOT
     standalone_check.ROOT = root
     buf = io.StringIO()
     try:
-        with contextlib.redirect_stdout(buf):
-            code = standalone_check.main()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = standalone_check.main(argv)
     finally:
         standalone_check.ROOT = original
     return code, buf.getvalue()
@@ -79,23 +85,49 @@ def run_guard(root: Path) -> tuple[int, str]:
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="standalone-guard-"))
     try:
-        print("standalone_check negative paths")
+        print("standalone_check v2 contract")
 
-        # Exit 2: one required entry absent. The optional entry is present, so this
-        # also pins that an optional file cannot mask a hole in the required surface.
-        code, out = run_guard(build_root(tmp / "a", omit=".lifecycle"))
-        check("incomplete required surface -> exit 2 (BLOCKED)", code == 2, f"exit={code} out={out!r}")
-        check("BLOCKED names the missing entry", ".lifecycle" in out, f"out={out!r}")
-        check("optional entry does not mask a missing required entry", code == 2, f"exit={code}")
+        complete = build_root(tmp / "ok")
+        staged, missing = stage(complete, tmp / "ok" / "app")
+        check("complete reference application stages with nothing missing",
+              missing == [], f"missing={missing}")
+        check("the framework tree is never staged",
+              "framework" not in staged and ".opencode" not in staged, f"staged={staged}")
 
-        # Exit 1: a complete surface whose validate.py fails must be reported, not passed.
-        code, out = run_guard(build_root(tmp / "b", validate_rc=1))
-        check("failing validation -> exit 1 (NOT STANDALONE)", code == 1, f"exit={code} out={out!r}")
-        check("NOT STANDALONE surfaces the failing check", "FAIL stub check" in out, f"out={out!r}")
+        hole = build_root(tmp / "hole", omit="tests")
+        _, missing = stage(hole, tmp / "hole" / "app")
+        check("a missing required entry is reported, not trimmed",
+              missing == ["tests"], f"missing={missing}")
 
-        # A complete surface that passes must still be the only path reaching exit 0.
-        code, out = run_guard(build_root(tmp / "c", validate_rc=0))
-        check("passing validation -> exit 0 (STANDALONE)", code == 0, f"exit={code} out={out!r}")
+        # Exit 2: incomplete reference application, refused before any build.
+        code, out = run_main(hole, [])
+        check("incomplete reference application -> exit 2 (BLOCKED)",
+              code == 2, f"exit={code} out={out!r}")
+        check("BLOCKED names the missing entry",
+              "BLOCKED" in out and "tests" in out, f"out={out!r}")
+
+        # Exit 2: unknown flag -> usage on stderr.
+        code, out = run_main(complete, ["--bogus"])
+        check("unknown flag -> exit 2 with usage",
+              code == 2 and "usage: framework standalone" in out, f"exit={code}")
+
+        # Exit 0: --help.
+        code, out = run_main(complete, ["--help"])
+        check("--help -> exit 0 and prints usage",
+              code == 0 and "usage: framework standalone" in out, f"exit={code}")
+
+        # Exit 2: complete fixture, --wheel that does not exist (reaches the wheel step).
+        code, out = run_main(complete, ["--wheel", "no-such-wheel.whl"])
+        check("missing --wheel -> exit 2 (BLOCKED)",
+              code == 2 and "wheel not found" in out, f"exit={code} out={out!r}")
+
+        for argv, want in ((["--keep"], (True, None)),
+                           (["--wheel", "w.whl"], (False, "w.whl")),
+                           (["--wheel=w.whl"], (False, "w.whl")),
+                           (["--keep", "--wheel=w.whl"], (True, "w.whl"))):
+            check(f"_parse({argv}) -> {want}", standalone_check._parse(argv) == want)
+        for argv in (["--wheel"], ["--nope"], ["positional"]):
+            check(f"_parse({argv}) -> None", standalone_check._parse(argv) is None)
 
         failed = [n for n, ok in _results if not ok]
         print(f"\n{len(_results) - len(failed)}/{len(_results)} checks passed")

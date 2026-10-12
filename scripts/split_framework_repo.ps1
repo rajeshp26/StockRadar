@@ -19,7 +19,7 @@
 #     committed or stashed first - `git status --porcelain` must be empty)
 #   - `agentic-lifecycle` installed in the active python env from the pin
 #     (pip install "agentic-lifecycle @ git+https://github.com/rajeshp26/agentic-lifecycle.git@v0.1.0")
-#   - user-approved app `opencode.json`, `AGENTS.md`, `.opencode/plugin/bootstrap.ts`
+#   - user-approved app `opencode.json`, `AGENTS.md`, `framework/opencode/plugin/bootstrap.ts`
 #     are in place (asserted by step 5 markers below)
 #
 # The script NEVER authors plane files (opencode.json / AGENTS.md / .opencode/**):
@@ -334,14 +334,14 @@ if (-not (Invoke-Check "opencode.json is the THIN binding (plugin bootstrap.ts, 
     return ($c -match 'bootstrap\.ts') -and ($c -match 'AGENTS\.md')
 })) { $PlaneOk = $false }
 
-if (-not (Invoke-Check ".opencode/plugin/bootstrap.ts present" {
-    $f = Join-Path $ProjectRoot '.opencode\plugin\bootstrap.ts'
+if (-not (Invoke-Check "framework/opencode/plugin/bootstrap.ts present" {
+    $f = Join-Path $ProjectRoot 'framework/opencode/plugin\bootstrap.ts'
     return Test-Path -LiteralPath $f
 })) { $PlaneOk = $false }
 
 if (-not $PlaneOk) {
     if ($Apply) {
-        Write-Fail "plane files are missing/incomplete - place the user-approved opencode.json, AGENTS.md, and .opencode/plugin/bootstrap.ts, then re-run"
+        Write-Fail "plane files are missing/incomplete - place the user-approved opencode.json, AGENTS.md, and framework/opencode/plugin/bootstrap.ts, then re-run"
         exit 1
     }
     Write-Warn "[dry-run] these markers are checked in -Execute mode; missing markers will abort the carve"
@@ -368,7 +368,7 @@ if ($Apply) {
             $trimmed = $line.TrimEnd()
             if ($obsoleteLines -contains $trimmed) { continue }                      # drop framework-owned
             if ($trimmed -eq '.opencode/') {
-                $out.Add('.opencode/plugin/*.js')                                   # scope: generated shims only
+                $out.Add('framework/opencode/plugin/*.js')                                   # scope: generated shims only
                 continue
             }
             $out.Add($line)
@@ -395,7 +395,7 @@ if ($Apply) {
     Commit-Atomic 'chore(split): gitignore framework runtime, scope .opencode to generated plugin shims'
 }
 else {
-    Write-Warn "[dry-run] would: drop '$($obsoleteLines -join "', '")'; change '.opencode/' -> '.opencode/plugin/*.js'; append .framework runtime block"
+    Write-Warn "[dry-run] would: drop '$($obsoleteLines -join "', '")'; change '.opencode/' -> 'framework/opencode/plugin/*.js'; append .framework runtime block"
     Write-Warn "[dry-run] would commit: chore(split): gitignore framework runtime, scope .opencode to generated plugin shims"
 }
 
@@ -423,7 +423,7 @@ $cosmeticEdits = @(
     },
     @{
         Path = 'web/src/app/globals.css'
-        Old  = 'Values verbatim from `.opencode/skills/apple-ui/tokens.css`.'
+        Old  = 'Values verbatim from `framework/opencode/skills/apple-ui/tokens.css`.'
         New  = 'Values verbatim from `framework/opencode/skills/apple-ui/tokens.css` (installed package surface).'
     }
 )

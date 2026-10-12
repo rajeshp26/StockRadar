@@ -73,9 +73,9 @@ Timestamp: <ISO 8601 with offset>
 
 ## Operational charter (portable)
 
-Moved from `.opencode/agents/planner.md` by PR-E, so the charter is the single portable
+Moved from `framework/opencode/agents/planner.md` by PR-E, so the charter is the single portable
 source. Runtime bindings (required-skill assignment, tool contract, stopping rule) remain in
-`.opencode/agents/planner.md`.
+`framework/opencode/agents/planner.md`.
 
 Defer to GSD's planner and plan-checker where the installed distribution provides them. Your
 job is to add contract and impact awareness, not to replace GSD planning.

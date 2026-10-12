@@ -451,7 +451,7 @@
 
 /* ==========================================================
    APPLE-UI SEMANTIC LAYER (super-investors dashboard)
-   — Values verbatim from `.opencode/skills/apple-ui/tokens.css`.
+   — Values verbatim from `framework/opencode/skills/apple-ui/tokens.css`.
    `--au-*` avoids collisions with existing tokens; the unprefixed
    `--financial-up/down` pair is the canonical directional source.
    ========================================================== */

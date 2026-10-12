@@ -27,14 +27,22 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# framework/verification/_state.py -> framework/ -> repository root
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
+# framework/verification/_state.py -> framework/ -> repository root.
+# The app root is config-driven (framework.locate).
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
+from framework import locate as _locate
+
+APP_ROOT = _locate.app_root()
+if str(APP_ROOT) not in sys.path:
     # The verification scripts are runnable from any working directory, so the
     # adapter imports below cannot depend on the caller's sys.path.
-    sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(APP_ROOT))
 
-FALLBACK = REPO_ROOT / ".planning"
+FALLBACK = _locate.state_root()
 
 
 def state_root() -> Path:
@@ -51,7 +59,7 @@ def state_root() -> Path:
         from framework.adapters.gsd_state import root as _gsd_state_root
 
         resolved = Path(_gsd_state_root())
-        return resolved if resolved.is_absolute() else (REPO_ROOT / resolved).resolve()
+        return resolved if resolved.is_absolute() else (APP_ROOT / resolved).resolve()
     except Exception as exc:  # any failure lands on the fallback; report it
         reason = f"{type(exc).__name__}: {exc}"
     print(

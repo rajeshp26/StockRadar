@@ -159,7 +159,7 @@ recorded means nothing to judge, which is never a pass.
 
 ## Rules
 
-The behavioural contract for claims lives in `.opencode/rules/evidence-provenance.md`:
+The behavioural contract for claims lives in `framework/opencode/rules/evidence-provenance.md`:
 claim classes, the VERIFIED controlled term, verification levels L1/L2/L3, runtime-scoped
 claims, and the two log rules. Insufficient provenance is blocker signal
 `EVIDENCE_INSUFFICIENT` (retry action `gather_provenance_or_downgrade_claim`).

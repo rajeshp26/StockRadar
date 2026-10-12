@@ -2,7 +2,7 @@
 """Conformance test for the canonical [gate] line protocol.
 
 WHY THIS EXISTS
-    The parser change lives in .opencode/plugin/gates.mjs. Its authoritative
+    The parser change lives in framework/opencode/plugin/gates.mjs. Its authoritative
     suite (gates.test.mjs) runs under node and is exercised separately; node
     is present here (v24.14.1) and that suite passes 37/37. This file is NOT
     a substitute for it -- it proves the side gates.test.mjs cannot see: the
@@ -70,7 +70,7 @@ def resolve_gates_dir():
 
 LIB = os.path.join(resolve_gates_dir(), "_lib.sh")
 
-# Transliteration of the PRE-patch regex (.opencode/plugin/gates.mjs:73).
+# Transliteration of the PRE-patch regex (framework/opencode/plugin/gates.mjs:73).
 OLD_RE = re.compile(
     r"^\[gate\]\s+([A-Za-z0-9_-]+)\s+"
     r"result=(pass|fail|unverifiable|not_reached|started)"

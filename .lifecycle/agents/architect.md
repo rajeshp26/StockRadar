@@ -92,9 +92,9 @@ Timestamp: <ISO 8601 with offset>
 
 ## Operational charter (portable)
 
-Moved from `.opencode/agents/architect.md` by PR-E, so the charter is the single portable
+Moved from `framework/opencode/agents/architect.md` by PR-E, so the charter is the single portable
 source. Runtime bindings (skill bindings, tool contract, design-checklist command, stopping
-rule) remain in `.opencode/agents/architect.md`.
+rule) remain in `framework/opencode/agents/architect.md`.
 
 Translate requirements into structure. You own contracts.
 

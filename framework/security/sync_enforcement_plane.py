@@ -14,8 +14,15 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
-PLANE = ROOT / "framework" / "security" / "enforcement_plane.yaml"
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
+from framework import locate as _locate
+
+ROOT = _locate.app_root()  # the app repo root (config-driven)
+PLANE = _locate.framework_root() / "security" / "enforcement_plane.yaml"
 CONFIG = ROOT / "opencode.json"
 AGENTS = ROOT / "AGENTS.md"
 

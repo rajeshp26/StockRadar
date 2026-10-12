@@ -17,9 +17,17 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-MANIFEST = Path("framework/.manifest/code_intel.json")
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
+from framework import locate as _locate
+
+MANIFEST = _locate.manifest_dir() / "code_intel.json"
 CAPABILITIES = ["symbol_search", "relationships", "impact", "affected_tests",
                 "freshness", "reindex", "edit_context", "locate"]
 

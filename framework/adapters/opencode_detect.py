@@ -10,6 +10,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
+from framework import locate as _locate
 import host as _host                                    # noqa: E402
 from hosts import opencode as _oc                       # noqa: E402
 
@@ -39,7 +45,7 @@ def detect():
         "config_precedence": caps["config_precedence"],
         "DEPRECATED": "use framework/adapters/host.py; this shim will be removed",
     }
-    p = Path("framework/.manifest/opencode.json")
+    p = _locate.manifest_dir() / "opencode.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(m, indent=2))
     _host.describe()          # keep host.json fresh too

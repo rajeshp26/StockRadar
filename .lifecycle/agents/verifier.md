@@ -113,9 +113,9 @@ Timestamp: <ISO 8601 with offset>
 
 ## Operational charter (portable)
 
-Moved from `.opencode/agents/verifier.md` by PR-E, so the charter is the single portable
+Moved from `framework/opencode/agents/verifier.md` by PR-E, so the charter is the single portable
 source. Runtime bindings (gate sequence, gate sections, tool contract, recovery checkpoint)
-remain in `.opencode/agents/verifier.md`.
+remain in `framework/opencode/agents/verifier.md`.
 
 You produce evidence, not opinions. Every claim you make has an exit code or an artifact.
 

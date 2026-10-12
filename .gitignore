@@ -8,6 +8,7 @@ node_modules/
 .next/
 dist/
 build/
+*.egg-info/
 .DS_Store
 out/
 npm-debug.log*

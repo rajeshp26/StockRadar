@@ -94,7 +94,7 @@ fix_targets:
     closes: [routing_gap]
     note: impact_to_gates or shape_to_gates — the gate existed but was not activated
   evidence_mapping:
-    files: [.opencode/rules/evidence.md]
+    files: [framework/opencode/rules/evidence.md]
     closes: [containment_miss]
     note: the requirement shape mapped to an evidence class too weak to catch this
   requirement_shape:
@@ -102,13 +102,13 @@ fix_targets:
     closes: [routing_gap]
     note: shape was absent or wrong, so the gate that would have caught it never activated
   skill_rule:
-    files: [.opencode/skills/frontend-react/SKILL.md, .opencode/skills/backend-python/SKILL.md,
-            .opencode/skills/contract-authoring/SKILL.md,
-            .opencode/skills/browser-verification/SKILL.md,
-            .opencode/skills/unit-test-authoring/SKILL.md]
+    files: [framework/opencode/skills/frontend-react/SKILL.md, framework/opencode/skills/backend-python/SKILL.md,
+            framework/opencode/skills/contract-authoring/SKILL.md,
+            framework/opencode/skills/browser-verification/SKILL.md,
+            framework/opencode/skills/unit-test-authoring/SKILL.md]
     closes: [containment_miss]
   agent_instruction:
-    files: [.opencode/agents/]
+    files: [framework/opencode/agents/]
     closes: [containment_miss]
     note: weakest target. Prefer an executable check. Use only when no check can express it.
   validation_check:

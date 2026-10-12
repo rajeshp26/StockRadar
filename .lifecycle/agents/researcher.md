@@ -92,8 +92,8 @@ Timestamp: <ISO 8601 with offset>
 
 ## Operational charter (portable)
 
-Moved from `.opencode/agents/researcher.md` by PR-E, so the charter is the single portable
-source. Runtime bindings (tool contract, stopping rule) remain in `.opencode/agents/researcher.md`.
+Moved from `framework/opencode/agents/researcher.md` by PR-E, so the charter is the single portable
+source. Runtime bindings (tool contract, stopping rule) remain in `framework/opencode/agents/researcher.md`.
 
 Investigate only what blocks design or implementation. Stop when the question is answered.
 

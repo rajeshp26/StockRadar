@@ -20,6 +20,18 @@ except Exception as _e:  # pragma: no cover - fail loud, never silent
     _RES_OK = False
     _RES_ERR = repr(_e)
 
+# Config-driven readiness targets (patch A4): the five app-readiness checks (openapi
+# schema, contract tests, frontend manifest, playwright config, browser specs) resolve their
+# targets through ``framework.locate``, keyed off the optional ``readiness`` block in
+# framework.config.json, with the legacy repo-root paths as defaults when no config exists.
+# The guarded import keeps direct execution (``python framework/validate.py``) working.
+# Unconditional, BEFORE the import: an importable `framework` from the environment
+# (PYTHONPATH, an installed copy) must never shadow this file's own tree.
+_BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[1])
+if _BOOTSTRAP_ROOT not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_ROOT)
+from framework import locate as _locate
+
 FAILS, WARNS, SKIPS = [], [], []
 
 
@@ -147,6 +159,166 @@ def sh(cmd, timeout=120):
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
+def _finalize():
+    """Print the aggregate verdict and exit; shared by the framework and app suites.
+
+    Factored out of the bottom of the file so `--profile app` (which returns after its own
+    sections) closes out through the identical summary/exit contract as the linear framework
+    self-suite: the same warning/skip/failure report and the same exit codes.
+    """
+    print("\n" + "=" * 60)
+    if WARNS:
+        print(f"{len(WARNS)} warning(s):")
+        for w in WARNS:
+            print(f"  - {w}")
+    if SKIPS:
+        print(f"{len(SKIPS)} check(s) NOT_APPLICABLE under --profile {_PROFILE} "
+              "(never counted as a pass; re-run with --profile app to assert them):")
+        for s in SKIPS:
+            print(f"  - {s}")
+    if FAILS:
+        print(f"\n{len(FAILS)} FAILURE(S) — do not use the framework until resolved:")
+        for f in FAILS:
+            print(f"  - {f}")
+        sys.exit(1)
+    print(f"VALIDATION PASSED  [profile={_PROFILE}; "
+          f"{len(FAILS)} fail, {len(WARNS)} warn, {len(SKIPS)} not-applicable]")
+
+
+# Root keys framework/config_schema.json allows (additionalProperties: false). An app config
+# carrying anything else is a typo the framework would silently ignore, so `--profile app`
+# asserts it and fails loud rather than binding on a mistyped field.
+_CONFIG_KEYS = {"framework", "app_root", "state_folder", "gate_settings", "surface", "readiness"}
+
+
+def _run_app_suite():
+    """The `--profile app` suite: assert THIS app's binding and rollout readiness only.
+
+    It deliberately excludes the framework self-suite. That suite asserts the framework
+    REPOSITORY's own source and layout through repo-relative paths (`framework/validate.py`,
+    `framework/gates/*`); in a carved application those paths do not exist - the framework is
+    an installed package, not a vendored tree - so running them would crash on a missing file
+    rather than report on the app. Under `--profile app` this suite instead asserts what is
+    true of the consumer: the one config that binds it, the state tree it owns, and the five
+    rollout-readiness targets (openapi schema, contract tests, frontend manifest, playwright
+    config, browser specs), each resolved through `framework.config.json`.
+
+    `--profile framework` (the framework repository's own CI) still runs the full suite.
+    """
+    print("\n[app] Binding to the installed framework")
+    _cfg_path = _locate.find_config()
+    check("framework.config.json present", _cfg_path is not None,
+          "run `framework init` to bind this repository")
+
+    _cfg = {}
+    if _cfg_path is not None:
+        try:
+            _raw = _cfg_path.read_text(encoding="utf-8")
+        except OSError as _e:
+            check("framework.config.json readable", False, repr(_e))
+            _raw = None
+        if _raw is not None:
+            try:
+                _cfg = json.loads(_raw)
+            except json.JSONDecodeError as _e:
+                check("framework.config.json is valid JSON", False, repr(_e))
+                _cfg = {}
+            else:
+                check("framework.config.json is valid JSON", isinstance(_cfg, dict),
+                      "the root value must be a JSON object")
+                if not isinstance(_cfg, dict):
+                    _cfg = {}
+
+    _unknown = sorted(set(_cfg) - _CONFIG_KEYS)
+    check("framework.config.json declares no unknown root keys", not _unknown,
+          f"unknown: {_unknown} (schema is additionalProperties:false)")
+
+    for _key in ("app_root", "state_folder"):
+        _val = _cfg.get(_key)
+        check(f"framework.config.json declares {_key}",
+              isinstance(_val, str) and bool(_val.strip()),
+              "required by framework/config_schema.json")
+
+    _fw = _cfg.get("framework")
+    if _fw is None:
+        check("framework block present", True,
+              "absent is tolerated; `framework init` writes distribution and version",
+              warn_only=True)
+    else:
+        check("framework block is an object", isinstance(_fw, dict), "must be a mapping")
+        if isinstance(_fw, dict) and not _fw.get("distribution"):
+            check("framework.distribution declared", False,
+                  "defaults to agentic-lifecycle; declare it to pin the distribution",
+                  warn_only=True)
+
+    _state_root = _locate.state_root()
+    check(f"state folder resolves: {_state_root}", _state_root.parent.is_dir(),
+          f"parent {_state_root.parent} does not exist; run `framework init`",
+          warn_only=True)
+    check("opencode.json present (runtime plane)", Path("opencode.json").exists(),
+          "the app's runtime config; `framework init` does not create it", warn_only=True)
+    check("AGENTS.md present (stable rules)", Path("AGENTS.md").exists(),
+          "the app's stable global rules file", warn_only=True)
+
+    _fw_root = _locate.framework_root()
+    check(f"framework package resolves: {_fw_root}", _fw_root.is_dir(),
+          "the installed agentic-lifecycle package could not be located")
+
+    print("\n[app] Rollout readiness")
+    _rd = _locate.readiness()
+
+    _cdir = _locate.app_root() / _rd.get("openapi_schema", ".planning/contracts")
+    _schemas = sorted(_cdir.glob("*.openapi.y*ml")) if _cdir.exists() else []
+    check("openapi schema present", bool(_schemas),
+          "v1 contracts are HTTP/OpenAPI only; no schema means G1 has nothing to enforce")
+
+    _tdir = _locate.app_root() / _rd.get("contract_tests", "tests/contract")
+    _ctests = sorted(_tdir.glob("test_*.py")) if _tdir.exists() else []
+    check("contract tests present", bool(_ctests),
+          "a contract without executable tests is documentation, not a gate")
+    for _t in _ctests:
+        _txt = _t.read_text(encoding="utf-8", errors="replace")
+        check(f"{_t.name} runs standalone", "__main__" in _txt,
+              "the gate must not depend on pytest being installed")
+
+    _app = _locate.app_root() / _rd.get("frontend_manifest", "package.json")
+    check("frontend app manifest exists", _app.exists(),
+          "Playwright needs an application to drive; a contract type file is not an app")
+    if _app.exists():
+        try:
+            _d = json.loads(_app.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as _e:
+            check("frontend manifest is valid JSON", False, repr(_e))
+            _d = {}
+        _deps = {**(_d.get("dependencies") or {}), **(_d.get("devDependencies") or {})}
+        for _need in ("motion", "lucide-react", "tailwindcss", "@playwright/test"):
+            check(f"required stack dep present ({_need})", _need in _deps,
+                  "the reference app must satisfy its own required tier")
+        check("deprecated framer-motion alias absent", "framer-motion" not in _deps,
+              "the project standardises on motion/react")
+
+    _pwc = _locate.app_root() / _rd.get("playwright_config", "playwright.config.ts")
+    check("playwright config exists", _pwc.exists(),
+          "no config means no baseURL and no viewports")
+    if _pwc.exists():
+        _tw = _pwc.read_text(encoding="utf-8", errors="replace")
+        check("at least two viewport projects", _tw.count("name:") >= 2,
+              "a responsive claim needs more than one rendered width")
+
+    _spec_dir = _locate.app_root() / _rd.get("browser_specs", "tests/e2e")
+    _spec = list(_spec_dir.glob("*.spec.ts")) if _spec_dir.exists() else []
+    check("browser specs exist", len(_spec) >= 1, "G6 cannot pass without committed specs")
+
+
+# Under `--profile app` the app suite is the whole run: assert the binding, report through the
+# shared `_finalize()` contract, and never fall through into the framework self-suite (whose
+# repo-relative paths do not exist in a carved application).
+if _PROFILE == "app":
+    _run_app_suite()
+    _finalize()
+    sys.exit(0)
+
+
 print("\n[1] Agent definitions and permissions")
 # An unreadable or unexpectedly shaped config is BLOCKED (exit 2), never a traceback and never a
 # pass: every check below reads `cfg`, so continuing on a guess would report on a different
@@ -203,7 +375,7 @@ if "--models" in sys.argv:
     sys.exit(_models_preflight())
 check("seven agents defined", sorted(agents) == sorted(EXPECTED), f"got {sorted(agents)}")
 for a in EXPECTED:
-    check(f"{a} markdown exists", Path(f".opencode/agents/{a}.md").exists())
+    check(f"{a} markdown exists", Path(f"framework/opencode/agents/{a}.md").exists())
 
 _edit = agents["implementer"]["permission"]["edit"]
 check("implementer can edit",
@@ -305,7 +477,7 @@ check("g1 refuses to pass without contract tests",
       not (rc == 0 and "no tests/contract" in out), "passed without tests")
 
 print("\n[7] Context Builder constraints")
-cb = Path(".opencode/tools/context-builder.ts").read_text()
+cb = Path("framework/opencode/tools/context-builder.ts").read_text()
 check("excerpt cap present", "EXCERPT_CAP_CHARS" in cb and "TOTAL_MATERIALISE_CAP" in cb)
 check("prefers pointers", "prefer pointers over copied content" in cb.lower()
       or "prefer pointers" in cb.lower())
@@ -322,14 +494,14 @@ check("browser missing driver is unverifiable", "report_unverifiable" in prof)
 
 print("\n[9] Rules loaded, not inlined")
 oc = Path("opencode.json").read_text()
-check("instructions reference rules", '"AGENTS.md"' in oc and ".opencode/rules/*.md" in oc)
+check("instructions reference rules", '"AGENTS.md"' in oc and "framework/opencode/rules/*.md" in oc)
 ag = Path("AGENTS.md").read_text()
 check("AGENTS.md stays small", len(ag) < 6000, f"{len(ag)} chars")
 check("no requirements inlined", "REQ-0" not in ag)
 check("do-not-invoke rule present", "merely because it exists" in ag)
 
 print("\n[10] Telemetry collector")
-_t = Path(".opencode/plugin/telemetry.ts")
+_t = Path("framework/opencode/plugin/telemetry.ts")
 check("telemetry plugin exists", _t.exists())
 _ts = _t.read_text() if _t.exists() else ""
 for field in ("gates", "retries", "context_expansions", "materialised_chars",
@@ -372,13 +544,13 @@ for _p in _plug:
 
 print("\n[11] Contract fixture")
 # Every check below exists because the matching bug was found by execution, not review.
-_cdir = Path(".planning/contracts")
+_cdir = _locate.app_root() / _locate.readiness().get("openapi_schema", ".planning/contracts")
 _schemas = sorted(_cdir.glob("*.openapi.y*ml")) if _cdir.exists() else []
 check("openapi schema present", bool(_schemas),
       "v1 contracts are HTTP/OpenAPI only; no schema means G1 has nothing to enforce",
       app_only=True)
 
-_tdir = Path("tests/contract")
+_tdir = _locate.app_root() / _locate.readiness().get("contract_tests", "tests/contract")
 _ctests = sorted(_tdir.glob("test_*.py")) if _tdir.exists() else []
 check("contract tests present", bool(_ctests),
       "a contract without executable tests is documentation, not a gate",
@@ -516,9 +688,9 @@ check("conditional-tool ledger exists", _ledger.exists(),
       "conditional tools need a recorded justification, not a convention")
 
 print("\n-- skills + opencode config schema --")
-_skills = sorted(Path(".opencode/skills").glob("*/SKILL.md"))
+_skills = sorted(Path("framework/opencode/skills").glob("*/SKILL.md"))
 check("skills directory is populated", len(_skills) >= 4,
-      "opencode.json pointed at .opencode/skills while it did not exist")
+      "opencode.json pointed at framework/opencode/skills while it did not exist")
 import re as _re
 for _f in _skills:
     _txt = _f.read_text(encoding="utf-8")
@@ -547,7 +719,7 @@ if _cfgp.exists():
     _plug = " ".join(_cfg.get("plugin") or [])
     check("registered plugin file exists",
           (not _plug) or any(Path(x).exists() for x in
-                             [".opencode/plugin/telemetry.ts", ".opencode/plugins/telemetry.ts"]),
+                             ["framework/opencode/plugin/telemetry.ts", ".opencode/plugins/telemetry.ts"]),
           "a registered plugin path that does not exist fails silently at startup")
     check("playwright MCP configured", "playwright" in (_cfg.get("mcp") or {}),
           "browser verification needs a driver available to the verifier")
@@ -561,11 +733,11 @@ if _cfgp.exists():
               (isinstance(_p.get("edit"), dict) and _p["edit"].get("*") == "deny"),
               "read-only roles must not mutate code")
 
-_plugin_dir_ok = Path(".opencode/plugin").exists() or Path(".opencode/plugins").exists()
+_plugin_dir_ok = Path("framework/opencode/plugin").exists() or Path(".opencode/plugins").exists()
 check("plugin directory present", _plugin_dir_ok,
       "OpenCode scans both plugin/ and plugins/; neither existing means no auto-load")
 
-_app = Path("package.json")
+_app = _locate.app_root() / _locate.readiness().get("frontend_manifest", "package.json")
 check("frontend app manifest exists", _app.exists(),
       "Playwright needs an application to drive; a contract type file is not an app",
       app_only=True)
@@ -579,7 +751,7 @@ if _app.exists():
     check("deprecated framer-motion alias absent", "framer-motion" not in _deps,
           "the project standardises on motion/react")
 
-_pwc = Path("playwright.config.ts")
+_pwc = _locate.app_root() / _locate.readiness().get("playwright_config", "playwright.config.ts")
 check("playwright config exists", _pwc.exists(), "no config means no baseURL and no viewports",
       app_only=True)
 if _pwc.exists():
@@ -587,7 +759,8 @@ if _pwc.exists():
     check("at least two viewport projects", _tw.count("name:") >= 2,
           "a responsive claim needs more than one rendered width")
 
-_spec = list(Path("tests/e2e").glob("*.spec.ts")) if Path("tests/e2e").exists() else []
+_spec_dir = _locate.app_root() / _locate.readiness().get("browser_specs", "tests/e2e")
+_spec = list(_spec_dir.glob("*.spec.ts")) if _spec_dir.exists() else []
 check("browser specs exist", len(_spec) >= 1, "G6 cannot pass without committed specs",
       app_only=True)
 
@@ -709,8 +882,8 @@ check("containment map exists", (_rd / "containment_map.yaml").exists(),
 check("escape path analyser exists", (_rd / "escape_path.py").exists())
 check("retro ledger exists", (_rd / "ledger.py").exists())
 check("g7 gate exists", Path("framework/gates/g7_retro.sh").exists())
-check("retrospective skill exists", Path(".opencode/skills/retrospective/SKILL.md").exists())
-check("retrospective rule exists", Path(".opencode/rules/retrospective.md").exists())
+check("retrospective skill exists", Path("framework/opencode/skills/retrospective/SKILL.md").exists())
+check("retrospective rule exists", Path("framework/opencode/rules/retrospective.md").exists())
 
 try:
     import yaml
@@ -810,16 +983,16 @@ try:
 except ImportError:
     pass
 
-_tl = Path(".opencode/agents/team-lead.md").read_text()
+_tl = Path("framework/opencode/agents/team-lead.md").read_text()
 check("team-lead opens retro triggers", "retro/triggers" in _tl)
 check("team-lead requires g7 before completion", "G7" in _tl)
 check("team-lead is told NOT to retro a clean catch",
       "first place it could" in _tl,
       "retrospecting every caught defect trains everyone to ignore the ledger")
-check("verifier runs g7", "g7_retro.sh" in Path(".opencode/agents/verifier.md").read_text())
+check("verifier runs g7", "g7_retro.sh" in Path("framework/opencode/agents/verifier.md").read_text())
 check("implementer can load the retrospective skill",
-      "retrospective" in Path(".opencode/agents/implementer.md").read_text())
-_skill = Path(".opencode/skills/retrospective/SKILL.md").read_text()
+      "retrospective" in Path("framework/opencode/agents/implementer.md").read_text())
+_skill = Path("framework/opencode/skills/retrospective/SKILL.md").read_text()
 check("skill rejects unfalsifiable recommendations",
       "be more careful" in _skill.lower() and "add more tests" in _skill.lower(),
       "the failure mode must be named explicitly to be avoided")
@@ -831,7 +1004,7 @@ check("verifier permitted to run g7",
       "./framework/gates/g7_retro.sh*" in _cfg["agent"]["verifier"]["permission"]["bash"]
       or _cfg["agent"]["verifier"]["permission"]["bash"].get("./framework/gates/*") == "allow")
 check("telemetry tracks escapes and recurrences",
-      all(f in Path(".opencode/plugin/telemetry.ts").read_text()
+      all(f in Path("framework/opencode/plugin/telemetry.ts").read_text()
           for f in ("defect_escapes", "retros_recorded", "retro_recurrences")),
       "rework rate is only meaningful with whether the gap closed")
 
@@ -887,7 +1060,7 @@ if _st.exists():
 _dr = _rd / "dry_run.md"
 check("dry run scenario exists", _dr.exists())
 
-_skill_v2 = Path(".opencode/skills/retrospective/SKILL.md").read_text()
+_skill_v2 = Path("framework/opencode/skills/retrospective/SKILL.md").read_text()
 check("skill has counterfactual analysis", "counterfactual" in _skill_v2.lower())
 check("skill has human-correction path", "human_correction" in _skill_v2)
 check("skill has gap type classification", "gap_type" in _skill_v2)
@@ -903,7 +1076,7 @@ print("\n[15c] Background task pub/sub contract")
 # system-reminder notification, or with block=true as a proxy for waiting. The contract
 # is fire -> END RESPONSE -> wait for notification -> collect. Telemetry measures it;
 # this section proves the enforcement surface exists.
-_bgr = Path(".opencode/rules/background-tasks.md")
+_bgr = Path("framework/opencode/rules/background-tasks.md")
 check("background task contract rule exists", _bgr.exists(),
       "a contract that is not declared cannot be enforced")
 if _bgr.exists():
@@ -917,7 +1090,7 @@ if _bgr.exists():
     check("rule names enforcement", "bg_poll_total" in _bgt,
           "telemetry measurement must be declared in the rule")
 
-_tel = Path(".opencode/plugin/telemetry.ts").read_text()
+_tel = Path("framework/opencode/plugin/telemetry.ts").read_text()
 check("telemetry tracks bg_poll_total", "bg_poll_total" in _tel,
       "sessions that poll must be measurable")
 check("telemetry classifies polls vs collects",
@@ -949,7 +1122,7 @@ check("compaction feeds the heartbeat",
 print("\n[15d] Telemetry liveness (T-FX3)")
 
 # (a) The integration harness exists and is runnable by node --test.
-_tl_test = Path(".opencode/plugin/telemetry.test.mjs")
+_tl_test = Path("framework/opencode/plugin/telemetry.test.mjs")
 check("telemetry integration harness exists", _tl_test.exists(),
       "the executable proof of collector behaviour must be committed")
 if _tl_test.exists():
@@ -982,7 +1155,7 @@ check("collector no longer uses the narrow gate regex as its matcher",
       "the narrow g[1-8] matcher missed g9/g12/g_tool_*; gate records must come from "
       "the canonical [gate] line")
 # Fallback chain lives in envelope.mjs (normalizeTaskArgs); the collector routes through it.
-_tl_env = Path(".opencode/plugin/envelope.mjs").read_text(encoding="utf-8")
+_tl_env = Path("framework/opencode/plugin/envelope.mjs").read_text(encoding="utf-8")
 check("collector reads task args via a fallback chain (not purely input?.args)",
       "normalizeTaskArgs" in _ts and "input.input" in _tl_env,
       "real runtime nests task args under input; reading input?.args alone yields "
@@ -1009,7 +1182,7 @@ check("runner delegates to node --test",
 
 # Agent instructions must carry the contract so the primary agent sees it before
 # launching anything in background.
-_lead = Path(".opencode/agents/team-lead.md").read_text()
+_lead = Path("framework/opencode/agents/team-lead.md").read_text()
 if "background" in _lead.lower() or "background-tasks" in _lead:
     check("team-lead carries background task contract", True)
 else:
@@ -1108,7 +1281,7 @@ if _cl.exists() and _clc.exists():
           "ARCHITECTURE_TASK" in Path("framework/gates/g3_architecture.sh").read_text(),
           "demanding dispositions on a typo fix gets the gate routed around")
     check("architect is told how to disposition",
-          "verdict" in Path(".opencode/agents/architect.md").read_text())
+          "verdict" in Path("framework/opencode/agents/architect.md").read_text())
 
 # Destination classification: the checklist must be the hardest tier to reach.
 _ep = Path("framework/retro/escape_path.py").read_text()
@@ -1147,18 +1320,18 @@ check("exit contract documents G8",
 check("bootstrap reports open blockers",
       "list-blockers" in Path("framework/bootstrap.sh").read_text(),
       "an install inherits visible escalation debt, not silent surprises")
-_ts = Path(".opencode/plugin/telemetry.ts").read_text()
+_ts = Path("framework/opencode/plugin/telemetry.ts").read_text()
 check("telemetry counts blockers opened/resolved",
       "blockers_opened" in _ts and "blockers_resolved" in _ts,
       "escalation debt invisible in telemetry is debt nobody pays")
-_im = Path(".opencode/agents/implementer.md").read_text()
+_im = Path("framework/opencode/agents/implementer.md").read_text()
 check("implementer records non-complete stops", "write-blocker" in _im,
       "a stop that lives only in prose evaporates with the conversation")
-_tl = Path(".opencode/agents/team-lead.md").read_text()
+_tl = Path("framework/opencode/agents/team-lead.md").read_text()
 check("team lead resolves or refuses on open blockers",
       "list-blockers" in _tl and "resolve-blocker" in _tl,
       "refusal without a resolution path routes around the gate")
-_vf = Path(".opencode/agents/verifier.md").read_text()
+_vf = Path("framework/opencode/agents/verifier.md").read_text()
 check("verifier runs g8 and reports its verdicts",
       "g8_blockers" in _vf and "g8:" in _vf)
 
@@ -1484,24 +1657,24 @@ check("S12 retry_policy declares worker_stalled count and WORKER_STALLED route",
       and "apply_recovery_ladder" in _rp21,
       "add worker_stalled: 1 and WORKER_STALLED -> team_lead apply_recovery_ladder")
 
-_dp21 = Path(".opencode/rules/delegation-protocol.md")
+_dp21 = Path("framework/opencode/rules/delegation-protocol.md")
 _dp21_text = _dp21.read_text(encoding="utf-8") if _dp21.exists() else ""
 check("S13 delegation-protocol.md rule file present and complete",
       _dp21.exists() and "## Lifecycle" in _dp21_text and "## Health" in _dp21_text
       and "task-register" in _dp21_text and "background-tasks.md" in _dp21_text,
-      ".opencode/rules/delegation-protocol.md missing or incomplete")
+      "framework/opencode/rules/delegation-protocol.md missing or incomplete")
 
-_bt21 = Path(".opencode/rules/background-tasks.md").read_text(encoding="utf-8")
+_bt21 = Path("framework/opencode/rules/background-tasks.md").read_text(encoding="utf-8")
 check("S14 background-tasks.md cross-references the protocol",
       "delegation-protocol.md" in _bt21 and "task-register" in _bt21,
       "append a Supervision section naming the task-* commands")
 
-_tl21 = Path(".opencode/agents/team-lead.md").read_text(encoding="utf-8")
+_tl21 = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
 check("S15 team-lead.md liveness policy names the task-* commands",
       "task-register" in _tl21 and "task-status" in _tl21 and "task-event" in _tl21,
       "liveness section must name task-register / task-status / task-event")
 
-_tel21 = Path(".opencode/plugin/telemetry.ts").read_text(encoding="utf-8")
+_tel21 = Path("framework/opencode/plugin/telemetry.ts").read_text(encoding="utf-8")
 check("S16 telemetry.ts collects worker supervision counters",
       "worker_tasks_registered" in _tel21 and "worker_events_written" in _tel21
       and "worker_stalls_detected" in _tel21,
@@ -1620,15 +1793,15 @@ check("claim ledger enforces independent check for high impact",
 check("claim ledger requires runtime-backed evidence for causal conclusions",
       "CLAIM_CAUSAL_NO_RUNTIME" in _cl,
       "static configuration, code inspection, logs, or plausibility cannot establish causation")
-_tl11 = Path(".opencode/agents/team-lead.md").read_text()
+_tl11 = Path("framework/opencode/agents/team-lead.md").read_text()
 check("team lead references evidence provenance",
       "evidence provenance" in _tl11.lower() or "claim ledger" in _tl11.lower() or "G-VERIFY" in _tl11,
       "the gate on findings must be enforced by the team lead, not hoped for")
-_im11 = Path(".opencode/agents/implementer.md").read_text()
+_im11 = Path("framework/opencode/agents/implementer.md").read_text()
 check("implementer references claim ledger",
       "claim" in _im11.lower() and ("ledger" in _im11.lower() or "evidence provenance" in _im11.lower()),
       "agents must be told to record claims, not assume they will")
-_vf11 = Path(".opencode/agents/verifier.md").read_text()
+_vf11 = Path("framework/opencode/agents/verifier.md").read_text()
 check("verifier runs g11 and reports its verdicts",
       "g11" in _vf11 and ("claim" in _vf11.lower() or "evidence" in _vf11.lower()),
       "verifier must reference the evidence gate")
@@ -1644,7 +1817,7 @@ check("researcher classifies findings and records them",
       "classification: FACT | HYPOTHESIS | ASSUMPTION | UNKNOWN" in _rs22
       and "## Claim classification" in _rs22 and "ledger" in _rs22.lower(),
       "research findings are claims and must be labelled")
-_im22 = Path(".opencode/agents/implementer.md").read_text()
+_im22 = Path("framework/opencode/agents/implementer.md").read_text()
 check("implementer records claim classification",
       "classification:" in _im22 and "FACT | HYPOTHESIS" in _im22,
       "a debug-mode diagnosis must carry a claim classification")
@@ -1652,7 +1825,7 @@ _im22l = Path(".lifecycle/agents/implementer.md").read_text()
 check("implementer knows verification levels",
       "### Verification levels" in _im22l and "L3 end-to-end" in _im22l,
       "evidence levels L1/L2/L3 must be taught to the agent that records claims")
-_ar22 = Path(".opencode/agents/architect.md").read_text()
+_ar22 = Path("framework/opencode/agents/architect.md").read_text()
 check("architect records ASSUMPTION decisions",
       "ASSUMPTION claim" in _ar22 and "ledger.py" in _ar22,
       "an accepted assumption that is never claimed is an unrecorded decision")
@@ -1660,7 +1833,7 @@ _rv22 = Path(".lifecycle/agents/reviewer.md").read_text()
 check("reviewer traces conclusions to VERIFIED claims",
       "VERIFIED claims" in _rv22 and "ledger" in _rv22.lower(),
       "a review conclusion without a claim is a question, not a finding")
-_tl22 = Path(".opencode/plugin/telemetry.ts").read_text()
+_tl22 = Path("framework/opencode/plugin/telemetry.ts").read_text()
 check("telemetry keeps g1-g8 matcher and adds g10/g11",
       "(g[1-8])" in _tl22 and "g1[01]" in _tl22,
       "evidence gates must be counted like functional gates")
@@ -1799,12 +1972,12 @@ check("adapter routes provider classes to the pre-flight gate",
       "g12 provider pre-flight" in _adp23 and "no dispatch to" in _adp23,
       "a blocking provider class must route to g12/nodispatch, not to WORKER_STALLED")
 
-_dp23_text = Path(".opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
+_dp23_text = Path("framework/opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
 check("delegation-protocol requires failure_class on FAILED",
       "failure_class" in _dp23_text and "TASK_INVALID_FAILURE_CLASS" in _dp23_text
       and "g12 provider pre-flight" in _dp23_text and "WORKER_STALLED" in _dp23_text,
       "the written protocol must carry the routing contract the adapter enforces")
-_tl23_text = Path(".opencode/agents/team-lead.md").read_text(encoding="utf-8")
+_tl23_text = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
 check("team-lead runs the provider pre-flight before dispatch",
       "g12_provider.sh" in _tl23_text and "NO TASK DISPATCH" in _tl23_text
       and "failure_class" in _tl23_text,
@@ -2115,7 +2288,7 @@ check("task_types declares the C0-C8 vocabulary",
 check("task_types declares per-type default checkpoints",
       "checkpoints:" in _tt26 and "C5-TESTS_GREEN" in _tt26,
       "each type needs a default progression")
-_dp26 = Path(".opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
+_dp26 = Path("framework/opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
 check("delegation-protocol documents C0-C8 and background_task_id",
       "C0-TASK_ACCEPTED" in _dp26 and "C8-HANDOFF_READY" in _dp26
       and "background_task_id" in _dp26,
@@ -2350,7 +2523,7 @@ def _suite_27():
     check("profiles routes the dispatch-time signal to g_entry",
           "no_plan_context" in _p27 and "g_entry" in _p27,
           "a fired signal with no gate is a routing gap")
-    _t27 = Path(".opencode/agents/team-lead.md").read_text(encoding="utf-8")
+    _t27 = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
     check("team-lead runs the entry gate before every dispatch",
           "Entry contract before dispatch" in _t27
           and "framework/gates/g_entry.sh" in _t27,
@@ -2359,7 +2532,7 @@ def _suite_27():
     check("implementer declares the plan-authority contract",
           "Plan authority" in _i27 and "scope drift" in _i27,
           "authority boundaries must bound the implementation")
-    _a27 = Path(".opencode/agents/architect.md").read_text(encoding="utf-8")
+    _a27 = Path("framework/opencode/agents/architect.md").read_text(encoding="utf-8")
     check("architect binds architecture-right-sizing in primary skills",
           "architecture-right-sizing" in _a27
           and "software-architecture-design" in _a27,
@@ -2377,7 +2550,7 @@ def _suite_27():
                "title: entry gate fixture\n"
                "files_or_components:\n"
                "  - framework/gates/g_entry.sh\n"
-               "  - .opencode/agents/team-lead.md\n"
+               "  - framework/opencode/agents/team-lead.md\n"
                "acceptance_criteria:\n"
                "  - the entry gate refuses dispatch without a valid approved plan\n"
                "  - EXIT_CODES documents the exit contract including the trivial bypass\n")
@@ -2577,7 +2750,7 @@ with _fut.ThreadPoolExecutor(max_workers=9) as _ex:
     list(_ex.map(lambda _f: _f(), _SUITES))
 
 print("\n[29] Router-table conformance (DID-013 PR-F residual 1)")
-_router = Path(".opencode/skills/gsd-ns-workflow/SKILL.md")
+_router = Path("framework/opencode/skills/gsd-ns-workflow/SKILL.md")
 _rtext = _router.read_text(encoding="utf-8") if _router.exists() else ""
 _routed = []
 for _line in _rtext.splitlines():
@@ -2597,8 +2770,8 @@ check("gsd-ns-workflow routes all 16 workflow skills (bidirectional)",
       "table-only=%s family-only=%s" % (sorted(set(_routed) - _WORKFLOW_FAMILY),
                                         sorted(_WORKFLOW_FAMILY - set(_routed))))
 _missing = [t for t in _routed
-            if not Path(".opencode/skills/%s/SKILL.md" % t).exists()]
-check("every routed skill resolves to .opencode/skills/<name>/SKILL.md on disk",
+            if not Path("framework/opencode/skills/%s/SKILL.md" % t).exists()]
+check("every routed skill resolves to framework/opencode/skills/<name>/SKILL.md on disk",
       not _missing, "missing on disk: %s" % _missing)
 
 print("\n[30] Charter single-source conformance (DID-013 PR-E)")
@@ -2611,10 +2784,10 @@ check("every core role has a portable charter in .lifecycle/agents/",
       not _missing30, "missing charter: %s" % _missing30)
 _no_pointer30 = []
 for _r30 in _ROLES30:
-    _op30 = Path(".opencode/agents/%s.md" % _r30)
+    _op30 = Path("framework/opencode/agents/%s.md" % _r30)
     if not _op30.exists() or (_pointer30 % _r30) not in _op30.read_text(encoding="utf-8"):
         _no_pointer30.append(_r30)
-check("every .opencode/agents/<role>.md is a thin pointer to its charter",
+check("every framework/opencode/agents/<role>.md is a thin pointer to its charter",
       not _no_pointer30, "missing pointer line: %s" % _no_pointer30)
 
 print("\n[31] Intake adapter (DID-012 PR-D1, ask conservation I1/I2)")
@@ -2764,11 +2937,14 @@ check("verification state tests pass (atomic write, locked RMW, state root)",
       _r38.returncode == 0 and "VERIFICATION-STATE-TESTS: PASS" in _r38.stdout,
       (_r38.stdout + _r38.stderr)[-400:])
 
-print("\n[39] Standalone guard negative paths (surface accounting)")
+print("\n[39] Standalone guard negative paths (reference-app refusal)")
 # standalone_check.py had only ever been observed to exit 0, so its ability to
-# refuse was unproved. Its accounting compared a count of staged entries against
-# len(REQUIRED), which the optional .gitattributes entry inflated - a scaffold
-# missing a required entry satisfied the count. Red phase: 3 of 6 checks fail.
+# refuse was unproved. v2 stages the reference application (the `--profile app`
+# self-fixture) instead of the framework surface, then builds and installs the
+# wheel - so the cheap, deterministic half pinned here is that it refuses before
+# any build when the fixture is incomplete, the flag is unknown, or the --wheel
+# is absent. The expensive half (wheel -> venv -> init -> validate) is the
+# guard's own run.
 _r39 = subprocess.run([sys.executable, "framework/test_standalone_check.py"],
                       capture_output=True, text=True, timeout=300)
 check("standalone guard refuses an incomplete surface and reports failures",
@@ -2843,21 +3019,5 @@ else:
     check("all five rollout checks are asserted under --profile app, none downgraded to WARN",
           not _leaked41, f"downgraded to WARN: {_leaked41}")
 
-print("\n" + "=" * 60)
-if WARNS:
-    print(f"{len(WARNS)} warning(s):")
-    for w in WARNS:
-        print(f"  - {w}")
-if SKIPS:
-    print(f"{len(SKIPS)} check(s) NOT_APPLICABLE under --profile {_PROFILE} "
-          "(never counted as a pass; re-run with --profile app to assert them):")
-    for s in SKIPS:
-        print(f"  - {s}")
-if FAILS:
-    print(f"\n{len(FAILS)} FAILURE(S) — do not use the framework until resolved:")
-    for f in FAILS:
-        print(f"  - {f}")
-    sys.exit(1)
-print(f"VALIDATION PASSED  [profile={_PROFILE}; "
-      f"{len(FAILS)} fail, {len(WARNS)} warn, {len(SKIPS)} not-applicable]")
+_finalize()
 

@@ -100,11 +100,21 @@ for agent, expected in (
         violations.append("agent '%s' bash catch-all is not '%s'" % (agent, expected))
 
 # --- [2] edit permission schema (enforcement plane; DID-013 PR-G10) ----
-# The enforcement plane (framework/**, .opencode/**, opencode.json, AGENTS.md)
-# is agent-immutable. The bash checks above never see the edit plane; assert its
-# shape explicitly so a config edit that opens the plane fails the gate.
+# The enforcement plane is agent-immutable. Its path set is read from the canonical
+# framework/security/enforcement_plane.yaml (the single source of truth), NOT a hardcoded
+# tuple: the framework repo and the app repo declare different planes (the pin owns
+# framework/** in the app repo). The bash checks above never see the edit plane; assert
+# its shape explicitly so a config edit that opens the plane fails the gate.
 edit = (cfg.get("permission") or {}).get("edit")
-PLANE = ("framework/**", ".opencode/**", "opencode.json", "AGENTS.md")
+try:
+    import yaml
+    with open(root + "/framework/security/enforcement_plane.yaml", encoding="utf-8") as _pf:
+        PLANE = tuple(e["path"] for e in yaml.safe_load(_pf.read())["paths"])
+    if not PLANE:
+        raise ValueError("empty 'paths'")
+except Exception as _exc:  # noqa: BLE001 - fail closed, never pass silently
+    violations.append("enforcement-plane unreadable: %s" % _exc)
+    PLANE = ()
 if not isinstance(edit, dict):
     violations.append("permission.edit missing or not an object")
 else:

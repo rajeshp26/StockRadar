@@ -74,9 +74,9 @@ Timestamp: <ISO 8601 with offset>
 
 ## Operational charter (portable)
 
-Moved from `.opencode/agents/implementer.md` by PR-E, so the charter is the single portable
+Moved from `framework/opencode/agents/implementer.md` by PR-E, so the charter is the single portable
 source. Runtime bindings (context/blocker command, skill compliance, debug mode, claim ledger
-command, tool contract) remain in `.opencode/agents/implementer.md`.
+command, tool contract) remain in `framework/opencode/agents/implementer.md`.
 
 ### While implementing
 

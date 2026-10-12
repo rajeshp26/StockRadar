@@ -4,7 +4,7 @@
   "small_model": "opencode/big-pickle",
   "instructions": [
     "AGENTS.md",
-    ".opencode/rules/*.md"
+    "framework/opencode/rules/*.md"
   ],
   "permission": {
     "read": "allow",
@@ -21,10 +21,10 @@
     },
     "edit": {
       "*": "ask",
-      "framework/**": "deny",
       ".opencode/**": "deny",
       "opencode.json": "deny",
-      "AGENTS.md": "deny"
+      "AGENTS.md": "deny",
+      "framework.config.json": "deny"
     },
     "webfetch": "deny",
     "bash": {
@@ -72,10 +72,10 @@
       "permission": {
         "edit": {
           "*": "ask",
-          "framework/**": "deny",
           ".opencode/**": "deny",
           "opencode.json": "deny",
-          "AGENTS.md": "deny"
+          "AGENTS.md": "deny",
+          "framework.config.json": "deny"
         },
         "task": {
           "*": "allow"
@@ -221,10 +221,10 @@
           "components.json": "allow",
           "tsconfig*.json": "allow",
           "*.config.*": "allow",
-          "framework/**": "deny",
           ".opencode/**": "deny",
           "opencode.json": "deny",
-          "AGENTS.md": "deny"
+          "AGENTS.md": "deny",
+          "framework.config.json": "deny"
         },
         "task": {
           "*": "deny"
@@ -395,11 +395,11 @@
   },
   "skills": {
     "paths": [
-      ".opencode/skills"
+      "framework/opencode/skills"
     ]
   },
   "plugin": [
-    "file://.opencode/plugin/telemetry.ts"
+    "file://framework/opencode/plugin/telemetry.ts"
   ],
   "compaction": {
     "auto": true,

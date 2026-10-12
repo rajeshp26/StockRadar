@@ -1,0 +1,20 @@
+# Source-distribution contents beyond the importable packages.
+#
+# The wheel ships the `framework` package tree (including all of framework/opencode/**) via
+# package-data in pyproject.toml. These entries add what is NOT inside an importable package but
+# must travel with the distribution: the top-level documents the framework owns and the sibling
+# .lifecycle/ tree that `framework init` materialises into an application repository.
+include README.md
+include AGENTS.md
+include TEAM_LEAD.md
+include MANIFEST.md
+include requirements-framework.txt
+include .gitattributes
+include docs/AGENTIC_ARCHITECTURE.md
+include docs/framework-portability-assessment.md
+recursive-include framework *.json *.yaml *.yml *.sh *.md *.txt *.ts *.mjs *.js *.cjs
+recursive-include .lifecycle *
+recursive-include reference-app *
+global-exclude *.pyc
+global-exclude *.py[cod]
+global-exclude __pycache__/*

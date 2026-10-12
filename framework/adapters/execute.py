@@ -276,7 +276,7 @@ def derive(now: str | None = None) -> dict:
 
 def _parse_payload(payload: str) -> dict:
     """Parse the handoff payload into {key: raw value string}. Accepts a JSON object or
-    a simple top-level `key: value` YAML-ish block (the .opencode/rules/handoff.md
+    a simple top-level `key: value` YAML-ish block (the framework/opencode/rules/handoff.md
     shape). The tiny parser is deliberately dependency-free."""
     if not payload or not payload.strip():
         return {}

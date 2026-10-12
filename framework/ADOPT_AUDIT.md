@@ -32,7 +32,7 @@ Write each decision via:
 
 ## Resolving the `gsd-*` agents and skills
 
-A file map that lists `.opencode/agents/gsd-*.md` and `.opencode/skills/gsd-*/SKILL.md`
+A file map that lists `framework/opencode/agents/gsd-*.md` and `framework/opencode/skills/gsd-*/SKILL.md`
 without a decision per row is the overlap, not a resolution. Each such file must map to a
 row above and carry a decision, or be deleted.
 
@@ -43,7 +43,7 @@ disagree, and the disagreement surfaces as review-rejection churn.
 
 ### File map resolution (2026-09-04)
 
-Every `.opencode/agents/gsd-*.md` and `.opencode/skills/gsd-*/SKILL.md` is a GSD-distribution
+Every `framework/opencode/agents/gsd-*.md` and `framework/opencode/skills/gsd-*/SKILL.md` is a GSD-distribution
 thin wrapper invoking the mapped GSD command under the decision recorded above. `adopt` rows
 call the command with no delta; `wrap` rows add only the named delta (read-only agent,
 permission wrapper, gate exit code); `replace` rows (G5, G6) own the capability outright and no

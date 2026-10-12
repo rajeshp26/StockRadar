@@ -39,7 +39,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { runAttributionSuite } from "../../.opencode/plugin/attribution_harness.mjs"
+import { runAttributionSuite } from "../../framework/opencode/plugin/attribution_harness.mjs"
 import { classifyRun, STATUS } from "./run_validity.mjs"
 import { encodeDataset, revealDataset, deriveKey } from "./blinding.mjs"
 

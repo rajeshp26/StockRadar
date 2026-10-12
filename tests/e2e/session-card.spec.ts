@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 // Browser evidence for requirement shapes that no unit test can prove.
-// Each test names the requirement shape it covers, per .opencode/rules/evidence.md.
+// Each test names the requirement shape it covers, per framework/opencode/rules/evidence.md.
 
 test.describe("REQ-017 session refresh — visible behaviour", () => {
   test.beforeEach(async ({ page }) => {
