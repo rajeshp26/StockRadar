@@ -108,6 +108,34 @@ def _build_snapshot_via_replay(
         return None
 
 
+def _gap_repair_start(
+    last_date: date | None,
+    today: date,
+    lookback_days: int | None,
+    first_date: date | None,
+) -> date | None:
+    """Earliest date the gap filler should examine for one account.
+
+    Forward-only repair begins the day after the newest stored row, so a hole left
+    by a missed run becomes unreachable the moment a later date is written. When
+    ``lookback_days`` is set the start is pulled back over that many days so those
+    interior holes are rebuilt too, clamped to the account's first stored snapshot:
+    an earlier date has no state to replay and would be written as a zero row.
+
+    Returns ``None`` for a cold start (no stored rows); the caller then derives the
+    start from the account's earliest event instead.
+    """
+    if last_date is None:
+        return None
+    start = last_date + timedelta(days=1)
+    if lookback_days:
+        window_start = today - timedelta(days=max(lookback_days - 1, 0))
+        if first_date is not None and window_start < first_date:
+            window_start = first_date
+        start = min(start, window_start)
+    return start
+
+
 async def _fill_snapshot_gaps(
     account_id: int,
     today: date,
@@ -124,12 +152,21 @@ async def _fill_snapshot_gaps(
     companies_map: dict[int, dict] | None = None,
     derived_cdr_companies: set[int] | None = None,
     lot_map_cache: "_GapLotMapCache | None" = None,
+    lookback_days: int | None = None,
 ) -> int:
     """Fill missing snapshot dates between last known snapshot and today.
 
     Uses event-replay with forward-filled historical prices for consistency.
     For cold-start (no existing snapshots), uses incremental replay for efficiency.
     Returns the number of gap snapshots written.
+
+    Repair is forward-only by default: it starts the day after the newest stored
+    row. Once a later date is written, a hole left by a missed run sits *behind*
+    that watermark and is unreachable, so it persists forever (see the June 2026
+    gap). ``lookback_days`` pulls the start back over a bounded window so those
+    interior holes are rebuilt too; dates before the account's first stored
+    snapshot are never requested, because there is no state to replay and the
+    incremental path would write a zero-value row.
 
     derived_cdr_companies and lot_map_cache carry the transaction-derived CDR truth.
     Gap dates are rebuilt through the same replay path as today, so without them they
@@ -144,7 +181,11 @@ async def _fill_snapshot_gaps(
         all_company_ids = []
 
     last_date = snapshots_repo.get_last_snapshot_date(account_id)
-    if last_date is None:
+    first_date = (
+        snapshots_repo.get_first_snapshot_date(account_id) if lookback_days else None
+    )
+    start_date = _gap_repair_start(last_date, today, lookback_days, first_date)
+    if start_date is None:
         event_store = EventStore()
         earliest_event_date = event_store.get_earliest_event_date(account_id)
         if earliest_event_date:
@@ -154,8 +195,6 @@ async def _fill_snapshot_gaps(
             )
         else:
             return 0
-    else:
-        start_date = last_date + timedelta(days=1)
     if start_date > today:
         return 0
 
@@ -513,12 +552,16 @@ async def _fill_snapshot_gaps_incremental(
 
 
 @timed()
-async def compute_daily_snapshots(target_date: date | None = None) -> int:
+async def compute_daily_snapshots(
+    target_date: date | None = None, lookback_days: int | None = None
+) -> int:
     """Build the snapshot for `target_date` (default: today) for all accounts.
 
     Historical gaps are filled before the target date is written, so the spike
     baseline is the genuinely preceding day rather than whatever the last successful
-    run happened to be.
+    run happened to be. Repair is forward-only unless `lookback_days` (default: the
+    SNAPSHOT_GAP_REPAIR_LOOKBACK_DAYS setting) also rebuilds interior holes that a
+    missed run left behind the newest row.
     """
     today = target_date or now_utc().date()
     portfolio_repo = PortfolioRepository()
@@ -527,6 +570,8 @@ async def compute_daily_snapshots(target_date: date | None = None) -> int:
 
     use_replay = getattr(settings, "ENABLE_EVENT_REPLAY_SNAPSHOTS", False)
     spike_threshold = getattr(settings, "SNAPSHOT_SPIKE_THRESHOLD", 0.20)
+    if lookback_days is None:
+        lookback_days = getattr(settings, "SNAPSHOT_GAP_REPAIR_LOOKBACK_DAYS", 0)
 
     all_accounts = portfolio_repo.get_user_accounts_all()
     if not all_accounts:
@@ -635,6 +680,7 @@ async def compute_daily_snapshots(target_date: date | None = None) -> int:
                 companies_map=companies_map,
                 derived_cdr_companies=derived_cdr,
                 lot_map_cache=gap_lot_map_cache,
+                lookback_days=lookback_days,
             )
             if repaired:
                 debug_trace.trace_event(

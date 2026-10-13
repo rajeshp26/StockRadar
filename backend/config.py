@@ -438,6 +438,16 @@ class Settings(BaseSettings):
                     "last known snapshot and today using event-replay with consistent pricing."
     )
 
+    SNAPSHOT_GAP_REPAIR_LOOKBACK_DAYS: int = Field(
+        default=730,
+        ge=0,
+        description="How far back the daily snapshot job repairs missing weekday "
+                    "snapshots. Forward-only filling leaves a hole permanently behind "
+                    "the newest row once a later date exists (e.g. the June 2026 "
+                    "snapshot gap); this bounded look-back rebuilds those interior "
+                    "holes. 0 disables the look-back and restores forward-only repair."
+    )
+
     # Debugging & Development
     DEBUG_FILTERING_LOGIC: bool = Field(
         default=False,

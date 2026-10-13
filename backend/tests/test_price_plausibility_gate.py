@@ -329,6 +329,7 @@ class TestComputeDailySnapshotsSpikePolicy:
         snapshots_repo = MagicMock()
         snapshots_repo.get_previous_snapshot.return_value = prev
         snapshots_repo.get_last_snapshot_date.return_value = date(2026, 8, 18)
+        snapshots_repo.get_first_snapshot_date.return_value = date(2021, 1, 1)
         snapshots_repo.get_missing_dates.return_value = []
         upsert_calls = []
         snapshots_repo.upsert_snapshot = MagicMock(side_effect=lambda row: upsert_calls.append(row))

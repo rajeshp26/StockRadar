@@ -226,38 +226,74 @@ class PortfolioSnapshotsRepository:
             )
             return None
 
-    def get_missing_dates(
-        self, account_id: int, start_date: date, end_date: date
-    ) -> list[date]:
+    def get_first_snapshot_date(self, account_id: int) -> date | None:
+        """Earliest stored snapshot date; the floor for interior-hole repair."""
         try:
             res = (
                 self.client.table("portfolio_snapshots")
                 .select("snapshot_date")
                 .eq("account_id", account_id)
-                .gte("snapshot_date", start_date.isoformat())
-                .lte("snapshot_date", end_date.isoformat())
+                .order("snapshot_date", desc=False)
+                .limit(1)
                 .execute()
             )
-            existing = set()
-            for row in (res.data or []):
-                d = row["snapshot_date"]
+            if res.data:
+                d = res.data[0]["snapshot_date"]
                 if isinstance(d, str):
-                    d = date.fromisoformat(d)
-                existing.add(d)
+                    return date.fromisoformat(d)
+                return d
+            return None
+        except Exception as e:
+            logger.error(
+                f"Failed to get first snapshot date for account {account_id}: {e}"
+            )
+            return None
 
-            all_dates = set()
-            current = start_date
-            while current <= end_date:
-                if current.weekday() < 5:
-                    all_dates.add(current)
-                current += timedelta(days=1)
-
-            return sorted(all_dates - existing)
+    def get_missing_dates(
+        self, account_id: int, start_date: date, end_date: date
+    ) -> list[date]:
+        existing: set[date] = set()
+        try:
+            # Paginated: PostgREST caps a single response (1000 rows on the local
+            # stack), so an unpaginated read over a multi-year window silently drops
+            # rows past the cap and reports already-populated dates as missing -- the
+            # caller would then rebuild and overwrite them.
+            page_size = 1000
+            offset = 0
+            while True:
+                res = (
+                    self.client.table("portfolio_snapshots")
+                    .select("snapshot_date")
+                    .eq("account_id", account_id)
+                    .gte("snapshot_date", start_date.isoformat())
+                    .lte("snapshot_date", end_date.isoformat())
+                    .order("snapshot_date", desc=False)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                chunk = res.data or []
+                for row in chunk:
+                    d = row["snapshot_date"]
+                    if isinstance(d, str):
+                        d = date.fromisoformat(d)
+                    existing.add(d)
+                if len(chunk) < page_size:
+                    break
+                offset += page_size
         except Exception as e:
             logger.error(
                 f"Failed to get missing dates for account {account_id}: {e}"
             )
             return []
+
+        all_dates = set()
+        current = start_date
+        while current <= end_date:
+            if current.weekday() < 5:
+                all_dates.add(current)
+            current += timedelta(days=1)
+
+        return sorted(all_dates - existing)
 
     def validate_snapshot_invariants(self, account_id: int) -> list[str]:
         errors: list[str] = []
