@@ -8,6 +8,7 @@ below is the guard that keeps that fix from silently regressing.
 
 import inspect
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -70,20 +71,51 @@ def test_day_resolution_returns_daily_series_untouched() -> None:
     assert PortfolioService._downsample_snapshots(daily, "day") is daily
 
 
-def test_month_buckets_take_period_end_close() -> None:
+def test_buckets_hold_one_point_per_period() -> None:
     daily = _series(
         ["2024-01-01", "2024-01-15", "2024-01-31", "2024-02-01", "2024-02-29", "2024-03-01"]
     )
     bucketed = PortfolioService._downsample_snapshots(daily, "month")
-    assert _dates(bucketed) == ["2024-01-01", "2024-01-31", "2024-02-29", "2024-03-01"]
+    # Jan = range start (one point), Feb = month-end close, Mar = range end.
+    # The old output carried BOTH 2024-01-01 and 2024-01-31 — the duplicate
+    # window-start entry the user saw rendered twice on the chart.
+    assert _dates(bucketed) == ["2024-01-01", "2024-02-29", "2024-03-01"]
 
 
-def test_quarter_buckets_take_period_end_close() -> None:
+def test_quarter_buckets_hold_one_point_per_period() -> None:
     daily = _series(
         ["2024-01-15", "2024-02-15", "2024-03-20", "2024-04-02", "2024-05-10", "2024-06-30"]
     )
     bucketed = PortfolioService._downsample_snapshots(daily, "quarter")
-    assert _dates(bucketed) == ["2024-01-15", "2024-03-20", "2024-06-30"]
+    # Q1 = range start, Q2 = quarter-end close — one point each, never two.
+    assert _dates(bucketed) == ["2024-01-15", "2024-06-30"]
+
+
+@pytest.mark.parametrize("resolution", ["month", "quarter"])
+def test_no_calendar_period_contributes_two_points(resolution: str) -> None:
+    """Regression: the window-start period used to carry two entries.
+
+    The first bucket kept both its first observation *and* its period-end close,
+    so the leftmost month/quarter appeared twice on the chart."""
+    daily = _series(
+        [
+            "2024-01-01", "2024-01-15", "2024-01-31",
+            "2024-02-01", "2024-02-15", "2024-02-29",
+            "2024-03-01", "2024-03-15", "2024-03-31",
+            "2024-04-01", "2024-04-15",
+        ]
+    )
+    bucketed = PortfolioService._downsample_snapshots(daily, resolution)
+
+    def bucket_key(iso: str) -> tuple[int, int]:
+        d = date.fromisoformat(iso)
+        divisor = 3 if resolution == "quarter" else 1
+        return (d.year, (d.month - 1) // divisor)
+
+    keys = [bucket_key(s["date"]) for s in bucketed]
+    assert len(keys) == len(set(keys)), (
+        f"a {resolution} bucket carried two points: {_dates(bucketed)}"
+    )
 
 
 @pytest.mark.parametrize("resolution", ["month", "quarter"])

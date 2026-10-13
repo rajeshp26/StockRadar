@@ -1487,6 +1487,14 @@ class PortfolioService:
             dates.append(end_str)
         return dates
 
+    # Chart precision by range (A6c — reaffirmed A6b). The served series matches
+    # the period the user is reading: daily for the short ranges (1W/1M = one bar
+    # per day), monthly for 1Y/YTD, quarterly for the long ranges (5Y/ALL). This
+    # mirrors the range-dependent cadence professional chart apps use and keeps a
+    # bar chart readable — one bar per period instead of ~165 daily slivers over
+    # a year (measured on user 1: 1Y daily would be 165 pts / 19 KB, ALL daily
+    # 1370 pts / 156 KB). Bucketed ranges emit ONE point per period; see
+    # `_downsample_snapshots`.
     _RESOLUTION_BY_PERIOD = {
         "1D": "day",
         "1W": "day",
@@ -1500,19 +1508,25 @@ class PortfolioService:
 
     @classmethod
     def _resolution_for_period(cls, period: str) -> str:
-        """Chart resolution for a period: daily for short ranges, then coarser."""
+        """Chart precision for a period: daily, monthly or quarterly (A6c)."""
         return cls._RESOLUTION_BY_PERIOD.get(period.upper(), "day")
 
     @classmethod
     def _downsample_snapshots(
         cls, snapshots: list[dict[str, Any]], resolution: str
     ) -> list[dict[str, Any]]:
-        """Reduce the daily series to the resolution the chart renders.
+        """Reduce the daily series to the bucketed grid the period renders.
 
-        Storage stays daily; only the served series is bucketed. Each calendar
-        month/quarter contributes its last observation (period-end close), and the
-        first observation is always kept so the chart spans the requested window
-        instead of starting a bucket late.
+        The precision follows the period (see `_RESOLUTION_BY_PERIOD`): the short
+        ranges are served daily, 1Y/YTD monthly and 5Y/ALL quarterly. When
+        bucketing applies, each calendar period contributes exactly ONE point, so
+        no month/quarter ever carries two x-axis entries:
+
+        * the first period contributes its first observation (the range start)
+          and the last period its last observation (the range end), so the chart
+          spans the requested window instead of starting/ending a bucket late;
+        * every interior period contributes its last observation (period-end
+          close).
 
         This is presentation only. Return metrics must be computed from the full
         daily series before this is applied -- deriving TWR or best_day from
@@ -1526,9 +1540,15 @@ class PortfolioService:
             period_index = d.month if resolution == "month" else (d.month - 1) // 3 + 1
             return (d.year, period_index)
 
+        first_key = bucket_key(snapshots[0]["date"])
         kept: list[dict[str, Any]] = [snapshots[0]]
         for prev, snap in zip(snapshots, snapshots[1:]):
             if bucket_key(snap["date"]) != bucket_key(prev["date"]):
+                # The first period is already represented by snapshots[0];
+                # emitting its period-end close as well was the duplicate
+                # window-start entry the chart showed twice.
+                if bucket_key(prev["date"]) == first_key:
+                    continue
                 if kept[-1] is not prev:
                     kept.append(prev)
         if kept[-1] is not snapshots[-1]:

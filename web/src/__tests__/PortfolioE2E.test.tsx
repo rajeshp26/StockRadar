@@ -627,9 +627,10 @@ describe("E2E: Performance & Risk — PT-E2E-07 to PT-E2E-10", () => {
     defaultApiMock();
     renderWithProviders(<PortfolioTabShell />);
     expect(await screen.findByText("Portfolio Risk Analytics")).toBeInTheDocument();
-    // Period presets are 1D/1W/YTD/1Y/All Time — no 1M or MAX
+    // Period presets are 1W/1M/1Y/YTD/All Time — no 1D or MAX
     expect(screen.getByText("1Y")).toBeInTheDocument();
-    expect(screen.queryByText("1M")).not.toBeInTheDocument();
+    expect(screen.getByText("1M")).toBeInTheDocument();
+    expect(screen.queryByText("1D")).not.toBeInTheDocument();
     expect(screen.queryByText("MAX")).not.toBeInTheDocument();
   });
 

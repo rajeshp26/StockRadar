@@ -211,10 +211,10 @@ export interface BenchmarkCompareResponse {
 export type TimePeriod = "1D" | "1W" | "1M" | "3M" | "1Y" | "YTD" | "ALL";
 
 export const PERIOD_OPTIONS: { label: string; value: TimePeriod }[] = [
-  { label: "1D", value: "1D" },
   { label: "1W", value: "1W" },
-  { label: "YTD", value: "YTD" },
+  { label: "1M", value: "1M" },
   { label: "1Y", value: "1Y" },
+  { label: "YTD", value: "YTD" },
   { label: "All Time", value: "ALL" },
 ];
 

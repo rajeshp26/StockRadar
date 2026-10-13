@@ -28,11 +28,15 @@
 //      "h:mm a" over date-only data), it falls back to "MMM d" so the axis is
 //      never useless.
 //
-//   5. The ALL range sizes its tick grid to a label-density target (8 labels by
-//      default; narrower charts request fewer via getDateAxis({ widthPx }))
-//      using a nice-interval ladder (1/2/3/6/12 h, 1/2/3/7 d, 1/3/6 mo,
-//      1/2/5/10 y) — the same shape professional chart libraries use. A 5.5-year
-//      span therefore gets annual labels, never a repeating month/quarter grid.
+//   5. The ALL range is span-driven. Histories of up to 8 years render on a
+//      QUARTER grid ("Q1'25" ... "Q4'26") so the quarters are actually visible
+//      to the user; longer histories collapse to an annual grid ("2021" ...).
+//      The annual grid is sized to a label-density target (8 labels by default;
+//      narrower charts request fewer via getDateAxis({ widthPx })) through a
+//      nice-interval ladder — the same shape professional chart libraries use.
+//      Short histories keep a day/month grid. Quarter ticks read "Q1'25"; month
+//      ticks in a span that crosses a calendar year read "Sep'25", so no label
+//      is ambiguous about which year it belongs to.
 //
 //   6. After ideal ticks are snapped to real data dates, adjacent ticks whose
 //      rendered labels collide (two ideal months landing in the same calendar
@@ -43,21 +47,34 @@ import {
     addDays,
     addHours,
     addMonths,
+    addQuarters,
     addYears,
     format,
     startOfDay,
     startOfHour,
     startOfMonth,
+    startOfQuarter,
     startOfYear,
 } from 'date-fns';
 
-export type TimeTickUnit = 'hour' | 'day' | 'month' | 'year';
+export type TimeTickUnit = 'hour' | 'day' | 'month' | 'quarter' | 'year';
 
 export interface TickConfig {
     unit: TimeTickUnit;
     step: number;
-    /** date-fns format tokens (e.g. 'h:mm a', 'EEE', 'MMM d', 'MMM', 'yyyy'). */
+    /** date-fns format tokens (e.g. 'h:mm a', 'EEE', 'MMM d', "MMM''yy", "QQQ''yy", 'yyyy'). */
     format: string;
+}
+
+/**
+ * Month-label format for a span. The year disambiguates month labels only when
+ * the data crosses a calendar year: a single-year span stays "Sep, Oct, ...",
+ * while a trailing 12-month window reads "Sep'25 ... Aug'26". Short year
+ * ("'25") keeps dense monthly axes compact while never leaving a label
+ * ambiguous about its year.
+ */
+function monthYearFormat(start: Date, end: Date): string {
+    return start.getFullYear() === end.getFullYear() ? 'MMM' : "MMM''yy";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,11 +104,12 @@ export function getTickConfig(range: string, dataStartDate: Date, dataEndDate: D
         case '3M':
         case 'YTD':
         case '1Y':
-            return { unit: 'month', step: 1, format: 'MMM' };
+            return { unit: 'month', step: 1, format: monthYearFormat(dataStartDate, dataEndDate) };
+        case '5Y':
         case 'ALL':
             return pickNiceConfig(dataStartDate, dataEndDate, targetTickCount);
         default:
-            return { unit: 'month', step: 1, format: 'MMM' };
+            return { unit: 'month', step: 1, format: monthYearFormat(dataStartDate, dataEndDate) };
     }
 }
 
@@ -106,11 +124,25 @@ const DEFAULT_TARGET_TICKS = 8;
 export const LABEL_BUDGET_PX = 80;
 const MIN_TARGET_TICKS = 3;
 /**
- * Upper clamp for width-derived targets. A larger budget would push a 5.5-year
- * ALL span onto a 6-month grid (repeating "Jan ... Jul ..." labels) — exactly
- * the defect this module replaced.
+ * Upper clamp for width-derived targets. The quarter band is span-driven and
+ * only reads the target to thin on a very narrow panel, so this clamp bounds
+ * the day/month and annual grids rather than the quarter grid.
  */
 const MAX_TARGET_TICKS = 8;
+
+// ── ALL-range span bands ─────────────────────────────────────────────────────
+// The ALL grid is chosen from the span, not only the label budget: a 5–8 year
+// portfolio otherwise collapses to ~8 year labels and the quarters vanish.
+const MS_PER_YEAR = 365.2425 * MS_PER_DAY;
+const MS_PER_QUARTER = 3 * 30.4375 * MS_PER_DAY;
+/** At or under this many years, ALL shows quarters instead of years. */
+const QUARTER_MAX_SPAN_YEARS = 8;
+/** Below this many years, ALL keeps the day/month grid (a young account). */
+const QUARTER_MIN_SPAN_YEARS = 0.7;
+/** Up to this many quarters, show every quarter; beyond it, every other. */
+const MAX_DENSE_QUARTERS = 24;
+/** A width-derived target below this thins the quarter grid to every other. */
+const NARROW_TARGET_TICKS = 6;
 
 /**
  * Derive an ALL-range label-density target from a chart's rendered width.
@@ -141,9 +173,12 @@ interface NiceInterval {
 }
 
 /**
- * Candidate tick steps from dense to sparse. Month/year lengths are the
- * calendar averages (30.4375d, 365.2425d) so ordering stays stable against
- * real calendar spans (e.g. 4 Jul-to-Jul years tie a half-year grid).
+ * Candidate tick steps from dense to sparse, used for the short-span (day/month)
+ * ALL grid and for the annual grid of long histories. Quarter/month/year lengths
+ * are the calendar averages (3/6/30.4375d, 365.2425d) so ordering stays stable
+ * against real calendar spans. The 0.7–8 year ALL band does not use this ladder
+ * for its unit — it is pinned to quarters (see `pickNiceConfig`) so a 5-year span
+ * renders "Q1'21 ... Q4'25" rather than a handful of year labels.
  */
 const NICE_INTERVALS: NiceInterval[] = [
     { unit: 'hour', step: 1, ms: MS_PER_DAY / 24 },
@@ -156,8 +191,8 @@ const NICE_INTERVALS: NiceInterval[] = [
     { unit: 'day', step: 3, ms: 3 * MS_PER_DAY },
     { unit: 'day', step: 7, ms: 7 * MS_PER_DAY },
     { unit: 'month', step: 1, ms: 30.4375 * MS_PER_DAY },
-    { unit: 'month', step: 3, ms: 3 * 30.4375 * MS_PER_DAY },
-    { unit: 'month', step: 6, ms: 6 * 30.4375 * MS_PER_DAY },
+    { unit: 'quarter', step: 1, ms: 3 * 30.4375 * MS_PER_DAY },
+    { unit: 'quarter', step: 2, ms: 6 * 30.4375 * MS_PER_DAY },
     { unit: 'year', step: 1, ms: 365.2425 * MS_PER_DAY },
     { unit: 'year', step: 2, ms: 2 * 365.2425 * MS_PER_DAY },
     { unit: 'year', step: 5, ms: 5 * 365.2425 * MS_PER_DAY },
@@ -165,41 +200,71 @@ const NICE_INTERVALS: NiceInterval[] = [
 ];
 
 /**
- * Size the ALL-range tick grid to a label density, the way d3's
- * `scaleTime().ticks(count)` and professional chart libraries do: the chosen
- * interval is the smallest nice step whose nominal duration is at least
- * `span / targetLabels`. Ticks never exceed the target, and adjacent spans
- * cannot flip formats the way a hard-coded year threshold did (5.0y and 5.5y
- * both land on an annual grid).
+ * Pick the ALL-range tick grid from the span, the way professional chart
+ * libraries size a time axis. Three span bands:
+ *
+ *   < 0.7y    day/month grid (a young account) sized by the label budget;
+ *   0.7–8y    QUARTER grid — every quarter while they are ≤ 24, else every
+ *             other — so the quarters are visible rather than collapsing to a
+ *             handful of year labels;
+ *   > 8y      annual grid, sized to the label budget (1/2/5/10-year steps).
+ *
+ * The density target (from chart width) only refines the day/month band and the
+ * annual band; inside the quarter band it can thin to every other quarter on a
+ * very narrow panel but never hides the quarters behind year labels.
  */
 function pickNiceConfig(dataStartDate: Date, dataEndDate: Date, targetTickCount?: number): TickConfig {
     const target = Math.max(1, Math.round(targetTickCount ?? DEFAULT_TARGET_TICKS));
     const spanMs = dataEndDate.getTime() - dataStartDate.getTime();
     if (spanMs <= 0) {
         // Zero-length span: keep a readable, stable default.
-        return { unit: 'month', step: 3, format: 'MMM yyyy' };
+        return { unit: 'quarter', step: 1, format: "QQQ''yy" };
     }
 
+    const spanYears = spanMs / MS_PER_YEAR;
+
+    if (spanYears > QUARTER_MAX_SPAN_YEARS) {
+        // Long history: annual grid sized to the label budget.
+        const ideal = spanMs / target;
+        for (const interval of NICE_INTERVALS) {
+            if (interval.unit === 'year' && interval.ms >= ideal) {
+                return { unit: 'year', step: interval.step, format: 'yyyy' };
+            }
+        }
+        const last = NICE_INTERVALS[NICE_INTERVALS.length - 1];
+        return { unit: 'year', step: last.step, format: 'yyyy' };
+    }
+
+    if (spanYears >= QUARTER_MIN_SPAN_YEARS) {
+        // Quarter band: prefer every quarter; thin to every other when there are
+        // too many to label, or on a very narrow panel.
+        const quarters = Math.round(spanMs / MS_PER_QUARTER);
+        let step = quarters <= MAX_DENSE_QUARTERS ? 1 : 2;
+        if (step === 1 && target < NARROW_TARGET_TICKS) step = 2;
+        return { unit: 'quarter', step, format: "QQQ''yy" };
+    }
+
+    // Short history: day/month grid from the nice-interval ladder.
     const ideal = spanMs / target;
-    let chosen = NICE_INTERVALS[NICE_INTERVALS.length - 1];
     for (const interval of NICE_INTERVALS) {
         if (interval.ms >= ideal) {
-            chosen = interval;
-            break;
+            return { unit: interval.unit, step: interval.step, format: pickNiceFormat(interval, dataStartDate, dataEndDate) };
         }
     }
-
-    return { unit: chosen.unit, step: chosen.step, format: pickNiceFormat(chosen, dataStartDate, dataEndDate) };
+    const last = NICE_INTERVALS[NICE_INTERVALS.length - 1];
+    return { unit: last.unit, step: last.step, format: pickNiceFormat(last, dataStartDate, dataEndDate) };
 }
 
 function pickNiceFormat(interval: NiceInterval, dataStartDate: Date, dataEndDate: Date): string {
     switch (interval.unit) {
         case 'year':
             return 'yyyy';
+        case 'quarter':
+            // Quarter ticks always carry the year: "Q1'25" removes any doubt
+            // about which year a quarter belongs to across a multi-year span.
+            return "QQQ''yy";
         case 'month':
-            // The year disambiguates month labels only when the data crosses a
-            // calendar year; a single-year span stays "Jan, Feb, ...".
-            return dataStartDate.getFullYear() === dataEndDate.getFullYear() ? 'MMM' : 'MMM yyyy';
+            return monthYearFormat(dataStartDate, dataEndDate);
         case 'day':
             return 'MMM d';
         case 'hour':
@@ -263,6 +328,8 @@ function anchorToUnit(date: Date, unit: TimeTickUnit): Date {
             return startOfDay(date);
         case 'month':
             return startOfMonth(date);
+        case 'quarter':
+            return startOfQuarter(date);
         case 'year':
             return startOfYear(date);
     }
@@ -276,6 +343,8 @@ function advanceBy(date: Date, unit: TimeTickUnit, step: number): Date {
             return addDays(date, step);
         case 'month':
             return addMonths(date, step);
+        case 'quarter':
+            return addQuarters(date, step);
         case 'year':
             return addYears(date, step);
     }

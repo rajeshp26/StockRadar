@@ -30,7 +30,7 @@ describe('getTickConfig', () => {
         });
     });
 
-    it('3M/YTD/1Y -> monthly, MMM', () => {
+    it('3M/YTD/1Y -> monthly, MMM within a single calendar year', () => {
         const start = new Date(2026, 0, 1);
         const end = new Date(2026, 11, 31);
         expect(getTickConfig('3M', start, end)).toEqual({ unit: 'month', step: 1, format: 'MMM' });
@@ -38,48 +38,65 @@ describe('getTickConfig', () => {
         expect(getTickConfig('1Y', start, end)).toEqual({ unit: 'month', step: 1, format: 'MMM' });
     });
 
-    it('ALL spanning more than 5 years -> yearly, yyyy', () => {
-        expect(getTickConfig('ALL', JAN_1_2019, JUL_1_2026).format).toBe('yyyy');
-        expect(getTickConfig('ALL', JAN_1_2019, JUL_1_2026).unit).toBe('year');
+    it("3M/YTD/1Y -> monthly, MMM'yy when the span crosses a calendar year", () => {
+        // The 1Y defect: a trailing 12-month window (Sep 2025 .. Aug 2026) must
+        // carry the year, or every month label is ambiguous about its year.
+        const start = new Date(2025, 8, 1);
+        const end = new Date(2026, 7, 31);
+        expect(getTickConfig('1Y', start, end)).toEqual({ unit: 'month', step: 1, format: "MMM''yy" });
+        expect(getTickConfig('3M', new Date(2025, 10, 1), new Date(2026, 1, 1))).toEqual({
+            unit: 'month', step: 1, format: "MMM''yy",
+        });
     });
 
-    it('ALL spanning exactly 5 years -> yearly, yyyy (density ladder, not a 3-month grid)', () => {
-        // A 5-year span at the 8-label target is an annual grid — the old
-        // "> 5 years" threshold surfaced only at 6+ years, which is why 5.0y used
-        // to flip between monthly and yearly formats for almost-identical spans.
+    it("ALL spanning 7.5 years -> every-other quarter (still inside the 8-year quarter band)", () => {
+        // 30 quarters > the 24-quarter dense cap, so step 2 — but still quarters,
+        // never year ticks.
+        expect(getTickConfig('ALL', JAN_1_2019, JUL_1_2026)).toEqual({
+            unit: 'quarter', step: 2, format: "QQQ''yy",
+        });
+    });
+
+    it("ALL spanning exactly 5 years -> every-quarter ticks, Qn'yy", () => {
+        // The 8-year quarter band: a 5-year history shows its 20 quarters rather
+        // than collapsing to five year labels.
         const cfg = getTickConfig('ALL', new Date(2021, 0, 1), new Date(2026, 0, 1));
-        expect(cfg).toEqual({ unit: 'year', step: 1, format: 'yyyy' });
+        expect(cfg).toEqual({ unit: 'quarter', step: 1, format: "QQQ''yy" });
     });
 
-    it('ALL spanning 5.49 years (reported Jan/Jul repeat bug) -> yearly, yyyy', () => {
-        // 2021-01-01 -> 2026-07-01: the exact span that used to render
-        // "Jan 2021 Jul 2021 ..." month labels because differenceInYears() floors
-        // 5.49 -> 5 and the old threshold only flipped at > 5. Density now sizes
-        // the grid by span/target, so this lands on annual labels.
+    it("ALL spanning 5.49 years -> every-quarter ticks, never a month grid", () => {
+        // 2021-01-01 -> 2026-07-01: the span that used to render the repeating
+        // "Jan 2021 Jul 2021 ..." month grid. It now lands on an all-quarter grid
+        // (22 quarters), neither monthly nor yearly.
         const cfg = getTickConfig('ALL', new Date(2021, 0, 1), new Date(2026, 6, 1));
-        expect(cfg).toEqual({ unit: 'year', step: 1, format: 'yyyy' });
+        expect(cfg).toEqual({ unit: 'quarter', step: 1, format: "QQQ''yy" });
     });
 
-    it('ALL spanning 5.9 and 6.0 years -> yearly, yyyy (no cliff at the 5-year mark)', () => {
-        expect(getTickConfig('ALL', new Date(2021, 0, 1), new Date(2026, 10, 30)).unit).toBe('year');
-        expect(getTickConfig('ALL', new Date(2020, 0, 1), new Date(2026, 0, 1))).toEqual({ unit: 'year', step: 1, format: 'yyyy' });
+    it('ALL spanning 5.9 and 6.0 years -> quarter ticks (still inside the 8-year band)', () => {
+        expect(getTickConfig('ALL', new Date(2021, 0, 1), new Date(2026, 10, 30))).toEqual({ unit: 'quarter', step: 1, format: "QQQ''yy" });
+        expect(getTickConfig('ALL', new Date(2020, 0, 1), new Date(2026, 0, 1))).toEqual({ unit: 'quarter', step: 1, format: "QQQ''yy" });
     });
 
-    it('ALL spanning 4 years -> 6-month ticks, MMM yyyy', () => {
+    it('ALL spanning just over 8 years -> annual grid (quarters no longer fit)', () => {
+        // 2018-01-01 -> 2026-07-01 = 8.5y, past the quarter band.
+        expect(getTickConfig('ALL', new Date(2018, 0, 1), new Date(2026, 6, 1))).toEqual({ unit: 'year', step: 2, format: 'yyyy' });
+    });
+
+    it("ALL spanning 4 years -> every-quarter ticks, Qn'yy", () => {
         expect(getTickConfig('ALL', new Date(2023, 6, 1), new Date(2027, 6, 1))).toEqual({
-            unit: 'month', step: 6, format: 'MMM yyyy',
+            unit: 'quarter', step: 1, format: "QQQ''yy",
         });
     });
 
-    it('ALL spanning 3 years -> 6-month ticks, MMM yyyy', () => {
+    it("ALL spanning 3 years -> every-quarter ticks, Qn'yy", () => {
         expect(getTickConfig('ALL', new Date(2023, 6, 15), new Date(2026, 6, 14))).toEqual({
-            unit: 'month', step: 6, format: 'MMM yyyy',
+            unit: 'quarter', step: 1, format: "QQQ''yy",
         });
     });
 
-    it('ALL spanning 2 years -> 3-month ticks', () => {
+    it("ALL spanning 2 years -> quarterly ticks, Qn'yy", () => {
         expect(getTickConfig('ALL', new Date(2024, 6, 1), new Date(2026, 6, 1))).toEqual({
-            unit: 'month', step: 3, format: 'MMM yyyy',
+            unit: 'quarter', step: 1, format: "QQQ''yy",
         });
     });
 
@@ -91,21 +108,27 @@ describe('getTickConfig', () => {
         expect(getTickConfig('ALL', new Date(2006, 0, 1), new Date(2026, 0, 1))).toEqual({ unit: 'year', step: 5, format: 'yyyy' });
     });
 
-    it('ALL with equal start/end dates -> stable 3-month default', () => {
+    it("ALL with equal start/end dates -> stable quarterly default", () => {
         const d = new Date(2026, 0, 1);
-        expect(getTickConfig('ALL', d, d).format).toBe('MMM yyyy');
+        expect(getTickConfig('ALL', d, d).format).toBe("QQQ''yy");
     });
 
-    it('ALL honors a custom density target (sparser budget -> wider ticks)', () => {
+    it('ALL honors a custom density target inside the quarter band (narrow budget thins to every other)', () => {
         const start = new Date(2021, 0, 1);
         const end = new Date(2026, 6, 1);
-        expect(getTickConfig('ALL', start, end, 4).step).toBe(2);
-        expect(getTickConfig('ALL', start, end, 16).step).toBe(6);
+        expect(getTickConfig('ALL', start, end, 4)).toEqual({ unit: 'quarter', step: 2, format: "QQQ''yy" });
+        expect(getTickConfig('ALL', start, end, 16)).toEqual({ unit: 'quarter', step: 1, format: "QQQ''yy" });
     });
 
-    it('unknown range -> sensible monthly default', () => {
+    it("5Y -> every-quarter ticks over a five-year span", () => {
         expect(getTickConfig('5Y', new Date(2021, 0, 1), new Date(2026, 0, 1))).toEqual({
-            unit: 'month', step: 1, format: 'MMM',
+            unit: 'quarter', step: 1, format: "QQQ''yy",
+        });
+    });
+
+    it('unknown range -> sensible monthly default (year shown when it crosses a year)', () => {
+        expect(getTickConfig('MAX', new Date(2021, 0, 1), new Date(2026, 0, 1))).toEqual({
+            unit: 'month', step: 1, format: "MMM''yy",
         });
     });
 });
@@ -236,55 +259,54 @@ describe('snapTicksToData', () => {
 });
 
 describe('getDateAxis (end-to-end)', () => {
-    it('1Y with monthly data -> real data keys, MMM labels', () => {
+    it("1Y with monthly data crossing a year -> real data keys, MMM'yy labels", () => {
         const dates = ['2025-08-01', '2025-09-01', '2025-10-01', '2025-11-01', '2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01', '2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01'];
         const axis = getDateAxis('1Y', dates);
-        expect(axis.tickFormat).toBe('MMM');
+        expect(axis.tickFormat).toBe("MMM''yy");
         expect(axis.ticks.length).toBeGreaterThanOrEqual(8);
         axis.ticks.forEach((t) => expect(dates).toContain(t));
-        expect(formatAxisTick(axis.ticks[0], axis.tickFormat)).toBe('Aug');
+        expect(formatAxisTick(axis.ticks[0], axis.tickFormat)).toBe("Aug'25");
     });
 
-    it('ALL over 7 years of yearly data -> year labels', () => {
+    it("ALL over 7 years of yearly data -> Qn'yy quarter labels", () => {
         const dates = ['2019-03-01', '2020-03-01', '2021-03-01', '2022-03-01', '2023-03-01', '2024-03-01', '2025-03-01', '2026-03-01'];
         const axis = getDateAxis('ALL', dates);
-        expect(axis.tickFormat).toBe('yyyy');
+        expect(axis.tickFormat).toBe("QQQ''yy");
         axis.ticks.forEach((t) => expect(dates).toContain(t));
-        expect(formatAxisTick(axis.ticks[0], axis.tickFormat)).toBe('2019'); // anchor at-or-before start: 2019-03-01
+        expect(formatAxisTick(axis.ticks[0], axis.tickFormat)).toBe("Q1'19"); // anchor at-or-before start: 2019-03-01
     });
 
-    it('ALL over a 3-year span -> MMM yyyy labels', () => {
+    it("ALL over a 3-year span -> Qn'yy quarter labels", () => {
         const dates = ['2023-07-01', '2023-10-01', '2024-01-01', '2024-04-01', '2024-07-01', '2024-10-01', '2025-01-01', '2025-04-01', '2025-07-01', '2025-10-01', '2026-01-01', '2026-04-01', '2026-07-01'];
         const axis = getDateAxis('ALL', dates);
-        expect(axis.tickFormat).toBe('MMM yyyy');
+        expect(axis.tickFormat).toBe("QQQ''yy");
         axis.ticks.forEach((t) => expect(dates).toContain(t));
-        expect(formatAxisTick(axis.ticks[0], axis.tickFormat)).toBe('Jul 2023'); // anchor at-or-before start: 2023-07-01
+        expect(formatAxisTick(axis.ticks[0], axis.tickFormat)).toBe("Q3'23"); // anchor at-or-before start: 2023-07-01
     });
 
-    it('ALL over a 5.49-year span -> yearly labels, never month labels (reported Jan/Jul repeat)', () => {
+    it("ALL over a 5.49-year span -> Qn'yy quarter labels, never month labels (reported Jan/Jul repeat)", () => {
         // Regression pin: 67 monthly points from 2021-01-01 to 2026-07-01 must
-        // render an all-year axis, not the repeating month grid from the bug.
+        // render an all-quarter axis, never the repeating month grid from the bug.
         const dates: string[] = [];
         for (let m = 0; m < 67; m++) {
             const d = new Date(2021, m, 1);
             dates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`);
         }
         const axis = getDateAxis('ALL', dates);
-        expect(axis.tickFormat).toBe('yyyy');
+        expect(axis.tickFormat).toBe("QQQ''yy");
         axis.ticks.forEach((t) => expect(dates).toContain(t));
         const labels = axis.ticks.map((t) => formatAxisTick(t, axis.tickFormat));
-        expect(labels[0]).toBe('2021');
-        expect(labels.every((l) => /^\d{4}$/.test(l))).toBe(true);
+        expect(labels[0]).toBe("Q1'21");
+        expect(labels.every((l) => /^Q[1-4]'\d\d$/.test(l))).toBe(true);
     });
 
-    it('getDateAxis honors a custom density target (2-year grid when few ticks fit)', () => {
+    it('getDateAxis honors a custom density target (sparse budget thins to every other quarter)', () => {
         const dates = ['2021-01-01', '2022-01-01', '2023-01-01', '2024-01-01', '2025-01-01', '2026-01-01', '2026-07-01'];
         const axis = getDateAxis('ALL', dates, 4);
-        expect(axis.tickFormat).toBe('yyyy');
-        // The 2-year grid stops at 2025; 2026-07-01 is appended by the terminal-tick
-        // guarantee so the newest observation is labelled. Before that guarantee the
-        // array ended at 2025-01-01 and the chart showed a tick two years stale.
-        expect(axis.ticks).toEqual(['2021-01-01', '2023-01-01', '2025-01-01', '2026-07-01']);
+        expect(axis.tickFormat).toBe("QQQ''yy");
+        // The sparse budget thins the 22-quarter span to every other quarter;
+        // 2026-07-01 stays as the terminal tick so the newest observation is labelled.
+        expect(axis.ticks).toEqual(['2021-01-01', '2022-01-01', '2023-01-01', '2024-01-01', '2025-01-01', '2026-01-01', '2026-07-01']);
     });
 
     it('1W over daily data -> weekday labels', () => {
@@ -360,24 +382,24 @@ describe('getDateAxis with { widthPx } target', () => {
         return keys;
     };
 
-    it('narrow panel (320px -> 4 ticks) relaxes a 5.49y ALL span to every 2 years', () => {
+    it('narrow panel (320px -> 4 ticks) thins a 5.49y ALL span to every other quarter', () => {
         const axis = getDateAxis('ALL', fiveYearMonthlyKeys(), { widthPx: 320 });
-        expect(axis.tickFormat).toBe('yyyy');
-        // 2026-07-01 is the last data key and is appended by the terminal-tick
-        // guarantee; the 2-year grid itself stops at 2025.
-        expect(axis.ticks).toEqual(['2021-01-01', '2023-01-01', '2025-01-01', '2026-07-01']);
+        expect(axis.tickFormat).toBe("QQQ''yy");
+        // Every-other quarter (Q1/Q3) end to end; the terminal key is already the
+        // last quarter start so the snap keeps it.
+        expect(axis.ticks).toEqual([
+            '2021-01-01', '2021-07-01', '2022-01-01', '2022-07-01', '2023-01-01', '2023-07-01',
+            '2024-01-01', '2024-07-01', '2025-01-01', '2025-07-01', '2026-01-01', '2026-07-01',
+        ]);
     });
 
-    it('wide panel (640px -> 8 ticks) keeps yearly labels on a 5.49y ALL span', () => {
+    it('wide panel (640px -> 8 ticks) keeps every quarter on a 5.49y ALL span', () => {
         const axis = getDateAxis('ALL', fiveYearMonthlyKeys(), { widthPx: 640 });
-        expect(axis.tickFormat).toBe('yyyy');
-        // 2026-01-01 and the terminal 2026-07-01 both render "2026", so the interior
-        // tick yields and the last data key is kept — the documented ECharts
-        // `fixMinMaxLabelShow` tie-break. Without the guarantee this ended at 2026-01-01,
-        // a label sitting six months short of the data it described.
-        expect(axis.ticks).toEqual([
-            '2021-01-01', '2022-01-01', '2023-01-01', '2024-01-01', '2025-01-01', '2026-07-01',
-        ]);
+        expect(axis.tickFormat).toBe("QQQ''yy");
+        // 23 quarter starts from Q1'21 through Q3'26 inclusive.
+        expect(axis.ticks.length).toBe(23);
+        expect(axis.ticks[0]).toBe('2021-01-01');
+        expect(axis.ticks[axis.ticks.length - 1]).toBe('2026-07-01');
     });
 
     it('240px (clamped to 3) behaves identically to 320px on the same span', () => {
@@ -401,7 +423,7 @@ describe('getDateAxis with { widthPx } target', () => {
         expect(getDateAxis('1Y', monthlyKeys, { widthPx: 320 })).toEqual(getDateAxis('1Y', monthlyKeys));
     });
 
-    it('reads YYYY-MM month keys (dividend history) and emits yearly ticks in the same key space', () => {
+    it("reads YYYY-MM month keys (dividend history) and emits quarter ticks in the same key space", () => {
         const quarterlyMonthKeys: string[] = [];
         for (let y = 2021; y <= 2026; y++) {
             for (const m of [1, 4, 7, 10]) {
@@ -409,16 +431,15 @@ describe('getDateAxis with { widthPx } target', () => {
             }
         }
         const axis = getDateAxis('ALL', quarterlyMonthKeys);
-        expect(axis.tickFormat).toBe('yyyy');
-        // 2026-01 and the terminal 2026-10 both render "2026"; the interior tick
-        // yields so the newest key is labelled, matching the yearly-key test above.
-        expect(axis.ticks).toEqual(['2021-01', '2022-01', '2023-01', '2024-01', '2025-01', '2026-10']);
+        expect(axis.tickFormat).toBe("QQQ''yy");
+        // 24 quarter keys, Q1'21 .. Q4'26, all present in the key space.
+        expect(axis.ticks.length).toBe(24);
         for (const tick of axis.ticks) {
             expect(quarterlyMonthKeys).toContain(tick);
         }
         const labels = axis.ticks.map((t) => formatAxisTick(t, axis.tickFormat));
         expect(new Set(labels).size).toBe(labels.length);
-        expect(labels.every((l) => /^\d{4}$/.test(l))).toBe(true);
+        expect(labels.every((l) => /^Q[1-4]'\d\d$/.test(l))).toBe(true);
     });
 });
 
@@ -430,11 +451,11 @@ describe('adjacent duplicate label collapse', () => {
             '2026-05-05', '2026-06-05', '2026-07-05', '2026-08-05', '2026-09-05',
         ];
         const axis = getDateAxis('1Y', dates);
-        expect(axis.tickFormat).toBe('MMM');
+        expect(axis.tickFormat).toBe("MMM''yy");
         const labels = axis.ticks.map((t) => formatAxisTick(t, axis.tickFormat));
         expect(new Set(labels).size).toBe(labels.length);
-        expect(labels[0]).toBe('Oct');
-        expect(labels[1]).toBe('Nov');
+        expect(labels[0]).toBe("Oct'25");
+        expect(labels[1]).toBe("Nov'25");
         expect(axis.ticks).not.toContain('2025-11-28');
     });
 
@@ -447,9 +468,9 @@ describe('adjacent duplicate label collapse', () => {
         const axis = getDateAxis('1Y', dates);
         expect(axis.ticks).toHaveLength(13);
         const labels = axis.ticks.map((t) => formatAxisTick(t, axis.tickFormat));
-        expect(labels[0]).toBe('Jan');
-        expect(labels[12]).toBe('Jan');
-        expect(new Set(labels).size).toBe(12);
+        expect(labels[0]).toBe("Jan'25");
+        expect(labels[12]).toBe("Jan'26");
+        expect(new Set(labels).size).toBe(13);
     });
 });
 

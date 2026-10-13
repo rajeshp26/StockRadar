@@ -130,14 +130,20 @@ function makePortfolioPerformance(period: string) {
             snapshots.push({ date: `2026-09-${String(day).padStart(2, "0")}`, value, cost_basis: 98000, net_deposits: 0 });
             value += 400;
         }
+    } else if (period === "1M") {
+        // 6 points across a single month -> day-granular 'MMM d'
+        for (let day = 5; day <= 30; day += 5) {
+            snapshots.push({ date: `2026-09-${String(day).padStart(2, "0")}`, value, cost_basis: 98000, net_deposits: 0 });
+            value += 400;
+        }
     } else if (period === "YTD") {
         for (let m = 1; m <= 8; m++) {
             snapshots.push({ date: `2026-${String(m).padStart(2, "0")}-01`, value, cost_basis: 98000, net_deposits: 0 });
             value += 400;
         }
     } else if (period === "ALL") {
-        // 8-year span → year ticks (`yyyy`)
-        for (let m = 0; m < 97; m++) {
+        // 10-year span → year ticks (`yyyy`); spans ≤ 8 years now get quarters
+        for (let m = 0; m < 121; m++) {
             const d = new Date(2018, 6 + m, 1);
             snapshots.push({ date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`, value, cost_basis: 98000, net_deposits: 0 });
             value += 400;
@@ -288,7 +294,7 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         mockUseAnalysisBenchmarks.mockReturnValue({ data: [], isLoading: false });
     });
 
-    it("PortfolioPerformanceChart: default 1Y passes monthly MMM ticks ⊆ data dates", () => {
+    it("PortfolioPerformanceChart: default 1Y passes monthly MMM'yy ticks ⊆ data dates", () => {
         render(<PortfolioPerformanceChart />);
         const axes = dateAxesSince(0);
         expect(axes.length).toBe(1);
@@ -296,16 +302,16 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         const dataDates = new Set(makePortfolioPerformance("1Y").snapshots.map((s) => s.date));
         expect(axis.ticks!.length).toBeGreaterThan(0);
         expect(axis.ticks!.every((t) => dataDates.has(t))).toBe(true);
-        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM"));
+        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM''yy"));
         expect(axis.minTickGap).toBeUndefined();
     });
 
-    it("PortfolioPerformanceChart: switching period re-derives axis format (1D h:mm a, 1W EEE, ALL yyyy)", () => {
+    it("PortfolioPerformanceChart: switching period re-derives axis format (1M MMM d, 1W EEE, ALL yyyy)", () => {
         render(<PortfolioPerformanceChart />);
 
-        fireEvent.click(screen.getByText("1D"));
+        fireEvent.click(screen.getByText("1M"));
         let axes = dateAxesSince(0).slice(-1);
-        expect(axes[0].tickFormatter!("2026-09-14T09:00:00")).toBe(format(new Date(2026, 8, 14, 9, 0, 0), "h:mm a"));
+        expect(axes[0].tickFormatter!("2026-09-15")).toBe(format(new Date(2026, 8, 15), "MMM d"));
 
         fireEvent.click(screen.getByText("1W"));
         axes = dateAxesSince(0).slice(-1);
@@ -329,10 +335,10 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         const dataDates = new Set(makePortfolioPerformance("1Y").snapshots.map((s) => s.date));
         expect(axis.ticks!.length).toBeGreaterThan(0);
         expect(axis.ticks!.every((t) => dataDates.has(t))).toBe(true);
-        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM"));
+        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM''yy"));
     });
 
-    it("BenchmarkComparisonChart: passes 1Y MMM ticks ⊆ merged data dates", () => {
+    it("BenchmarkComparisonChart: passes 1Y MMM'yy ticks ⊆ merged data dates", () => {
         render(<BenchmarkComparisonChart data={makeBenchmarkCompare() as any} />);
         const axes = dateAxesSince(0);
         expect(axes.length).toBe(1);
@@ -341,11 +347,11 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         for (const pt of makeBenchmarkCompare().portfolio) merged.add(pt.date);
         expect(axis.ticks!.length).toBeGreaterThan(0);
         expect(axis.ticks!.every((t) => merged.has(t))).toBe(true);
-        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM"));
+        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM''yy"));
         expect(axis.minTickGap).toBeUndefined();
     });
 
-    it("DrawdownChart: passes 1Y MMM ticks ⊆ drawdown dates", () => {
+    it("DrawdownChart: passes 1Y MMM'yy ticks ⊆ drawdown dates", () => {
         render(<DrawdownChart data={makeDrawdown() as any} isLoading={false} isError={false} />);
         const axes = dateAxesSince(0);
         expect(axes.length).toBe(1);
@@ -353,11 +359,11 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         const ddDates = new Set(makeDrawdown().drawdowns.map((d) => d.date));
         expect(axis.ticks!.length).toBeGreaterThan(0);
         expect(axis.ticks!.every((t) => ddDates.has(t))).toBe(true);
-        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM"));
+        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM''yy"));
         expect(axis.minTickGap).toBeUndefined();
     });
 
-    it("StockPerformancePanel: main chart passes 1Y MMM ticks ⊆ snapshot dates", () => {
+    it("StockPerformancePanel: main chart passes 1Y MMM'yy ticks ⊆ snapshot dates", () => {
         render(<StockPerformancePanel symbol="AAPL" />);
         const axes = dateAxesSince(0);
         expect(axes.length).toBe(1); // dividend bar chart is categorical → no ticks
@@ -365,11 +371,11 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         const snapDates = new Set(makeHoldingPerformance().snapshots.map((s) => s.date));
         expect(axis.ticks!.length).toBeGreaterThan(0);
         expect(axis.ticks!.every((t) => snapDates.has(t))).toBe(true);
-        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM"));
+        expect(axis.tickFormatter!("2025-09-01")).toBe(format(new Date(2025, 8, 1), "MMM''yy"));
         expect(axis.minTickGap).toBeUndefined();
     });
 
-    it("StockVsIndexPanel: both charts pass ALL MMM yyyy ticks ⊆ data dates", () => {
+    it("StockVsIndexPanel: both charts pass ALL Qn'yy ticks ⊆ data dates", () => {
         render(<StockVsIndexPanel symbol="AAPL" />);
         const axes = dateAxesSince(0);
         expect(axes.length).toBe(2); // normalized prices + relative strength
@@ -377,7 +383,7 @@ describe("chart x-axis wiring (getDateAxis → XAxis ticks/tickFormatter)", () =
         for (const axis of axes) {
             expect(axis.ticks!.length).toBeGreaterThan(0);
             expect(axis.ticks!.every((t) => dataDates.has(t))).toBe(true);
-            expect(axis.tickFormatter!("2023-07-01")).toBe(format(new Date(2023, 6, 1), "MMM yyyy"));
+            expect(axis.tickFormatter!("2023-07-01")).toBe(format(new Date(2023, 6, 1), "QQQ''yy"));
             expect(axis.minTickGap).toBeUndefined();
         }
     });
