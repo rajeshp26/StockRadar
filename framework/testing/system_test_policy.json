@@ -1,0 +1,39 @@
+{
+  "_comment": "DID-017. Plane file: agents cannot edit it. TAILOR forbidden_imports, runners and stack to your project.",
+  "test_dir": "tests/system",
+  "data_manifest": "tests/system/data/MANIFEST.json",
+  "forbidden_imports": ["backend", "src", "infrastructure", "shared", "domain", "app"],
+  "runners": [
+    {
+      "name": "api",
+      "cmd": ["python3", "-m", "pytest", "{test_dir}", "-q", "-p", "no:cacheprovider", "--junitxml={junit}"],
+      "env": {},
+      "timeout_s": 900
+    }
+  ],
+  "stack": {
+    "base_url_env": "SYSTEM_TEST_BASE_URL",
+    "health_path": "/",
+    "require_base_url": true,
+    "db_url_env": "SYSTEM_TEST_DB_URL",
+    "require_db": false
+  },
+  "min_total_tests": 3,
+  "min_per_ac": {"positive": 1, "break": 1},
+  "break_kinds": ["negative", "boundary", "abuse", "idempotency", "concurrency", "regression"],
+  "require_plan_for_completion": false,
+  "universal_perturbations": [
+    {"name": "empty_or_missing_input", "hint": "empty value, null, missing field, empty collection"},
+    {"name": "boundary_min_max", "hint": "smallest, largest, just inside and just outside the limit"},
+    {"name": "duplicate_input", "hint": "same record or event twice; repeated request"},
+    {"name": "stale_or_old_data", "hint": "data older than any horizon the requirement names"},
+    {"name": "unauthorised_actor", "hint": "wrong role, no session, another user's data"},
+    {"name": "unchanged_when_not_in_scope", "hint": "records the change must NOT touch stay identical"}
+  ],
+  "conditional_perturbations": [
+    {"name": "rounding_and_currency", "when": "price|amount|total|value|cost|currency|percent|dividend|quantity", "hint": "fractions, rounding, mixed currencies"},
+    {"name": "time_boundary", "when": "date|day|time|age|horizon|expire|month|year", "hint": "first and last instant, month end, timezone, leap day"},
+    {"name": "repeat_and_concurrent", "when": "import|upload|sync|job|batch|concurrent|retry", "hint": "run twice, run concurrently, interrupted midway"},
+    {"name": "text_encoding_and_size", "when": "name|text|label|description|search|symbol|csv", "hint": "unicode, very long, leading/trailing spaces, quotes"}
+  ]
+}

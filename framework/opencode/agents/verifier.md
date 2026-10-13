@@ -58,6 +58,25 @@ verification:
 
 You may not edit source. You may add or amend tests only when the task authorises it.
 
+## System testing (DID-017)
+
+For any criterion tagged `[integration]`, `[e2e]`, `[browser]` or `[data-invariant]` you are the
+black-box tester. Load the `system-test-authoring` skill and follow it. Work from the requirements
+and the real data only: do not read application source (`backend/`, `src/`); your permissions deny it.
+
+1. Profile the real data into `tests/system/data/MANIFEST.json`.
+2. `python3 framework/testing/scenario_matrix.py --plan <plan>`; resolve every row.
+3. Write the tests in `tests/system/` (real stack, no mocks, tags `AC-n kind:... data:... shape:...`).
+4. `python3 framework/testing/system_test_lint.py --plan <plan> --matrix <matrix>` until no ERROR.
+5. `python3 framework/testing/run_system_tests.py freeze --plan <plan>`, then `run --phase red`.
+   Hand back to team-lead. Do not implement.
+6. After implementation: `run --phase green`, then `./framework/gates/g17_system_tests.sh` with
+   `SYSTEM_PLAN=<plan>`.
+
+Never edit a frozen test to make it pass: a failing test is a defect report (test name, criterion,
+input, expected versus observed) recorded as a blocker. A stack that cannot be reached is
+UNVERIFIABLE (exit 2 or 3), never a pass.
+
 ## Frontend and browser verification
 
 Two additional gates apply when a task touches the frontend.

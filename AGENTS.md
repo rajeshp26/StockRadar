@@ -69,6 +69,10 @@ plane change).
     opencode.json       permission model
     AGENTS.md           stable global rules
     framework.config.jsonframework binding (one config)
+    framework/opencode/**agents, rules, skills, plugin, config
+    framework/plan/**   plan lint + eval cases (DID-016)
+    framework/testing/**system-test harness + policy (DID-017)
+    framework/security/**plane source + sync/check (immutable)
 <!-- enforcement-plane: end -->
 
 Enforced by edit permissions in opencode.json (narrow allowlists with deny fallback, and an

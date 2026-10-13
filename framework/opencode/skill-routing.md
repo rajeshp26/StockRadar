@@ -8,6 +8,8 @@ Every delegation must consult this matrix before selecting skills.
 | Condition | Required Skill | Agent | When to activate |
 |---|---|---|---|
 | New feature or enhancement | `requirements-authoring` | Team Lead / Architect | Any new user-facing behavior |
+| Planning or decomposing any non-trivial change | `task-breakdown` | Planner / Team Lead | Before writing a plan, acceptance criteria or task list |
+| Proving a feature or fix works (integration, end-to-end, real data) | `system-test-authoring` | Verifier | Any criterion tagged integration, e2e, browser or data-invariant; before any 'it works' claim |
 | Architecture change | `software-architecture-design` | Architect | New boundaries, new components, cross-component flow |
 | Unknown technical behavior | `technical-validation` | Researcher / Architect | Material assumption before design |
 | API endpoint change | `api-design` | Architect | New or modified HTTP endpoints |

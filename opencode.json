@@ -24,7 +24,11 @@
       ".opencode/**": "deny",
       "opencode.json": "deny",
       "AGENTS.md": "deny",
-      "framework.config.json": "deny"
+      "framework.config.json": "deny",
+      "framework/opencode/**": "deny",
+      "framework/plan/**": "deny",
+      "framework/testing/**": "deny",
+      "framework/security/**": "deny"
     },
     "webfetch": "deny",
     "bash": {
@@ -75,7 +79,11 @@
           ".opencode/**": "deny",
           "opencode.json": "deny",
           "AGENTS.md": "deny",
-          "framework.config.json": "deny"
+          "framework.config.json": "deny",
+          "framework/opencode/**": "deny",
+          "framework/plan/**": "deny",
+          "framework/testing/**": "deny",
+          "framework/security/**": "deny"
         },
         "task": {
           "*": "allow"
@@ -215,6 +223,7 @@
           "*": "deny",
           "src/**": "allow",
           "tests/**": "allow",
+          "tests/system/**": "deny",
           "docs/**": "allow",
           "package.json": "allow",
           "package-lock.json": "allow",
@@ -224,7 +233,11 @@
           ".opencode/**": "deny",
           "opencode.json": "deny",
           "AGENTS.md": "deny",
-          "framework.config.json": "deny"
+          "framework.config.json": "deny",
+          "framework/opencode/**": "deny",
+          "framework/plan/**": "deny",
+          "framework/testing/**": "deny",
+          "framework/security/**": "deny"
         },
         "task": {
           "*": "deny"
@@ -305,8 +318,22 @@
         "edit": {
           "*": "deny",
           ".planning/**/VERIFICATION.md": "allow",
-          "tests/**": "ask"
+          "tests/**": "ask",
+          "tests/system/**": "allow",
+          ".planning/**/*.SYSTEM-MATRIX.md": "allow"
         },
+        "read": {
+          "*": "allow",
+          "backend/**": "deny",
+          "src/**": "deny"
+        },
+        "list": {
+          "*": "allow",
+          "backend/**": "deny",
+          "src/**": "deny"
+        },
+        "grep": "deny",
+        "glob": "deny",
         "task": {
           "*": "deny"
         },
@@ -319,10 +346,7 @@
           "mypy*": "allow",
           "ruff*": "allow",
           "eslint*": "allow",
-          "git diff*": "allow",
           "git status*": "allow",
-          "git log*": "allow",
-          "git show*": "allow",
           "./framework/*": "allow",
           "npm audit*": "allow",
           "pip-audit*": "allow",
@@ -348,8 +372,7 @@
           "git merge*": "deny",
           "git cherry-pick*": "deny",
           "python framework/*": "allow",
-          "bash framework/*": "allow",
-          "Get-Content*": "allow"
+          "bash framework/*": "allow"
         }
       },
       "tools": {

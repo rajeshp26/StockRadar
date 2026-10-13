@@ -7,6 +7,7 @@
 | Type or interface correctness | Type check and build |
 | Visual alignment or styling | Browser screenshot plus DOM/runtime inspection |
 | Interaction flow end to end | Browser navigation and interaction, with console output |
+| Real-stack behaviour: multi-component flow, real data, user-visible outcome | System test through `framework/testing/run_system_tests.py` (black-box, frozen before implementation, no mocks), gate G17 |
 | No unauthorised dependency | Dependency and security scanner |
 | Authorisation denies a role | Integration test against a running system |
 | Latency budget | Measured benchmark on representative data |
@@ -35,6 +36,13 @@ Visual alignment, interaction flow, and responsive layout cannot be proven by a 
 `framework/gates/g6_browser.sh` is the evidence. Authoring a spec with the Playwright MCP
 server does not count — MCP output is a conversation transcript and gets pruned. Committed
 specs plus an exit code are the durable artefact.
+
+## System tests are the evidence for real-stack criteria
+
+A criterion tagged `[integration]`, `[e2e]`, `[browser]` or `[data-invariant]` is proven only by a
+harness-produced result: the frozen suite ran against the real stack with real data, nothing was
+skipped, and the code has not changed since. A unit test, a mocked test or an agent's statement
+that it works is not that evidence. An unreachable stack is unverifiable, not a pass.
 
 ## Claim discipline
 

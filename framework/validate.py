@@ -2504,6 +2504,11 @@ def _suite_27():
                     ignore=shutil.ignore_patterns(".manifest", "__pycache__"))
     (_bd27 / ".planning").mkdir(parents=True, exist_ok=True)
     (_bd27 / ".planning" / "phases" / "00-unphased").mkdir(parents=True, exist_ok=True)
+    # The legacy entry-contract checks below test approval/scope/criteria/ASK behaviour with
+    # minimal fixtures; the plan lint (DID-016) has its own checks at the end of this suite.
+    _mode27 = _bd27 / "framework" / "plan" / "lint_mode"
+    if _mode27.parent.exists():
+        _mode27.write_text("off\n", encoding="utf-8")
 
     def _wsh27(cmd, timeout=180):
         return sh("cd '%s' && %s" % (_wsl_path(str(_bd27)), cmd), timeout=timeout)
@@ -2622,6 +2627,37 @@ def _suite_27():
     _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-007_PLAN.md " + _G27)
     check("g_entry refuses a draft plan whose approval token is nested (EXT-CRITIQUE-03)",
           _r == 1 and "not approved" in _o, (_o or "")[-200:])
+
+    # plan lint (DID-016): the mode lives in a plane file, quality is enforced by default
+    if _mode27.parent.exists():
+        _pd27 = _bd27 / ".planning" / "phases" / "00-unphased"
+        _good27 = (_bd27 / "framework" / "plan" / "eval" / "cases" / "good_full.md").read_text(
+            encoding="utf-8")
+        (_pd27 / "V27-LINT-OK_PLAN.md").write_text(_good27, encoding="utf-8")
+        _mode27.write_text("enforce\n", encoding="utf-8")
+        _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-LINT-OK_PLAN.md " + _G27)
+        check("g_entry (lint enforce) passes a plan that satisfies the plan lint",
+              _r == 0 and "entry contract complete" in _o, (_o or "")[-200:])
+        _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-001_PLAN.md " + _G27)
+        check("g_entry (lint enforce) refuses a plan with unobservable/untagged criteria (DID-016)",
+              _r == 1 and "plan lint errors" in _o and "PL03" in _o, (_o or "")[-200:])
+        _mode27.write_text("warn\n", encoding="utf-8")
+        _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-001_PLAN.md " + _G27)
+        check("g_entry (lint warn) reports lint errors but does not change the verdict",
+              _r == 0 and "WARN" in _o, (_o or "")[-200:])
+        _mode27.write_text("bogus\n", encoding="utf-8")
+        _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-LINT-OK_PLAN.md " + _G27)
+        check("g_entry refuses an invalid lint_mode as BLOCKED, never a silent default",
+              _r == 2 and "lint_mode" in _o, (_o or "")[-200:])
+        _mode27.write_text("enforce\n", encoding="utf-8")
+        _r, _o = _wsh27("ENTRY_PLAN_LINT=off ENTRY_PLAN=.planning/phases/00-unphased/"
+                        "V27-001_PLAN.md " + _G27)
+        check("an agent-settable environment variable cannot downgrade the lint (DID-016)",
+              _r == 1 and "plan lint errors" in _o, (_o or "")[-200:])
+        (_bd27 / "framework" / "plan" / "plan_lint.py").unlink()
+        _r, _o = _wsh27("ENTRY_PLAN=.planning/phases/00-unphased/V27-LINT-OK_PLAN.md " + _G27)
+        check("g_entry is BLOCKED when the lint script is missing under enforce",
+              _r == 2 and "plan_lint.py missing" in _o, (_o or "")[-200:])
 
     shutil.rmtree(_bd27, ignore_errors=True)
 
@@ -3018,6 +3054,57 @@ else:
     _leaked41 = [n for n in _ROUTED41 if any(s.startswith(n) for s in WARNS)]
     check("all five rollout checks are asserted under --profile app, none downgraded to WARN",
           not _leaked41, f"downgraded to WARN: {_leaked41}")
+
+# ---- DID-017: system-test enforcement (gate, completion guard, permissions) ----
+print("\n[42] System-test enforcement (DID-017)")
+_g17 = Path("framework/gates/g17_system_tests.sh")
+check("framework/gates/g17_system_tests.sh exists", _g17.exists(), "missing")
+if _g17.exists():
+    _g17t = _g17.read_text(encoding="utf-8")
+    check("g17 self-identifies as g17_system_tests", 'GATE_NAME="g17_system_tests"' in _g17t,
+          "GATE_NAME literal missing")
+    check("g17 has explicit UNVERIFIABLE and NOT_APPLICABLE exits",
+          "exit $UNVERIFIABLE" in _g17t and "exit $NOT_APPLICABLE" in _g17t, "exit literals missing")
+    check("g17 is on the functional profile",
+          "./framework/gates/g17_system_tests.sh" in
+          Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8"),
+          "profile membership missing")
+    check("EXIT_CODES documents G17",
+          "| G17 system-tests" in Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8"),
+          "EXIT_CODES row missing")
+for _f in ("system_test_lint.py", "scenario_matrix.py", "run_system_tests.py",
+           "system_test_policy.json"):
+    check("framework/testing/%s exists" % _f, Path("framework/testing", _f).exists(), "missing")
+try:
+    import json as _json17
+    _pol17 = _json17.loads(Path("framework/testing/system_test_policy.json").read_text(
+        encoding="utf-8-sig"))
+    check("system_test_policy.json has runners, stack and a data manifest path",
+          bool(_pol17.get("runners")) and "stack" in _pol17 and bool(_pol17.get("data_manifest")),
+          "policy incomplete")
+except (OSError, ValueError) as _e17:
+    check("system_test_policy.json parses", False, str(_e17))
+check("intake COMPLETED transition is guarded by the system-test harness",
+      "_completion_guard(ask_id)" in Path("framework/adapters/intake.py").read_text(encoding="utf-8"),
+      "completion guard missing")
+try:
+    _cfg17 = _json17.loads(Path("opencode.json").read_text(encoding="utf-8-sig"))
+    _ie = list(_cfg17["agent"]["implementer"]["permission"]["edit"].items())
+    _keys = [k for k, _v in _ie]
+    check("implementer cannot edit tests/system/** (deny placed after the tests/** allow)",
+          dict(_ie).get("tests/system/**") == "deny"
+          and _keys.index("tests/system/**") > _keys.index("tests/**"), "permission missing/misordered")
+    _vp = _cfg17["agent"]["verifier"]["permission"]
+    check("verifier may write tests/system/** but cannot read application source",
+          _vp["edit"].get("tests/system/**") == "allow"
+          and _vp.get("read", {}).get("backend/**") == "deny"
+          and _vp.get("read", {}).get("src/**") == "deny", "verifier black-box permissions missing")
+    check("verifier has no grep/glob/git-diff/Get-Content route around the read deny",
+          _vp.get("grep") == "deny" and _vp.get("glob") == "deny"
+          and not any(k in _vp["bash"] for k in ("git diff*", "git show*", "git log*", "Get-Content*")),
+          "bypass route present")
+except (OSError, ValueError, KeyError) as _e17:
+    check("opencode.json system-test permissions readable", False, str(_e17))
 
 _finalize()
 

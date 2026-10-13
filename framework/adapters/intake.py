@@ -266,6 +266,26 @@ def capture(payload: dict) -> dict:
     return show(aid)
 
 
+def _completion_guard(ask_id: str) -> None:
+    """DID-017: an ASK cannot be COMPLETED while a plan that declares it lacks fresh, passing,
+    harness-produced system-test evidence. Unverifiable is not a pass. No-op where the harness
+    is not installed (isolated self-tests)."""
+    harness = Path("framework/testing/run_system_tests.py")
+    if not harness.exists():
+        return
+    import subprocess
+    try:
+        r = subprocess.run([sys.executable, str(harness), "ask-gate", "--ask", ask_id],
+                           capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise SystemExit(f"COMPLETION_BLOCKED: system-test guard could not run: {e}")
+    if r.returncode != 0:
+        detail = (r.stdout or r.stderr).strip()
+        raise SystemExit(
+            f"COMPLETION_BLOCKED: {ask_id} lacks fresh, passing system-test evidence. "
+            f"Run framework/testing/run_system_tests.py for its plan. {detail}")
+
+
 def transition(ask_id: str, payload: dict) -> dict:
     payload = payload or {}
     if not ask_id:
@@ -292,6 +312,8 @@ def transition(ask_id: str, payload: dict) -> dict:
             f"INVALID_TRANSITION: {cur} -> {to}; "
             f"legal next states: {', '.join(sorted(nxt))}"
         )
+    if to == "COMPLETED":
+        _completion_guard(ask_id)
     _append({"event": "ASK_TRANSITIONED", "ask_id": ask_id, "from": cur, "to": to,
              "ts": _now(), "emitter": str(payload.get("emitter") or "team-lead")})
     return show(ask_id)

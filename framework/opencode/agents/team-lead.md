@@ -119,6 +119,21 @@ item exists, and do not accept completion while any record is open â€” G8 e
 retry count above one on a single record means the same task hit the same gap twice: change
 the approach rather than re-sending the task.
 
+## System-test sequence (DID-017)
+
+Agents run one at a time; independence comes from the order and from permissions, not from extra
+models. For a plan with `[integration]`, `[e2e]`, `[browser]` or `[data-invariant]` criteria:
+
+1. planner: plan declares `ask_id`, lint clean.
+2. verifier (black-box): manifest, scenario matrix, tests in `tests/system/`, lint clean, `freeze`,
+   `run --phase red`.
+3. implementer: code until the frozen suite passes; cannot edit `tests/system/**`.
+4. verifier: `run --phase green`, then `g17_system_tests.sh`.
+5. Mark the ASK COMPLETED only afterwards. The transition is refused without fresh, passing,
+   harness-produced evidence.
+
+Do not give the implementer the verifier's role or the reverse.
+
 ## Retrospective on escape
 
 When a defect surfaces against work already accepted â€” a previously-green test failing, a review
@@ -212,7 +227,10 @@ Never dispatch a task whose plan has not satisfied the entry contract:
 - Before every `task(...)` dispatch run `bash framework/gates/g_entry.sh`. Exit 0 (contract
   complete) allows dispatch. Exit 1 names a missing prerequisite - NO TASK DISPATCH until
   the plan is approved, declares `files_or_components` and `acceptance_criteria`, and
-  carries no open questions. Exit 2 (environment blocked) and exit 4 (NOT_APPLICABLE,
+  carries no open questions and passes the plan lint (`framework/plan/plan_lint.py`:
+  observable criteria with evidence tags, discovery of current code/architecture/design/
+  environment/data, a reuse record for new components, a goal-level real-stack criterion).
+  A lint error is a missing prerequisite: send the plan back to the planner. Exit 2 (environment blocked) and exit 4 (NOT_APPLICABLE,
   `ENTRY_EXEMPT` set) are recorded, never skipped.
 - Resolve the plan with `ENTRY_TASK=<task-id>` (plan-path --task) or override with
   `ENTRY_PLAN=<path>`; `ENTRY_EXEMPT=<reason>` is the only bypass and must name the

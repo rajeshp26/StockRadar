@@ -24,6 +24,7 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G14 evidence-integrity | all claims pass E1-E8 | integrity violation(s) listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no claims recorded) |
 | G15 tripwires | no eval tripwire hits | violations listed | BLOCKED (grep/awk absent) | — | NOT_APPLICABLE (no changed eval files) |
 | G16 state-health | task/ledger store readable | broken task(s) or unreadable tail listed | BLOCKED (python3 absent / adapter error) | — | NOT_APPLICABLE (no tasks, no ledger) |
+| G17 system-tests | fresh passing harness evidence for every real-stack criterion | evidence missing, stale, tampered or failing | BLOCKED (python3 / plan unreadable) | UNVERIFIABLE (stack unreachable) | NOT_APPLICABLE (no plan given, or no real-stack criteria) |
 | G-EXEC exec-integrity | matrix 38/38 checks pass | deviations listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no matrix module) |
 
 ## G6 emits ONLY 0, 1, 3

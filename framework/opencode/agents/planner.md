@@ -27,6 +27,16 @@ Consult `framework/opencode/skill-routing.md` for the correct skills per task ty
 | Performance-sensitive | `performance-testing`, `unit-test-authoring` |
 | Security-sensitive | `security-research`, `unit-test-authoring` |
 
+## Plan quality (DID-016)
+
+Before writing any plan, acceptance criteria or task list, load the `task-breakdown` skill and
+follow it: discover the current code, architecture, design, environment and data first; search
+for reuse before inventing; write observable criteria tagged `AC-n [evidence]`; end with a
+goal-level real-stack criterion. Use block lists (one `- item` per line) for
+`files_or_components`, `acceptance_criteria`, `discovery`, `reuse` and `depends_on`.
+Run `python3 framework/plan/plan_lint.py <plan>` and fix every ERROR before handing the plan
+to team-lead. `g_entry` refuses dispatch on lint errors.
+
 ## Tool Contract
 
 Before planning:

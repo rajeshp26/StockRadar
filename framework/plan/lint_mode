@@ -1,0 +1,6 @@
+# Plan lint mode for framework/gates/g_entry.sh (DID-016).
+# enforce = any lint ERROR refuses dispatch (default)
+# warn    = findings printed, verdict unchanged (temporary migration only)
+# off     = lint skipped
+# framework/** is agent-immutable, so only a human can change this file.
+enforce

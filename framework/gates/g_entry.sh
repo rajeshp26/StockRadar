@@ -120,15 +120,74 @@ if [ -n "$open_qs" ]; then
   fail "unresolved open questions block dispatch:"$'\n'"$open_qs"
 fi
 
+# 4b. Plan-quality lint (DID-016). Structure and cited evidence only: vague criteria, missing
+# evidence class, no goal-level check, unresolved discovery, new code without a reuse record,
+# unresolvable dependencies, edits after approval. The mode comes from framework/plan/lint_mode
+# (enforce | warn | off; absent file = enforce). It is deliberately NOT an environment variable:
+# an agent can set an env var, but framework/** is immutable to agents. An unreadable or invalid
+# mode, or a missing lint script under enforce, is BLOCKED -- never a silent skip.
+lint_mode="enforce"
+if [ -f framework/plan/lint_mode ]; then
+  lint_mode="$(grep -v '^[[:space:]]*#' framework/plan/lint_mode | tr -d '\r[:space:]' | head -n1)"
+fi
+case "$lint_mode" in
+  off|warn|enforce) ;;
+  *) persist blocked "framework/plan/lint_mode must be enforce|warn|off, got '$lint_mode'"
+     log "BLOCKED  framework/plan/lint_mode must be enforce|warn|off, got '$lint_mode'"
+     exit $BLOCKED ;;
+esac
+if [ "$lint_mode" != "off" ]; then
+  if [ ! -f framework/plan/plan_lint.py ]; then
+    if [ "$lint_mode" = "enforce" ]; then
+      persist blocked "plan lint script missing under enforce"
+      log "BLOCKED  framework/plan/plan_lint.py missing while lint_mode=enforce"
+      exit $BLOCKED
+    fi
+  else
+    lint_out="$(python3 framework/plan/plan_lint.py "$ENTRY_PLAN" 2>&1)"; lint_rc=$?
+    lint_out="$(printf '%s' "$lint_out" | tr -d '\r')"
+    case "$lint_rc" in
+      0) printf '%s\n' "$lint_out" | grep -q 'WARN' \
+           && log "WARN  plan lint advisories (non-blocking):"$'\n'"$lint_out" ;;
+      1) if [ "$lint_mode" = "enforce" ]; then
+           persist fail "plan lint errors block dispatch"
+           fail "plan lint errors block dispatch; load skill task-breakdown, fix the plan, re-run:"$'\n'"$lint_out"
+         else
+           log "WARN  plan lint found errors (advisory under lint_mode=warn):"$'\n'"$lint_out"
+         fi ;;
+      *) if [ "$lint_mode" = "enforce" ]; then
+           persist blocked "plan lint unreadable (exit $lint_rc)"
+           log "BLOCKED  plan lint unreadable (exit $lint_rc)"
+           exit $BLOCKED
+         else
+           log "WARN  plan lint unavailable (exit $lint_rc); advisory only"
+         fi ;;
+    esac
+  fi
+fi
+
 # 5. ASK coverage (DID-012 PR-D1 / invariant I1): an executable task must be bound to a
 # durable ASK record before dispatch. A terminal task is not executable, so the adapter
 # reports NOT_APPLICABLE (4) and the gate continues. Unbound is a hard refusal; an
 # unreadable adapter is BLOCKED -- never a pass.
 if [ -n "$ENTRY_TASK" ]; then
-  python3 framework/adapters/intake.py verify-task --id "$ENTRY_TASK" >/dev/null 2>&1
+  vt_out="$(python3 framework/adapters/intake.py verify-task --id "$ENTRY_TASK" 2>/dev/null)"
   rc=$?
   case $rc in
-    0) : ;;
+    0) # DID-017: the plan must name the ask it serves, so ASK completion can be bound to the
+       # plan's system-test evidence. Governed by the same framework/plan/lint_mode.
+       if [ "$lint_mode" != "off" ]; then
+         bound_ask="$(printf '%s' "$vt_out" | tr -d '\r' | sed -n 's/.*bound to \([A-Za-z0-9_-]*\).*/\1/p' | head -n1)"
+         plan_ask="$(tr -d '\r' < "$ENTRY_PLAN" | sed -n 's/^ask_id:[[:space:]]*\([A-Za-z0-9_-]*\).*/\1/p' | head -n1)"
+         if [ -n "$bound_ask" ] && [ "$plan_ask" != "$bound_ask" ]; then
+           if [ "$lint_mode" = "enforce" ]; then
+             persist fail "plan does not declare ask_id: $bound_ask"
+             fail "plan must declare 'ask_id: $bound_ask' (the ask task $ENTRY_TASK is bound to); found '${plan_ask:-none}'"
+           else
+             log "WARN  plan does not declare ask_id: $bound_ask (found '${plan_ask:-none}')"
+           fi
+         fi
+       fi ;;
     4) log "NOT_APPLICABLE  ask coverage: task $ENTRY_TASK is terminal (not executable)" ;;
     1) persist fail "ask coverage: executable task $ENTRY_TASK has no durable ASK_ID (I1)"
        fail "ask coverage: executable task $ENTRY_TASK has no durable ASK_ID; NO TASK DISPATCH" ;;

@@ -91,6 +91,14 @@ Record a claim when the conclusion is:
 See `framework/opencode/rules/evidence-provenance.md` for the full claim protocol and the
 VERIFIED controlled term.
 
+## System tests are not yours to edit (DID-017)
+
+`tests/system/**` is written by the verifier from the requirements and frozen before you implement.
+You cannot edit it, and you must not work around that. Run
+`python3 framework/testing/run_system_tests.py run --plan <plan> --phase green` to see failures,
+then fix the code, not the test. If a frozen test looks wrong, stop and record a blocker for
+team-lead.
+
 ## Finish
 
 Write a handoff per `framework/opencode/rules/handoff.md`, including re-derived impact. State Definition of
