@@ -62,6 +62,25 @@ reviewer can hold all of it in their head. Bulk without evidence, whether it
 is speculative code or speculative process, is the same failure mode the
 gate-value counterweight polices at the framework level.
 
+## The other half: finish the change
+
+A ceiling on speculative addition is not permission to leave a change
+half-applied. Deliberate minimalism is about the *solution*, never about the
+*change* — the smallest diff that still produces every mandated artifact
+(tests, `VERIFICATION.md`, evidence), never a diff that starves one:
+
+- **Finish every caller, test, and fixture the change breaks.** If the change
+  alters a signature, a return shape, a config key, or an error contract,
+  update every site that depends on it in the same change. A green build with a
+  stale caller is not done.
+- **Before editing a shared function, grep every caller.** If the defect lives
+  in the shared code, fix the root cause once there; do not patch one caller
+  and leave the rest broken. A guard duplicated into a single caller is the
+  wrong shape — it belongs in the shared function.
+- **Code that moves or merges keeps its validation and error handling.** A
+  refactor does not get to silently drop a check; if that check is genuinely
+  dead, removing it is its own named change with its own justification.
+
 ## What this does not change
 
 This file bounds what an agent may add *unprompted*. It does not lower the

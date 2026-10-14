@@ -155,6 +155,9 @@ review:
       affected_components:
       required_change:
   integration_risks:
+  assumed_load: [the load this review assumes - one operator vs many, one process vs many, one request at a time vs concurrent; "not stated" if the load is unknown]
+  not_checked: [what this review did not verify, and why]
+  residual_risk: [risk that remains once the required changes land]
   skill_compliance:
     - skill: [skill name]
       loaded: [true | false]
@@ -167,5 +170,12 @@ review:
 
 Every finding needs a file and line reference. A finding without evidence is a question, not a
 finding. Do not restate what a gate already proved.
+
+A review must also state the load it assumes (`assumed_load`) - one operator vs many, one
+process vs many, one request at a time vs concurrent. A verdict that code is fast or slow, or
+safe or unsafe under load, is meaningless without it; if the load is unknown, write
+`assumed_load: not stated` and treat it as a gap, not a pass. List what the review did **not**
+check (`not_checked`) and the risk that remains once the required changes land (`residual_risk`).
+An unchecked item is never a pass - the same rule as `unverifiable` under the browser profile.
 
 A `direction: redesign` finding is a verdict on the design, not a mandate to rewrite it: state the observed violation and the required outcome, never the specific redesign. A `propose_alternative` finding offers an option the current design can still satisfy - it is a PROPOSAL, not a redesign. The implementer and architect choose the shape of the fix; the reviewer states what is wrong and what must be true after the fix.

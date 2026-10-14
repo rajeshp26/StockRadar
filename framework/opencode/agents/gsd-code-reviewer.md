@@ -238,6 +238,12 @@ For each finding, assign severity:
 - Type coercion issues (`==` vs `===`)
 - Unhandled promise rejections
 - Dead code paths that indicate logic errors
+- Unbounded growth: a list, queue, or cache with no size or age bound
+- Race or interleaving hazard: shared mutable state written without coordination
+- Query-per-item (N+1): a query or I/O call inside a loop over the input
+- O(n^2) or worse on the input the code admits (a nested loop over rows)
+- Per-process state (an in-memory counter, lock, or cache) that breaks with more than one instance
+- Risky logic with no test: concurrency, money or quantity arithmetic, parsing, or a trust-boundary check
 
 **Info** — Style issues, naming improvements, dead code, unused imports, suggestions:
 - Unused imports/variables
@@ -246,6 +252,12 @@ For each finding, assign severity:
 - TODO/FIXME comments
 - Magic numbers (should be constants)
 - Code duplication
+- Dead code that can simply be deleted
+- Re-implements the standard library or a native platform feature
+- Re-implements a dependency the repository already installs
+- YAGNI: an option, config flag, parameter, or abstraction with no current caller
+- Two mechanisms doing one job that should be merged
+- One function doing several unrelated jobs that should be split by job, never by line count
 
 **Each finding MUST include:**
 - `file`: Full path to file
@@ -367,7 +379,7 @@ _Depth: {depth}_
 
 **DO consider project conventions** from AGENTS.md when evaluating code quality. What's a violation in one project may be standard in another.
 
-**Performance issues (O(n²), memory leaks) are out of v1 scope.** Do NOT flag them unless they're also correctness issues (e.g., infinite loop).
+**Performance is in scope at the stated load; micro-optimisation is not.** Flag unbounded growth, query-per-item (N+1) loops, O(n²) on the input the code admits, unbounded caches, per-process state under more than one instance, and memory that is never released - and state the load the finding assumes. Do NOT flag constant-factor tuning with no measured basis.
 
 </critical_rules>
 
@@ -376,6 +388,7 @@ _Depth: {depth}_
 - [ ] All changed source files reviewed at specified depth
 - [ ] Each finding has: file path, line number, description, severity, fix suggestion
 - [ ] Findings grouped by severity: Critical > Warning > Info
+- [ ] Scale classes considered at the stated load (unbounded growth, N+1, O(n^2), per-process state, races)
 - [ ] REVIEW.md created with YAML frontmatter and structured sections
 - [ ] No source files modified (review is read-only)
 - [ ] Depth-appropriate analysis performed:

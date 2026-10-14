@@ -53,6 +53,17 @@ Select combinations using equivalence partitioning, boundary analysis, pairwise 
 
 Every evidence item records `claim`, `command`, `commit`, `environment`, `timestamp`, `result_file` and `checksum`. Result files are committed. An assertion with no result file fails the gate.
 
+## Stated load and not-checked (mandatory in every verdict)
+
+A verdict that a claim holds states the **load it assumes** - one operator vs many, one process
+vs many, one request at a time vs concurrent, and the data volume of the environment baseline.
+"Fast enough" or "safe under load" without a stated load is not a verdict; where the load is
+unknown, record `assumed_load: not stated` and treat it as a gap, not a pass.
+
+Every verdict also records what it did **not** check (`not_checked`) and the risk that remains
+once the required changes land (`residual_risk`). An unchecked item is never a pass - the same
+rule as an `unverifiable` browser profile.
+
 ## REDâ†’GREEN, with a controlled exception (Â§12.4)
 
 Preferred and default: the new regression test fails before the fix and passes after, both recorded.

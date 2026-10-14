@@ -84,7 +84,20 @@ bash framework/gates/g7_retro.sh
 
 # 4. Trend analysis
 python3 framework/retro/ledger.py analyse
+
+# 5. Harvest deliberate simplifications marked at the code site (shortcut debt)
+python3 framework/retro/shortcut_debt.py
+# exit 0 every marker names an upgrade trigger | 1 a marker has no trigger
 ```
+
+### Shortcut debt as an input, not a second ledger
+
+A deliberate simplification that leaves a known ceiling is recorded at the code site with a
+`shortcut: <the limit>, <when to upgrade>` marker
+(`framework/opencode/rules/shortcut-debt.md`). `shortcut_debt.py` harvests every marker and
+reports `<N> markers, <M> with no trigger`; a marker with no trigger is rot, not a decision. The
+harvested rows feed the `accepted` tier of this ledger (`ledger.py append`) — one debt system,
+and this harvester is an input to it, never a parallel file.
 
 ## What is deliberately not here
 

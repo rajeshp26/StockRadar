@@ -52,6 +52,7 @@ Document results with evidence
 
 ```yaml
 performance_validation:
+  assumed_load: [one operator vs many; one process vs many instances; serial vs concurrent; data volume]
   requirement_id: REQ-XXX
   metrics:
     - name: [metric name]
@@ -95,6 +96,14 @@ performance_validation:
       command: [exact command]
       output: [key output]
 ```
+
+## State the assumed load first (MANDATORY)
+
+State the load the system is assumed to serve before measuring anything: one operator or many
+users, one process or many instances, one request at a time or concurrent, and the data volume
+expected in production. A baseline or a regression verdict with no stated load is not evidence -
+"fast" and "slow" are only meaningful against a load. Record it as `assumed_load`; if it is
+unknown, say so and treat the missing load as a gap to resolve, not a pass.
 
 ## Measurement rules
 
