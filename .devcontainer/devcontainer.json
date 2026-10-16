@@ -1,0 +1,14 @@
+{
+  "name": "agentic-lifecycle",
+  "build": {
+    "dockerfile": "../framework/container/Dockerfile",
+    "context": "../framework/container"
+  },
+  "remoteUser": "audit",
+  "postCreateCommand": "python3 --version && node --version && git --version",
+  "customizations": {
+    "vscode": {
+      "extensions": []
+    }
+  }
+}

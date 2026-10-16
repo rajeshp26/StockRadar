@@ -17,7 +17,7 @@ Every delegation must consult this matrix before selecting skills.
 | Database/schema change | `database-schema-design` | Architect | Table/column/index modifications |
 | Unit tests required | `unit-test-authoring` | Implementer | Any business logic verification |
 | Performance impact | `performance-testing` | Verifier | Latency, throughput, memory, concurrency |
-| Security concern | `security-research` | Researcher | Threat modeling, vulnerability assessment |
+| Security concern | `security-audit` | security-auditor | Threat modeling, vulnerability assessment |
 | UI change | `apple-ui` + `frontend-react` | Implementer | Components, styling, animation, icons, finance dashboard design |
 | Backend logic change | `backend-python` | Implementer | Endpoints, business logic, persistence |
 | Visible behavior change | `browser-verification` | Verifier | Playwright specs, visual validation |

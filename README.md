@@ -42,6 +42,12 @@ after init. The command is idempotent — re-run it after an upgrade to refresh 
 - **LF line endings** — the repo is stored LF (`* text=auto eol=lf` in `.gitattributes`); a
   machine-global `core.autocrlf=true` rewrites checked-out files to CRLF even though nothing is
   committed CRLF. If a working tree shows CRLF after clone, run `git add --renormalize .` once.
+- **Security-audit tier (optional)** — the audit workflow executes target code and vendors a POSIX
+  `node` >=18. Provision both portably with the sandbox container:
+  `bash framework/container/build.sh` (needs Docker or Podman able to run Linux containers).
+  A host that already has POSIX `node` and unprivileged user namespaces (bubblewrap) needs nothing.
+  With neither, the audit refuses to execute and stays source-only. See
+  `docs/SECURITY_AUDIT_INTEGRATION.md` and `framework/container/README.md`.
 
 ## Layout
 
@@ -76,7 +82,10 @@ framework/
   adapters/                       gsd_state.py (GSD state + task supervision), host.py,
                                   hosts/opencode.py + hosts/dsh.py, code_intel.py,
                                   failure_injection.py (G-EXEC matrix), opencode_detect.py (deprecated)
-  security/                       enforcement_plane.yaml (canonical), sync + check scripts
+  security/                       enforcement_plane.yaml (canonical), sync + check scripts,
+                                  sandbox_policy.yaml (declared target-execution controls)
+  container/                      Dockerfile + build.sh: the audit toolchain (POSIX node,
+                                  python3, git) and fallback isolation image
   claims/ledger.py                claim ledger (append/analyse/integrity E1-E8)
   retro/                          escape_path.py, containment_map.yaml
   telemetry/                      report.py, browser/mcp output dir

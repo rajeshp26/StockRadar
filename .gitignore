@@ -96,6 +96,9 @@ docs/migration_baseline/view_*.json
 # Generated tool output
 docs/graphify-out/
 
+# Detection caches. With framework.config.json present, locate.manifest_dir() resolves to
+# <state_root>.parent/.manifest (here: the repo root); without it, the legacy framework/.manifest.
+/.manifest/
 framework/.manifest/
 framework/telemetry/browser/
 
@@ -189,5 +192,4 @@ web/scripts/
 # Root-level scratch state and generated verification output
 /.blocker_*.json
 /verification_output/
-; fi; done; echo ---
 docs/*.patch

@@ -29,7 +29,7 @@ For each ask, determine:
 | Backend implementation | yes/no | `backend-python` |
 | Unit test authoring | yes/no | `unit-test-authoring` |
 | Performance testing | yes/no | `performance-testing` |
-| Security research | yes/no | `security-research` |
+| Security research | yes/no | `security-audit` |
 | Browser verification | yes/no | `browser-verification` |
 | Contract authoring | yes/no | `contract-authoring` |
 | Karpathy guidelines | yes/no | `karpathy-guidelines` |

@@ -25,7 +25,7 @@ Consult `framework/opencode/skill-routing.md` for the correct skills per task ty
 | API endpoint change | `api-design`, `contract-authoring`, `unit-test-authoring` |
 | Database change | `database-schema-design`, `unit-test-authoring` |
 | Performance-sensitive | `performance-testing`, `unit-test-authoring` |
-| Security-sensitive | `security-research`, `unit-test-authoring` |
+| Security-sensitive | `security-audit`, `unit-test-authoring` |
 
 ## Plan quality (DID-016)
 

@@ -21,7 +21,7 @@ Read `.lifecycle/agents/architect.md` and act only within that charter.
 - `api-design` â€” when new or modified API endpoints are required
 - `database-schema-design` â€” when data model changes are needed
 - `performance-testing` â€” when architecture introduces latency/throughput concerns
-- `security-research` â€” when architecture introduces security-sensitive boundaries
+- `security-audit` â€” when architecture introduces security-sensitive boundaries
 
 #### Skill usage rule
 

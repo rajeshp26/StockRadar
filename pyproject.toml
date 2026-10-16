@@ -34,7 +34,7 @@ namespaces = false
 # Non-.py runtime data. Gates are bash, the surface is Markdown/TypeScript; none is importable,
 # all of it is required at runtime. `framework.opencode` is the relocated surface, shipped whole.
 [tool.setuptools.package-data]
-framework = ["**/*.json", "**/*.yaml", "**/*.yml", "**/*.sh", "**/*.md", "**/*.txt", "**/*.ts", "**/*.mjs", "**/*.js"]
+framework = ["**/*.json", "**/*.yaml", "**/*.yml", "**/*.sh", "**/*.md", "**/*.txt", "**/*.ts", "**/*.mjs", "**/*.js", "**/Dockerfile"]
 "framework.opencode" = ["**/*"]
 
 [tool.pytest.ini_options]

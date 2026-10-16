@@ -1,0 +1,78 @@
+# Sandbox policy for target-controlled execution (security-audit).
+#
+# This file DECLARES the controls an audit requires. It does not grant them.
+#   framework/adapters/sandbox.py   measures whether the host can enforce them
+#   framework/gates/g_sandbox.sh    refuses execution when it cannot
+# A policy is a claim; the probe is the evidence. Where they disagree, the probe wins.
+version: 1
+
+# Execution is refused unless every required control measures as enforced. There is no
+# "best effort" mode: unenforceable means source-only.
+mode: fail_closed
+
+required_controls:
+  - id: user_namespaces
+    why: unprivileged namespaces are the isolation primitive; without them there is no boundary
+    probe: userns
+  - id: os_sandbox
+    why: bubblewrap gives a read-only toolchain, no egress, a cleared environment, one writable dir
+    probe: bwrap_start
+  - id: read_only_target
+    why: the auditor must not mutate the artifact under test
+    probe: fs_ro_scratch_rw
+  - id: no_external_network
+    why: a target under audit must not exfiltrate data or fetch instructions
+    probe: net_isolation
+  - id: environment_allowlist
+    why: no ambient credentials may leak into the sandbox
+    probe: env_allowlist
+
+optional_controls:
+  - id: loopback_relay
+    probe: socat
+    why: only for tests that need a local socket
+  - id: cgroup_limits
+    probe: cgroup_user
+    why: memory/pids accounting via systemd-run --user
+
+limits:
+  wall_seconds: 900
+  fsize_kb: 262144      # 256 MiB per file
+  pids: 512
+  mem_mb: 2048
+
+writable:
+  - kind: scratch_dir   # bound read-write; the only host-visible writable path
+    note: an ephemeral tmpfs /tmp is also mounted inside and discarded on exit
+
+read_only:
+  - kind: target_dir
+  - kind: toolchain_roots   # /usr /bin /sbin /lib* /etc
+
+# Enforcement backends. The controls above are declared once; each backend supplies at least
+# one capability the other cannot, and the probe picks the first enforceable one:
+#   native    -- bubblewrap + unprivileged user namespaces. Preferred while available: the
+#                user namespace is a real kernel boundary.
+#   container -- an OCI image run with the controls below. The fallback, and the reason a
+#                fresh project needs no host provisioning: the image carries POSIX node >=18
+#                (the artifact validators need O_NOFOLLOW), python3 and git.
+# A container shares the host kernel, so it is weaker than the native boundary and is never
+# preferred. Absent both, execution is refused (mode: fail_closed above).
+backends:
+  native:
+    requires: [user_namespaces, os_sandbox]
+  container:
+    image: agentic-lifecycle/sandbox:1
+    build: framework/container/build.sh
+    dockerfile: framework/container/Dockerfile
+    why: supplies the POSIX toolchain and becomes the boundary where user namespaces are unavailable
+    probe: [container_engine, container_image, container_start, container_binds]
+    controls:
+      - network=none
+      - read_only_rootfs
+      - cap_drop_all
+      - no_new_privileges
+      - pids_memory_fsize_limits
+      - target_dir_bound_read_only_path_preserving
+      - scratch_bound_read_write_path_preserving
+      - environment_allowlist_via_env_i   # Docker cannot unset the image's own ENV

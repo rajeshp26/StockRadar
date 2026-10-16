@@ -2763,6 +2763,7 @@ class PortfolioService:
             }
 
         initial_value = snapshots_subset[0]["position_value"]
+        anchor_date = snapshots_subset[0]["date"]
         snapshot_dates = [s["date"] for s in snapshots_subset]
 
         txns = self.portfolio_repo.get_transactions_for_symbol(user_id, symbol)
@@ -2784,6 +2785,12 @@ class PortfolioService:
                 amount = -(float(abs(qty) * price - commission))
                 holding_cashflows.append({"date": td, "amount": amount})
         holding_cashflows.sort(key=lambda x: x["date"])
+
+        anchor_dt = date.fromisoformat(anchor_date) if isinstance(anchor_date, str) else anchor_date
+        holding_cashflows = [
+            cf for cf in holding_cashflows
+            if not (cf["date"] == anchor_dt and abs(cf["amount"] - initial_value) < 1e-6)
+        ]
 
         benchmark_series_list = []
         if benchmark_symbols:
@@ -2896,6 +2903,10 @@ class PortfolioService:
         # If portfolio had no value at start, benchmark is always zero
         if initial_value <= 0:
             return [{"date": d, "value": 0.0} for d in snapshot_dates]
+
+        # If start price is missing or invalid, cannot simulate
+        if not start_price or start_price <= 0:
+            return None
 
         shares = initial_value / start_price
 
@@ -3178,8 +3189,18 @@ class PortfolioService:
             }
 
         initial_value = snapshots_subset[0]["value"]
+        anchor_date = snapshots_subset[0]["date"]
         snapshot_dates = [s["date"] for s in snapshots_subset]
         cashflow_deltas = self._get_cashflow_deltas(account_ids)
+
+        # Prevent double-counting: if there's a cash flow on the anchor date
+        # that equals initial_value (within tolerance), skip it - it's already
+        # reflected in the initial portfolio value
+        anchor_dt = date.fromisoformat(anchor_date) if isinstance(anchor_date, str) else anchor_date
+        cashflow_deltas = [
+            cf for cf in cashflow_deltas
+            if not (cf["date"] == anchor_dt and abs(cf["amount"] - initial_value) < 1e-6)
+        ]
 
         benchmark_series_list = []
         if benchmark_symbols:

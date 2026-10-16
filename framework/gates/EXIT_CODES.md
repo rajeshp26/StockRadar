@@ -1,11 +1,11 @@
-#| G-ENTRY entry | approved plan + declared scope + acceptance criteria, no open questions - dispatch allowed | named missing prerequisite - NO TASK DISPATCH | BLOCKED (python3 absent / unreadable) | - | NOT_APPLICABLE (ENTRY_EXEMPT=TRIVIAL) |
- Gate Exit Code Contract — AUTHORITATIVE
+# Gate Exit Code Contract — AUTHORITATIVE
 
 Machine-checked by `framework/validate.py`. If a document disagrees with this table, the
 document is wrong. Generated claims about gate behaviour must cite this file.
 
 | Gate | 0 | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|---|
+| G-ENTRY entry | approved plan + declared scope + acceptance criteria, no open questions — dispatch allowed | named missing prerequisite — NO TASK DISPATCH | BLOCKED (python3 absent / unreadable) | — | NOT_APPLICABLE (ENTRY_EXEMPT=TRIVIAL) |
 | G1 contract   | valid, types in sync, tests green | validation failed / CONTRACT_CHANGE | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no contracts dir) |
 | G2 impact     | impact mapped to N tests | UNKNOWN_IMPACT | — | — | NOT_APPLICABLE (no changes) |
 | G3 architecture | boundaries respected | boundary violation | BLOCKED (pyyaml absent) | — | NOT_APPLICABLE (no architecture rules) |
@@ -26,6 +26,8 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G16 state-health | task/ledger store readable | broken task(s) or unreadable tail listed | BLOCKED (python3 absent / adapter error) | — | NOT_APPLICABLE (no tasks, no ledger) |
 | G17 system-tests | fresh passing harness evidence for every real-stack criterion | evidence missing, stale, tampered or failing | BLOCKED (python3 / plan unreadable) | UNVERIFIABLE (stack unreachable) | NOT_APPLICABLE (no plan given, or no real-stack criteria) |
 | G-EXEC exec-integrity | matrix 38/38 checks pass | deviations listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no matrix module) |
+| G-SANDBOX capability | sandbox enforceable via the chosen backend (native bubblewrap or container) — target execution permitted | isolation control failed (target writable / env leaked / egress open) | BLOCKED (probe could not run) | capability missing (no enforceable native backend and no usable container) | NOT_APPLICABLE (SANDBOX_EXEC_REQUIRED=0) |
+| G18 security-audit | no open confirmed high/critical finding | open confirmed high/critical finding, or findings/ledger fail validation | BLOCKED (run dir or artifact missing) | UNVERIFIABLE (validators absent, or no POSIX-capable interpreter — native node lacks O_NOFOLLOW and the container is unavailable) | NOT_APPLICABLE (no audit run dir) |
 
 ## G6 emits ONLY 0, 1, 3
 
@@ -165,6 +167,33 @@ module is absent — nothing to judge. The matrix is self-cleaning: residue
 left in the task store after a run is itself a deviation. G-EXEC complements
 G13 (worker observability) and G14 (evidence integrity) as the gate that tests
 the framework's own execution contract instead of trusting it.
+
+## G-SANDBOX refuses target execution it cannot enforce
+
+G-SANDBOX measures the host's sandbox capability before any untrusted target runs. Exit 0 means
+the isolation primitives are present AND an enforcement probe proved them (read-only target,
+writable scratch, cleared environment, no external egress) — execution is permitted. The probe
+picks a backend: **native** (bubblewrap + unprivileged user namespaces) is preferred, and the
+**container** backend (`framework/container/`) is the fallback and the toolchain provider. Exit 1
+means a control that was required did not hold: the sandbox is not a sandbox, and the run must
+abort rather than fall back to an unsandboxed one. Exit 3 means no backend is enforceable
+(bubblewrap/user namespaces absent and no usable container): the audit proceeds **source-only**
+and the gap is recorded, never waived. Exit 4 means target execution was not required
+(`SANDBOX_EXEC_REQUIRED=0`). A skipped check is never a pass: G-SANDBOX reports DOWNGRADE, it does
+not grant the capability.
+
+## G18 blocks completion on an open confirmed high/critical finding
+
+G18 judges a security-audit run directory (`AUDIT_RUN_DIR`), delegating artifact validity to the
+vendored skill's own validators. Exit 0 means the artifacts validate and no confirmed finding is
+high or critical. Exit 1 means completion is refused: either an artifact failed validation, or a
+`confirmed` finding carries severity high/critical. A `needs_validation` critical is NOT a
+confirmed finding and does not block. Exit 2 means the run dir or an artifact is missing — the
+audit did not happen, which is not a pass. Exit 3 means the validators are absent, or no
+interpreter could judge: Windows `node.exe` cannot enforce no-follow input, and the container
+fallback was unavailable. It tries native `node` first and falls through to the sandbox
+container's POSIX `node`, so a host with the image reaches a real verdict instead of exit 3. It is
+UNVERIFIABLE, never a false FAIL. Exit 4 means no audit run dir was given — nothing to judge.
 
 ## Exit 3 is the most important code in the framework
 

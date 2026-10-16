@@ -386,7 +386,7 @@ agent when a task matches the skill's description (the `skill` tool) or via the
 | Database / schema change | `database-schema-design` | architect |
 | Unit tests required | `unit-test-authoring` | implementer |
 | Performance impact | `performance-testing` | verifier |
-| Security concern | `security-research` | researcher |
+| Security concern | `security-audit` | security-auditor |
 | UI change | `apple-ui` + `frontend-react` | implementer |
 | Backend logic change | `backend-python` | implementer |
 | Visible behaviour change | `browser-verification` | verifier |
@@ -414,11 +414,13 @@ Matrix highlights (role → loads → produces):
 - **verifier** → `browser-verification`, `performance-testing` → verification
   artifacts with tool evidence (G-T1).
 
-> Note: the routing table lists `security-research` for security concerns, but this skill is
-> environment-provided (builtin/user scope) — it is not one of the 87 under `framework/opencode/skills/`,
-> so a fresh checkout may not have it. The canonical name is `security-research` (`security-review`
-> is an alias). Resolve it before loading; if it is absent, apply the Team Lead skill-availability
-> rule (`framework/opencode/agents/team-lead.md`): record the gap, never silently skip, never deadlock.
+> Note: the routing table lists `security-audit` for security concerns. It is **vendored** as a
+> first-class skill under `framework/opencode/skills/security-audit/` (MIT, see
+> `docs/SECURITY_AUDIT_INTEGRATION.md`), not environment-provided, so a fresh checkout has it.
+> Its executable tier is gated: `framework/gates/g_sandbox.sh` refuses target execution unless
+> the host can enforce the sandbox, and `framework/gates/g18_security_audit.sh` blocks completion
+> on an open confirmed high/critical finding. If the sandbox is unenforceable, the audit runs
+> **source-only** — record the gap, never silently skip, never execute anyway.
 
 ---
 

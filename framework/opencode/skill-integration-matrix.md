@@ -17,6 +17,7 @@ section 5, file in construction).
 | --- | --- | --- |
 | team-lead | requirements-authoring for every feature request; karpathy-guidelines per its routing condition (skill-routing.md:24); consult routing matrix for every delegation; record required skills in Tool Plan | skill-routing.md:59-62 |
 | researcher | technical-validation for any material unknown | skill-routing.md:66 |
+| security-auditor | security-audit for a scoped audit of a security-sensitive diff; technical-validation for material unknowns | skill-routing.md |
 | architect | software-architecture-design for L3/L4; technical-validation; api-design before contract-authoring; database-schema-design for data-model changes | skill-routing.md:64-68 |
 | planner | verify required skills listed per task; consume architect outputs (architecture + contracts + data design); never redesign architecture | skill-routing.md:70-73 |
 | implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; unit-test-authoring for business logic; karpathy-guidelines per its routing condition (skill-routing.md:24) | skill-routing.md:75-78 |
@@ -59,6 +60,7 @@ a required skill is a G-T1 tool-utilization gap.
 | tool plan | team-lead | implementer | G-T0 |
 | tool evidence | verifier | reviewer | G-T1 |
 | handoff (SUMMARY.md) | completing role | successor | G8 (open blockers) |
+| audit run dir (findings.json + coverage-ledger.json) | security-auditor | reviewer, verifier | G-SANDBOX (execution), G18 (artifacts) |
 
 ## 4. Evidence class -> Requirement shape -> Gate
 
@@ -78,6 +80,8 @@ a required skill is a G-T1 tool-utilization gap.
 | Playwright run at declared viewport | responsive layout at a width | G6 |
 | G5 stack conformance exit code | mandated tool/library is used | G5 |
 | ledger entry naming requirement + approver | conditional visual tool permitted | G5 |
+| sandbox capability probe exit code (native or container backend) | target-controlled execution is required | G-SANDBOX |
+| validated findings.json + coverage-ledger.json | a vulnerability audit was run | G18 |
 
 Unverifiable is never a pass: no driver -> exit 3, no harness -> exit 3, absent tool ->
 BLOCKED 2 (evidence.md:21-30).
@@ -85,38 +89,45 @@ BLOCKED 2 (evidence.md:21-30).
 ## 5. Gate -> Binds -> Verdict
 
 Exit semantics are authoritative in `framework/gates/EXIT_CODES.md`; this table binds each
-gate to the contract row it judges and adds the new G-EXEC row.
+gate to the contract row it judges. Verdict sources name the contract row and section heading
+rather than a line number, so they do not drift when `EXIT_CODES.md` is edited.
 
 | Gate | Binds | Verdict source |
 | --- | --- | --- |
-| G-ENTRY | plan pre-flight (SPEC/PLAN approval, scope, no open questions) | EXIT_CODES.md:161-171 |
-| G1 | OpenAPI contract + generated types + contract tests | EXIT_CODES.md:9 |
-| G2 | impact mapping to tests | EXIT_CODES.md:10 |
-| G3 | architecture boundaries (architecture_rules.yaml) | EXIT_CODES.md:11 |
-| G4 | executable checks | EXIT_CODES.md:12 |
-| G5 | frontend stack conformance | EXIT_CODES.md:13 |
-| G6 | browser specs for visible behavior | EXIT_CODES.md:14, 26-31 |
-| G7 | retro ledger | EXIT_CODES.md:15, 33-37 |
-| G8 | open blockers | EXIT_CODES.md:16, 39-45 |
-| G9 | changed source vs declared scope | EXIT_CODES.md:17, 47-51 |
-| G10 | permission policy structure | EXIT_CODES.md:18, 54-71 |
-| G11 | claim validity + provenance | EXIT_CODES.md:21, 93-97 |
-| G12 | provider health pre-dispatch | EXIT_CODES.md:22, 99-110 |
-| G13 | task event stream | EXIT_CODES.md:23, 112-122 |
-| G14 | claim integrity E1-E8 | EXIT_CODES.md:24, 124-134 |
-| G-T0 | tool lifecycle pre-flight | EXIT_CODES.md:19, 73-78 |
-| G-T1 | tool evidence in verification artifacts | EXIT_CODES.md:20, 80-85 |
-| G-EXEC | execution-integrity matrix (failure_injection.py) | 0 = 38/38 pass; 1 = deviations listed; 2 = BLOCKED (no python3); 4 = NOT_APPLICABLE (no matrix module) |
+| G-ENTRY | plan pre-flight (SPEC/PLAN approval, scope, no open questions) | EXIT_CODES.md (G-ENTRY row; "G-ENTRY is a pre-flight gate") |
+| G1 | OpenAPI contract + generated types + contract tests | EXIT_CODES.md (G1 row) |
+| G2 | impact mapping to tests | EXIT_CODES.md (G2 row) |
+| G3 | architecture boundaries (architecture_rules.yaml) | EXIT_CODES.md (G3 row) |
+| G4 | executable checks | EXIT_CODES.md (G4 row) |
+| G5 | frontend stack conformance | EXIT_CODES.md (G5 row) |
+| G6 | browser specs for visible behavior | EXIT_CODES.md (G6 row; "G6 emits ONLY 0, 1, 3") |
+| G7 | retro ledger | EXIT_CODES.md (G7 row; "G7 exit 4 is not a pass") |
+| G8 | open blockers | EXIT_CODES.md (G8 row; "G8 blocks completion on open blockers") |
+| G9 | changed source vs declared scope | EXIT_CODES.md (G9 row; "G9 skips are not silent passes") |
+| G10 | permission policy structure | EXIT_CODES.md (G10 row; "G10 asserts policy structure, not interactive behaviour") |
+| G11 | claim validity + provenance | EXIT_CODES.md (G11 row; "G11 validates claims, not prose") |
+| G12 | provider health pre-dispatch | EXIT_CODES.md (G12 row; "G12 is a pre-flight gate") |
+| G13 | task event stream | EXIT_CODES.md (G13 row; "G13 is an observability gate") |
+| G14 | claim integrity E1-E8 | EXIT_CODES.md (G14 row; "G14 is an evidence-integrity gate") |
+| G15 | eval tripwires in changed eval-scoped code | EXIT_CODES.md (G15 row; "G15 is an eval-integrity gate") |
+| G16 | task/ledger store health | EXIT_CODES.md (G16 row) |
+| G17 | system-test harness evidence for real-stack criteria | EXIT_CODES.md (G17 row) |
+| G-T0 | tool lifecycle pre-flight | EXIT_CODES.md (G-T0 row; "G-T0 verifies tool readiness before work") |
+| G-T1 | tool evidence in verification artifacts | EXIT_CODES.md (G-T1 row; "G-T1 verifies tool utilization after work") |
+| G-EXEC | execution-integrity matrix (failure_injection.py) | EXIT_CODES.md (G-EXEC row): 0 = 38/38 pass; 1 = deviations listed; 2 = BLOCKED (no python3); 4 = NOT_APPLICABLE (no matrix module) |
+| G-SANDBOX | sandbox capability + enforcement probe (native bubblewrap or container) | EXIT_CODES.md (G-SANDBOX row): 0 enforceable / 1 isolation failed / 2 BLOCKED / 3 capability missing / 4 NOT_APPLICABLE |
+| G18 | security-audit artifacts + no open confirmed high/critical | EXIT_CODES.md (G18 row): 0 pass / 1 open confirmed high-critical or invalid artifacts / 2 BLOCKED / 3 UNVERIFIABLE / 4 NOT_APPLICABLE |
 
 G-EXEC (critic #9): `framework/gates/g_exec.sh` wraps
 `python3 framework/adapters/failure_injection.py`. Exit 0 -> pass; non-zero -> fail with the
 deviation summary printed; python3 absent -> BLOCKED; no matrix module -> NOT_APPLICABLE.
-The EXIT_CODES.md row is added when the gate is created (P1, in progress).
+The `EXIT_CODES.md` (G-EXEC row) records these semantics.
 
 ## 6. Contract verification method
 
 - Rows 1-2: read from skill-routing.md (full read, 89 lines).
-- Row 3: source from agent charters (read) + gates inventory (glob, 19 files).
+- Row 3: source from agent charters (read) + gates inventory (glob).
 - Row 4: read from evidence.md (full read, 42 lines).
-- Row 5: gates read from EXIT_CODES.md (full read, 171 lines).
-- G-EXEC: gate created, executed, exit code recorded (todo 9, next).
+- Row 5: gates read from EXIT_CODES.md (full read, 233 lines); verdict sources cite the
+  contract row and section heading, so they do not drift when the file is edited.
+- G-EXEC: gate created, executed, exit code recorded.
