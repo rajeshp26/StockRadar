@@ -329,7 +329,7 @@ if not _cfg_path.exists():
           "(the .opencode/opencode.json project file is a different file)" % Path.cwd())
     sys.exit(2)
 try:
-    cfg = json.loads(_cfg_path.read_text())
+    cfg = json.loads(_cfg_path.read_text(encoding="utf-8"))
 except json.JSONDecodeError as _e:
     print("BLOCKED: opencode.json is not valid JSON: %s" % _e)
     sys.exit(2)
@@ -337,7 +337,8 @@ if not isinstance(cfg.get("agent"), dict):
     print("BLOCKED: opencode.json has no `agent` object (keys present: %s)" % ", ".join(sorted(cfg)))
     sys.exit(2)
 agents = cfg["agent"]
-EXPECTED = ["team-lead", "researcher", "architect", "planner", "implementer", "reviewer", "verifier"]
+EXPECTED = ["team-lead", "researcher", "architect", "planner", "implementer", "reviewer", "verifier",
+            "security-auditor"]
 
 
 
@@ -373,7 +374,7 @@ if "--models" in sys.argv:
         print("--models unavailable: resolve engine import failed: %s" % _RES_ERR)
         sys.exit(2)
     sys.exit(_models_preflight())
-check("seven agents defined", sorted(agents) == sorted(EXPECTED), f"got {sorted(agents)}")
+check("agent set matches EXPECTED", sorted(agents) == sorted(EXPECTED), f"got {sorted(agents)}")
 for a in EXPECTED:
     check(f"{a} markdown exists", Path(f"framework/opencode/agents/{a}.md").exists())
 
@@ -477,25 +478,25 @@ check("g1 refuses to pass without contract tests",
       not (rc == 0 and "no tests/contract" in out), "passed without tests")
 
 print("\n[7] Context Builder constraints")
-cb = Path("framework/opencode/tools/context-builder.ts").read_text()
+cb = Path("framework/opencode/tools/context-builder.ts").read_text(encoding="utf-8")
 check("excerpt cap present", "EXCERPT_CAP_CHARS" in cb and "TOTAL_MATERIALISE_CAP" in cb)
 check("prefers pointers", "prefer pointers over copied content" in cb.lower()
       or "prefer pointers" in cb.lower())
 check("returns provider tier", "provider_tier" in cb)
 
 print("\n[8] Retry, escalation and human gates")
-rp = Path("framework/retry_policy.yaml").read_text()
+rp = Path("framework/retry_policy.yaml").read_text(encoding="utf-8")
 check("retry limits defined", "test_failure: 2" in rp)
 check("escalation defined", "on_exhaustion: escalate_to_human" in rp)
 check("zero-retry conflicts", "contract_conflict: 0" in rp and "architecture_conflict: 0" in rp)
-prof = Path("framework/verifier/profiles.yaml").read_text()
+prof = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
 check("impact drives gates", "impact_to_gates" in prof)
 check("browser missing driver is unverifiable", "report_unverifiable" in prof)
 
 print("\n[9] Rules loaded, not inlined")
-oc = Path("opencode.json").read_text()
+oc = Path("opencode.json").read_text(encoding="utf-8")
 check("instructions reference rules", '"AGENTS.md"' in oc and "framework/opencode/rules/*.md" in oc)
-ag = Path("AGENTS.md").read_text()
+ag = Path("AGENTS.md").read_text(encoding="utf-8")
 check("AGENTS.md stays small", len(ag) < 6000, f"{len(ag)} chars")
 check("no requirements inlined", "REQ-0" not in ag)
 check("do-not-invoke rule present", "merely because it exists" in ag)
@@ -503,7 +504,7 @@ check("do-not-invoke rule present", "merely because it exists" in ag)
 print("\n[10] Telemetry collector")
 _t = Path("framework/opencode/plugin/telemetry.ts")
 check("telemetry plugin exists", _t.exists())
-_ts = _t.read_text() if _t.exists() else ""
+_ts = _t.read_text(encoding="utf-8") if _t.exists() else ""
 for field in ("gates", "retries", "context_expansions", "materialised_chars",
               "fallbacks_used", "blockers_opened", "blockers_resolved"):
     check(f"telemetry records {field}", field in _ts)
@@ -563,18 +564,18 @@ for _s in _schemas:
 
 _gen = Path("framework/contracts/gen_types.py")
 if _gen.exists():
-    _g = _gen.read_text()
+    _g = _gen.read_text(encoding="utf-8")
     check("generated type paths derived from contract id",
           "def targets_for" in _g and "{slug}" in _g,
           "hardcoded output paths make a second contract overwrite the first")
 
 for _t in _ctests:
-    check(f"{_t.name} runs standalone", "__main__" in _t.read_text(),
+    check(f"{_t.name} runs standalone", "__main__" in _t.read_text(encoding="utf-8"),
           "the gate must not depend on pytest being installed")
 
 _vs = Path("framework/contracts/validate_schema.py")
 if _vs.exists():
-    _v = _vs.read_text()
+    _v = _vs.read_text(encoding="utf-8")
     check("validator separates unavailable from invalid", "_UNAVAILABLE_MARKERS" in _v,
           "a network or install failure must not read as a contract violation")
     check("structural check always runs", "Structural check ALWAYS runs" in _v,
@@ -583,7 +584,7 @@ if _vs.exists():
 print("\n[12] Gate robustness")
 _lib = Path("framework/gates/_lib.sh")
 if _lib.exists():
-    _l = _lib.read_text()
+    _l = _lib.read_text(encoding="utf-8")
     check("changed_files includes untracked files", "--others" in _l,
           "git diff alone misses new files, turning gates into silent no-ops")
     check("changed_files is cwd-relative", "--relative" in _l,
@@ -595,7 +596,7 @@ if _lib.exists():
 
 _g1 = Path("framework/gates/g1_contract.sh")
 if _g1.exists():
-    _c = _g1.read_text()
+    _c = _g1.read_text(encoding="utf-8")
     check("G1 resolves git paths from cwd", "HEAD:./$s" in _c,
           "HEAD:path resolves from repo root and misreports changed contracts as new")
     check("CONTRACT_CHANGE outranks test failure", 'if [ "$contract_changed" = "1" ]' in _c,
@@ -605,7 +606,7 @@ if _g1.exists():
 
 _g4 = Path("framework/gates/g4_executable.sh")
 if _g4.exists():
-    _c4 = _g4.read_text()
+    _c4 = _g4.read_text(encoding="utf-8")
     check("G4 discovers sources outside repo root", "git ls-files '*.py'" in _c4,
           "root-only globbing misses the conventional src/ + tests/ layout")
     check("G4 substitutes for missing pytest", "executing tests standalone" in _c4,
@@ -617,7 +618,7 @@ if _g4.exists():
 
 _ci = Path("framework/adapters/code_intel.py")
 if _ci.exists():
-    _c = _ci.read_text()
+    _c = _ci.read_text(encoding="utf-8")
     check("affected-tests uses cwd-relative paths", '"--relative"' in _c,
           "repo-relative paths never match in a monorepo subdirectory")
     check("affected-tests excludes framework state", "_NON_SOURCE" in _c,
@@ -635,7 +636,7 @@ check("frontend stack contract exists", _stack.exists(),
 
 _sc = Path("framework/frontend/stack_check.py")
 if _sc.exists():
-    _t = _sc.read_text()
+    _t = _sc.read_text(encoding="utf-8")
     check("G5 distinguishes NOT_APPLICABLE from PASS", "NOT_APPLICABLE" in _t,
           "reporting PASS with zero files evaluated is a vacuous pass")
     check("G5 blocks when pyyaml absent", "A missing parser is not conformance" in _t,
@@ -652,7 +653,7 @@ if _sc.exists():
 _g5 = Path("framework/gates/g5_frontend_stack.sh")
 check("G5 gate wired", _g5.exists(), "stack contract needs an executable gate")
 if _g5.exists():
-    _t5 = _g5.read_text()
+    _t5 = _g5.read_text(encoding="utf-8")
     check("G5 maps exit 4 to a non-passing verdict", "4) not_applicable" in _t5,
           "no frontend must be NOT_APPLICABLE, never pass")
     check("G5 surfaces blocked separately", "exit 2" in _t5,
@@ -662,7 +663,7 @@ _g6 = Path("framework/gates/g6_browser.sh")
 check("G6 browser gate exists", _g6.exists(),
       "browser profile had commands: [] and could only report unverifiable")
 if _g6.exists():
-    _t6 = _g6.read_text()
+    _t6 = _g6.read_text(encoding="utf-8")
     check("G6 exits 3 for unverifiable", "UNVERIFIABLE=3" in _t6,
           "unverifiable must not share an exit code with pass")
     check("G6 refuses to fetch a driver at gate time", "refusing to fetch at gate time" in _t6,
@@ -674,7 +675,7 @@ if _g6.exists():
 
 _pf = Path("framework/verifier/profiles.yaml")
 if _pf.exists():
-    _tp = _pf.read_text()
+    _tp = _pf.read_text(encoding="utf-8")
     check("browser profile has real commands", "g6_browser.sh" in _tp,
           "commands: [] made the browser profile permanently unverifiable")
     check("g5 referenced in impact_to_gates has an implementation",
@@ -706,7 +707,7 @@ for _f in _skills:
 _cfgp = Path("opencode.json")
 if _cfgp.exists():
     import json as _json
-    _cfg = _json.loads(_cfgp.read_text())
+    _cfg = _json.loads(_cfgp.read_text(encoding="utf-8"))
     _sk = _cfg.get("skills")
     _sk_ok = _sk is None or (
         isinstance(_sk, dict) and isinstance(_sk.get("paths"), list)
@@ -743,7 +744,7 @@ check("frontend app manifest exists", _app.exists(),
       app_only=True)
 if _app.exists():
     import json as _j
-    _d = _j.loads(_app.read_text())
+    _d = _j.loads(_app.read_text(encoding="utf-8"))
     _deps = {**(_d.get("dependencies") or {}), **(_d.get("devDependencies") or {})}
     for _need in ("motion", "lucide-react", "tailwindcss", "@playwright/test"):
         check(f"required stack dep present ({_need})", _need in _deps,
@@ -755,7 +756,7 @@ _pwc = _locate.app_root() / _locate.readiness().get("playwright_config", "playwr
 check("playwright config exists", _pwc.exists(), "no config means no baseURL and no viewports",
       app_only=True)
 if _pwc.exists():
-    _tw = _pwc.read_text()
+    _tw = _pwc.read_text(encoding="utf-8")
     check("at least two viewport projects", _tw.count("name:") >= 2,
           "a responsive claim needs more than one rendered width")
 
@@ -772,7 +773,7 @@ _ec = Path("framework/gates/EXIT_CODES.md")
 check("exit code contract documented", _ec.exists(),
       "gate semantics must have one authoritative source or docs drift")
 
-_g6 = Path("framework/gates/g6_browser.sh").read_text()
+_g6 = Path("framework/gates/g6_browser.sh").read_text(encoding="utf-8")
 # The bug this prevents: a doc offered "exit 2 = BLOCKED" for G6 alongside exit 3
 # UNVERIFIABLE. Two codes for one condition is how "could not look" becomes "looks fine".
 check("G6 never emits exit 2", "exit 2" not in _g6,
@@ -784,15 +785,15 @@ check("G6 routes every missing precondition to exit 3", _g6_unver >= 5,
       f"only {_g6_unver} paths exit UNVERIFIABLE; driver/config/spec gaps must all use it")
 
 if _ec.exists():
-    _ect = _ec.read_text()
+    _ect = _ec.read_text(encoding="utf-8")
     check("contract states G6 has no exit 2", "NEVER EMITTED" in _ect,
           "the table must say so explicitly, not by omission")
     check("contract distinguishes BLOCKED from UNVERIFIABLE", "not interchangeable" in _ect,
           "2 is a toolchain problem; 3 is a capability problem")
 
 # G5 exit 4 must exist in BOTH the wrapper and the checker, or the branch is dead.
-_g5 = Path("framework/gates/g5_frontend_stack.sh").read_text()
-_sc = Path("framework/frontend/stack_check.py").read_text()
+_g5 = Path("framework/gates/g5_frontend_stack.sh").read_text(encoding="utf-8")
+_sc = Path("framework/frontend/stack_check.py").read_text(encoding="utf-8")
 check("G5 wrapper handles NOT_APPLICABLE", "4)" in _g5,
       "the wrapper must branch on 4 or a no-frontend repo reads as conformant")
 check("stack_check can emit NOT_APPLICABLE", "return NOT_APPLICABLE" in _sc,
@@ -827,11 +828,11 @@ if _host.exists():
 
 _od = Path("framework/adapters/opencode_detect.py")
 if _od.exists():
-    check("legacy detector is a shim", "DEPRECATED" in _od.read_text(),
+    check("legacy detector is a shim", "DEPRECATED" in _od.read_text(encoding="utf-8"),
           "old callers must keep working while pointing at host.py")
 
 # GSD single-distribution rule (fix #1): recognise gsd-pi in order to REFUSE it by name.
-_gs = Path("framework/adapters/gsd_state.py").read_text()
+_gs = Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8")
 check("GSD declares one supported distribution", 'SUPPORTED = ("gsd-core",)' in _gs,
       "v1 supports the installed distribution only; dual support is a conformance target")
 check("GSD refuses unsupported distribution", "UNSUPPORTED DISTRIBUTION" in _gs,
@@ -851,7 +852,7 @@ check("audit checker exists", _ac.exists(),
 
 _aud = Path("framework/ADOPT_AUDIT.md")
 if _aud.exists():
-    _at = _aud.read_text()
+    _at = _aud.read_text(encoding="utf-8")
     for _cap in ("G5 stack conformance", "G6 browser gate", "state consistency"):
         check(f"audit covers {_cap}", _cap in _at,
               "every framework capability with a GSD counterpart needs a row")
@@ -867,11 +868,11 @@ if _ac.exists():
         WARNS.append("adopt-before-extend audit undecided — required install step, "
                      "most likely path to shrinking the framework below 7 agents")
     check("bootstrap runs the audit checker",
-          "audit_check.py" in Path("framework/bootstrap.sh").read_text(),
+          "audit_check.py" in Path("framework/bootstrap.sh").read_text(encoding="utf-8"),
           "stage 3 must execute the check, not just cat the file")
 
 check("bootstrap detects host via the neutral adapter",
-      "adapters/host.py" in Path("framework/bootstrap.sh").read_text(),
+      "adapters/host.py" in Path("framework/bootstrap.sh").read_text(encoding="utf-8"),
       "stage 1 must not depend on a host-specific module name")
 
 
@@ -887,7 +888,7 @@ check("retrospective rule exists", Path("framework/opencode/rules/retrospective.
 
 try:
     import yaml
-    _cm = yaml.safe_load((_rd / "containment_map.yaml").read_text())
+    _cm = yaml.safe_load((_rd / "containment_map.yaml").read_text(encoding="utf-8"))
     check("containment map lists checkpoints in pipeline order",
           [c["id"] for c in _cm["checkpoints"]][:2] == ["requirements", "research"],
           "escape path is computed by position; order is load-bearing")
@@ -941,7 +942,7 @@ _rc_e, _ = sh("python3 framework/retro/ledger.py append --json '{\"task_id\":\"x
 check("incomplete ledger entry rejected", _rc_e == 1,
       "a retro without a fix target is a note, not a finding")
 
-_sig = Path("framework/retro/ledger.py").read_text()
+_sig = Path("framework/retro/ledger.py").read_text(encoding="utf-8")
 # Behavioural test, not a text search: two entries describing the same structural gap with
 # different task ids, fix targets and wording must collide on signature.
 _rc_s, _out_s = sh(
@@ -956,7 +957,7 @@ check("recurrence matches structure, not prose", "SAME" in _out_s,
 check("landed fix requires a verifying command", "fix_verified_by" in _sig,
       "a fix claimed without an exit code is the DoD failure this framework exists to prevent")
 
-_g7 = Path("framework/gates/g7_retro.sh").read_text()
+_g7 = Path("framework/gates/g7_retro.sh").read_text(encoding="utf-8")
 check("g7 emits NOT_APPLICABLE rather than passing with no trigger", "NOT_APPLICABLE=4" in _g7)
 check("g7 refuses when tooling is absent", "BLOCKED" in _g7 and "pyyaml" in _g7,
       "a missing parser must never read as 'no gaps found'")
@@ -967,13 +968,13 @@ check("g7 never emits exit 3", _rc_g7 != 3,
 
 try:
     import yaml
-    _pr = yaml.safe_load(Path("framework/verifier/profiles.yaml").read_text())
+    _pr = yaml.safe_load(Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8"))
     check("retro profile is event-routed, not impact-routed",
           "defect_escaped" in (_pr.get("event_to_gates") or {}),
           "an escape can follow any impact class, so impact_to_gates cannot route it")
     check("retro profile invokes g7",
           any("g7" in c for c in _pr["profiles"]["retro"]["commands"]))
-    _rp = yaml.safe_load(Path("framework/retry_policy.yaml").read_text())
+    _rp = yaml.safe_load(Path("framework/retry_policy.yaml").read_text(encoding="utf-8"))
     check("retro triggers are enumerated", len(_rp.get("retro_triggers", [])) >= 5,
           "if 'escape' is a judgement call, the retrospective is optional in practice")
     check("recurrence gets zero retries", _rp["retry_policy"].get("retro_recurrence") == 0,
@@ -983,33 +984,33 @@ try:
 except ImportError:
     pass
 
-_tl = Path("framework/opencode/agents/team-lead.md").read_text()
+_tl = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
 check("team-lead opens retro triggers", "retro/triggers" in _tl)
 check("team-lead requires g7 before completion", "G7" in _tl)
 check("team-lead is told NOT to retro a clean catch",
       "first place it could" in _tl,
       "retrospecting every caught defect trains everyone to ignore the ledger")
-check("verifier runs g7", "g7_retro.sh" in Path("framework/opencode/agents/verifier.md").read_text())
+check("verifier runs g7", "g7_retro.sh" in Path("framework/opencode/agents/verifier.md").read_text(encoding="utf-8"))
 check("implementer can load the retrospective skill",
-      "retrospective" in Path("framework/opencode/agents/implementer.md").read_text())
-_skill = Path("framework/opencode/skills/retrospective/SKILL.md").read_text()
+      "retrospective" in Path("framework/opencode/agents/implementer.md").read_text(encoding="utf-8"))
+_skill = Path("framework/opencode/skills/retrospective/SKILL.md").read_text(encoding="utf-8")
 check("skill rejects unfalsifiable recommendations",
       "be more careful" in _skill.lower() and "add more tests" in _skill.lower(),
       "the failure mode must be named explicitly to be avoided")
 check("skill states routing outranks containment",
       "outrank" in _skill.lower() or "precedence" in _skill.lower())
 
-_cfg = json.loads(Path("opencode.json").read_text())
+_cfg = json.loads(Path("opencode.json").read_text(encoding="utf-8"))
 check("verifier permitted to run g7",
       "./framework/gates/g7_retro.sh*" in _cfg["agent"]["verifier"]["permission"]["bash"]
       or _cfg["agent"]["verifier"]["permission"]["bash"].get("./framework/gates/*") == "allow")
 check("telemetry tracks escapes and recurrences",
-      all(f in Path("framework/opencode/plugin/telemetry.ts").read_text()
+      all(f in Path("framework/opencode/plugin/telemetry.ts").read_text(encoding="utf-8")
           for f in ("defect_escapes", "retros_recorded", "retro_recurrences")),
       "rework rate is only meaningful with whether the gap closed")
 
 check("g7 in the authoritative exit code table",
-      "G7 retro" in Path("framework/gates/EXIT_CODES.md").read_text())
+      "G7 retro" in Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8"))
 
 
 
@@ -1021,7 +1022,7 @@ check("injection protocol exists", _ip.exists(),
       "controlled falsification needs defined challenges")
 if _ip.exists():
     try:
-        _ipc = yaml.safe_load(_ip.read_text())
+        _ipc = yaml.safe_load(_ip.read_text(encoding="utf-8"))
         check("injection protocol parseable", isinstance(_ipc, dict))
         check("has challenges", isinstance(_ipc.get("challenges"), list))
         check("has scoring", isinstance(_ipc.get("scoring"), dict))
@@ -1036,7 +1037,7 @@ _mt = _rd / "maturity.yaml"
 check("maturity levels exist", _mt.exists())
 if _mt.exists():
     try:
-        _mtd = yaml.safe_load(_mt.read_text())
+        _mtd = yaml.safe_load(_mt.read_text(encoding="utf-8"))
         check("maturity parseable", isinstance(_mtd, dict))
         check("has levels", isinstance(_mtd.get("levels"), dict))
         check("has advancement rules", isinstance(_mtd.get("advancement"), dict))
@@ -1049,7 +1050,7 @@ if _mt.exists():
 _st = _rd / "smoke_check.py"
 check("smoke test exists", _st.exists())
 if _st.exists():
-    _stc = _st.read_text()
+    _stc = _st.read_text(encoding="utf-8")
     check("smoke test covers containment_map", "containment_map" in _stc)
     check("smoke test covers escape_path", "escape_path" in _stc)
     check("smoke test covers ledger", "ledger" in _stc)
@@ -1060,7 +1061,7 @@ if _st.exists():
 _dr = _rd / "dry_run.md"
 check("dry run scenario exists", _dr.exists())
 
-_skill_v2 = Path("framework/opencode/skills/retrospective/SKILL.md").read_text()
+_skill_v2 = Path("framework/opencode/skills/retrospective/SKILL.md").read_text(encoding="utf-8")
 check("skill has counterfactual analysis", "counterfactual" in _skill_v2.lower())
 check("skill has human-correction path", "human_correction" in _skill_v2)
 check("skill has gap type classification", "gap_type" in _skill_v2)
@@ -1080,7 +1081,7 @@ _bgr = Path("framework/opencode/rules/background-tasks.md")
 check("background task contract rule exists", _bgr.exists(),
       "a contract that is not declared cannot be enforced")
 if _bgr.exists():
-    _bgt = _bgr.read_text()
+    _bgt = _bgr.read_text(encoding="utf-8")
     check("rule declares the correct flow", "END YOUR RESPONSE" in _bgt,
           "fire-and-wait must be the primary path")
     check("rule defines a poll", "still running" in _bgt.lower() or "pending" in _bgt.lower(),
@@ -1090,7 +1091,7 @@ if _bgr.exists():
     check("rule names enforcement", "bg_poll_total" in _bgt,
           "telemetry measurement must be declared in the rule")
 
-_tel = Path("framework/opencode/plugin/telemetry.ts").read_text()
+_tel = Path("framework/opencode/plugin/telemetry.ts").read_text(encoding="utf-8")
 check("telemetry tracks bg_poll_total", "bg_poll_total" in _tel,
       "sessions that poll must be measurable")
 check("telemetry classifies polls vs collects",
@@ -1182,18 +1183,18 @@ check("runner delegates to node --test",
 
 # Agent instructions must carry the contract so the primary agent sees it before
 # launching anything in background.
-_lead = Path("framework/opencode/agents/team-lead.md").read_text()
+_lead = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
 if "background" in _lead.lower() or "background-tasks" in _lead:
     check("team-lead carries background task contract", True)
 else:
     check("team-lead carries background task contract",
-          "background" in Path("opencode.json").read_text().lower(),
+          "background" in Path("opencode.json").read_text(encoding="utf-8").lower(),
           "the orchestrator must know the pub/sub contract before it delegates")
 
 print("\n[16] Detection cache portability")
 _mf = Path("framework/.manifest/gsd.json")
 if _mf.exists():
-    _m = json.loads(_mf.read_text())
+    _m = json.loads(_mf.read_text(encoding="utf-8"))
     _sr = _m.get("state_root")
     if _sr and os.path.isabs(_sr):
         check("cached state root belongs to this checkout",
@@ -1204,13 +1205,13 @@ _MANIFEST_IGNORE_RULES = ((Path("framework/.gitignore"), ".manifest"),
 
 
 def _manifest_cache_ignored():
-    return any(p.exists() and pat in p.read_text() for p, pat in _MANIFEST_IGNORE_RULES)
+    return any(p.exists() and pat in p.read_text(encoding="utf-8") for p, pat in _MANIFEST_IGNORE_RULES)
 
 
 check("manifest cache is gitignored", _manifest_cache_ignored(),
       "a committed manifest carries the packager's absolute paths into every clone")
 check("manifest cache is validated before use",
-      "_cache_valid" in Path("framework/adapters/gsd_state.py").read_text(),
+      "_cache_valid" in Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8"),
       "trusting the cache unconditionally makes a relocated tree read the wrong state silently")
 
 print("\n[17] Architecture design checklist")
@@ -1223,7 +1224,7 @@ check("checklist checker exists", _clc.exists())
 if _cl.exists() and _clc.exists():
     try:
         import yaml as _y
-        _d = _y.safe_load(_cl.read_text())
+        _d = _y.safe_load(_cl.read_text(encoding="utf-8"))
         check("checklist is scoped to the architect",
               _d.get("scope") == "architect",
               "an unscoped checklist loads for every agent and dilutes attention")
@@ -1271,20 +1272,20 @@ if _cl.exists() and _clc.exists():
 
     # Disposition ordering: newest wins, not lexicographically last.
     check("disposition tally reads files in timestamp order",
-          "st_mtime" in _clc.read_text(),
+          "st_mtime" in _clc.read_text(encoding="utf-8"),
           "filename order would let a stale disposition retire an item whose latest cycle applied")
 
     check("G3 enforces the disposition",
-          "checklist_check.py" in Path("framework/gates/g3_architecture.sh").read_text(),
+          "checklist_check.py" in Path("framework/gates/g3_architecture.sh").read_text(encoding="utf-8"),
           "an unenforced checklist is documentation")
     check("checklist is owed only for architecture tasks",
-          "ARCHITECTURE_TASK" in Path("framework/gates/g3_architecture.sh").read_text(),
+          "ARCHITECTURE_TASK" in Path("framework/gates/g3_architecture.sh").read_text(encoding="utf-8"),
           "demanding dispositions on a typo fix gets the gate routed around")
     check("architect is told how to disposition",
-          "verdict" in Path("framework/opencode/agents/architect.md").read_text())
+          "verdict" in Path("framework/opencode/agents/architect.md").read_text(encoding="utf-8"))
 
 # Destination classification: the checklist must be the hardest tier to reach.
-_ep = Path("framework/retro/escape_path.py").read_text()
+_ep = Path("framework/retro/escape_path.py").read_text(encoding="utf-8")
 check("retro analyser classifies lesson destination", "def destination(" in _ep,
       "without a destination, every lesson becomes prose in an agent prompt")
 check("checklist tier is reachable only from architecture",
@@ -1310,28 +1311,28 @@ check("an executable target outranks the checklist",
 print("\n[18] Blocker escalation")
 check("g8 gate exists", Path("framework/gates/g8_blockers.sh").exists(),
       "an unwritten gate cannot refuse completion on open escalation debt")
-_pf = Path("framework/verifier/profiles.yaml").read_text()
+_pf = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
 check("functional profile always runs g8",
       "./framework/gates/g8_blockers.sh" in _pf,
       "blockers are checked every task, not when someone remembers")
 check("exit contract documents G8",
-      "| G8 blockers" in Path("framework/gates/EXIT_CODES.md").read_text(),
+      "| G8 blockers" in Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8"),
       "claims about gate behaviour must cite EXIT_CODES.md")
 check("bootstrap reports open blockers",
-      "list-blockers" in Path("framework/bootstrap.sh").read_text(),
+      "list-blockers" in Path("framework/bootstrap.sh").read_text(encoding="utf-8"),
       "an install inherits visible escalation debt, not silent surprises")
-_ts = Path("framework/opencode/plugin/telemetry.ts").read_text()
+_ts = Path("framework/opencode/plugin/telemetry.ts").read_text(encoding="utf-8")
 check("telemetry counts blockers opened/resolved",
       "blockers_opened" in _ts and "blockers_resolved" in _ts,
       "escalation debt invisible in telemetry is debt nobody pays")
-_im = Path("framework/opencode/agents/implementer.md").read_text()
+_im = Path("framework/opencode/agents/implementer.md").read_text(encoding="utf-8")
 check("implementer records non-complete stops", "write-blocker" in _im,
       "a stop that lives only in prose evaporates with the conversation")
-_tl = Path("framework/opencode/agents/team-lead.md").read_text()
+_tl = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
 check("team lead resolves or refuses on open blockers",
       "list-blockers" in _tl and "resolve-blocker" in _tl,
       "refusal without a resolution path routes around the gate")
-_vf = Path("framework/opencode/agents/verifier.md").read_text()
+_vf = Path("framework/opencode/agents/verifier.md").read_text(encoding="utf-8")
 check("verifier runs g8 and reports its verdicts",
       "g8_blockers" in _vf and "g8:" in _vf)
 
@@ -1349,7 +1350,7 @@ def _perm_keys(obj, prefix):
     return n
 
 
-_ocj = json.loads(Path("opencode.json").read_text())
+_ocj = json.loads(Path("opencode.json").read_text(encoding="utf-8"))
 check("six agents hold the plain-form adapter allowlist",
       _perm_keys(_ocj, "python3 framework/adapters/gsd_state.py") >= 6,
       "the silent permission pause returns for any agent missing it")
@@ -1528,7 +1529,7 @@ check("top-level model resolves to something real",
 _prof = Path("framework/models/profiles.sh")
 check("model profiles exist", _prof.exists())
 if _prof.exists():
-    _ps = _prof.read_text()
+    _ps = _prof.read_text(encoding="utf-8")
     for _name in ("baseline", "tiered", "cheap", "reset"):
         check(f"profile '{_name}' defined",
               re.search(rf"^\s*(?:\w+\|)*{_name}(?:\|\w+)*\)", _ps, re.M) is not None)
@@ -1773,14 +1774,14 @@ def _suite_21():
 print("\n[21] Evidence provenance")
 check("g11 gate exists", Path("framework/gates/g11_evidence.sh").exists(),
       "an unwritten gate cannot refuse completion on claims without provenance")
-_pf11 = Path("framework/verifier/profiles.yaml").read_text()
+_pf11 = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
 check("functional profile always runs g11",
       "./framework/gates/g11_evidence.sh" in _pf11,
       "evidence provenance is checked every task, not when someone remembers")
 check("exit contract documents G11",
-      "| G11 evidence" in Path("framework/gates/EXIT_CODES.md").read_text(),
+      "| G11 evidence" in Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8"),
       "claims about gate behaviour must cite EXIT_CODES.md")
-_cl = Path("framework/claims/ledger.py").read_text()
+_cl = Path("framework/claims/ledger.py").read_text(encoding="utf-8")
 check("claim ledger has append and analyse", "def append" in _cl and "def analyse" in _cl,
       "a ledger that cannot record or judge claims is decorative")
 check("claim ledger validates provenance", "def _has_provenance" in _cl,
@@ -1793,54 +1794,54 @@ check("claim ledger enforces independent check for high impact",
 check("claim ledger requires runtime-backed evidence for causal conclusions",
       "CLAIM_CAUSAL_NO_RUNTIME" in _cl,
       "static configuration, code inspection, logs, or plausibility cannot establish causation")
-_tl11 = Path("framework/opencode/agents/team-lead.md").read_text()
+_tl11 = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
 check("team lead references evidence provenance",
       "evidence provenance" in _tl11.lower() or "claim ledger" in _tl11.lower() or "G-VERIFY" in _tl11,
       "the gate on findings must be enforced by the team lead, not hoped for")
-_im11 = Path("framework/opencode/agents/implementer.md").read_text()
+_im11 = Path("framework/opencode/agents/implementer.md").read_text(encoding="utf-8")
 check("implementer references claim ledger",
       "claim" in _im11.lower() and ("ledger" in _im11.lower() or "evidence provenance" in _im11.lower()),
       "agents must be told to record claims, not assume they will")
-_vf11 = Path("framework/opencode/agents/verifier.md").read_text()
+_vf11 = Path("framework/opencode/agents/verifier.md").read_text(encoding="utf-8")
 check("verifier runs g11 and reports its verdicts",
       "g11" in _vf11 and ("claim" in _vf11.lower() or "evidence" in _vf11.lower()),
       "verifier must reference the evidence gate")
 
 print("\n[22] Evidence provenance -- agent wiring and ledger behaviour")
 # statics: every agent that records claims must be told how; the gate must run
-_rp22 = Path("framework/retry_policy.yaml").read_text()
+_rp22 = Path("framework/retry_policy.yaml").read_text(encoding="utf-8")
 check("EVIDENCE_INSUFFICIENT escalation route recorded",
       "EVIDENCE_INSUFFICIENT" in _rp22 and "gather_provenance_or_downgrade_claim" in _rp22,
       "a claim without provenance needs a named recovery action")
-_rs22 = Path(".lifecycle/agents/researcher.md").read_text()
+_rs22 = Path(".lifecycle/agents/researcher.md").read_text(encoding="utf-8")
 check("researcher classifies findings and records them",
       "classification: FACT | HYPOTHESIS | ASSUMPTION | UNKNOWN" in _rs22
       and "## Claim classification" in _rs22 and "ledger" in _rs22.lower(),
       "research findings are claims and must be labelled")
-_im22 = Path("framework/opencode/agents/implementer.md").read_text()
+_im22 = Path("framework/opencode/agents/implementer.md").read_text(encoding="utf-8")
 check("implementer records claim classification",
       "classification:" in _im22 and "FACT | HYPOTHESIS" in _im22,
       "a debug-mode diagnosis must carry a claim classification")
-_im22l = Path(".lifecycle/agents/implementer.md").read_text()
+_im22l = Path(".lifecycle/agents/implementer.md").read_text(encoding="utf-8")
 check("implementer knows verification levels",
       "### Verification levels" in _im22l and "L3 end-to-end" in _im22l,
       "evidence levels L1/L2/L3 must be taught to the agent that records claims")
-_ar22 = Path("framework/opencode/agents/architect.md").read_text()
+_ar22 = Path("framework/opencode/agents/architect.md").read_text(encoding="utf-8")
 check("architect records ASSUMPTION decisions",
       "ASSUMPTION claim" in _ar22 and "ledger.py" in _ar22,
       "an accepted assumption that is never claimed is an unrecorded decision")
-_rv22 = Path(".lifecycle/agents/reviewer.md").read_text()
+_rv22 = Path(".lifecycle/agents/reviewer.md").read_text(encoding="utf-8")
 check("reviewer traces conclusions to VERIFIED claims",
       "VERIFIED claims" in _rv22 and "ledger" in _rv22.lower(),
       "a review conclusion without a claim is a question, not a finding")
-_tl22 = Path("framework/opencode/plugin/telemetry.ts").read_text()
+_tl22 = Path("framework/opencode/plugin/telemetry.ts").read_text(encoding="utf-8")
 check("telemetry keeps g1-g8 matcher and adds g10/g11",
       "(g[1-8])" in _tl22 and "g1[01]" in _tl22,
       "evidence gates must be counted like functional gates")
 check("telemetry counts claim events",
       "claims_recorded" in _tl22 and "claims_invalid" in _tl22,
       "claim provenance must be measurable per session")
-_oc22 = json.loads(Path("opencode.json").read_text())
+_oc22 = json.loads(Path("opencode.json").read_text(encoding="utf-8"))
 _rb22 = _oc22["agent"]["researcher"]["permission"]["bash"]
 check("researcher may run the claim ledger",
       any("claims/ledger.py" in k for k in _rb22),
