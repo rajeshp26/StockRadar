@@ -2,7 +2,11 @@
 # Windows-compatible startup script for StockerPro
 # Docker Supabase + Backend + Frontend + Worker Process
 param(
-    [switch]$SkipCleanup
+    [switch]$SkipCleanup,
+    # Bypass the WSL egress guard (section 0b). Only for the case where egress is
+    # genuinely unavailable but the stack is still wanted up; the backend will not
+    # be able to start, so this is a diagnostic escape hatch, not a normal path.
+    [switch]$SkipNetworkCheck
 )
 
 # Child processes (supabase CLI, docker) emit UTF-8. Without this the console's
@@ -81,6 +85,114 @@ function Stop-WSLBackend {
     wsl -e bash "$ProjectRootWsl/backend/scripts/stop_all.sh" 2>$null
     Start-Sleep -Seconds 2
     Write-Host "   WSL backend processes stopped" -ForegroundColor Gray
+}
+
+function Test-WslOutbound {
+    # Does WSL itself have working egress? Probed from INSIDE the distro, because
+    # the Windows host having internet says nothing about WSL - see section 0b.
+    #
+    # bash's /dev/tcp is a builtin, so this needs no interpreter, no PATH entry
+    # and no network tooling installed in the distro. Two targets are tried so
+    # that a network which blocks 1.1.1.1 is not mistaken for broken egress.
+    param([int]$TimeoutSec = 6)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        foreach ($target in '1.1.1.1', 'github.com') {
+            wsl -e timeout $TimeoutSec bash -c "exec 3<>/dev/tcp/$target/443" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { return $true }
+        }
+        return $false
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Invoke-WslNetworkRepair {
+    # Self-heal a stale host-side WSL network binding (mechanism: see
+    # Write-WslNetworkRemedy). Removing an HNS network is admin-only, so the work
+    # runs in an elevated child process and reports back through a JSON file.
+    # The child's own verdict is never trusted: this process re-probes egress
+    # itself before the caller is allowed to continue.
+    $repairScript = Join-Path $PSScriptRoot "wsl-network-repair.ps1"
+    if (-not (Test-Path $repairScript)) {
+        Write-Host "   Repair script not found: $repairScript" -ForegroundColor Yellow
+        return $false
+    }
+    $resultFile = Join-Path $env:TEMP "wsl-network-repair.json"
+    Remove-Item $resultFile -Force -ErrorAction SilentlyContinue
+
+    Write-Host "   Rebuilding the stale WSL network (one admin consent prompt)..." -ForegroundColor Yellow
+    try {
+        $proc = Start-Process powershell -Verb RunAs -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$repairScript`"",
+            '-ResultFile', "`"$resultFile`""
+        )
+    } catch {
+        # UAC declined, or elevation unavailable (e.g. a non-interactive session).
+        Write-Host "   Could not elevate: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+
+    if ($proc) {
+        $proc.WaitForExit(240000) | Out-Null
+    } else {
+        # ShellExecute gave no process handle: bound the wait by polling instead.
+        Start-Sleep -Seconds 60
+    }
+
+    if (Test-Path $resultFile) {
+        try {
+            $r = Get-Content $resultFile -Raw | ConvertFrom-Json
+            $removed = if ($r.RemovedNetworks) { @($r.RemovedNetworks) -join ', ' } else { '(none)' }
+            Write-Host "   Repair child: removed [$removed], hns running=$($r.HnsRestarted), attempts=$($r.Attempts), egress=$($r.EgressOk)" -ForegroundColor Gray
+        } catch {
+            Write-Host "   Repair child: result file unreadable ($($_.Exception.Message))" -ForegroundColor Yellow
+        }
+    }
+
+    # Independent, bounded verification of the outcome.
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-WslOutbound) { return $true }
+        Start-Sleep -Seconds 5
+    }
+    return $false
+}
+
+function Write-WslNetworkRemedy {
+    Write-Host ""
+    Write-Host "   ROOT CAUSE: WSL cannot reach the internet - the host-side WSL network" -ForegroundColor Red
+    Write-Host "   binding is stale." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "   WSL2 reaches the internet through an HNS network whose address translation" -ForegroundColor Red
+    Write-Host "   is performed on Windows. When that network object goes stale, Windows still" -ForegroundColor Red
+    Write-Host "   RECEIVES the guest's packets on 'vEthernet (WSL ...)' but forwards none of" -ForegroundColor Red
+    Write-Host "   them to the physical adapter (measured on this machine: 300 of 300" -ForegroundColor Red
+    Write-Host "   datagrams received, Wi-Fi transmit unchanged, loopback control = 0)." -ForegroundColor Red
+    Write-Host "   The symptom is deceptive: the guest interface is up with a correct default" -ForegroundColor Red
+    Write-Host "   route, the gateway ARP resolves, DNS still answers (it tunnels over vsock," -ForegroundColor Red
+    Write-Host "   not the network) and the Windows host itself stays online." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "   This blocks the backend, it does not merely degrade it: importing" -ForegroundColor Red
+    Write-Host "   defeatbeta_api calls nltk.download() and HuggingFace at import time with" -ForegroundColor Red
+    Write-Host "   no timeout, so uvicorn hangs and never binds :8001 - the frontend then" -ForegroundColor Red
+    Write-Host "   502s on every /api/proxy/* call." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "   Fix (a reboot also clears it and needs none of this):" -ForegroundColor Yellow
+    Write-Host "     wsl --shutdown" -ForegroundColor Yellow
+    Write-Host "     # elevated - drop the stale object, then let WSL rebuild the network:" -ForegroundColor Yellow
+    Write-Host "     Get-HnsNetwork | Where-Object Name -like 'WSL*' | Remove-HnsNetwork" -ForegroundColor Yellow
+    Write-Host "     Restart-Service hns -Force" -ForegroundColor Yellow
+    Write-Host "     wsl -e true" -ForegroundColor Yellow
+    Write-Host "   Or run: scripts\wsl-network-repair.ps1   (elevated; does all of the above)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   NOTE: 'net stop winnat; net start winnat; wsl --shutdown' does NOT fix this." -ForegroundColor DarkYellow
+    Write-Host "   It was tried on this machine and measured failing: wsl --shutdown re-uses" -ForegroundColor DarkYellow
+    Write-Host "   the stale network object, so it must be REMOVED, not merely bounced." -ForegroundColor DarkYellow
+    Write-Host ""
+    Write-Host "   To skip this guard: -SkipNetworkCheck" -ForegroundColor Yellow
+    Write-Host ""
 }
 
 function Get-ExcludedTcpRanges {
@@ -240,6 +352,32 @@ if ($reservedSupabasePorts.Count -gt 0) {
 Write-Host "   No conflicting reservations for $($SupabasePorts -join ', ')" -ForegroundColor Gray
 Write-Host ""
 
+# ── 0b. WSL egress guard ────────────────────────────────────────────────
+# See Write-WslNetworkRemedy() for the mechanism. Checked here, before Docker or
+# Supabase are touched, so a stale WinNAT binding is reported in ~8s instead of
+# surfacing minutes later as a backend that never binds and a 502-ing frontend.
+if ($SkipNetworkCheck) {
+    Write-Host "WSL connectivity check skipped (-SkipNetworkCheck)" -ForegroundColor Yellow
+    Write-Host ""
+} else {
+    Write-Host "Checking WSL outbound connectivity..." -ForegroundColor Green
+    if (Test-WslOutbound) {
+        Write-Host "   WSL can reach the internet" -ForegroundColor Gray
+        Write-Host ""
+    } else {
+        Write-Host "   WSL cannot reach the internet." -ForegroundColor Red
+        if (Invoke-WslNetworkRepair) {
+            Write-Host "   Repaired - WSL can reach the internet again." -ForegroundColor Green
+            Write-Host "   The guest got a NEW address and the vEthernet was rebuilt; nothing may" -ForegroundColor Gray
+            Write-Host "   cache the old WSL IP (BACKEND_ORIGIN is pinned to 127.0.0.1 below)." -ForegroundColor Gray
+            Write-Host ""
+        } else {
+            Write-WslNetworkRemedy
+            exit 1
+        }
+    }
+}
+
 # ── 1. Add Docker to PATH and start Docker Desktop ─────────────────────
 $dockerBin = "C:\Program Files\Docker\Docker\resources\bin"
 $dockerPath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
@@ -318,16 +456,28 @@ if ($unpublished.Count -gt 0) {
 }
 Write-Host "   Supabase published on $($SupabasePorts -join ', ')" -ForegroundColor Gray
 
-# ── 2b. Detect WSL IP and update BACKEND_ORIGIN ─────────────────────────
-$wslIP = (wsl -e bash -c "hostname -I").Trim()
-if ($wslIP) {
-    $envLocal = Join-Path $WebDir ".env.local"
+# ── 2b. Point the frontend proxy at the backend via loopback ────────────
+# The WSL IP is NOT stable - it is re-assigned on every WSL restart, and it does
+# not exist at all under mirrored networking - so it must never be baked into
+# config. Windows reaches WSL services through WSL's localhost forwarding
+# (localhostForwarding=true), which survives restarts. 127.0.0.1 rather than
+# "localhost": the relay binds IPv4 only, and Node may try ::1 first.
+$envLocal = Join-Path $WebDir ".env.local"
+$backendOrigin = "http://127.0.0.1:8001"
+if (Test-Path $envLocal) {
     $content = Get-Content $envLocal -Raw
-    $newOrigin = "http://${wslIP}:8001"
-    # Always update BACKEND_ORIGIN to current WSL IP
-    $content = $content -replace "BACKEND_ORIGIN=http://[^\r\n]+", "BACKEND_ORIGIN=$newOrigin"
-    Set-Content -Path $envLocal -Value $content -NoNewline -Encoding UTF8
-    Write-Host "   BACKEND_ORIGIN set to $newOrigin" -ForegroundColor Gray
+    if ($content -match [regex]::Escape("BACKEND_ORIGIN=$backendOrigin")) {
+        Write-Host "   BACKEND_ORIGIN already $backendOrigin" -ForegroundColor Gray
+    } elseif ($content -match 'BACKEND_ORIGIN=http://') {
+        $content = $content -replace "BACKEND_ORIGIN=http://[^\r\n]+", "BACKEND_ORIGIN=$backendOrigin"
+        Set-Content -Path $envLocal -Value $content -NoNewline -Encoding UTF8
+        Write-Host "   BACKEND_ORIGIN set to $backendOrigin" -ForegroundColor Gray
+    } else {
+        Add-Content -Path $envLocal -Value "BACKEND_ORIGIN=$backendOrigin"
+        Write-Host "   BACKEND_ORIGIN added as $backendOrigin" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "   WARNING: $envLocal not found - frontend proxy origin not set" -ForegroundColor Yellow
 }
 
 # ── 2c. Verify Kong is responding (auto-restart if broken) ───────────────
@@ -391,10 +541,27 @@ Write-Host "Starting Backend on port 8001 via WSL..." -ForegroundColor Green
 Write-Host ("-" * 50)
 Write-Host ""
 
+# Readiness gate. Launched with -NoNewWindow so it reports into THIS console.
+# uvicorn runs in the foreground below, so without this the script cannot tell
+# "serving" apart from "hung in an import-time network call".
+$healthWatch = $null
+$healthScript = Join-Path $PSScriptRoot "backend-health-watch.ps1"
+if (Test-Path $healthScript) {
+    $healthWatch = Start-Process powershell -NoNewWindow -PassThru -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$healthScript`"",
+        '-Url', 'http://127.0.0.1:8001/health', '-TimeoutSec', '90'
+    )
+} else {
+    Write-Host "   WARNING: $healthScript not found - backend readiness will not be reported" -ForegroundColor Yellow
+}
+
 # Run uvicorn in WSL foreground — keeps terminal alive, Ctrl+C stops everything
 wsl -e bash "$ProjectRootWsl/backend/scripts/start_backend.sh"
 
 # If we reach here, backend exited
+if ($healthWatch -and -not $healthWatch.HasExited) {
+    Stop-Process -Id $healthWatch.Id -Force -ErrorAction SilentlyContinue
+}
 Write-Host ""
 Write-Host "Backend stopped." -ForegroundColor Yellow
 Write-Host "Cleaning up frontend and worker..." -ForegroundColor Yellow
