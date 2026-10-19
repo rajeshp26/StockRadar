@@ -5,7 +5,7 @@ import html
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -454,6 +454,36 @@ class DefeatBetaProvider(StockDataProvider):
     # NEW (enhanced): Market/Forecast/Summary fetchers
     #   - support start_date/end_date filters where applicable
     # -----------------------------------------------------------
+    @staticmethod
+    def _yfinance_result_is_sufficient(
+        rows: list[dict[str, Any]],
+        start_date: date | None,
+        end_date: date | None,
+    ) -> bool:
+        """Whether a YFinance result credibly covers the range DefeatBeta would serve.
+
+        YFinance is retained as the primary source only when it actually provides a
+        series: an unbounded (bootstrap) request needs a deep history, and a
+        bounded request needs the rows it asked for. A single trailing quote
+        satisfies neither and must not short-circuit the deep-history provider.
+
+        shallow window: >= 2 rows threshold, revisit if a symbol legitimately
+        trades on <2 days within the requested range.
+        """
+        if not rows:
+            return False
+        # Bootstrap (no explicit window): a real daily history, not a lone quote.
+        if start_date is None and end_date is None:
+            return len(rows) >= 2
+        dates = sorted(r["price_date"] for r in rows if r.get("price_date"))
+        if not dates:
+            return False
+        # Bounded request: accept when the earliest row reaches the start bound
+        # (or near it), i.e. the window was actually covered rather than clipped.
+        if start_date is not None and dates[0] > start_date + timedelta(days=7):
+            return False
+        return True
+
     async def get_price_history_optimized(
         self,
         symbol: str,
@@ -465,8 +495,18 @@ class DefeatBetaProvider(StockDataProvider):
         """
         Priority: YFinance (primary) → DefeatBeta (last resort).
         Dates are applied client-side after provider retrieval.
+
+        YFinance is a RECENT-QUOTE source, not a history source: for many symbols
+        it returns a single trailing row (or a shallow window) rather than a deep
+        daily series. Treating any non-empty YFinance result as the answer caused
+        bootstrap to persist 1 row and then mark the symbol refreshed, starving
+        price_history while looking successful. YFinance is therefore only
+        accepted as sufficient when it actually covers the requested span;
+        otherwise DefeatBeta, which serves the deep daily history, is consulted
+        and its richer result is preferred.
         """
         # ── Primary: YFinance (full daily OHLCV, reliable) ──
+        _yf_out: list[dict[str, Any]] = []
         if self.yfinance_provider:
             try:
                 df = await asyncio.to_thread(self.yfinance_provider.get_price_history_df, symbol, exchange)
@@ -493,11 +533,23 @@ class DefeatBetaProvider(StockDataProvider):
                         })
                     if out:
                         logger.info("[PRICE] YFinance returned %d rows for %s", len(out), symbol)
-                        return out
+                        # Accept only when YFinance plausibly represents the range
+                        # asked for. With no window (bootstrap) a deep series is
+                        # required; a handful of trailing quotes must not be
+                        # mistaken for one.
+                        if not self._yfinance_result_is_sufficient(out, start_date, end_date):
+                            logger.info(
+                                "[PRICE] YFinance result for %s is a shallow window "
+                                "(%d rows); consulting DefeatBeta for depth",
+                                symbol, len(out),
+                            )
+                            _yf_out = out
+                        else:
+                            return out
             except Exception as e:
                 logger.warning("[PRICE] YFinance failed for %s: %s", symbol, e)
 
-        # ── Fallback: DefeatBeta (last resort) ──
+        # ── Fallback: DefeatBeta (deep daily history) ──
         try:
             rows = await self.fetch_price_history(symbol, company_id, start_date=start_date, end_date=end_date, exchange=exchange)
             if rows:
@@ -505,6 +557,15 @@ class DefeatBetaProvider(StockDataProvider):
                 return rows
         except Exception as e:
             logger.warning("[PRICE] DefeatBeta failed for %s: %s", symbol, e)
+
+        # DefeatBeta did not serve the range; fall back to whatever YFinance gave
+        # rather than discarding a usable (if shallow) result.
+        if _yf_out:
+            logger.info(
+                "[PRICE] DefeatBeta empty for %s; using %d YFinance rows",
+                symbol, len(_yf_out),
+            )
+            return _yf_out
 
         logger.warning("[PRICE] All providers failed for %s", symbol)
         return []

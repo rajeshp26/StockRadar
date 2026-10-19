@@ -188,8 +188,15 @@ class YFinanceProvider(StockDataProvider, StockProvider):
                 "Close": "close_price",
                 "Volume": "volume",
             })
-            # yfinance uses pandas Timestamp index; ensure python date for consistency upstream
+            # yfinance returns a tz-aware DatetimeIndex (e.g. America/New_York).
+            # Normalise to tz-naive so downstream date-window comparisons against
+            # a naive pd.Timestamp are valid; a tz-aware column raises
+            # "Invalid comparison between dtype=datetime64[s, America/New_York]
+            # and Timestamp" in defeat_beta_provider.get_price_history_optimized
+            # whenever start_date/end_date is supplied.
             df["price_date"] = pd.to_datetime(df["price_date"], errors='coerce')
+            if isinstance(df["price_date"].dtype, pd.DatetimeTZDtype):
+                df["price_date"] = df["price_date"].dt.tz_localize(None)
             return df
         except Exception:
             return pd.DataFrame()

@@ -155,7 +155,7 @@ async def backfill_symbol(
             else:
                 logger.warning("[Bootstrap] %s: no daily rows generated", symbol)
 
-            result["status"] = "ok"
+            result["status"] = "ok" if daily_out else "no_data"
             result["mode"] = "bootstrap"
             result["rows"] = len(daily_out or [])
             return result
@@ -195,7 +195,7 @@ async def backfill_symbol(
                 symbol, effective_cutoff,
             )
 
-        result["status"] = "ok"
+        result["status"] = "ok" if daily_recent_out else "no_data"
         result["mode"] = "incremental"
         result["rows"] = len(daily_recent_out or [])
         return result
@@ -207,6 +207,49 @@ async def backfill_symbol(
         return result
 
 
+def _companies_without_price_history(limit: int | None = None) -> list[dict[str, Any]]:
+    """Companies holding zero price_history rows.
+
+    Enumerated by paging the whole companies table and paging price_history to
+    collect the covered ids, because PostgREST caps a single select at 1000 rows
+    and an earlier capped read made this set look like 3 companies instead of
+    ~2926. Correctness here decides the scope of a large write, so it pages.
+    """
+    covered: set[int] = set()
+    page = 0
+    while True:
+        chunk = (
+            supabase.table("price_history").select("company_id")
+            .range(page * 1000, page * 1000 + 999).execute()
+        ).data or []
+        if not chunk:
+            break
+        covered.update(r["company_id"] for r in chunk)
+        page += 1
+        if page > 600:  # safety: 600k rows
+            break
+
+    out: list[dict[str, Any]] = []
+    page = 0
+    while True:
+        chunk = (
+            supabase.table("companies")
+            .select("company_id, ticker_symbol, security_type")
+            .range(page * 1000, page * 1000 + 999).execute()
+        ).data or []
+        if not chunk:
+            break
+        for c in chunk:
+            if c["company_id"] not in covered:
+                out.append(c)
+                if limit and len(out) >= limit:
+                    return out
+        page += 1
+        if page > 20:  # safety: 20k companies
+            break
+    return out
+
+
 async def run_backfill(
     symbols: list[str],
     retention_years: int,
@@ -214,8 +257,17 @@ async def run_backfill(
     concurrency: int,
     dry_run: bool,
     force_bootstrap: bool = False,
+    all_missing: bool = False,
+    limit: int | None = None,
 ) -> None:
-    """Resolve symbols to company_ids, then backfill concurrently."""
+    """Resolve symbols to company_ids, then backfill concurrently.
+
+    all_missing: ignore `symbols` and select every company that has no
+    price_history at all. This is the fleet-repair mode: the writer defects meant
+    ~2926 companies were never populated, so the symbol list is not the useful
+    unit of work. Companies are still processed through the identical per-symbol
+    path, so this changes SELECTION only, never the write semantics.
+    """
     repo = SupabaseFinancialRepository(supabase)
     yf = YFinanceProvider()
     from providers.edgar_provider import EdgarToolsProvider
@@ -228,23 +280,31 @@ async def run_backfill(
 
     # ── Resolve symbols → company records ──
     companies: list[dict[str, Any]] = []
-    for sym in symbols:
-        upper = sym.upper()
-        resp = (
-            supabase.table("companies")
-            .select("company_id, ticker_symbol, security_type")
-            .eq("ticker_symbol", upper)
-            .limit(1)
-            .execute()
+    if all_missing:
+        companies = _companies_without_price_history(limit=limit)
+        logger.info(
+            "Fleet mode: selected %d companies with no price_history%s",
+            len(companies),
+            f" (limit={limit})" if limit else "",
         )
-        if resp.data:
-            companies.append(resp.data[0])
-        else:
-            logger.warning(
-                "%s: not found in companies table -- skipping. "
-                "Import a CSV containing this symbol first, then re-run.",
-                upper,
+    else:
+        for sym in symbols:
+            upper = sym.upper()
+            resp = (
+                supabase.table("companies")
+                .select("company_id, ticker_symbol, security_type")
+                .eq("ticker_symbol", upper)
+                .limit(1)
+                .execute()
             )
+            if resp.data:
+                companies.append(resp.data[0])
+            else:
+                logger.warning(
+                    "%s: not found in companies table -- skipping. "
+                    "Import a CSV containing this symbol first, then re-run.",
+                    upper,
+                )
 
     if not companies:
         logger.error("No valid companies found for any of the requested symbols.")
@@ -279,16 +339,33 @@ async def run_backfill(
     ok = sum(1 for r in results if r["status"] == "ok")
     err = sum(1 for r in results if r["status"] == "error")
     skipped = sum(1 for r in results if r["status"] == "dry_run")
+    # A zero-row fetch is not a success: the company still has no prices. Counted
+    # separately so a human reading the summary cannot mistake "ran without error"
+    # for "data written", which is how the original outage stayed hidden.
+    no_data = sum(1 for r in results if r["status"] == "no_data")
     elapsed = (datetime.utcnow() - started_at).total_seconds()
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info("SUMMARY: %d ok, %d errors, %d dry-run | %.1fs", ok, err, skipped, elapsed)
+    logger.info(
+        "SUMMARY: %d ok, %d no-data, %d errors, %d dry-run | %.1fs",
+        ok, no_data, err, skipped, elapsed,
+    )
+    if no_data:
+        logger.info(
+            "  (%d companies: provider served no rows -- unservable/delisted "
+            "symbols, not a write failure)", no_data,
+        )
     for r in results:
         if r["status"] == "ok":
             logger.info(
                 "  [OK] %s (cid=%s): [%s] %d daily rows",
                 r["symbol"], r["company_id"], r.get("mode", "?"), r.get("rows", 0),
+            )
+        elif r["status"] == "no_data":
+            logger.warning(
+                "  [NONE] %s (cid=%s): provider returned no rows -- no data written",
+                r["symbol"], r["company_id"],
             )
         elif r["status"] == "error":
             logger.warning("  [ERR] %s (cid=%s): %s", r["symbol"], r["company_id"], r.get("error"))
@@ -329,6 +406,15 @@ def main() -> None:
              "(densifies monthly-compressed companies; incremental path alone "
              "would only look back ~45 days)",
     )
+    parser.add_argument(
+        "--all-missing", action="store_true",
+        help="Fleet repair: select every company with zero price_history instead "
+             "of --symbol. Combines with --limit for a pilot run.",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="With --all-missing, cap the number of companies processed.",
+    )
     args = parser.parse_args()
 
     symbols = args.symbol or DEFAULT_SYMBOLS
@@ -340,6 +426,8 @@ def main() -> None:
         concurrency=args.concurrency,
         dry_run=args.dry_run,
         force_bootstrap=args.force_bootstrap,
+        all_missing=args.all_missing,
+        limit=args.limit,
     ))
 
 

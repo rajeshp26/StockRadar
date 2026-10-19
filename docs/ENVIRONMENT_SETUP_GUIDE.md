@@ -49,6 +49,40 @@ nix-shell --run "bash backend/start.sh"
 
 This command handles the Nix environment and executes the startup script, which manages the virtual environment and dependencies.
 
+#### Dependency preflight (`requirements.txt`)
+
+Both long-running processes — the API (`backend/main.py`) and the background
+worker (`backend/scheduler_worker.py`) — run a dependency preflight at startup.
+It compares the **installed** `defeatbeta-api` and `duckdb` (and every other
+pinned package) against `backend/requirements.txt` and logs a loud `DEPENDENCY
+DRIFT DETECTED` banner when they disagree.
+
+This exists because a silent drift once emptied the price pipeline for roughly
+six weeks. `requirements.txt` declared `defeatbeta-api==0.0.61` and
+`duckdb==1.5.3`, while the installed environment held `0.0.50` and `1.4.3`.
+`defeatbeta-api` 0.0.50 pins `duckdb==1.4.3`, and the `cache_httpfs` extension it
+loads at connection time does not exist for DuckDB 1.4.3 (the community-extension
+repository returns HTTP 404 for 1.4.3 and 206 for 1.5.3). Every price fetch
+therefore died at `DuckDBClient` initialisation and degraded to a per-symbol
+warning, so `price_history` drained out with nothing erroring.
+
+Run the check on demand:
+
+```bash
+python backend/scripts/preflight_dependencies.py          # exit 1 on drift
+python backend/scripts/preflight_dependencies.py --quiet  # silent when clean
+```
+
+Set `PRICE_PREFLIGHT_FATAL=1` to make a **pipeline-critical** drift fatal at
+startup instead of a warning (recommended for price-only deployments and CI).
+Drift in a non-pricing package is reported but never fatal.
+
+To fix drift:
+
+```bash
+python -m pip install -r backend/requirements.txt
+```
+
 ---
 
 ## Frontend Quick Start (`web/`)

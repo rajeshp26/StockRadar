@@ -239,6 +239,19 @@ async def main():
     logger.info("Environment: %s", settings.ENVIRONMENT)
     logger.info("=" * 60)
 
+    # ── Dependency preflight ───────────────────────────────────────────────
+    # This process is what writes price_history. An installed dependency that
+    # drifts from requirements.txt used to starve the table for ~6 weeks with no
+    # error surfacing (defeatbeta-api 0.0.50 -> duckdb 1.4.3 -> cache_httpfs 404
+    # at DuckDBClient init, degrading to a per-symbol warning). Check it before
+    # any scheduler runs so the condition is visible at startup.
+    from scripts.preflight_dependencies import startup_check
+    if not startup_check(logger=logger):
+        logger.error(
+            "Dependency preflight reported drift; continuing because "
+            "PRICE_PREFLIGHT_FATAL is not set. Price writes may be unreliable."
+        )
+
     # ── Initialize components ──────────────────────────────────────────────
 
     # 1. Job Engine

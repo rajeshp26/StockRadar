@@ -216,6 +216,12 @@ async def lifespan(app: FastAPI):
     # STARTUP ---------------------------------------------------------------
     # No Firebase initialization — Supabase JWT verification uses lazy JWKS fetch
 
+    # Dependency preflight: surface drift from requirements.txt at boot rather
+    # than silently serving unreliable price data (see
+    # scripts/preflight_dependencies.py for the outage this prevents).
+    from scripts.preflight_dependencies import startup_check
+    startup_check(logger=logger)
+
     # SSE price monitor (stays in FastAPI - real-time user-facing)
     price_task = asyncio.create_task(background_price_monitor(), name="price_monitor")
     app.state.tasks["price_monitor"] = price_task
