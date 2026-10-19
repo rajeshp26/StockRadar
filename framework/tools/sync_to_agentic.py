@@ -59,7 +59,12 @@ APP_ONLY = {
 # The framework surface mirrored by default. StockerPro's `framework/` and
 # agentic's `framework/` are the SAME tree (verified), so it can never carry
 # application code; opencode.json + AGENTS.md are the root framework files.
-INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md"]
+# `.lifecycle/agents` carries the agent charters that the thin pointers in
+# framework/opencode/agents/ resolve to, and `design` carries the advisory
+# design-skill corpus the ui-designer agent reads. Publishing the pointers
+# without either leaves broken references in the distribution repo, so both
+# are part of the default surface - no per-run flags to remember.
+INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md", ".lifecycle/agents", "design"]
 
 # Paths the distribution repo owns itself, or that carry application content.
 # `docs/` is excluded because StockerPro holds ~90 *application* design docs
