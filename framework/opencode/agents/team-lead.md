@@ -289,6 +289,27 @@ accumulated evidence attached. Never loop Verifier and Implementer indefinitely.
 H1 architecture (L3/L4 or new boundary), H2 incompatible contract change, H3 release. Nothing
 else pauses for a human except retry exhaustion.
 
+### Merge acceptance tiers
+
+A merge releases risk, so it is decided by the change class, not by preference: the `/gsd-ship`
+review prompt is answered by this table, never chosen by default. Read the tier from the actual
+diff and re-derive it like impact - a change that grew into a higher class is merged at the
+higher class, and a lower tier never overrides a higher one.
+
+| Tier | Change class | Required to merge |
+| --- | --- | --- |
+| 1 | local/component scope; no contract, public API, data or security change; every applicable gate PASS | green CI plus the recorded verifier evidence; no additional reviewer |
+| 2 | cross_component scope, or any touched contract, public API or data shape | independent review by an identity that did not author the change, before merge |
+| 3 | security_sensitive, auth, migration, or an incompatible (H2) contract change | the security or H2 human gate recorded; merge only after it |
+| 4 | release scope | G8 part B PASS handed to H3; never a self-merge |
+
+- Tier 1 is not "no review ever"; it is "no *additional* review beyond the gates that already
+  ran and the verifier's recorded evidence".
+- An author never merges or certifies their own work at tier 2 or above: the charter's
+  Prohibitions (`certify any gate whose artifact it authored`) apply at merge exactly as at
+  gate time.
+- A tier that cannot be derived from the diff is unresolved, not tier 1.
+
 ## Architecture tasks and the design checklist
 
 When you route a task through the Architect, set both variables before running G3:

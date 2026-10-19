@@ -1,0 +1,59 @@
+diff --git a/framework/opencode/skills/gsd-ship/SKILL.md b/framework/opencode/skills/gsd-ship/SKILL.md
+index 8d455ec..a569228 100644
+--- a/framework/opencode/skills/gsd-ship/SKILL.md
++++ b/framework/opencode/skills/gsd-ship/SKILL.md
+@@ -14,3 +14,20 @@ Closes the plan â†’ execute â†’ verify â†’ ship loop.
+ </execution_context>
+ 
+ Execute the ship workflow from @C:/Project/StockerPro/StockerPro/framework/opencode/gsd-core/workflows/ship.md end-to-end.
++
++<runtime_note>
++**Merge review is decided by the change class, not asked.** The workflow's `optional_review`
++step offers Skip / Self-review / Request review. Answer it from the merge acceptance tiers in
++`framework/opencode/agents/team-lead.md` - read the tier from the actual diff and re-derive it
++like impact; a lower tier never overrides a higher one:
++
++- tier 1 -> Skip or Self-review. CI green plus the recorded verifier evidence is the acceptance.
++- tier 2 -> Request review. An identity that did not author the change reviews before merge.
++- tier 3 -> do not merge until the security or H2 human gate is recorded.
++- tier 4 -> do not merge here. G8 part B hands a recommendation to H3, which decides.
++
++An identity never merges or certifies its own work at tier 2 or above.
++
++This binding lives in the wrapper skill and not in `gsd-core/workflows/ship.md`: that file is
++vendored GSD-core, and local divergence from upstream is a rebase cost paid on every pull.
++</runtime_note>
+diff --git a/framework/validate.py b/framework/validate.py
+index a739d5a..28d4e49 100644
+--- a/framework/validate.py
++++ b/framework/validate.py
+@@ -492,6 +492,14 @@ check("zero-retry conflicts", "contract_conflict: 0" in rp and "architecture_con
+ prof = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
+ check("impact drives gates", "impact_to_gates" in prof)
+ check("browser missing driver is unverifiable", "report_unverifiable" in prof)
++# The merge tiers bind the H1/H2/H3 line to the *merge* decision (the /gsd-ship review
++# prompt). Without them that question has no framework answer and is settled by
++# preference. Instruction-level: this asserts the policy is present, not that an
++# agent followed it.
++_tl_mg = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
++check("team-lead defines merge acceptance tiers",
++      "Merge acceptance tiers" in _tl_mg and "never a self-merge" in _tl_mg,
++      "which classes need independent review or an H gate before merge is policy, not preference")
+ 
+ print("\n[9] Rules loaded, not inlined")
+ oc = Path("opencode.json").read_text(encoding="utf-8")
+@@ -500,6 +508,14 @@ ag = Path("AGENTS.md").read_text(encoding="utf-8")
+ check("AGENTS.md stays small", len(ag) < 6000, f"{len(ag)} chars")
+ check("no requirements inlined", "REQ-0" not in ag)
+ check("do-not-invoke rule present", "merely because it exists" in ag)
++# The prompt shape is what makes the contract fields authorable: a prompt missing Goal,
++# Context or Validation is not ready to dispatch. Without this the rule file can lose the
++# shape silently and "a vague prompt" regains no shape to fail against.
++_dp_shape = Path("framework/opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
++check("delegation-protocol carries the prompt shape",
++      "Prompt shape (Goal / Context / Validation)" in _dp_shape
++      and "not ready to dispatch" in _dp_shape,
++      "a delegation prompt with no Validation is not ready to dispatch")
+ 
+ print("\n[10] Telemetry collector")
+ _t = Path("framework/opencode/plugin/telemetry.ts")

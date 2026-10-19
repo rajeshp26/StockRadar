@@ -28,6 +28,28 @@ Time budgets come from `framework/tasks/task_types.yaml` (type entry over `defau
 overridable per contract. A type that declares `null` (verify) requires the contract to
 name the budget - it is never inherited from defaults.
 
+### Prompt shape (Goal / Context / Validation)
+
+A contract is only as complete as the prompt that fills it. Author every delegation prompt in
+three parts, and treat a prompt missing any part as not ready to dispatch:
+
+| Part | Answers | Lands in the contract as |
+| --- | --- | --- |
+| **Goal** | the one outcome to be true, and what is explicitly out of scope | `objective` |
+| **Context** | the pointers, constraints and existing patterns the worker must not re-derive | the `context-builder` pointer set, `allowed_tools` |
+| **Validation** | the exact command and its expected result - how a stranger confirms the outcome | `completion_criteria`, `expected_artifact` |
+
+- One Goal per contract. Two outcomes in one prompt are a decomposition that has not happened
+  yet: split them into two contracts with their own ids.
+- Context is pointers, never pasted content. A prompt that inlines files it did not have to
+  carries no pointer set at all.
+- Validation names a runnable command and the result that proves the Goal, not an expectation.
+  A prompt whose Validation cannot be run is resolved before `task-register`, never discovered
+  after the worker returns.
+- The prompt shape fills the contract; it does not restate it. Plan completeness is
+  `framework/gates/g_entry.sh`'s authority and the contract fields above are the record - do
+  not duplicate either inside the prompt body.
+
 ## Checkpoints
 
 Lifecycle checkpoints use the shared C0-C8 vocabulary declared in

@@ -1,0 +1,65 @@
+diff --git a/framework/opencode/agents/team-lead.md b/framework/opencode/agents/team-lead.md
+index b437cfa..e561809 100644
+--- a/framework/opencode/agents/team-lead.md
++++ b/framework/opencode/agents/team-lead.md
+@@ -289,6 +289,27 @@ accumulated evidence attached. Never loop Verifier and Implementer indefinitely.
+ H1 architecture (L3/L4 or new boundary), H2 incompatible contract change, H3 release. Nothing
+ else pauses for a human except retry exhaustion.
+ 
++### Merge acceptance tiers
++
++A merge releases risk, so it is decided by the change class, not by preference: the `/gsd-ship`
++review prompt is answered by this table, never chosen by default. Read the tier from the actual
++diff and re-derive it like impact - a change that grew into a higher class is merged at the
++higher class, and a lower tier never overrides a higher one.
++
++| Tier | Change class | Required to merge |
++| --- | --- | --- |
++| 1 | local/component scope; no contract, public API, data or security change; every applicable gate PASS | green CI plus the recorded verifier evidence; no additional reviewer |
++| 2 | cross_component scope, or any touched contract, public API or data shape | independent review by an identity that did not author the change, before merge |
++| 3 | security_sensitive, auth, migration, or an incompatible (H2) contract change | the security or H2 human gate recorded; merge only after it |
++| 4 | release scope | G8 part B PASS handed to H3; never a self-merge |
++
++- Tier 1 is not "no review ever"; it is "no *additional* review beyond the gates that already
++  ran and the verifier's recorded evidence".
++- An author never merges or certifies their own work at tier 2 or above: the charter's
++  Prohibitions (`certify any gate whose artifact it authored`) apply at merge exactly as at
++  gate time.
++- A tier that cannot be derived from the diff is unresolved, not tier 1.
++
+ ## Architecture tasks and the design checklist
+ 
+ When you route a task through the Architect, set both variables before running G3:
+diff --git a/framework/opencode/rules/delegation-protocol.md b/framework/opencode/rules/delegation-protocol.md
+index d1dd3a2..a9abe50 100644
+--- a/framework/opencode/rules/delegation-protocol.md
++++ b/framework/opencode/rules/delegation-protocol.md
+@@ -28,6 +28,28 @@ Time budgets come from `framework/tasks/task_types.yaml` (type entry over `defau
+ overridable per contract. A type that declares `null` (verify) requires the contract to
+ name the budget - it is never inherited from defaults.
+ 
++### Prompt shape (Goal / Context / Validation)
++
++A contract is only as complete as the prompt that fills it. Author every delegation prompt in
++three parts, and treat a prompt missing any part as not ready to dispatch:
++
++| Part | Answers | Lands in the contract as |
++| --- | --- | --- |
++| **Goal** | the one outcome to be true, and what is explicitly out of scope | `objective` |
++| **Context** | the pointers, constraints and existing patterns the worker must not re-derive | the `context-builder` pointer set, `allowed_tools` |
++| **Validation** | the exact command and its expected result - how a stranger confirms the outcome | `completion_criteria`, `expected_artifact` |
++
++- One Goal per contract. Two outcomes in one prompt are a decomposition that has not happened
++  yet: split them into two contracts with their own ids.
++- Context is pointers, never pasted content. A prompt that inlines files it did not have to
++  carries no pointer set at all.
++- Validation names a runnable command and the result that proves the Goal, not an expectation.
++  A prompt whose Validation cannot be run is resolved before `task-register`, never discovered
++  after the worker returns.
++- The prompt shape fills the contract; it does not restate it. Plan completeness is
++  `framework/gates/g_entry.sh`'s authority and the contract fields above are the record - do
++  not duplicate either inside the prompt body.
++
+ ## Checkpoints
+ 
+ Lifecycle checkpoints use the shared C0-C8 vocabulary declared in

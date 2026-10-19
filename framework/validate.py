@@ -492,6 +492,14 @@ check("zero-retry conflicts", "contract_conflict: 0" in rp and "architecture_con
 prof = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
 check("impact drives gates", "impact_to_gates" in prof)
 check("browser missing driver is unverifiable", "report_unverifiable" in prof)
+# The merge tiers bind the H1/H2/H3 line to the *merge* decision (the /gsd-ship review
+# prompt). Without them that question has no framework answer and is settled by
+# preference. Instruction-level: this asserts the policy is present, not that an
+# agent followed it.
+_tl_mg = Path("framework/opencode/agents/team-lead.md").read_text(encoding="utf-8")
+check("team-lead defines merge acceptance tiers",
+      "Merge acceptance tiers" in _tl_mg and "never a self-merge" in _tl_mg,
+      "which classes need independent review or an H gate before merge is policy, not preference")
 
 print("\n[9] Rules loaded, not inlined")
 oc = Path("opencode.json").read_text(encoding="utf-8")
@@ -500,6 +508,14 @@ ag = Path("AGENTS.md").read_text(encoding="utf-8")
 check("AGENTS.md stays small", len(ag) < 6000, f"{len(ag)} chars")
 check("no requirements inlined", "REQ-0" not in ag)
 check("do-not-invoke rule present", "merely because it exists" in ag)
+# The prompt shape is what makes the contract fields authorable: a prompt missing Goal,
+# Context or Validation is not ready to dispatch. Without this the rule file can lose the
+# shape silently and "a vague prompt" regains no shape to fail against.
+_dp_shape = Path("framework/opencode/rules/delegation-protocol.md").read_text(encoding="utf-8")
+check("delegation-protocol carries the prompt shape",
+      "Prompt shape (Goal / Context / Validation)" in _dp_shape
+      and "not ready to dispatch" in _dp_shape,
+      "a delegation prompt with no Validation is not ready to dispatch")
 
 print("\n[10] Telemetry collector")
 _t = Path("framework/opencode/plugin/telemetry.ts")
@@ -1856,7 +1872,15 @@ def _suite_22():
     (_bd22 / ".planning").mkdir()
 
     def _wsh22(cmd, timeout=180):
-        return sh("cd '%s' && %s" % (_wsl_path(str(_bd22)), cmd), timeout=timeout)
+        # Pin the ledger's store to this copy. The copy's own resolution is
+        # CWD-relative (locate.find_config walks up from the working directory), so a
+        # temp dir under any configured tree appends the suite's fixtures to the LIVE
+        # ledger -- that is how 2026-10-12's runs left 24 fixture records there and
+        # held G14 red. GSD_STATE_ROOT is the ledger's documented test pin and wins
+        # over discovery.
+        return sh("cd '%s' && GSD_STATE_ROOT='%s/.planning' %s"
+                  % (_wsl_path(str(_bd22)), _wsl_path(str(_bd22)), cmd),
+                  timeout=timeout)
 
     _GL = "bash framework/gates/g11_evidence.sh"
     _LG = "python3 framework/claims/ledger.py"
@@ -2091,7 +2115,11 @@ def _suite_24():
         encoding="utf-8")
 
     def _wsh24(cmd, timeout=180):
-        return sh("cd '%s' && %s" % (_wsl_path(str(_bd24)), cmd), timeout=timeout)
+        # Pin the ledger's store to this copy: config discovery walks up from the CWD,
+        # so isolation must not depend on where the temp dir landed.
+        return sh("cd '%s' && GSD_STATE_ROOT='%s/.planning' %s"
+                  % (_wsl_path(str(_bd24)), _wsl_path(str(_bd24)), cmd),
+                  timeout=timeout)
 
     _EC24 = "python3 framework/execution_context.py"
     _LG24 = "python3 framework/claims/ledger.py"
@@ -2304,7 +2332,11 @@ def _suite_26():
     (_bd26 / ".planning").mkdir()
 
     def _wsh26(cmd, timeout=180):
-        return sh("cd '%s' && %s" % (_wsl_path(str(_bd26)), cmd), timeout=timeout)
+        # Pin the ledger's store to this copy (build, not spot-fix): the isolation is
+        # CWD-relative and would otherwise follow the temp dir into the live repo.
+        return sh("cd '%s' && GSD_STATE_ROOT='%s/.planning' %s"
+                  % (_wsl_path(str(_bd26)), _wsl_path(str(_bd26)), cmd),
+                  timeout=timeout)
 
     _EC26 = "python3 framework/execution_context.py"
     _LG26 = "python3 framework/claims/ledger.py"
@@ -2694,7 +2726,12 @@ def _suite_28():
     (_bd28 / ".planning").mkdir()
 
     def _wsh28(cmd, timeout=180):
-        return sh("cd '%s' && %s" % (_wsl_path(str(_bd28)), cmd), timeout=timeout)
+        # Pin the ledger's store to this copy. G14 and the append must agree on which
+        # store they are talking about, and neither may be the live ledger: the store
+        # is chosen by GSD_STATE_ROOT, not by where the temp dir happened to land.
+        return sh("cd '%s' && GSD_STATE_ROOT='%s/.planning' %s"
+                  % (_wsl_path(str(_bd28)), _wsl_path(str(_bd28)), cmd),
+                  timeout=timeout)
 
     _GI28 = "bash framework/gates/g14_integrity.sh"
     _LG28 = "python3 framework/claims/ledger.py"
