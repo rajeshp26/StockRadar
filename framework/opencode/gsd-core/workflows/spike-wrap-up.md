@@ -1,7 +1,7 @@
 <purpose>
 Package spike experiment findings into a persistent project skill — an implementation blueprint
 for future build conversations. Reads from `.planning/spikes/`, writes skill to
-`./.opencode/skills/spike-findings-[project]/` (project-local) and summary to
+`./.planning/skills/spike-findings-[project]/` (project-local) and summary to
 `.planning/spikes/WRAP-UP-SUMMARY.md`. Companion to `/gsd-spike`.
 </purpose>
 
@@ -28,7 +28,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 2. Glob `.planning/spikes/*/README.md` and parse YAML frontmatter from each — each spike's
    `idea:` field is the idea key that owns it. If a README predates #1700 and has no `idea:`
    field, resolve its idea key from the matching `## Spikes` table row's Idea column instead.
-3. Check if `./.opencode/skills/spike-findings-*/SKILL.md` exists for this project
+3. Check if `./.planning/skills/spike-findings-*/SKILL.md` exists for this project
    - If yes: read its `processed_spikes` list from the metadata section and filter those out
    - If no: all spikes are candidates
 
@@ -78,7 +78,7 @@ Each group becomes one reference file in the generated skill.
 Derive the skill name from the project directory:
 
 1. Get the project root directory name (e.g., `solana-tracker`)
-2. The skill will be created at `./.opencode/skills/spike-findings-[project-dir-name]/`
+2. The skill will be created at `./.planning/skills/spike-findings-[project-dir-name]/`
 
 If a skill already exists at that path (append mode), update in place.
 </step>
@@ -198,7 +198,7 @@ Write `.planning/spikes/WRAP-UP-SUMMARY.md` for project history:
 **Date:** [date]
 **Spikes processed:** [count]
 **Feature areas:** [list]
-**Skill output:** `./.opencode/skills/spike-findings-[project]/`
+**Skill output:** `./.planning/skills/spike-findings-[project]/`
 
 ## Processed Spikes
 | # | Name | Type | Verdict | Feature Area |
@@ -209,16 +209,19 @@ Write `.planning/spikes/WRAP-UP-SUMMARY.md` for project history:
 ```
 </step>
 
-<step name="update_claude_md">
-## Update Project AGENTS.md
+<step name="suggest_routing_line">
+## Suggest a Routing Line (do NOT edit AGENTS.md)
 
-Add an auto-load routing line to the project's AGENTS.md (create the file if it doesn't exist):
+`AGENTS.md` is an enforcement-plane file - agents cannot write it. Do not attempt to.
+
+Instead, print this suggestion in the completion report so the human can add it if wanted:
 
 ```
-- **Spike findings for [project]** (implementation patterns, constraints, gotchas) → `Skill("spike-findings-[project-dir-name]")`
+- **Spike findings for [project]** (implementation patterns, constraints, gotchas) → read `./.planning/skills/spike-findings-[project-dir-name]/SKILL.md`
 ```
 
-If this routing line already exists (append mode), leave it as-is.
+This is optional: consumers find the findings by explicit glob (`sketch.md:135`,
+`spike.md:136`), not by the skill loader.
 </step>
 
 <step name="generate_conventions">
@@ -273,12 +276,12 @@ gsd_run query commit "docs(spike-wrap-up): package [N] spike findings into proje
 
 **Processed:** {N} spikes
 **Feature areas:** {list}
-**Skill:** `./.opencode/skills/spike-findings-[project]/`
+**Skill:** `./.planning/skills/spike-findings-[project]/`
 **Conventions:** `.planning/spikes/CONVENTIONS.md`
 **Summary:** `.planning/spikes/WRAP-UP-SUMMARY.md`
-**AGENTS.md:** routing line added
+**AGENTS.md:** not modified (enforcement-plane file) - routing suggestion below
 
-The spike-findings skill will auto-load in future build conversations.
+The findings are read by explicit glob (`./.planning/skills/spike-findings-*/SKILL.md`); they do not auto-load.
 ```
 </step>
 
@@ -311,12 +314,12 @@ After the summary, present next-step options:
 <success_criteria>
 - [ ] All unprocessed spikes auto-included and processed
 - [ ] Spikes grouped by feature area
-- [ ] Spike-findings skill exists at `./.opencode/skills/` with SKILL.md (including requirements), references/, sources/
+- [ ] Spike-findings skill exists at `./.planning/skills/` with SKILL.md (including requirements), references/, sources/
 - [ ] Reference files are implementation blueprints with Requirements, How to Build It, What to Avoid, Constraints
 - [ ] Requirements in each reference file and in SKILL.md are scoped to the idea key(s) actually represented among the wrapped spikes — never blended with an unrelated idea's requirements
 - [ ] `.planning/spikes/CONVENTIONS.md` created or updated with recurring stack/structure/pattern choices
 - [ ] `.planning/spikes/WRAP-UP-SUMMARY.md` written for project history
-- [ ] Project AGENTS.md has auto-load routing line
+- [ ] Routing-line suggestion presented (AGENTS.md not modified - enforcement-plane file)
 - [ ] Summary presented
 - [ ] Next-step options presented (including frontier spike exploration via `/gsd-spike`)
 </success_criteria>

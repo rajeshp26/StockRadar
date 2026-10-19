@@ -415,6 +415,37 @@
       "model": "opencode/big-pickle",
       "temperature": 0.0,
       "_model_rationale": "Runs gates and transcribes exit codes. Least reasoning-intensive role."
+    },
+    "ui-designer": {
+      "description": "Designs UI and produces 2-3 throwaway HTML mockup variants for human approval, grounded in design/skills. Foreground only.",
+      "mode": "subagent",
+      "permission": {
+        "edit": {
+          "*": "deny",
+          ".planning/**": "allow",
+          ".opencode/**": "deny",
+          "opencode.json": "deny",
+          "AGENTS.md": "deny",
+          "framework.config.json": "deny",
+          "framework/opencode/**": "deny",
+          "framework/plan/**": "deny",
+          "framework/testing/**": "deny",
+          "framework/security/**": "deny"
+        },
+        "task": {
+          "*": "deny"
+        },
+        "bash": {
+          "*": "deny",
+          "git status*": "allow",
+          "git diff*": "allow",
+          "git log*": "allow",
+          "git show*": "allow"
+        }
+      },
+      "model": "opencode/big-pickle",
+      "temperature": 0.3,
+      "_model_rationale": "Variant generation rewards breadth: every variant is throwaway and human-reviewed, so exploration variance is cheap to absorb while a homogenised shortlist costs the project a genuinely different direction."
     }
   },
   "mcp": {

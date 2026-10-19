@@ -18,6 +18,7 @@ section 5, file in construction).
 | team-lead | requirements-authoring for every feature request; karpathy-guidelines per its routing condition (skill-routing.md:24); consult routing matrix for every delegation; record required skills in Tool Plan | skill-routing.md:59-62 |
 | researcher | technical-validation for any material unknown | skill-routing.md:66 |
 | security-auditor | security-audit for a scoped audit of a security-sensitive diff; technical-validation for material unknowns | skill-routing.md |
+| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; design/skills/ corpus as advisory craft only | skill-routing.md |
 | architect | software-architecture-design for L3/L4; technical-validation; api-design before contract-authoring; database-schema-design for data-model changes | skill-routing.md:64-68 |
 | planner | verify required skills listed per task; consume architect outputs (architecture + contracts + data design); never redesign architecture | skill-routing.md:70-73 |
 | implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; unit-test-authoring for business logic; karpathy-guidelines per its routing condition (skill-routing.md:24) | skill-routing.md:75-78 |
@@ -61,6 +62,7 @@ a required skill is a G-T1 tool-utilization gap.
 | tool evidence | verifier | reviewer | G-T1 |
 | handoff (SUMMARY.md) | completing role | successor | G8 (open blockers) |
 | audit run dir (findings.json + coverage-ledger.json) | security-auditor | reviewer, verifier | G-SANDBOX (execution), G18 (artifacts) |
+| sketch deliverables (.planning/sketches/<sketch>/ : variants, render evidence, DECISION-SHEET.md) | ui-designer | team-lead, planner, implementer | none (human approval only; not a gate outcome) |
 
 ## 4. Evidence class -> Requirement shape -> Gate
 

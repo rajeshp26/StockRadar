@@ -338,7 +338,7 @@ if not isinstance(cfg.get("agent"), dict):
     sys.exit(2)
 agents = cfg["agent"]
 EXPECTED = ["team-lead", "researcher", "architect", "planner", "implementer", "reviewer", "verifier",
-            "security-auditor"]
+            "security-auditor", "ui-designer"]
 
 
 
@@ -2813,7 +2813,7 @@ check("every routed skill resolves to framework/opencode/skills/<name>/SKILL.md 
 
 print("\n[30] Charter single-source conformance (DID-013 PR-E)")
 _ROLES30 = ["architect", "implementer", "planner", "researcher",
-            "reviewer", "team-lead", "verifier"]
+            "reviewer", "team-lead", "verifier", "ui-designer"]
 _pointer30 = "Read `.lifecycle/agents/%s.md` and act only within that charter."
 _missing30 = [r for r in _ROLES30
               if not Path(".lifecycle/agents/%s.md" % r).exists()]

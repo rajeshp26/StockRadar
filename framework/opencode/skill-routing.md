@@ -18,6 +18,7 @@ Every delegation must consult this matrix before selecting skills.
 | Unit tests required | `unit-test-authoring` | Implementer | Any business logic verification |
 | Performance impact | `performance-testing` | Verifier | Latency, throughput, memory, concurrency |
 | Security concern | `security-audit` | security-auditor | Threat modeling, vulnerability assessment |
+| Design direction for a UI surface is undecided (2-3 comparable mockups before a plan) | `gsd-sketch` + `frontend-react` + `apple-ui` | ui-designer | Before a screen/layout direction enters a plan; the human approval selects the variant |
 | UI change | `apple-ui` + `frontend-react` | Implementer | Components, styling, animation, icons, finance dashboard design |
 | Backend logic change | `backend-python` | Implementer | Endpoints, business logic, persistence |
 | Visible behavior change | `browser-verification` | Verifier | Playwright specs, visual validation |

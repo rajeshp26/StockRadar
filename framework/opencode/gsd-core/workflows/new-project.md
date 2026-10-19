@@ -114,10 +114,10 @@ Check for existing spike and sketch work that should inform project setup:
 
 ```bash
 # Check for spike findings skill (project-local)
-SPIKE_SKILL=$(ls ./.opencode/skills/spike-findings-*/SKILL.md 2>/dev/null | head -1 || true)
+SPIKE_SKILL=$(ls ./.planning/skills/spike-findings-*/SKILL.md 2>/dev/null | head -1 || true)
 
 # Check for sketch findings skill (project-local)
-SKETCH_SKILL=$(ls ./.opencode/skills/sketch-findings-*/SKILL.md 2>/dev/null | head -1 || true)
+SKETCH_SKILL=$(ls ./.planning/skills/sketch-findings-*/SKILL.md 2>/dev/null | head -1 || true)
 
 # Check for raw spikes/sketches in .planning/
 HAS_SPIKES=$(ls .planning/spikes/MANIFEST.md 2>/dev/null)

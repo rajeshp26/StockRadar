@@ -371,9 +371,9 @@ Package spike findings into a persistent project skill.
 
 - Curates each spike one-at-a-time (include/exclude/partial/UAT)
 - Groups findings by feature area
-- Generates `./.opencode/skills/spike-findings-[project]/` with references and sources
+- Generates `./.planning/skills/spike-findings-[project]/` with references and sources
 - Writes summary to `.planning/spikes/WRAP-UP-SUMMARY.md`
-- Adds auto-load routing line to project AGENTS.md
+- Prints a routing-line suggestion for the human (AGENTS.md is enforcement-plane; not edited)
 
 Usage: `/gsd-spike --wrap-up`
 
@@ -382,9 +382,9 @@ Package sketch design findings into a persistent project skill.
 
 - Curates each sketch one-at-a-time (include/exclude/partial/revisit)
 - Groups findings by design area
-- Generates `./.opencode/skills/sketch-findings-[project]/` with design decisions, CSS patterns, HTML structures
+- Generates `./.planning/skills/sketch-findings-[project]/` with design decisions, CSS patterns, HTML structures
 - Writes summary to `.planning/sketches/WRAP-UP-SUMMARY.md`
-- Adds auto-load routing line to project AGENTS.md
+- Prints a routing-line suggestion for the human (AGENTS.md is enforcement-plane; not edited)
 
 Usage: `/gsd-sketch --wrap-up`
 

@@ -1,6 +1,6 @@
 <purpose>
 Curate sketch design findings and package them into a persistent project skill for future
-UI implementation. Reads from `.planning/sketches/`, writes skill to `./.opencode/skills/sketch-findings-[project]/`
+UI implementation. Reads from `.planning/sketches/`, writes skill to `./.planning/skills/sketch-findings-[project]/`
 (project-local) and summary to `.planning/sketches/WRAP-UP-SUMMARY.md`.
 Companion to `/gsd-sketch`.
 </purpose>
@@ -24,7 +24,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 1. Read `.planning/sketches/MANIFEST.md` for the design direction and reference points
 2. Glob `.planning/sketches/*/README.md` and parse YAML frontmatter from each
-3. Check if `./.opencode/skills/sketch-findings-*/SKILL.md` exists for this project
+3. Check if `./.planning/skills/sketch-findings-*/SKILL.md` exists for this project
    - If yes: read its `processed_sketches` list and filter those out
    - If no: all sketches are candidates
 
@@ -94,7 +94,7 @@ Each group becomes one reference file in the generated skill.
 <step name="skill_name">
 ## Determine Output Skill Name
 
-Derive from the project directory name: `./.opencode/skills/sketch-findings-[project-dir-name]/`
+Derive from the project directory name: `./.planning/skills/sketch-findings-[project-dir-name]/`
 
 If a skill already exists at that path (append mode), update in place.
 </step>
@@ -199,7 +199,7 @@ Write `.planning/sketches/WRAP-UP-SUMMARY.md` for project history:
 **Date:** [date]
 **Sketches processed:** [count]
 **Design areas:** [list]
-**Skill output:** `./.opencode/skills/sketch-findings-[project]/`
+**Skill output:** `./.planning/skills/sketch-findings-[project]/`
 
 ## Included Sketches
 | # | Name | Winner | Design Area |
@@ -217,16 +217,19 @@ Write `.planning/sketches/WRAP-UP-SUMMARY.md` for project history:
 ```
 </step>
 
-<step name="update_claude_md">
-## Update Project AGENTS.md
+<step name="suggest_routing_line">
+## Suggest a Routing Line (do NOT edit AGENTS.md)
 
-Add an auto-load routing line:
+`AGENTS.md` is an enforcement-plane file - agents cannot write it. Do not attempt to.
+
+Instead, print this suggestion in the completion report so the human can add it if wanted:
 
 ```
-- **Sketch findings for [project]** (design decisions, CSS patterns, visual direction) → `Skill("sketch-findings-[project-dir-name]")`
+- **Sketch findings for [project]** (design decisions, CSS patterns, visual direction) → read `./.planning/skills/sketch-findings-[project-dir-name]/SKILL.md`
 ```
 
-If this routing line already exists (append mode), leave it as-is.
+This is optional: consumers find the findings by explicit glob (`ui-phase.md:37`,
+`plan-phase.md:560-561`, `discuss-phase.md:253-254`), not by the skill loader.
 </step>
 
 <step name="commit">
@@ -245,11 +248,11 @@ gsd_run query commit "docs(sketch-wrap-up): package [N] sketch findings into pro
 
 **Curated:** {N} sketches ({included} included, {excluded} excluded)
 **Design areas:** {list}
-**Skill:** `./.opencode/skills/sketch-findings-[project]/`
+**Skill:** `./.planning/skills/sketch-findings-[project]/`
 **Summary:** `.planning/sketches/WRAP-UP-SUMMARY.md`
-**AGENTS.md:** routing line added
+**AGENTS.md:** not modified (enforcement-plane file) - routing suggestion below
 
-The sketch-findings skill will auto-load when building the UI.
+The findings are read by explicit glob (`./.planning/skills/sketch-findings-*/SKILL.md`); they do not auto-load.
 ```
 
 ───────────────────────────────────────────────────────────────
@@ -276,11 +279,11 @@ The sketch-findings skill will auto-load when building the UI.
 <success_criteria>
 - [ ] Every unprocessed sketch presented for individual curation
 - [ ] Design-area grouping proposed and approved
-- [ ] Sketch-findings skill exists at `./.opencode/skills/` with SKILL.md, references/, sources/
+- [ ] Sketch-findings skill exists at `./.planning/skills/` with SKILL.md, references/, sources/
 - [ ] Winning theme.css copied into skill sources
 - [ ] Reference files contain design decisions, CSS patterns, HTML structures, anti-patterns
 - [ ] `.planning/sketches/WRAP-UP-SUMMARY.md` written for project history
-- [ ] Project AGENTS.md has auto-load routing line
+- [ ] Routing-line suggestion presented (AGENTS.md not modified - enforcement-plane file)
 - [ ] Summary presented
 - [ ] Next-step options presented (including frontier sketch exploration via `/gsd-sketch`)
 </success_criteria>

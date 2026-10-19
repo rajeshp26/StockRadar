@@ -28,6 +28,10 @@ Does not require prior new-project setup — auto-creates `.planning/sketches/` 
 
 <runtime_note>
 **Copilot (VS Code):** Use `vscode_askquestions` wherever this workflow calls `question`.
+
+**Executor:** this workflow runs in the current session, or is delegated by team-lead to the
+`ui-designer` subagent (charter `.lifecycle/agents/ui-designer.md`), which drives this same
+workflow and stops at its human-approval gate. Neither case implements application code.
 </runtime_note>
 
 <context>
