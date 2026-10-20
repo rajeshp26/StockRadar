@@ -2517,11 +2517,22 @@ def _suite_26():
     check("task-list excludes *.contract.json peers",
           _r == 0 and _r2 == 0 and "V26-002" in _o2 and "V26-101.contract" not in _o2,
           (_o2 or "")[-200:])
-    _contract26 = json.loads((_bd26 / ".planning" / "tasks" / "V26-002.json").read_text(encoding="utf-8"))
-    check("type default checkpoints land in the contract",
-          "C0-TASK_ACCEPTED" in _contract26.get("checkpoints", [])
-          and "C8-HANDOFF_READY" in _contract26.get("checkpoints", []),
-          str(_contract26.get("checkpoints"))[:200])
+    # The fixture is written by the task-register call above, so its absence is a
+    # failure of THAT check, not a reason to crash the whole validator. An unguarded
+    # read turns a diagnosable BLOCKED (missing dependency, refused write) into an
+    # opaque traceback and exit 1 with no failed check naming the cause -- which is
+    # how a missing PyYAML read as an unroutable crash instead of a dependency gap.
+    _contract26_p = _bd26 / ".planning" / "tasks" / "V26-002.json"
+    if _contract26_p.exists():
+        _contract26 = json.loads(_contract26_p.read_text(encoding="utf-8"))
+        check("type default checkpoints land in the contract",
+              "C0-TASK_ACCEPTED" in _contract26.get("checkpoints", [])
+              and "C8-HANDOFF_READY" in _contract26.get("checkpoints", []),
+              str(_contract26.get("checkpoints"))[:200])
+    else:
+        check("type default checkpoints land in the contract", False,
+              "no contract at %s: task-register did not write it, so the preceding "
+              "check's diagnostics are the cause" % _contract26_p.name)
 
     shutil.rmtree(_bd26, ignore_errors=True)
 
