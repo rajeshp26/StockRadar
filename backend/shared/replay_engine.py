@@ -288,8 +288,15 @@ class ReplayEngine:
             state.cash_balance += net_cash
             _bucket(state.cash_by_currency, currency, net_cash)
 
-        # Deposits
-        if activity_type in self.DEPOSIT_ACTIVITY_TYPES and net_cash > 0:
+        # Deposits — signed net movement: contributions positive, withdrawals
+        # negative. Snapshot net_deposits must mirror
+        # PortfolioRepository.get_net_deposits and the live performance path
+        # (_cached_net_deposits), which both sum net_cash_amount with no sign
+        # guard. A positive-only guard silently drops every outflow, inflating
+        # net_deposits; TWR/MWR read the period-over-period net_deposits change
+        # as the period's cash flow, so a dropped withdrawal removes a negative
+        # term and overstates every return.
+        if activity_type in self.DEPOSIT_ACTIVITY_TYPES:
             state.net_deposits += net_cash
             _bucket(state.net_deposits_by_currency, currency, net_cash)
 

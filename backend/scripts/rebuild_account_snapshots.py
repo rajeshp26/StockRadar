@@ -446,8 +446,8 @@ def main():
     changed = 0
     too_high = 0
     max_recomputed = 0.0
-    min_nd = 0.0
     nd_decreases = 0
+    nd_decrease_total = 0.0
     prev_nd = None
 
     for sd in sorted(recomputed_by_date):
@@ -459,7 +459,9 @@ def main():
         st = stored_by_date.get(sd)
         if prev_nd is not None and float(rc["net_deposits"]) < prev_nd - 0.01:
             nd_decreases += 1
-            print(f"  !! ND DECREASE {sd}: {prev_nd:.2f} -> {float(rc['net_deposits']):.2f}")
+            nd_decrease_total += prev_nd - float(rc["net_deposits"])
+            print(f"  - ND down {sd}: {prev_nd:.2f} -> {float(rc['net_deposits']):.2f} "
+                  f"(withdrawal)")
         prev_nd = float(rc["net_deposits"])
         if st is None:
             print(f"  + NEW {sd}: total={rv:,.2f} flag={rc['data_quality_flag']}")
@@ -485,7 +487,8 @@ def main():
         print(f"Stored rows preserved beyond --max-date (left untouched): {len(preserved)}")
     print(f"Recomputed snapshots still > $5M: {too_high}")
     print(f"Recomputed max total_value: {max_recomputed:,.2f}")
-    print(f"Net deposit decreases in recompute: {nd_decreases}")
+    print(f"Net deposit decreases (withdrawals): {nd_decreases}, "
+          f"total {nd_decrease_total:,.2f}")
     print(f"First: {rows[0]['snapshot_date']} val={float(rows[0]['total_value']):,.2f} nd={float(rows[0]['net_deposits']):,.2f}")
     print(f"Last:  {rows[-1]['snapshot_date']} val={float(rows[-1]['total_value']):,.2f} nd={float(rows[-1]['net_deposits']):,.2f}")
 

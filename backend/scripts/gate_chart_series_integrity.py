@@ -13,7 +13,15 @@ deliberately does not model. A transfer-out larger than the drop explains it; a 
 movement and no transfer does not. Material increases are still reported, as diagnostics only.
 
 It also checks the structural invariants a truthful series must hold (strictly increasing dates,
-cumulative net_deposits never falling) and the metadata self-consistency a spike flag must satisfy.
+net_deposits changing only by the deposit/withdrawal events in the window) and the metadata
+self-consistency a spike flag must satisfy.
+
+net_deposits is net of withdrawals, not a monotonic contribution tally: the snapshot writer,
+PortfolioRepository.get_net_deposits and the live performance path all sum signed cash flows,
+and TWR/MWR read the period-over-period change as that period's cash flow. The invariant is
+therefore equality with the ledger (in-window deposit/withdrawal total), which catches both an
+unexplained fall and an unexplained rise - strictly stronger than "never falls", which passes
+corruption that adds a phantom deposit.
 
 Exit codes follow framework/gates/EXIT_CODES.md:
   0  pass
@@ -48,11 +56,24 @@ CASH_AFFECTING = {
     "BonusPayment", "FxExchange", "ReturnOfCapital", "Tax",
 }
 TRANSFER_ACTIVITY = "InternalSecurityTransfer"
+# The two activity types the snapshot writer counts as net deposits
+# (replay_engine.DEPOSIT_ACTIVITY_TYPES, mirrored by get_net_deposits and
+# portfolio_service._cached_net_deposits). They are also cash-affecting, so each
+# such event is emitted twice: once as 'cash' for the value-drop explanation and
+# once as 'deposit' for the net_deposits invariant.
+DEPOSIT_ACTIVITY_TYPES = {"MoneyMovement", "BonusPayment"}
 MATERIAL_MOVE_PCT = 20.0
+# Per-account snapshot net_deposits is stored rounded to cents, so a scope's
+# aggregate can be off the raw ledger sum by a few cents. This tolerance absorbs
+# that rounding only; real corruption is orders of magnitude larger.
+ND_ROUNDING_TOLERANCE = Decimal("0.05")
 _SCOPE_ACCT = re.compile(r"^user(\d+)_acct(\d+)$")
 
 Event = tuple[str, str, Decimal]
-"""(iso_date, kind, magnitude) where kind is 'cash', 'transfer_in' or 'transfer_out'."""
+"""(iso_date, kind, magnitude) with kind in 'cash', 'transfer_in', 'transfer_out', 'deposit'.
+
+'cash' and 'deposit' carry a SIGNED amount (withdrawals negative); the two transfer
+kinds carry a magnitude. A deposit-type event appears as both 'cash' and 'deposit'."""
 
 
 def _dec(value) -> Decimal:
@@ -105,6 +126,7 @@ class Interval:
     cash: Decimal = Decimal("0")
     transfer_in: Decimal = Decimal("0")
     transfer_out: Decimal = Decimal("0")
+    deposit_flow: Decimal = Decimal("0")
     explained: Decimal = Decimal("0")
     residual: Decimal = Decimal("0")
     residual_pct: float = 0.0
@@ -124,6 +146,18 @@ def classify_events(events: list[Event], lo: str, hi: str) -> tuple[Decimal, Dec
         elif kind == "transfer_out":
             out_v += mag
     return cash, in_v, out_v
+
+
+def sum_deposit_flows(events: list[Event], lo: str, hi: str) -> Decimal:
+    """Signed deposit/withdrawal total in the window (lo, hi].
+
+    This is what a truthful series changes net_deposits by, and nothing else.
+    """
+    total = Decimal("0")
+    for iso, kind, mag in events:
+        if kind == "deposit" and lo < iso <= hi:
+            total += mag
+    return total
 
 
 def evaluate_series(
@@ -149,6 +183,7 @@ def evaluate_series(
 
         iv.cash, iv.transfer_in, iv.transfer_out = classify_events(events, p_d, c_d)
         iv.explained = abs(iv.cash) + iv.transfer_in + iv.transfer_out
+        iv.deposit_flow = sum_deposit_flows(events, p_d, c_d)
 
         base = max(abs(p_v), Decimal("1"))
         iv.residual = abs(iv.change) - iv.explained
@@ -156,10 +191,15 @@ def evaluate_series(
 
         if c_d <= p_d:
             iv.violations.append(f"date not increasing: {p_d} -> {c_d}")
-        if iv.end_nd < iv.start_nd:
+        nd_delta = iv.end_nd - iv.start_nd
+        if abs(nd_delta - iv.deposit_flow) > ND_ROUNDING_TOLERANCE:
+            direction = "fell" if nd_delta < 0 else "rose"
             iv.violations.append(
-                f"net_deposits fell {iv.start_nd:,.2f} -> {iv.end_nd:,.2f} across {p_d} -> {c_d}; "
-                "cumulative contributions must not decrease"
+                f"net_deposits {direction} {iv.start_nd:,.2f} -> {iv.end_nd:,.2f} across "
+                f"{p_d} -> {c_d}, but deposit/withdrawal events in that window total "
+                f"{iv.deposit_flow:+,.2f} (unexplained change "
+                f"{nd_delta - iv.deposit_flow:+,.2f}); net_deposits must change only by "
+                f"deposit and withdrawal events"
             )
         if iv.change < 0 and abs(iv.pct_change) > MATERIAL_MOVE_PCT \
                 and iv.residual_pct > tolerance * 100:
@@ -237,11 +277,27 @@ def main() -> int:
                 continue
             if at == TRANSFER_ACTIVITY:
                 kind = "transfer_in" if _dec(payload.get("quantity")) > 0 else "transfer_out"
-                mag = abs(_dec(payload.get("net_cash_amount")))
+                mag = to_reporting_currency(
+                    abs(_dec(payload.get("net_cash_amount"))),
+                    str(payload.get("currency", "")), d,
+                )
             else:
-                kind, mag = "cash", _dec(payload.get("net_cash_amount"))
-            mag = to_reporting_currency(mag, str(payload.get("currency", "")), d)
+                kind = "cash"
+                mag = to_reporting_currency(
+                    _dec(payload.get("net_cash_amount")),
+                    str(payload.get("currency", "")), d,
+                )
             events_by_account.setdefault(aid, []).append((d.isoformat(), kind, mag))
+            if at in DEPOSIT_ACTIVITY_TYPES:
+                # net_deposits is defined as the RAW signed sum of net_cash_amount
+                # (replay_engine and PortfolioRepository.get_net_deposits both sum it
+                # with no FX). The deposited flow must mirror that definition exactly;
+                # reusing the FX-converted 'cash' magnitude would flag correct data
+                # whose transaction currency is not the reporting currency.
+                events_by_account.setdefault(aid, []).append(
+                    (d.isoformat(), "deposit", _dec(payload.get("net_cash_amount")))
+                )
+
     except Exception as exc:  # noqa: BLE001
         print(f"UNVERIFIABLE: cannot read event log to attribute changes: {exc}")
         return 3
@@ -288,6 +344,8 @@ def main() -> int:
                         "cash": float(iv.cash),
                         "transfer_in": float(iv.transfer_in),
                         "transfer_out": float(iv.transfer_out),
+                        "deposit_flow": float(iv.deposit_flow),
+                        "nd_delta": float(iv.end_nd - iv.start_nd),
                         "explained": float(iv.explained),
                         "residual": float(iv.residual),
                         "residual_pct": round(iv.residual_pct, 2),

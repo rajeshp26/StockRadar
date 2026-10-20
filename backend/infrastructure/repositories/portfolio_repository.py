@@ -1339,11 +1339,16 @@ class PortfolioRepository:
         self, company_ids: list[int], target_date: date
     ) -> dict[int, list[tuple]]:
         """
-        Fetch ALL prices <= target_date for the given companies,
-        adjusted for stock splits.
+        Fetch ALL as-traded prices <= target_date for the given companies.
 
-        Prices are adjusted so that historical prices reflect post-split equivalents.
-        Returns {company_id: [(date, adjusted_price), ...]} sorted ascending.
+        The as-traded (true raw) `close_price` is the VALUATION basis: the replay
+        engine applies splits to SHARE counts at their effective dates, so the
+        share count on date d is the as-traded count and must be paired with the
+        as-traded price. `adj_close` is the split-RESTATED series on the current
+        share scale (a single-security continuity device for charts/indicators);
+        pairing it with as-traded shares double-counts every later split.
+
+        Returns {company_id: [(date, as_traded_price), ...]} sorted ascending.
         """
         price_map: dict[int, list[tuple]] = {}
         if not company_ids:
@@ -1377,10 +1382,16 @@ class PortfolioRepository:
                         pd = date.fromisoformat(pd)
                     elif isinstance(pd, datetime):
                         pd = pd.date()
-                    # Prefer the materialized adjusted close (== served series);
-                    # legacy rows pre-refetch lack it (transition D7).
-                    adj = row.get("adj_close")
-                    px = adj if adj is not None else row.get("close_price")
+                    # VALUATION basis: the as-traded close. Measured on real rows:
+                    # AAPL 2020-08-28 close_price 499.23 (as traded) vs adj_close
+                    # 124.8075 (x1/4 for the 2020-08-31 4:1); XELA 2022-07-25
+                    # close_price 0.1455 vs adj_close 582.0 (x4000 for the 1:20 +
+                    # 1:200 reverse splits), which valued 60 as-traded shares at
+                    # 34,920 USD instead of 8.73 USD. Legacy rows pre-refetch have
+                    # no adj_close; close_price is then the only column.
+                    px = row.get("close_price")
+                    if px is None:
+                        px = row.get("adj_close")
                     price_map.setdefault(cid, []).append((pd, float(px)))
                 if len(page) < PAGE:
                     break

@@ -551,24 +551,6 @@ class MarketDataRefreshScheduler:
                 "skipped_delisted": True,
             }
 
-        if not is_stock:
-            logger.info(
-                "[MARKET_DATA] %s security_type=%s — skipping (ETF/index/fund)",
-                symbol, security_type,
-            )
-            return {
-                "price_history_daily": 0,
-                "security_type": security_type,
-                "splits": 0,
-                "revenue_forecast": 0,
-                "earnings_forecast": 0,
-                "company_summary": 0,
-                "ratios_changed": 0,
-                "dividend_metrics": 0,
-                "valuation_pe": 0,
-                "skipped_etf": True,
-            }
-
         # 1) SPLITS — all security types (ETFs and funds do split). Must land
         #    BEFORE price so upsert_price_history can apply the true-raw
         #    recovery factors to the rows it writes (design D3).
@@ -578,6 +560,26 @@ class MarketDataRefreshScheduler:
 
         # 2) PRICE HISTORY — all security types
         price_rows_written = await self._upsert_daily_price_history(symbol, company_id, exchange=exchange)
+
+        # For ETFs, indices, and funds steps 3-7 are skipped after collecting
+        # price history and splits (per contract). Do not skip splits+price.
+        if not is_stock:
+            logger.info(
+                "[MARKET_DATA] %s security_type=%s — skipping fundamentals (ETF/index/fund)",
+                symbol, security_type,
+            )
+            return {
+                "price_history_daily":   price_rows_written,
+                "security_type":         security_type,
+                "splits":                len(split_rows or []),
+                "revenue_forecast":      0,
+                "earnings_forecast":     0,
+                "company_summary":       0,
+                "ratios_changed":        0,
+                "dividend_metrics":      0,
+                "valuation_pe":          0,
+                "skipped_etf":           True,
+            }
 
         # 3) REVENUE FORECAST — stocks only
         rev_fcst_rows: list[dict[str, Any]] = []

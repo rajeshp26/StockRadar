@@ -91,6 +91,10 @@ yfinance + DefeatBeta + local DB), decisive on direction and scale:
    `shares(d) = shares_orig × Π share-factors(≤d)` and
    `adj_close(d) = raw(d) × Π price-factors(>d)`, the product is constant across
    d — same value regardless of which date's scale the snapshot uses.
+   **CORRECTED 2026-10-18 — this invariant is FALSE as implemented and the
+   valuation read is `close_price`, not `adj_close`. It holds only if `shares(d)`
+   is carried on the current (restated) share scale; the replay engine carries
+   AS-TRADED quantities. See "Amendment 2026-10-18" at the end of this document.**
 6. Plausibility gate evaluates on the **adjusted** scale: `adj_close` vs
    anchor × `MAX_PRICE_UP_RATIO` (default 100). Since adj_close == served == the
    continuous current-scale series, the comparison is scale-consistent with the
@@ -126,6 +130,9 @@ yfinance + DefeatBeta + local DB), decisive on direction and scale:
 - D4: `get_all_prices_historical` switches to `adj_close` and the 5x/60-day
   unit-normalization heuristic is **deleted** — its only purpose was to seam the
   hybrid scale, which D7 eliminates.
+  **CORRECTED 2026-10-18: half-applied. The heuristic stays deleted; the read is
+  `close_price` (as-traded), because D5's invariant is false — see
+  "Amendment 2026-10-18".**
 - D5: Gate/clamp: gate compares adjusted close; clamp raised to the real column
   capacity (~1e12) with a corrected comment.
 - D6: API `PriceHistoryPoint` gains optional `adj_close` + `adjustment_factor`
@@ -135,6 +142,10 @@ yfinance + DefeatBeta + local DB), decisive on direction and scale:
   refetch completes. Snapshot jobs are held until refetch completes, then
   snapshots are revalidated — must be unchanged for consistent companies
   (D2 invariant).
+  **CORRECTED 2026-10-18: the valuation read is `COALESCE(close_price, adj_close)`
+  unconditionally. The "snapshots unchanged" check passed because both sides of
+  the comparison were already on the served scale, so it could not detect the
+  split double count — see "Amendment 2026-10-18".**
 - D8: RESOLVED (probe 2) — the GIS 1995-05-30 `'10000:8265'` factor
   (1.2099213551119177) is provider-canonical: Yahoo's own split history contains
   the identical factor and no owned-vs-provider diff exists. It is a real
@@ -154,8 +165,9 @@ yfinance + DefeatBeta + local DB), decisive on direction and scale:
    adjusted scale, raise clamp to numeric(16,4) capacity (~1e12). Splits must
    already be in DB (D3) when this runs.
 4. Scheduler + watchlist_service + backfill: upsert splits BEFORE price upsert.
-5. `portfolio_repository.get_all_prices_historical`: read adj_close,
-   delete heuristic.
+5. `portfolio_repository.get_all_prices_historical`: read `close_price`
+   (as-traded), delete heuristic. **CORRECTED 2026-10-18 (was: read adj_close);
+   see "Amendment 2026-10-18".**
 6. `analysis_repository` + `derived_financial_metrics_job`: adjusted scale where
    prices cross split boundaries (weekly/monthly readers).
 7. API: additive adj_close/factor on PriceHistoryPoint.
@@ -198,3 +210,73 @@ Consequences for anyone picking this up:
 - The refetch coverage guard in `backend/scripts/refetch_price_history.py` exists because
   a provider that returns sparse rows must never authorize destructive deletion; keep it
   enabled through any future recovery attempt.
+
+## Amendment 2026-10-18 — valuation basis is the as-traded close
+
+Status: APPLIED. Supersedes D4 (read choice), D5 (as an invariant), D7's second
+sentence, target-model item 5, and required-change item 5. The stored data model
+(items 1-3, D1-D3, D6, D8) is unchanged and stands.
+
+### What was wrong
+
+Item 5 claimed `adj_close(d) × shares(d)` is invariant across `d`. That is true
+only when `shares(d)` is carried on the **current (restated) share scale**. The
+replay engine carries **as-traded** quantities: it multiplies the share count by
+the split factor at the split's effective date
+(`backend/tests/test_replay_engine.py:1180-1186` — `(10+5)*3 = 45` for a 3:1).
+It must: cost basis, sale proceeds and dividends are as-traded dollar amounts.
+
+So the shipped pairing was as-traded shares × restated price, which double counts
+every later split: a forward split deflates historical value by the cumulative
+split ratio, a reverse split inflates it by the same ratio.
+
+Measured on real rows (`price_history`, real DB):
+
+| witness | date | `close_price` (as traded) | `adj_close` (restated) | factor |
+| --- | --- | --- | --- | --- |
+| AAPL | 2020-08-28 | 499.23 | 124.8075 | 0.25 (4:1 on 2020-08-31) |
+| XELA | 2022-07-25 | 0.1455 | 582.0 | 4000 |
+| XELA | 2022-07-26 | 1.85 | 370.0 | 200 |
+
+XELA's factor is the owned calendar's product of two reverse splits: `1:20` on
+2022-07-26 and `1:200` on 2023-05-15 (yfinance's calendar). The two witnesses
+prove which column is as-traded: AAPL closed at **499.23** on 2020-08-28 as
+traded, and `close_price` stores exactly that while `adj_close` stores the x0.25
+restatement.
+
+Consequence on real data — account 9, snapshot 2022-07-25:
+
+- as-traded holding: 60 shares
+- shipped value: `60 x 582 = 34,920 USD` (45,132.70 CAD) instead of
+  `60 x 0.1455 = 8.73 USD` (11.28 CAD) — a 4000x overstatement
+- account total 84,776.20 CAD vs 39,643.50 CAD for every other holding; the next
+  day the 1:20 split divided the share count and XELA fell to 1,426.43 CAD
+
+That artifact is the entire 2022-06-30 -> 2022-09-30 drop reported by
+`backend/scripts/gate_chart_series_integrity.py`.
+
+## Correction applied
+
+- `PortfolioRepository.get_all_prices_historical` values on `close_price`
+  (`COALESCE(close_price, adj_close)`). Legacy pre-refetch rows carry no
+  `adj_close`, so their read is unchanged; refetched rows move from the restated
+  to the as-traded scale.
+- `adj_close` keeps its role everywhere it is a *single-security continuity*
+  value, not a share-count pairing: the API chart (`api/stocks.py`), the
+  plausibility gate's adjusted-scale comparison, `analysis_repository`
+  (N/S ratios), `derived_financial_metrics_job`, and the live "latest close"
+  fallback in `portfolio_service._get_current_price` (which restates a stale
+  quote into today's share basis — the scale that matches today's holdings).
+- Item 5 restated: `shares_current_basis(d) x adj_close(d)` is invariant. The
+  shipped pairing is `as_traded_shares(d) x close_price(d)`.
+
+Verification: `backend/tests/test_price_valuation_basis.py` — red before the
+change (XELA yields 582.0 / AAPL yields 124.8075 / the split date shows a 4x
+jump), green after.
+
+## Residual, not addressed here
+
+`portfolio_service._compute_performance_fallback` and `get_holding_performance`
+build lots from transactions with no split events at all, so their quantity side
+is stale after any split regardless of price basis. That is a quantity-side gap
+(D4's `adj_close` read did not fix it and was not the cause of it).

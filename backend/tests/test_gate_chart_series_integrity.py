@@ -2,8 +2,12 @@
 
 The gate is only worth having if it fails on the defect class it exists to catch. These tests
 pin both directions: an unexplained value collapse must FAIL, and a drop that a securities
-transfer accounts for must PASS. A gate that only ever passes is worse than no gate, because it
-reports safety it has not checked.
+transfer accounts for must PASS. The net_deposits invariant is pinned the same way: a change
+with no ledger event behind it FAILS, and a withdrawal or deposit that the ledger records
+PASSES (net_deposits is net of withdrawals, so a fall is legitimate when it is real).
+
+A gate that only ever passes is worse than no gate, because it reports safety it has not
+checked.
 
 The pure functions are tested without a database or a series dump.
 """
@@ -26,6 +30,7 @@ from gate_chart_series_integrity import (  # noqa: E402
     classify_events,
     evaluate_series,
     scope_accounts,
+    sum_deposit_flows,
 )
 
 
@@ -160,13 +165,75 @@ def test_over_explained_drop_passes():
 
 
 # --- structural invariants --------------------------------------------------------------
+#
+# net_deposits is net of withdrawals. A truthful series changes it by exactly the
+# deposit/withdrawal events in the window - no more (phantom deposit) and no less
+# (dropped withdrawal). A withdrawal that matches the fall is correct data and must
+# PASS; a change with no ledger event behind it is the defect.
 
 def test_net_deposits_falling_is_a_violation():
+    """An unexplained fall is still corruption, not a withdrawal."""
     snaps = [_snap("2024-09-30", "100000", nd="50000"),
              _snap("2024-12-31", "98000", nd="40000")]
     ivs = evaluate_series(snaps, [], tolerance=0.20)
 
     assert any("net_deposits fell" in v for v in ivs[0].violations)
+
+
+def test_net_deposits_rising_is_a_violation():
+    """A rise must be a deposit event; a phantom deposit is corruption too.
+
+    This direction is what the previous 'never falls' rule could not see.
+    """
+    snaps = [_snap("2024-09-30", "100000", nd="50000"),
+             _snap("2024-12-31", "100000", nd="60000")]
+    ivs = evaluate_series(snaps, [], tolerance=0.20)
+
+    assert any("net_deposits rose" in v for v in ivs[0].violations)
+
+
+def test_withdrawal_matching_the_fall_passes():
+    """Regression: the replay writer dropped outflows, so every legitimate
+    withdrawal looked like an unexplained net_deposits fall. It is now explained
+    by the ledger event, and a fall of exactly that size must not be flagged."""
+    snaps = [_snap("2024-09-30", "100000", nd="50000"),
+             _snap("2024-12-31", "95000", nd="49567")]
+    events = [("2024-11-15", "deposit", Decimal("-433"))]
+    ivs = evaluate_series(snaps, events, tolerance=0.20)
+
+    assert ivs[0].deposit_flow == Decimal("-433")
+    assert not any("net_deposits" in v for v in ivs[0].violations)
+
+
+def test_deposit_matching_the_rise_passes():
+    snaps = [_snap("2024-09-30", "100000", nd="50000"),
+             _snap("2024-12-31", "102000", nd="52000")]
+    events = [("2024-11-15", "deposit", Decimal("2000"))]
+    ivs = evaluate_series(snaps, events, tolerance=0.20)
+
+    assert not any("net_deposits" in v for v in ivs[0].violations)
+
+
+def test_partial_withdrawal_explanation_is_a_violation():
+    """Only part of the fall is on the ledger - still a violation."""
+    snaps = [_snap("2024-09-30", "100000", nd="50000"),
+             _snap("2024-12-31", "95000", nd="49000")]
+    events = [("2024-11-15", "deposit", Decimal("-433"))]
+    ivs = evaluate_series(snaps, events, tolerance=0.20)
+
+    assert any("net_deposits fell" in v for v in ivs[0].violations)
+
+
+def test_deposit_event_is_excluded_from_cash_kind():
+    """The deposit kind is separate; cash/transfer classification is unchanged."""
+    events = [("2024-11-15", "deposit", Decimal("-433")),
+              ("2024-11-15", "cash", Decimal("-433"))]
+    cash, in_v, out_v = classify_events(events, "2024-10-01", "2024-12-31")
+
+    assert cash == Decimal("-433")
+    assert in_v == Decimal("0")
+    assert out_v == Decimal("0")
+    assert sum_deposit_flows(events, "2024-10-01", "2024-12-31") == Decimal("-433")
 
 
 def test_dates_out_of_order_are_flagged():

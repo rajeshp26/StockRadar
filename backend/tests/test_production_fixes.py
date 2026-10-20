@@ -1,6 +1,6 @@
 """
 Targeted tests for production issue fixes (issues.txt).
-Covers: Issue #1 (forecast_id), #2 (price overflow), #3+7 (ETF skip),
+Covers: Issue #1 (forecast_id), #2 (price overflow), #3+7 (ETF price/splits),
         #6 (429 backoff), #8 (delisted filtering).
 """
 from datetime import date
@@ -171,37 +171,75 @@ class TestPriceHistoryOverflowClamping:
 
 
 # ============================================================================
-# Issue #7: ETF early-exit
+# ETF / index / fund handling: price history + splits only (regression lock)
 # ============================================================================
+#
+# The 2026-09-04 commit 21109f19 converted the non-stock branch from a
+# fall-through ("running price+splits only") into an early return placed
+# *above* the splits and price steps. That silently deleted price ingestion
+# for every ETF/index/fund, so their price history froze at the seed horizon
+# while stocks kept refreshing. The class below pins the documented contract:
+# non-stocks still collect splits + daily price history, and skip only the
+# fundamental steps 3-7.
 
-class TestEtfEarlyExit:
-    """Verify non-stock securities return immediately with skipped_etf=True."""
+class TestEtfPriceAndSplitsOnly:
+    """Non-stock securities collect price history + splits, skip fundamentals."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, mock_financial_repo):
+    def _setup(self, mock_financial_repo, mock_defeat_beta_provider):
         from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
+        self.repo = mock_financial_repo
+        self.provider = mock_defeat_beta_provider
         self.scheduler = MarketDataRefreshScheduler(
             financial_repo=mock_financial_repo,
-            defeat_beta_provider=MagicMock(),
+            defeat_beta_provider=mock_defeat_beta_provider,
             yfinance_provider=MagicMock(),
         )
 
-    async def test_etf_returns_early_with_complete_dict(self):
+    async def test_etf_collects_price_and_splits(self):
+        self.provider.get_splits_optimized.return_value = [
+            {"company_id": 1, "split_date": "2020-01-01", "ratio": 2.0}
+        ]
+        self.scheduler._upsert_daily_price_history = AsyncMock(return_value=7)
+
         result = await self.scheduler._process_company("SPY", 1, security_type="etf")
-        assert result["skipped_etf"] is True
-        assert result["price_history_daily"] == 0
-        assert result["revenue_forecast"] == 0
 
-    async def test_index_returns_early(self):
+        self.provider.get_splits_optimized.assert_awaited_once()
+        self.repo.upsert_splits.assert_awaited_once()
+        self.scheduler._upsert_daily_price_history.assert_awaited_once()
+        assert result["price_history_daily"] == 7
+        assert result["splits"] == 1
+        assert result["skipped_etf"] is True
+
+    async def test_index_collects_price(self):
+        self.scheduler._upsert_daily_price_history = AsyncMock(return_value=3)
+
         result = await self.scheduler._process_company("^GSPC", 2, security_type="index")
+
+        self.scheduler._upsert_daily_price_history.assert_awaited_once()
+        assert result["price_history_daily"] == 3
         assert result["skipped_etf"] is True
 
-    async def test_etf_does_not_call_providers(self):
-        self.scheduler.defeat_beta_provider.fetch_revenue_forecast = AsyncMock()
-        self.scheduler.yfinance_provider.fetch_revenue_forecast = AsyncMock()
+    async def test_etf_does_not_call_fundamental_providers(self):
+        self.scheduler._upsert_daily_price_history = AsyncMock(return_value=0)
+
         await self.scheduler._process_company("QQQ", 3, security_type="etf")
-        self.scheduler.defeat_beta_provider.fetch_revenue_forecast.assert_not_called()
-        self.scheduler.yfinance_provider.fetch_revenue_forecast.assert_not_called()
+
+        self.provider.fetch_revenue_forecast.assert_not_called()
+        self.provider.fetch_earnings_forecast.assert_not_called()
+        self.provider.get_company_summary_optimized.assert_not_called()
+        self.repo.upsert_revenue_forecast.assert_not_called()
+        self.repo.upsert_earnings_forecast.assert_not_called()
+        self.repo.upsert_company_summary.assert_not_called()
+
+    async def test_delisted_symbol_still_skips_before_price(self):
+        self.scheduler._upsert_daily_price_history = AsyncMock(return_value=9)
+
+        result = await self.scheduler._process_company("WBA", 4, security_type="stock")
+
+        self.scheduler._upsert_daily_price_history.assert_not_called()
+        assert result["skipped_delisted"] is True
+        assert result["price_history_daily"] == 0
 
 
 # ============================================================================
