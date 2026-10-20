@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.13"
   BACKEND_DIR: backend
 
 jobs:
@@ -30,7 +30,18 @@ jobs:
 
       - name: Verify lock is fresh
         working-directory: ${{ env.BACKEND_DIR }}
-        run: pip-compile --check requirements.in -o requirements.txt
+        run: |
+          # pip-tools has no --check flag (removed in 7.x). Regenerate to a temp
+          # file and compare the resolved pins. Comment lines are stripped first:
+          # the header records the --output-file name, which legitimately differs.
+          pip-compile --quiet --output-file=requirements.check.txt requirements.in
+          grep -v '^#' requirements.txt      > requirements.lock.pins
+          grep -v '^#' requirements.check.txt > requirements.check.pins
+          if ! diff -u requirements.lock.pins requirements.check.pins; then
+            echo "::error::requirements.txt is stale. Run: pip-compile -o requirements.txt requirements.in"
+            exit 1
+          fi
+          rm -f requirements.check.txt requirements.lock.pins requirements.check.pins
 
       - name: Dependency conflict check
         working-directory: ${{ env.BACKEND_DIR }}

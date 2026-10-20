@@ -1,4 +1,10 @@
 # Development-only dependencies (not for production)
+#
+# Pulls in the full production set with -r so a single `pip-sync requirements-dev.txt`
+# yields a complete environment. Using only `-c requirements.txt` (constraint) would
+# produce a dev lockfile WITHOUT fastapi and the rest of the app stack, which then
+# breaks CI's pip-sync + import smoke test.
+-r requirements.txt
 -c requirements.txt
 
 # Testing
@@ -13,4 +19,7 @@ mypy
 
 # Security
 bandit
-semgrep
+# semgrep publishes no Windows-compatible distribution (upstream refuses Windows:
+# github.com/semgrep/semgrep/issues/1330). Marked non-Windows so the dev lockfile can
+# be compiled and installed on every platform, including developer Windows machines.
+semgrep; sys_platform != "win32"

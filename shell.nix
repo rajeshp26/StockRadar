@@ -6,12 +6,12 @@ pkgs.mkShell {
     # ============================================
     # Python Runtime & Package Management
     # ============================================
-    python311
-    python311Packages.pip
-    python311Packages.virtualenv
-    python311Packages.setuptools
-    python311Packages.wheel
-    python311Packages.lxml
+    python313
+    python313Packages.pip
+    python313Packages.virtualenv
+    python313Packages.setuptools
+    python313Packages.wheel
+    python313Packages.lxml
     
     # ============================================
     # Build Tools
@@ -61,7 +61,7 @@ pkgs.mkShell {
     export PYTHONPATH="$PYTHONPATH:."
     
     echo "🔧 Environment Setup:"
-    echo "   • Python 3.11 ✅"
+    echo "   • Python 3.13 ✅"
     echo "   • C++ stdlib (from container) ✅"
     echo "   • Build tools (gcc, make, pkg-config) ✅"
     echo "   • Google Cloud Studio IDE compatible ✅"

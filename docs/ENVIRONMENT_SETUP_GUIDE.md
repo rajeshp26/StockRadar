@@ -49,6 +49,41 @@ nix-shell --run "bash backend/start.sh"
 
 This command handles the Nix environment and executes the startup script, which manages the virtual environment and dependencies.
 
+#### Python version (3.13)
+
+This project targets **Python 3.13** everywhere, and that is a single value that must not
+drift: the interpreter that *generates* `requirements.txt` must be the interpreter that
+*runs* the app.
+
+| Location | Declares |
+|---|---|
+| `backend/pyproject.toml` | `requires-python = ">=3.13,<3.14"`, `target-version = "py313"`, mypy `python_version = "3.13"` |
+| `backend/requirements.txt` header | generated with Python 3.13 |
+| `.github/workflows/ci.yml`, `nightly.yml` | `PYTHON_VERSION: "3.13"` |
+| `shell.nix`, `dev.nix`, `.idx/dev.nix` | `python313` |
+
+A mismatch here is not cosmetic. `pip-compile` resolves pins *for the interpreter it runs
+on*, so a lockfile generated on one version and installed on another can carry pins that
+are unsatisfiable or wrong on the runtime. That is exactly how `click==8.4.0` survived in
+the lockfile while `huggingface-hub` required `click>=8.4.2`: the lockfile had not been
+regenerated since the dependency graph moved.
+
+To regenerate the lockfiles after editing the `.in` files (run on Python 3.13):
+
+```bash
+cd backend
+pip-compile --output-file=requirements.txt requirements.in
+pip-compile --output-file=requirements-dev.txt requirements-dev.in
+```
+
+CI enforces this: the `Verify lock is fresh` step recompiles and diffs the resolved pins,
+failing the build if `requirements.txt` is stale.
+
+> **Windows note:** `semgrep` publishes no Windows distribution (upstream refuses Windows:
+> <https://github.com/semgrep/semgrep/issues/1330>). It is declared in
+> `backend/requirements-dev.in` with a `sys_platform != "win32"` marker so the dev lockfile
+> compiles and installs on Windows, WSL, and Linux CI alike.
+
 #### Dependency preflight (`requirements.txt`)
 
 Both long-running processes — the API (`backend/main.py`) and the background

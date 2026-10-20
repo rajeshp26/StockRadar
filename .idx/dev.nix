@@ -5,8 +5,8 @@
   # Use https://search.nixos.org/packages to find packages
   packages = [
     pkgs.nodejs_20
-    pkgs.python311
-    pkgs.python311Packages.pip
+    pkgs.python313
+    pkgs.python313Packages.pip
     pkgs.nodePackages.firebase-tools
     pkgs.jdk17
     pkgs.flutter
