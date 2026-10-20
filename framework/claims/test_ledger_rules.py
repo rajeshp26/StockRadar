@@ -264,3 +264,112 @@ def test_integrity_e2_still_reports_a_genuinely_absent_file(monkeypatch, tmp_pat
                if v["check"] == "EVIDENCE_ARTIFACT_MISSING"]
     assert len(missing) == 1
     assert "not_a_real_file.py" in missing[0]["message"]
+
+
+def test_integrity_e2_tolerates_symbol_and_multi_range_anchors(monkeypatch, tmp_path):
+    # Regression: the two other citation shapes the framework's own evidence
+    # routinely uses were left attached and reported as missing artifacts --
+    # `file.py::symbol` (the Python anchor form) and `file.py:41-58,96,120-130`
+    # (a multi-range line anchor). Both name a file that exists.
+    for anchor in ("framework/claims/ledger.py::main",
+                   "framework/claims/ledger.py::_strip_citation_suffix",
+                   "framework/claims/ledger.py:41-58,96,120-130",
+                   "framework/claims/ledger.py::holder:12-14"):
+        path = tmp_path / "ledger.jsonl"
+        rec = _claim("DIRECT")
+        rec["evidence"][0]["entry_point"] = anchor
+        path.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+        monkeypatch.setattr(ledger, "ledger_path", lambda: path)
+        missing = [v for v in ledger.integrity_report()["violations"]
+                   if v["check"] == "EVIDENCE_ARTIFACT_MISSING"]
+        assert missing == [], anchor
+
+
+def test_integrity_e2_still_reports_a_symbol_anchored_absent_file(monkeypatch, tmp_path):
+    # Extending the stripper to `::symbol` must not make the suffix form a way
+    # past E2: the file behind the anchor still has to exist.
+    for anchor in ("framework/claims/not_a_real_file.py::main",
+                   "framework/claims/not_a_real_file.py:5-9,20",
+                   "framework/claims/not_a_real_file.py:5"):
+        path = tmp_path / "ledger.jsonl"
+        rec = _claim("DIRECT")
+        rec["evidence"][0]["entry_point"] = anchor
+        path.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+        monkeypatch.setattr(ledger, "ledger_path", lambda: path)
+        missing = [v for v in ledger.integrity_report()["violations"]
+                   if v["check"] == "EVIDENCE_ARTIFACT_MISSING"]
+        assert len(missing) == 1, anchor
+        assert "not_a_real_file.py" in missing[0]["message"]
+
+
+def test_strip_citation_suffix_removes_only_the_citation_suffix():
+    # The helper is the whole citation grammar in one place, and it must strip
+    # only a citation: a path carrying a hyphen survives unchanged.
+    assert ledger._strip_citation_suffix("backend/scripts/a.py") == "backend/scripts/a.py"
+    assert ledger._strip_citation_suffix("backend/scripts/a.py:41") == "backend/scripts/a.py"
+    assert ledger._strip_citation_suffix("backend/scripts/a.py:41-58") == "backend/scripts/a.py"
+    assert ledger._strip_citation_suffix("framework/claims/ledger.py::main") == \
+        "framework/claims/ledger.py"
+    assert ledger._strip_citation_suffix(
+        "backend/application/schedulers/market_data_scheduler.py:528-529,554-570,668") \
+        == "backend/application/schedulers/market_data_scheduler.py"
+    assert ledger._strip_citation_suffix("backend/x/2019-01.py") == "backend/x/2019-01.py"
+
+
+def test_integrity_flags_one_id_used_by_two_different_claims(monkeypatch, tmp_path):
+    # A cross-process id collision puts two unrelated claims behind one id. The
+    # ledger previously had no rule for this at all, so `integrity` reported "ok"
+    # while carrying duplicates and the id stopped identifying a claim.
+    path = tmp_path / "ledger.jsonl"
+    a = _claim("DIRECT")
+    b = _claim("DIRECT")
+    a["claim_id"] = b["claim_id"] = "CLM-COLLIDE"
+    b["statement"] = "a genuinely different claim sharing the id"
+    path.write_text(json.dumps(a) + "\n" + json.dumps(b) + "\n", encoding="utf-8")
+    monkeypatch.setattr(ledger, "ledger_path", lambda: path)
+    dupes = [v for v in ledger.integrity_report()["violations"]
+             if v["check"] == "EVIDENCE_DUPLICATE_CLAIM_ID"]
+    assert len(dupes) == 1
+    assert "CLM-COLLIDE" in dupes[0]["message"]
+
+
+def test_integrity_does_not_flag_a_legitimate_reappend(monkeypatch, tmp_path):
+    # Multiple records per claim_id are the SUPPORTED history model (see the module
+    # docstring; `latest` keeps the newest, which is how grandfathering self-heals).
+    # Reporting every repeated id would flag the supported path and train reviewers
+    # to ignore the check, so only a differing statement counts as a collision.
+    path = tmp_path / "ledger.jsonl"
+    rec = _claim("DIRECT")
+    first = dict(rec)
+    second = dict(rec, schema_version=2)  # same claim, re-stamped on re-append
+    path.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+    monkeypatch.setattr(ledger, "ledger_path", lambda: path)
+    assert [v for v in ledger.integrity_report()["violations"]
+            if v["check"] == "EVIDENCE_DUPLICATE_CLAIM_ID"] == []
+
+
+def test_next_claim_id_beats_an_existing_id_when_the_clock_is_behind(monkeypatch, tmp_path):
+    # The defect: _last_claim_ns began at 0 in every process, so two separate
+    # `ledger.py append` CLI invocations could mint the same nanosecond id. The id
+    # must be unique against what is ALREADY on disk, not merely within one process.
+    path = tmp_path / "ledger.jsonl"
+    existing = 99999999999999999999  # 20-digit, far above any real clock value
+    path.write_text(json.dumps({"claim_id": "CLM-%020d" % existing, "statement": "x"})
+                    + "\n", encoding="utf-8")
+    monkeypatch.setattr(ledger, "ledger_path", lambda: path)
+    monkeypatch.setattr(ledger, "_last_claim_ns", 0)
+    monkeypatch.setattr(ledger.time, "time_ns", lambda: 1000)
+    minted = ledger._next_claim_id()
+    assert int(minted.split("-")[1]) > existing
+
+
+def test_next_claim_id_is_unique_within_a_process(monkeypatch, tmp_path):
+    # Strict monotonicity across repeated calls, so a frozen or stepped-back clock
+    # cannot re-issue an id already handed out in this process.
+    path = tmp_path / "ledger.jsonl"
+    path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(ledger, "ledger_path", lambda: path)
+    monkeypatch.setattr(ledger, "_last_claim_ns", 0)
+    monkeypatch.setattr(ledger.time, "time_ns", lambda: 5000)
+    ids = [ledger._next_claim_id() for _ in range(3)]
+    assert len(set(ids)) == 3

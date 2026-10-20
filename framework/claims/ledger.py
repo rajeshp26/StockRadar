@@ -560,19 +560,52 @@ def validate_record(rec: dict) -> list[str]:
 _last_claim_ns = 0
 
 
-def _next_claim_id() -> str:
-    """CLM-<20-digit ns-epoch> -- stateless, no ledger scan.
+def _max_existing_claim_ns() -> int:
+    """Highest ns-epoch encoded in the ledger's existing CLM-<20-digit> ids, or 0.
 
-    The old id continued the highest number across ALL records, so every append
-    re-read the whole ledger and the scan grew with the store (the quadratic hot
-    path this change removes). A wall-clock-ns id is unique without any scan;
-    _last_claim_ns keeps it strictly monotonic even across an NTP step back.
-    ns-epoch is ~1.8e18 in 2026, safely under int64's 9.2e18; uniqueness does
-    not rely on the file -- one process is fenced by the monotonic guard and
-    cross-process ns collisions are a one-in-a-trillion race the atomic per-line
-    append serialises past anyway.
+    Read once per process, before the first id is minted. Without it, a fresh
+    process starts its monotonic guard at 0 and can mint an id another process
+    already used in the same nanosecond -- two separate `ledger.py append` CLI
+    invocations collide far more easily than "one-in-a-trillion", and did: the
+    live ledger carried two genuine id collisions (CLM-029 and an ns-scheme pair
+    from two appends in one clock tick). Seeding from the file makes the guard
+    span processes.
+    """
+    p = ledger_path()
+    if not p.exists():
+        return 0
+    best = 0
+    for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            cid = str(json.loads(ln).get("claim_id") or "")
+        except json.JSONDecodeError:
+            continue
+        m = re.fullmatch(r"CLM-(\d{20})", cid)
+        if m:
+            best = max(best, int(m.group(1)))
+    return best
+
+
+def _next_claim_id() -> str:
+    """CLM-<20-digit ns-epoch>, seeded from the ledger and strictly monotonic.
+
+    The ns-epoch scheme keeps the id stateless (no full ledger scan per append, the
+    quadratic hot path this replaced). Uniqueness does NOT rely on wall clock alone:
+    the first call in a process seeds the guard from the highest id already on disk
+    (_max_existing_claim_ns), so two processes appending in the same nanosecond
+    still produce distinct ids. Within a process _last_claim_ns keeps it monotonic
+    even across an NTP step back.
+
+    ns-epoch is ~1.8e18 in 2026, safely under int64's 9.2e18. `integrity` also
+    reports CLAIM_DUPLICATE_ID independently, so a collision that slips past this
+    guard is visible rather than silent.
     """
     global _last_claim_ns
+    if _last_claim_ns == 0:
+        _last_claim_ns = _max_existing_claim_ns()
     ns = time.time_ns()
     if ns <= _last_claim_ns:
         ns = _last_claim_ns + 1
@@ -741,6 +774,32 @@ def _unfinished_reviews() -> set:
     return out
 
 
+# A citation suffix is metadata ABOUT the cited file, never part of its name. Both
+# shapes the framework's own citation grammar produces must be removed before E2
+# resolves the path, or E2 reports a file as missing while it sits on disk:
+#   file.py::main                     a symbol anchor (Python `file::symbol`)
+#   file.py:41-58,96,120-130          a multi-range line anchor
+# `file.py:41` and `file.py:12-20` (single anchors) are the same class.
+_CITATION_SUFFIX = re.compile(
+    r"(?:::[A-Za-z_][A-Za-z0-9_.]*)+$"            # ::symbol / ::Class.method
+    r"|(?::\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*)$"   # :41 / :41-58 / :41-58,96,120-130
+)
+
+
+def _strip_citation_suffix(entry_point: str) -> str:
+    """Drop citation suffixes so the remaining text is a repo-relative path.
+
+    Applied repeatedly: the grammar allows both shapes on one citation, and the
+    order they appear in is not constrained. Each pass strictly shortens the
+    string, so the loop terminates.
+    """
+    prev = None
+    while prev != entry_point:
+        prev = entry_point
+        entry_point = _CITATION_SUFFIX.sub("", entry_point)
+    return entry_point
+
+
 def integrity_report() -> dict:
     """E1-E8 evidence integrity over the latest claim per id.
 
@@ -785,15 +844,15 @@ def integrity_report() -> dict:
                 continue
             ep = e.get("entry_point")
             if isinstance(ep, str) and re.match(r"^(framework|src|backend)/", ep) and " " not in ep:
-                # A citation may carry a line anchor (`f.py:246`, `f.py:12-20`). The
-                # anchor is metadata about the file, not part of its name, so it is
-                # stripped before resolution. Leaving it attached makes every
-                # line-anchored citation report a file as missing, and a gate that
-                # cries wolf on files that exist is worse than no gate at all -- it
-                # teaches reviewers to ignore E2. Resolution is anchored to the repo
-                # root rather than the caller's cwd, so the verdict does not depend
-                # on where the gate was invoked from.
-                target = re.sub(r":\d+(-\d+)?$", "", ep)
+                # A citation carries an anchor (`f.py:246`, `f.py:12-20`,
+                # `f.py:41-58,96,120-130`, `f.py::main`). The anchor is metadata about
+                # the file, not part of its name, so it is stripped before resolution.
+                # Leaving it attached makes every anchored citation report a file as
+                # missing, and a gate that cries wolf on files that exist is worse than
+                # no gate at all -- it teaches reviewers to ignore E2. Resolution is
+                # anchored to the repo root rather than the caller's cwd, so the verdict
+                # does not depend on where the gate was invoked from.
+                target = _strip_citation_suffix(ep)
                 if not (_REPO_ROOT / target).exists():
                     _add(c.get("claim_id"), c.get("task_id"), "EVIDENCE_ARTIFACT_MISSING",
                          f"evidence entry_point does not exist: {ep}")
@@ -841,6 +900,22 @@ def integrity_report() -> dict:
                 for cid in fp_to_claims[fp]:
                     _add(cid, latest[cid].get("task_id"), "EVIDENCE_STALE_REUSE",
                          f"identical evidence payload recorded across tasks {sorted(tasks)}")
+
+    # ID uniqueness: two DIFFERENT claims must not share a claim_id. A re-append of
+    # the same claim is legitimate -- `append` re-stamps schema_version and `latest`
+    # keeps the newest record, which is how grandfathering self-heals -- so records
+    # are grouped by id and compared by statement. Only an id whose records describe
+    # different claims is a collision; reporting every repeated id would flag the
+    # supported re-append path and train reviewers to ignore the check.
+    by_id: dict[str, set] = {}
+    for r in records:
+        cid = str(r.get("claim_id") or "?")
+        by_id.setdefault(cid, set()).add(str(r.get("statement") or ""))
+    for cid, statements in by_id.items():
+        if len(statements) > 1:
+            _add(cid, latest.get(cid, {}).get("task_id"), "EVIDENCE_DUPLICATE_CLAIM_ID",
+                 f"claim_id {cid} is used by {len(statements)} different claims; "
+                 "ids must be unique (a cross-process id collision)")
 
     return {"status": "violations" if violations else "ok",
             "entries": len(lines), "claims": len(claims), "violations": violations}
