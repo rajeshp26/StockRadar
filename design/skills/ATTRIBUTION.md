@@ -1,9 +1,14 @@
 # Attribution
 
-Source: C:\Users\rajes\AppData\Local\Temp\opencode\design-skills-research\emilkowalski-skills\skills
-License: MIT
-
 Imported design skills are advisory only (see README.md).
+
+Two distinct sources, with different license statuses. Read the per-source section;
+there is no single license covering this directory.
+
+## Sources
+
+- **Emil Kowalski skills** — `C:\Users\rajes\AppData\Local\Temp\opencode\design-skills-research\emilkowalski-skills\skills`. License: **MIT**.
+- **TikTok-derived design skills** — `C:\Users\rajes\Downloads` (ziahamza skill set). License: **no grant from the original creators**. See `ania-kubow-design/ATTRIBUTION.md`. The code in those skills is original implementation written fresh by the extractor, not transcribed from the videos; redistribution is permitted on the conditions stated in that file (keep attribution and per-pattern video links intact, label reconstructions as reconstructions, do not present the code as the creator's own).
 
 ## animate
 - animate/RECIPES.md
@@ -18,6 +23,13 @@ Imported design skills are advisory only (see README.md).
 
 ## animation-vocabulary
 - animation-vocabulary/SKILL.md
+
+## ania-kubow-design
+- ania-kubow-design/ATTRIBUTION.md
+- ania-kubow-design/SKILL.md
+- ania-kubow-design/references/code-examples.md
+- ania-kubow-design/references/design-examples.md
+- ania-kubow-design/skill.yaml
 
 ## apple-design
 - apple-design/SKILL.md
