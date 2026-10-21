@@ -1285,6 +1285,20 @@ def health() -> dict:
             "ok": not drift}
 
 
+def _stid(base: str) -> str:
+    """A selftest fixture task id that is unique to this process.
+
+    Each selftest fixture used a fixed id ("selftest-ws", "selftest-concurrency",
+    ...), so two overlapping selftest processes shared one task directory. On
+    Windows the loser hit PermissionError (WinError 32) deleting a file the winner
+    still held, or read a half-written stream and reported a bogus failure -- a
+    check that is flaky under exactly the concurrency it exists to verify. The
+    pid suffix isolates every fixture; fixtures are deleted on exit either way, so
+    the id is never seen outside the run.
+    """
+    return f"{base}-selftest-{os.getpid()}"
+
+
 def selftest() -> dict:
     """Round-trip suite. Run this on every GSD upgrade; a failure is blocking."""
     results = {}
@@ -1292,7 +1306,7 @@ def selftest() -> dict:
     # the SUMMARY is a RENDER and status/position/next_action are DERIVED, never
     # authored; the task must be registered first. Both the accepted render and the
     # I8 rejection at the seam are checked; all residue is cleaned up.
-    wtid = "selftest-ws"
+    wtid = _stid("selftest-ws")
     ws_path = None
     try:
         _task_path(wtid).unlink(missing_ok=True)
@@ -1330,7 +1344,7 @@ def selftest() -> dict:
     # failure_class round trip: FAILED must name a taxonomy class; provider-class
     # failures route recovery to the provider boundary (g12), worker-class to the
     # WORKER_STALLED ladder. Tasks are cleaned up so selftest leaves no residue.
-    tid = "selftest-fc"
+    tid = _stid("selftest-fc")
     try:
         _task_path(tid).unlink(missing_ok=True)
         _task_events_path(tid).unlink(missing_ok=True)
@@ -1372,7 +1386,7 @@ def selftest() -> dict:
     # assumed dead. session_alive=True downgrades silent-based STALLED to
     # WARNING; session_alive=False forces STALLED/DEAD; OVERDUE deadline is
     # never suppressed by reconcile.
-    rtid = "selftest-reconcile"
+    rtid = _stid("selftest-reconcile")
     try:
         _task_path(rtid).unlink(missing_ok=True)
         _task_events_path(rtid).unlink(missing_ok=True)
@@ -1420,7 +1434,7 @@ def selftest() -> dict:
         _task_events_path(rtid).unlink(missing_ok=True)
 
     # LOST: supervisor-declared, terminal, unrecoverable-by-the-worker state.
-    ltid = "selftest-lost"
+    ltid = _stid("selftest-lost")
     try:
         _task_path(ltid).unlink(missing_ok=True)
         _task_events_path(ltid).unlink(missing_ok=True)
@@ -1466,7 +1480,7 @@ def selftest() -> dict:
 
     # progress vs liveness: milestones are NEW checkpoints; repeats and
     # checkpointless PROGRESS are heartbeats. Sequences prove event ordering.
-    ptid = "selftest-progress"
+    ptid = _stid("selftest-progress")
     try:
         _task_path(ptid).unlink(missing_ok=True)
         _task_events_path(ptid).unlink(missing_ok=True)
@@ -1500,7 +1514,7 @@ def selftest() -> dict:
         _task_events_path(ptid).unlink(missing_ok=True)
 
     # headless contract flag round trip
-    htid = "selftest-headless"
+    htid = _stid("selftest-headless")
     try:
         _task_path(htid).unlink(missing_ok=True)
         _task_events_path(htid).unlink(missing_ok=True)
@@ -1539,7 +1553,16 @@ def selftest() -> dict:
     # strictly monotonic seq range with no duplicates. The pre-fix adapter read
     # the tail and appended as two unlocked steps, so racing writers duplicated
     # seqs; the lock now covers the whole read+append critical section.
-    ctid = "selftest-concurrency"
+    #
+    # The id is process-unique. It was the fixed "selftest-concurrency", so two
+    # overlapping selftest processes (validate runs one and other checks run
+    # concurrently) shared one task directory: one unlinked/registered while the
+    # other appended, and the loser read a partial stream -- reproducible as
+    # "seqs [1..23]" or "NOT_FOUND: task selftest-concurrency is not registered".
+    # A shared fixture id made the check flaky under exactly the load it exists
+    # to test. Same class as the claim-id collision: process-global identity must
+    # not be shared across processes.
+    ctid = _stid("selftest-concurrency")
     try:
         _task_path(ctid).unlink(missing_ok=True)
         _task_events_path(ctid).unlink(missing_ok=True)
