@@ -78,6 +78,44 @@ COMMON_PRUNE=(
   -not -path '*/target/*'
 )
 
+# ── Assertion integrity: test-only changes that weaken assertions ──────────────
+# The "make the failing test pass by editing the test" failure leaves a specific
+# shape in the change set: net assertion lines REMOVED from test files while no
+# non-test source changed anywhere. A legitimate fix touches the source, and a
+# legitimate test update keeps the assertion count level or higher (removed
+# lines balance added ones); a net removal against a static codebase has no
+# honest reading. This guards the change set rather than executing a check, so
+# it never inflates `ran` -- but a violation sets the same rc=1 verdict.
+is_test_path() {
+  case "$1" in
+    tests/*|test/*|*/tests/*|*/test/*) return 0 ;;
+    test_*.py|*/test_*.py|*_test.py|*_test.go|*.spec.ts|*.spec.tsx|*.test.ts|*.test.tsx) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+_ASSERT_RE='expect\(|(^|[^A-Za-z])assert|\.toBe\(|\.toEqual\(|\.toHave[A-Z]|raises\('
+test_changed=""
+src_changed=""
+for f in $(changed_source_files); do
+  if is_test_path "$f"; then
+    test_changed="${test_changed}${test_changed:+ }$f"
+  else
+    src_changed="${src_changed}${src_changed:+ }$f"
+  fi
+done
+if [ -n "$test_changed" ] && [ -z "$src_changed" ]; then
+  for f in $test_changed; do
+    # Untracked new files diff to nothing (additions only cannot weaken) and
+    # deleted files diff to all-removed; both are handled by the same comparison.
+    removed=$(git diff HEAD -U0 -- "$f" 2>/dev/null | grep -E '^-[^-]' | grep -cE "$_ASSERT_RE")
+    added=$(git diff HEAD -U0 -- "$f" 2>/dev/null | grep -E '^\+[^+]' | grep -cE "$_ASSERT_RE")
+    if [ "${removed:-0}" -gt "${added:-0}" ] 2>/dev/null; then
+      log "FAIL assertion-integrity: $f nets $((removed - added)) removed assertion line(s) with no non-test source change -- restore the assertion and fix the source, or justify the removal in the task record"
+      rc=1
+    fi
+  done
+fi
+
 # ── JS / TS ────────────────────────────────────────────────────────────────────
 JS_FILES=$(
   { git ls-files '*.js' '*.jsx' '*.ts' '*.tsx' 2>/dev/null

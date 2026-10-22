@@ -30,7 +30,7 @@ routes:
   CONTEXT_INSUFFICIENT:   {to: same_agent, action: retrieve_named_item}
   GRAPH_STALE:            {to: code_intel_adapter, action: reindex}
   UNKNOWN_IMPACT:         {to: same_agent, action: expand_to_system}
-  TEST_FAILED:            {to: implementer, mode: debug}
+  TEST_FAILED:            {to: implementer, mode: debug, skill: gsd-debug}
   REVIEW_REJECTED:        {to: implementer, action: apply_findings}
   INTEGRATION_FAILED:     {to: implementer, plus: affected_consumers}
   CONTRACT_CONFLICT:      {to: architect, then: human_gate_h2}

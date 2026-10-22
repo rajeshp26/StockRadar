@@ -45,6 +45,37 @@ if [ "$count" -eq 0 ]; then
   pass "no open blockers"
 fi
 
+# --- retry budgets (framework/retry_policy.yaml) ---------------------------------
+# The budgets were data nothing read: a blocker could sit past test_failure: 2
+# forever and every gate still said only "one open blocker", so the documented
+# on_exhaustion (escalate_to_human) never fired. The blockers store is the only
+# per-task retry counter that exists (telemetry TEST_FAILED events carry no
+# task_id), so this gate is where the comparison happens. An unreadable budget
+# report is BLOCKED -- never read as "nothing exhausted".
+rb_raw=$(python3 framework/adapters/gsd_state.py retry-budget 2>&1)
+rb_rc=$?
+rb_out=$(printf '%s' "$rb_raw" | tr -d '\r')
+if [ $rb_rc -ne 0 ]; then
+  log "BLOCKED  gsd_state retry-budget failed rc=$rb_rc"
+  echo "$rb_out"
+  persist blocked "retry-budget rc=$rb_rc"
+  exit $BLOCKED
+fi
+printf '%s' "$rb_out" | python3 -c "import sys, json; json.load(sys.stdin)" 2>/dev/null || {
+  log "BLOCKED  unparsable retry-budget report -- refusing to read as zero"
+  echo "$rb_out"
+  persist blocked "unparsable retry-budget report"
+  exit $BLOCKED
+}
+exh=$(printf '%s' "$rb_out" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('exhausted', [])))" | tr -d '\r')
+if [ "${exh:-0}" -gt 0 ] 2>/dev/null; then
+  # The escalation name is policy data, not a constant: print the value the
+  # report actually carries so retry_policy.yaml stays the single source of it.
+  onx=$(printf '%s' "$rb_out" | python3 -c "import sys, json; print(json.load(sys.stdin).get('on_exhaustion') or 'unset')" | tr -d '\r')
+  log "FAIL  ${exh} open blocker(s) past retry budget -- on_exhaustion: ${onx}:"
+  printf '%s' "$rb_out" | python3 -c "import sys, json; [print('  %s  %s  retries=%s budget=%s' % (e.get('id'), e.get('signal'), e.get('retries'), e.get('budget'))) for e in json.load(sys.stdin).get('exhausted', [])]"
+fi
+
 log "FAIL  $count open blocker(s) -- completion refused until resolved:"
 python3 framework/adapters/gsd_state.py list-blockers --text
 persist fail "$count open blocker(s)"

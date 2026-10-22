@@ -24,6 +24,7 @@ Every delegation must consult this matrix before selecting skills.
 | Visible behavior change | `browser-verification` | Verifier | Playwright specs, visual validation |
 | Code review | `gsd-code-review` | Reviewer | Phase completion, PR review |
 | Defect escape | `retrospective` | Implementer | Post-fix framework gap analysis |
+| Failing test during implementation (TEST_FAILED signal) | `gsd-debug` | Implementer | Before any retry, assertion edit, or timeout raise: reproduce the failure, read it, hypothesise, test |
 | Ambiguity/uncertainty/multiple interpretations, or writing/reviewing/refactoring code | `karpathy-guidelines` | Team Lead / Implementer / Architect / Reviewer | When assumptions exist, clarity is needed, a simpler approach may be better, or a change should stay surgical and avoid overcomplication |
 
 ## Skill dependency chain
@@ -79,6 +80,7 @@ software-architecture-design
 ### Implementer
 - [ ] Load ALL skills specified by Team Lead / Planner
 - [ ] `unit-test-authoring` for business logic
+- [ ] `gsd-debug` reasoning loop before editing assertions, raising timeouts, or retrying a failing test
 - [ ] Do not skip required skills
 
 ### Reviewer

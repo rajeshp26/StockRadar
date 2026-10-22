@@ -489,6 +489,8 @@ rp = Path("framework/retry_policy.yaml").read_text(encoding="utf-8")
 check("retry limits defined", "test_failure: 2" in rp)
 check("escalation defined", "on_exhaustion: escalate_to_human" in rp)
 check("zero-retry conflicts", "contract_conflict: 0" in rp and "architecture_conflict: 0" in rp)
+check("TEST_FAILED route names the debug skill", "skill: gsd-debug" in rp,
+      "a failing test must route into the gsd-debug reasoning loop, not bounce back free")
 prof = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
 check("impact drives gates", "impact_to_gates" in prof)
 check("browser missing driver is unverifiable", "report_unverifiable" in prof)
@@ -631,6 +633,9 @@ if _g4.exists():
           "npx --yes can fail on network and read as a type error")
     check("G4 requires node_modules before npm scripts", "-d node_modules" in _c4,
           "'eslint: not found' exit 1 is indistinguishable from a real lint error")
+    check("G4 guards mid-loop assertion weakening", "assertion-integrity" in _c4,
+          "a test-only change set netting removed assertions with no source change is "
+          "the guess-instead-of-read failure mode")
 
 _ci = Path("framework/adapters/code_intel.py")
 if _ci.exists():
@@ -688,6 +693,9 @@ if _g6.exists():
           "passing with zero specs is a vacuous pass")
     check("G6 counts screenshot artefacts", "shots=" in _t6,
           "a pass with no captured evidence is unfalsifiable")
+    check("G6 resolves the driver through node.exe interop", "node.exe" in _t6,
+          "a WSL-only host has no node on PATH; without the interop fallback G6 can "
+          "only ever report unverifiable here")
 
 _pf = Path("framework/verifier/profiles.yaml")
 if _pf.exists():
@@ -972,6 +980,57 @@ check("recurrence matches structure, not prose", "SAME" in _out_s,
       f"reworded duplicates must collide; got {_out_s[:120]}")
 check("landed fix requires a verifying command", "fix_verified_by" in _sig,
       "a fix claimed without an exit code is the DoD failure this framework exists to prevent")
+
+# Human corrections are a parallel observation path: their own required field set and
+# closed gap vocabulary, no counterfactual/fix-target, and recurrence by structure
+# (phase + gap_type), never prose. The two rejections exit 1 BEFORE any write, so they
+# run through the CLI safely; the append/analyse success path runs in-process against a
+# temp ledger so the real store is never written.
+_rc_hc, _ = sh("python3 framework/retro/ledger.py append --json "
+               "'{\"type\":\"human_correction\",\"task_id\":\"x\"}'")
+check("incomplete human correction rejected", _rc_hc == 1,
+      "a correction missing what/correction/gap_type/phase is unrecordable noise")
+_rc_hc2, _ = sh("python3 framework/retro/ledger.py append --json "
+                "'{\"type\":\"human_correction\",\"task_id\":\"x\",\"what\":\"a\","
+                "\"correction\":\"b\",\"gap_type\":\"banana\",\"phase\":\"implementation\"}'")
+check("uncontrolled correction gap_type rejected", _rc_hc2 == 1,
+      "free-text gap types make correction recurrence undetectable")
+_hc = ("import sys,json,tempfile;sys.path.insert(0,'framework/retro');import ledger as L;"
+       "from pathlib import Path;"
+       "d=Path(tempfile.mkdtemp(prefix='v15_hc_'));L.ledger_path=lambda:d/'l.jsonl';"
+       "L.append({'type':'human_correction','task_id':'H1','what':'assumed sync api',"
+       "'correction':'api is async, requires await','gap_type':'knowledge',"
+       "'phase':'implementation'});"
+       "L.append({'type':'human_correction','task_id':'H2','what':'different words',"
+       "'correction':'other phrasing','gap_type':'knowledge','phase':'implementation'});"
+       "a=L.analyse();"
+       "print(json.dumps({'st':a.get('status'),'esc':a.get('escalate'),"
+       "'rec':len(a.get('recurring_signatures',[])),"
+       "'hc':(a.get('human_corrections') or {}).get('entries'),"
+       "'debt':len(a.get('open_fix_debt',[]))}))")
+_rc_hc3, _out_hc3 = sh("python3 -c \"%s\"" % _hc)
+try:
+    _hcd = json.loads(_out_hc3.strip().splitlines()[-1])
+except Exception:
+    _hcd = {}
+check("repeated human correction escalates structurally",
+      _rc_hc3 == 0 and _hcd.get("st") == "recurrence" and _hcd.get("esc") is True
+      and _hcd.get("rec") == 1 and _hcd.get("hc") == 2 and _hcd.get("debt") == 0,
+      _out_hc3[:300])
+
+# g7 is the gate-side consumer of both correction behaviours: it must refuse to
+# let a correction discharge a defect trigger, and its recurrence counters must
+# survive the Windows-python CRLF capture (a "1\r" makes [ -gt ] error and read
+# false, so recurrence would silently never fail the gate - measured on this host).
+_g7c = Path("framework/gates/g7_retro.sh").read_text(encoding="utf-8")
+check("g7 never discharges a defect trigger with a human correction",
+      'e.get("type") != "human_correction"' in _g7c,
+      "a correction carries no counterfactual and no fix; using one to discharge "
+      "the escape it was recording would erase the defect")
+check("g7 strips CR from its recurrence counters before numeric use",
+      'recur=$(printf \'%s\' "$recur" | tr -d \'\\r\')' in _g7c,
+      "Windows python prints CRLF through interop; without the strip "
+      "[ -gt ] rejects the value and recurring gaps pass silently")
 
 _g7 = Path("framework/gates/g7_retro.sh").read_text(encoding="utf-8")
 check("g7 emits NOT_APPLICABLE rather than passing with no trigger", "NOT_APPLICABLE=4" in _g7)
@@ -1351,6 +1410,14 @@ check("team lead resolves or refuses on open blockers",
 _vf = Path("framework/opencode/agents/verifier.md").read_text(encoding="utf-8")
 check("verifier runs g8 and reports its verdicts",
       "g8_blockers" in _vf and "g8:" in _vf)
+_g8c = Path("framework/gates/g8_blockers.sh").read_text(encoding="utf-8")
+check("g8 enforces retry_policy budgets", "retry-budget" in _g8c,
+      "budgets declared in yaml and counted in the store, but never compared at "
+      "completion, is not enforcement")
+_gsc = Path("framework/adapters/gsd_state.py").read_text(encoding="utf-8")
+check("retry-budget subcommand reads the declared budgets", "def retry_budget" in _gsc,
+      "the comparison belongs in the adapter where the blocker store is read, "
+      "not re-derived in bash")
 
 
 def _perm_keys(obj, prefix):
@@ -1427,6 +1494,30 @@ def _suite_18():
     _rc, _o = _bsh("bash framework/gates/g8_blockers.sh")
     check("g8 refuses completion while a record is open",
           _rc == 1 and "BLK-001" in _o, ("rc=%d " % _rc) + _o[:300])
+
+    # Retry budgets are data nothing used to read: at retries==budget there is
+    # still one attempt of room; one past it, on_exhaustion must fire and g8
+    # must say so by name rather than only "one open blocker".
+    _rc, _o = _bsh("python3 framework/adapters/gsd_state.py retry-budget")
+    _rb = json.loads(_o) if _rc == 0 else {}
+    check("retry budget not exhausted at retries==budget",
+          _rc == 0 and _rb.get("exhausted") == [], _o[:200])
+
+    _up3 = json.dumps({"signal": "CONTEXT_INSUFFICIENT", "task_id": "99-99",
+                       "agent": "implementer", "retries": 3})
+    _rc, _o = _bsh("python3 framework/adapters/gsd_state.py write-blocker --json '%s'" % _up3)
+    check("third stop upserts retries=3", _rc == 0, _o[:200])
+
+    _rc, _o = _bsh("python3 framework/adapters/gsd_state.py retry-budget")
+    _rb = json.loads(_o) if _rc == 0 else {}
+    check("third attempt exhausts the budget and names the escalation",
+          _rc == 0 and len(_rb.get("exhausted", [])) == 1
+          and _rb["exhausted"][0].get("budget_key") == "context_expansion"
+          and _rb.get("on_exhaustion") == "escalate_to_human", _o[:300])
+
+    _rc, _o = _bsh("bash framework/gates/g8_blockers.sh")
+    check("g8 surfaces budget exhaustion by name",
+          _rc == 1 and "escalate_to_human" in _o, ("rc=%d " % _rc) + _o[:300])
 
     _rc, _o = _bsh("python3 framework/adapters/gsd_state.py resolve-blocker --id BLK-001")
     _d = json.loads(_o) if _rc == 0 else {}

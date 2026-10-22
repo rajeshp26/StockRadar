@@ -37,18 +37,36 @@ if ! grep -q '"@playwright/test"' package.json 2>/dev/null; then
   exit $UNVERIFIABLE
 fi
 
+# Resolve a runnable playwright invocation. The .bin shim is a POSIX script that
+# execs `node`, which WSL-only hosts may not have on PATH while Windows
+# `node.exe` (interop) can still run the CLI. Prefer the shim; fall back to
+# node.exe with a RELATIVE CLI path — Windows node cannot open /mnt/c/... absolute
+# paths, and this gate always runs from the repo root like every other path here.
 PW="node_modules/.bin/playwright"
-if [ ! -x "$PW" ]; then
+PW_CLI="node_modules/@playwright/test/cli.js"
+
+if [ ! -x "$PW" ] && ! { have node.exe && [ -f "$PW_CLI" ]; }; then
   persist unverifiable "playwright binary not installed (run: npm ci)"
   log "UNVERIFIABLE  playwright not installed locally — refusing to fetch at gate time"
   exit $UNVERIFIABLE
 fi
 
-# Browser binaries are a separate download from the npm package.
+PW_RUN=("$PW")
 if ! "$PW" --version >/dev/null 2>&1; then
-  persist unverifiable "playwright present but not runnable"
-  log "UNVERIFIABLE  playwright not runnable — check: npx playwright install"
-  exit $UNVERIFIABLE
+  # Browser binaries are a separate download from the npm package; a shim that
+  # exists but cannot exec node is a different failure than an absent package.
+  if have node.exe && [ -f "$PW_CLI" ] && node.exe "$PW_CLI" --version >/dev/null 2>&1; then
+    PW_RUN=(node.exe "$PW_CLI")
+    log "driver resolved via node.exe interop (bin shim has no node on PATH)"
+  elif [ -x "$PW" ]; then
+    persist unverifiable "playwright present but not runnable"
+    log "UNVERIFIABLE  playwright not runnable — check: npx playwright install"
+    exit $UNVERIFIABLE
+  else
+    persist unverifiable "playwright binary not installed (run: npm ci)"
+    log "UNVERIFIABLE  playwright not installed locally — refusing to fetch at gate time"
+    exit $UNVERIFIABLE
+  fi
 fi
 
 if [ ! -f playwright.config.ts ] && [ ! -f playwright.config.js ]; then
@@ -70,7 +88,7 @@ mkdir -p "$ART"
 
 log "running playwright (all configured projects/viewports)"
 set +e
-"$PW" test --reporter=list --output="$ART/artifacts" 2>&1 | tee "$ART/last-run.txt"
+"${PW_RUN[@]}" test --reporter=list --output="$ART/artifacts" 2>&1 | tee "$ART/last-run.txt"
 rc=${PIPESTATUS[0]}
 set -e
 

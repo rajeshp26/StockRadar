@@ -57,7 +57,9 @@ for line in p.read_text().splitlines():
         e = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if str(e.get("task_id")) == tid:
+    if str(e.get("task_id")) == tid and e.get("type") != "human_correction":
+        # A human correction is an observation, not a retrospective: it carries no
+        # counterfactual and no fix, so it must never discharge a defect trigger.
         sys.exit(0)
 sys.exit(1)
 PY
@@ -76,16 +78,22 @@ if [ "$led_rc" -eq 3 ]; then
   exit 1
 fi
 
+# Windows python prints CRLF through interop pipes; $( ) strips the \n but keeps
+# the stray CR, so [ -gt ] rejects "1\r" as garbage and reads false — every
+# recurrence (including human-correction recurrence, the Gap 5 escalation path)
+# would then silently pass. Strip before numeric use, exactly as g8 does.
 recur=$(printf '%s' "$led_out" | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)
 except Exception: print(0); raise SystemExit
 print(len(d.get('recurring_signatures',[])))" 2>/dev/null || echo 0)
+recur=$(printf '%s' "$recur" | tr -d '\r')
 unver=$(printf '%s' "$led_out" | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)
 except Exception: print(0); raise SystemExit
 print(len(d.get('unverified_fixes',[])))" 2>/dev/null || echo 0)
+unver=$(printf '%s' "$unver" | tr -d '\r')
 
 if [ "$recur" -gt 0 ]; then
   log "FAIL  $recur recurring gap signature(s) — a previous fix did not close the gap"
@@ -95,7 +103,10 @@ d=json.load(sys.stdin)
 for r in d.get('recurring_signatures',[]):
     print('  x%d  %s' % (r['occurrences'], r['signature']))
     for h in r.get('history',[]):
-        print('        %s  fix=%s landed=%s' % (h.get('task_id'), h.get('fix_target'), h.get('fix_landed')))
+        if 'what' in h and h.get('what') is not None:
+            print('        %s  corrected: %s' % (h.get('task_id'), h.get('what')))
+        else:
+            print('        %s  fix=%s landed=%s' % (h.get('task_id'), h.get('fix_target'), h.get('fix_landed')))
 " 2>/dev/null
   bad=$((bad+1))
 fi

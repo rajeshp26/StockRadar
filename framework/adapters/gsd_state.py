@@ -365,6 +365,91 @@ def list_blockers(as_text: bool = False):
             print("      tried:   %s" % b["tried"])
     return None
 
+
+# Signal name in blockers.yaml -> budget key under retry_policy. The two
+# vocabularies differ by design: a signal names what happened, a budget names
+# the policy class that bounds it. An open blocker whose signal is unmapped, or
+# whose key has no declared budget, is skipped -- assigning one here would put
+# the policy in two places, and the yaml is the single source.
+_RETRY_BUDGET_KEY = {
+    "TEST_FAILED": "test_failure",
+    "REVIEW_REJECTED": "review_rejection",
+    "INTEGRATION_FAILED": "integration_failure",
+    "CONTEXT_INSUFFICIENT": "context_expansion",
+    "CONTRACT_CONFLICT": "contract_conflict",
+    "ARCHITECTURE_CONFLICT": "architecture_conflict",
+    "RELEASE_BLOCKED": "release_blocked",
+    "RETRO_RECURRENCE": "retro_recurrence",
+    "WORKER_STALLED": "worker_stalled",
+}
+
+
+def retry_budget() -> dict:
+    """OPEN blockers whose retries exceed the budget declared in retry_policy.yaml.
+
+    The budgets were declared and read by nothing: a blocker could sit at
+    retries=5 under test_failure: 2 and every gate still only said "one open
+    blocker", so on_exhaustion (escalate_to_human) never fired. The blocker
+    store is the only per-task retry counter that exists (telemetry
+    TEST_FAILED events carry no task_id), so it is the count of record.
+
+    Exhaustion is retries > budget: retries starts at 1 on the first write, so
+    a budget of 2 permits attempts 1-2 and attempt 3 exhausts it; a budget of 0
+    (immediate escalation) is exceeded by the first occurrence. A malformed or
+    absent policy refuses loudly rather than reading as "no budgets, nothing
+    to check" -- the same failure class as an absent parser.
+    """
+    p = Path("framework/retry_policy.yaml")
+    if not p.exists():
+        raise SystemExit(
+            "BLOCKED: framework/retry_policy.yaml is missing - retry budgets "
+            "must be declared in state, not invented in code."
+        )
+    try:
+        data = _yaml_mod().safe_load(p.read_text(encoding="utf-8-sig")) or {}
+    except SystemExit:
+        raise
+    except Exception as e:
+        raise SystemExit(f"BLOCKED: framework/retry_policy.yaml unparsable: {e}")
+    budgets = data.get("retry_policy")
+    if not isinstance(budgets, dict) or not budgets:
+        raise SystemExit(
+            "BLOCKED: framework/retry_policy.yaml must declare a retry_policy "
+            "budget map - an unreadable budget is not zero budget."
+        )
+    open_blockers = list_blockers()
+    checked = 0
+    exhausted = []
+    for b in open_blockers:
+        key = _RETRY_BUDGET_KEY.get(b.get("signal"))
+        if key is None or key not in budgets:
+            continue  # no declared budget for this signal -- skipped, never invented
+        budget = budgets[key]
+        if not isinstance(budget, int) or isinstance(budget, bool):
+            raise SystemExit(
+                f"BLOCKED: retry_policy budget {key!r} must be an integer, got {budget!r}."
+            )
+        checked += 1
+        try:
+            retries = int(b.get("retries"))
+        except (TypeError, ValueError):
+            retries = 1
+        if retries > budget:
+            exhausted.append({
+                "id": b.get("id"),
+                "task_id": b.get("task_id"),
+                "signal": b.get("signal"),
+                "budget_key": key,
+                "retries": retries,
+                "budget": budget,
+            })
+    return {
+        "checked": checked,
+        "on_exhaustion": data.get("on_exhaustion"),
+        "exhausted": exhausted,
+    }
+
+
 # ── worker supervision (delegated task execution protocol) ─────────────────
 # A delegated task is an immutable execution contract plus an append-only
 # lifecycle event stream under <state_root>/tasks/. Health is DERIVED from the
@@ -1613,6 +1698,7 @@ CMDS = {
     "write-blocker": lambda a: write_blocker(_parse_json(a.json)),
     "resolve-blocker": lambda a: resolve_blocker(a.id),
     "list-blockers": lambda a: list_blockers(a.text),
+    "retry-budget": lambda a: retry_budget(),
     "task-register": lambda a: register_task(a.id, _parse_json(a.json, "TASK") if a.json else None),
     "task-event": lambda a: task_event(a.id, _parse_json(a.json, "TASK")),
     "task-status": lambda a: task_status(a.id, {"true": True, "false": False}.get(a.session_alive.lower(), None)),

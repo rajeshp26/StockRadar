@@ -54,6 +54,15 @@ CONTROLLED_GAP_TYPES = {
     "declared_rule", "design_checklist", "unmapped_combination", "accepted",
 }
 
+# A human correction is an observation path, not a defect escape: it carries no
+# counterfactual, no fix target, and no defect class. Its class key is
+# (phase, gap_type) from this vocabulary — the same kind of misunderstanding
+# corrected twice at the same phase means the framework's model of that phase
+# is wrong again. Prose (what/correction) is excluded from the key for the same
+# reason prose is excluded from signature() below: a rephrased repeat of the
+# same misunderstanding must still collide.
+CORRECTION_GAP_TYPES = {"knowledge", "reasoning", "assumption"}
+
 # Fields an amendment row may carry. Everything else in the ledger is immutable
 # (injected_at, defect_class, primary_gap, fix_target, routing_gaps, containment_misses).
 AMENDABLE = ("fix_landed", "fix_verified_by", "note", "defect_site", "counterfactual")
@@ -116,6 +125,11 @@ def signature(e: dict) -> str:
     would let a rephrase hide a recurrence. This is the aggregation key — do NOT use it
     to judge recurrence; that is `signature_instance`.
     """
+    if e.get("type") == "human_correction":
+        # A correction's class is the phase it landed in and the kind of gap it
+        # named. The prose (what/correction) is deliberately excluded here for
+        # exactly the reason prose is excluded below.
+        return "|".join(["human_correction", e.get("phase", "?"), e.get("gap_type", "?")])
     return "|".join([
         e.get("injected_at", "?"),
         e.get("defect_class", "?"),
@@ -142,6 +156,10 @@ def signature_instance(e: dict) -> str:
     Two findings in different files are two instances even when the class key matches;
     the class key alone would report them as the same gap recurring.
     """
+    if e.get("type") == "human_correction":
+        # An observation has no defect site, so the class key IS the instance
+        # key here — deliberately, not by omission: see signature().
+        return signature(e)
     return signature(e) + "| " + _site_of(e)
 
 
@@ -152,6 +170,8 @@ def _open_debt(e: dict) -> bool:
     resolve the other. A group-level predicate kept G7 red forever once any shape had
     ever recurred, because the ledger has no close command.
     """
+    if e.get("type") == "human_correction":
+        return False  # an observation owes no fix; there is no fix_landed state for it
     if e.get("fix_target") == "none_human_judgement":
         return False
     return not bool(e.get("fix_landed"))
@@ -240,29 +260,50 @@ def supersede(target: str, fields: dict) -> str:
 
 
 def append(entry: dict) -> str:
-    required = ["task_id", "injected_at", "caught_at", "defect_class", "primary_gap",
-                "fix_target", "fix_landed"]
-    missing = [k for k in required if k not in entry]
-    if missing:
-        print(json.dumps({"error": "incomplete retro entry", "missing": missing}),
-              file=sys.stderr)
-        sys.exit(1)
-    if entry["fix_target"] != "none_human_judgement" and not entry.get("fix_landed"):
-        entry.setdefault("debt_opened", date.today().isoformat())
-    # A defect that reached production passed every checkpoint. Its escape therefore has
-    # to name the control that was missing and the tier it belonged to, from the closed
-    # vocabulary — not a paragraph about being more careful.
-    if entry.get("caught_at") in PRODUCTION_PHASES or \
-            str(entry.get("defect_class", "")).startswith("security"):
-        ok, why = _counterfactual_ok(entry)
-        if not ok:
-            print(json.dumps({"error": "production finding needs a controlled counterfactual",
-                              "detail": why,
-                              "gap_types": sorted(CONTROLLED_GAP_TYPES)}), file=sys.stderr)
+    # A human correction is a parallel observation path (the retrospective
+    # skill's human-correction route), not a defect escape: its own required
+    # field set and closed gap vocabulary, and deliberately no defect class,
+    # fix target, or counterfactual. It is refused when incomplete for the same
+    # reason an incomplete retro entry is — an entry that cannot be judged
+    # structurally is noise in a recurrence key.
+    is_correction = entry.get("type") == "human_correction"
+    if is_correction:
+        required = ["task_id", "what", "correction", "gap_type", "phase"]
+        missing = [k for k in required if not str(entry.get(k) or "").strip()]
+        if missing:
+            print(json.dumps({"error": "incomplete human correction", "missing": missing,
+                              "required": required}), file=sys.stderr)
             sys.exit(1)
+        if entry["gap_type"] not in CORRECTION_GAP_TYPES:
+            print(json.dumps({"error": "uncontrolled gap_type",
+                              "gap_type": entry["gap_type"],
+                              "allowed": sorted(CORRECTION_GAP_TYPES)}), file=sys.stderr)
+            sys.exit(1)
+        entry.setdefault("no_counterfactual", True)  # always true by definition
+    else:
+        required = ["task_id", "injected_at", "caught_at", "defect_class", "primary_gap",
+                    "fix_target", "fix_landed"]
+        missing = [k for k in required if k not in entry]
+        if missing:
+            print(json.dumps({"error": "incomplete retro entry", "missing": missing}),
+                  file=sys.stderr)
+            sys.exit(1)
+        if entry["fix_target"] != "none_human_judgement" and not entry.get("fix_landed"):
+            entry.setdefault("debt_opened", date.today().isoformat())
+        # A defect that reached production passed every checkpoint. Its escape therefore has
+        # to name the control that was missing and the tier it belonged to, from the closed
+        # vocabulary — not a paragraph about being more careful.
+        if entry.get("caught_at") in PRODUCTION_PHASES or \
+                str(entry.get("defect_class", "")).startswith("security"):
+            ok, why = _counterfactual_ok(entry)
+            if not ok:
+                print(json.dumps({"error": "production finding needs a controlled counterfactual",
+                                  "detail": why,
+                                  "gap_types": sorted(CONTROLLED_GAP_TYPES)}), file=sys.stderr)
+                sys.exit(1)
     entry["signature"] = signature(entry)
     entry["signature_instance"] = signature_instance(entry)
-    if not entry.get("defect_site"):
+    if not is_correction and not entry.get("defect_site"):
         entry["defect_site"] = _site_of(entry)
     entry.setdefault("recorded_at", datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00","Z"))
 
@@ -286,12 +327,20 @@ def analyse() -> dict:
     by_inst: dict[str, list[dict]] = {}
     for e in entries:
         by_inst.setdefault(signature_instance(e), []).append(e)
+    # A human correction owes no fix (_open_debt is False for every one of them), so the
+    # open-debt predicate that keeps defect signatures live cannot apply: a repeated
+    # correction is live by definition — the human had to say it twice — and nothing in
+    # the ledger can close it. Only the threshold governs it.
     recurring = {s: len(g) for s, g in by_inst.items()
-                 if len(g) >= RECURRENCE_THRESHOLD and any(_open_debt(e) for e in g)}
+                 if len(g) >= RECURRENCE_THRESHOLD
+                 and (any(e.get("type") == "human_correction" for e in g)
+                      or any(_open_debt(e) for e in g))}
 
-    by_target = Counter(e.get("fix_target", "?") for e in entries)
-    by_phase = Counter(e.get("injected_at", "?") for e in entries)
-    by_gap = Counter(e.get("primary_gap", "?") for e in entries)
+    defects = [e for e in entries if e.get("type") != "human_correction"]
+    corrections = [e for e in entries if e.get("type") == "human_correction"]
+    by_target = Counter(e.get("fix_target", "?") for e in defects)
+    by_phase = Counter(e.get("injected_at", "?") for e in defects)
+    by_gap = Counter(e.get("primary_gap", "?") for e in defects)
 
     # A fix claimed as landed must name how it was proven.
     unverified = [{"task_id": e.get("task_id"), "fix_target": e.get("fix_target")}
@@ -306,14 +355,23 @@ def analyse() -> dict:
     detail = defaultdict(list)
     for e in entries:
         s = signature_instance(e)
-        if s in recurring:
+        if s not in recurring:
+            continue
+        if e.get("type") == "human_correction":
+            # What was misunderstood, and what the human said instead — the only
+            # fields that tell the escalating human where to look.
+            detail[s].append({"task_id": e.get("task_id"),
+                              "what": e.get("what"),
+                              "correction": e.get("correction"),
+                              "recorded_at": e.get("recorded_at")})
+        else:
             detail[s].append({"task_id": e.get("task_id"),
                               "fix_target": e.get("fix_target"),
                               "fix_landed": e.get("fix_landed"),
                               "defect_site": _site_of(e),
                               "recorded_at": e.get("recorded_at")})
 
-    judgement_rate = by_target.get("none_human_judgement", 0) / len(entries)
+    judgement_rate = by_target.get("none_human_judgement", 0) / (len(defects) or 1)
 
     return {
         "status": "recurrence" if recurring else ("unverified_fix" if unverified else "ok"),
@@ -324,6 +382,10 @@ def analyse() -> dict:
         ],
         "unverified_fixes": unverified,
         "open_fix_debt": open_debt,
+        "human_corrections": {
+            "entries": len(corrections),
+            "by_gap_type": dict(Counter(e.get("gap_type", "?") for e in corrections)),
+        },
         "checkpoint_pressure": checkpoint_pressure(entries),
         "by_injection_phase": dict(by_phase),
         "by_primary_gap": dict(by_gap),
