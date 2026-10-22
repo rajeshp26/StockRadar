@@ -679,6 +679,7 @@ def build_snapshot_row(
         "cash_balance": round(float(cash_balance), 2),
         "net_deposits": round(float(net_deposits), 2),
         "holdings_json": holdings_detail if holdings_detail else None,
+        "fx_unconverted_count": fx_unconverted_count,
         "data_quality_flag": data_quality,
         "validation_warnings": validation_warnings,
         "job_id": job_id,

@@ -390,10 +390,42 @@ class Settings(BaseSettings):
         description="Enable daily portfolio snapshot computation job (23:00 UTC)"
     )
 
+    ENABLE_BENCHMARK_SERIES_SCHEDULER: bool = Field(
+        True,
+        description="Enable the daily refresh of the materialised benchmark "
+                    "comparison series (migration 015). The request path still "
+                    "simulates live and stores on a miss, so disabling this "
+                    "costs performance, never correctness."
+    )
+
     ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH: bool = Field(
         True,
         description="Enable snapshot-based read path for /api/portfolio/performance "
                     "(shadow-mode before full cutover)"
+    )
+
+    ENABLE_PORTFOLIO_RESPONSE_CACHE: bool = Field(
+        True,
+        description="Cache the /portfolio/performance response per "
+                    "(account set, period), keyed on a fingerprint of the "
+                    "snapshot inputs plus the resolved window dates. A warm hit "
+                    "serves the identical series without re-running the merge; "
+                    "the snapshot rows are still read (their fingerprint is the "
+                    "key), so a corrected or appended snapshot misses rather "
+                    "than serving stale values. Disabling costs performance, "
+                    "never correctness."
+    )
+
+    ENABLE_PORTFOLIO_VALUE_SERIES: bool = Field(
+        True,
+        description="Serve /portfolio/performance from the materialised value "
+                    "series (migration 017) when its input fingerprint still "
+                    "matches the snapshot rows the request read. A period switch "
+                    "or a weekend becomes a slice of the stored build instead of "
+                    "a re-merge. The fingerprint is recomputed from live "
+                    "snapshots on every request, so an appended, corrected or "
+                    "backdated snapshot rebuilds before any stored point is "
+                    "served. Disabling costs performance, never correctness."
     )
 
     PORTFOLIO_SNAPSHOT_FALLBACK_ENABLED: bool = Field(

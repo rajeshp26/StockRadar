@@ -59,8 +59,26 @@ def _make_service(snapshot_rows):
 
     mock_snaps_repo = MagicMock()
     mock_snaps_repo.get_portfolio_snapshots.return_value = snapshot_rows
+    # The snapshot read path reads SCALAR rows via the _series method and
+    # resolves the build's inception from the first snapshot date; both must be
+    # configured or the mock returns junk the merge can never see.
+    mock_snaps_repo.get_portfolio_snapshots_series.return_value = snapshot_rows
+    mock_snaps_repo.get_first_snapshot_date.return_value = date(2025, 1, 1)
 
     patchers = []
+
+    # The service binds `settings` at import time, so patch("config.settings")
+    # never reaches it; these patch the real object the service actually reads
+    # and are restored by p.stop() in the caller's finally-block.
+    from config import settings as real_settings
+    for attr, value in (
+        ("ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH", True),
+        ("ENABLE_PORTFOLIO_RESPONSE_CACHE", False),
+        ("ENABLE_PORTFOLIO_VALUE_SERIES", False),
+    ):
+        sp = patch.object(real_settings, attr, value)
+        sp.start()
+        patchers.append(sp)
 
     period_patcher = patch.object(
         PortfolioService, "_period_to_date_range",
@@ -171,6 +189,10 @@ async def test_fx_unconverted_date_spike_suppressed():
         for aid in (7, 8, 9):
             snap = _snap(aid, d, vals[aid])
             if d_i == 2:
+                # The merge keys suppression on the row-level count persisted by
+                # migration 016 (fx_applied=False in holdings_json is what the
+                # job writes it FROM; the merge no longer walks holdings_json).
+                snap["fx_unconverted_count"] = 1
                 snap["holdings_json"] = [{"fx_applied": False}]
             rows.append(snap)
 

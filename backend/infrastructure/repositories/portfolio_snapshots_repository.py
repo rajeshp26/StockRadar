@@ -51,6 +51,57 @@ class PortfolioSnapshotsRepository:
             logger.error(f"Failed to fetch portfolio snapshots: {e}")
             return []
 
+    def get_portfolio_snapshots_series(
+        self,
+        account_ids: list[int],
+        start_date: date,
+        end_date: date,
+    ) -> list[dict[str, Any]]:
+        """Scalar-only snapshot read for the performance/chart path.
+
+        Deliberately excludes ``holdings_json``. That blob is ~3.8 KB per row
+        (max ~9 KB); shipping it for a multi-year, multi-account window costs
+        ~18 MB per request and was measured at 4,120 ms versus 63 ms for the
+        same rows without it. The chart renders only scalars, and the one thing
+        it needed from the blob -- whether a date carries an unconverted-FX
+        holding -- is now persisted as ``fx_unconverted_count``
+        (migration 016).
+
+        Use ``get_portfolio_snapshots`` when the holdings detail itself is the
+        subject (audits, ledger reconciliation). Use this for series reads.
+        """
+        if not account_ids:
+            return []
+        PAGE_SIZE = 1000
+        all_data = []
+        try:
+            offset = 0
+            while True:
+                res = (
+                    self.client.table("portfolio_snapshots")
+                    .select("account_id, snapshot_date, total_value, holdings_market_value, cost_basis, "
+                            "cash_balance, net_deposits, data_quality_flag, fx_unconverted_count")
+                    .in_("account_id", account_ids)
+                    .gte("snapshot_date", start_date.isoformat())
+                    .lte("snapshot_date", end_date.isoformat())
+                    .order("snapshot_date", desc=False)
+                    .order("account_id", desc=False)
+                    .order("id", desc=False)
+                    .range(offset, offset + PAGE_SIZE - 1)
+                    .execute()
+                )
+                chunk = res.data or []
+                if not chunk:
+                    break
+                all_data.extend(chunk)
+                if len(chunk) < PAGE_SIZE:
+                    break
+                offset += PAGE_SIZE
+            return all_data
+        except Exception as e:
+            logger.error(f"Failed to fetch portfolio snapshot series: {e}")
+            return []
+
     def upsert_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         # Strip field that may not exist in DB schema yet
         safe = {k: v for k, v in snapshot.items() if k != "validation_warnings"}

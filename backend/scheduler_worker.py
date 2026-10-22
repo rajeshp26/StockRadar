@@ -37,8 +37,10 @@ from typing import Any
 # v3 infrastructure
 from application.jobs.job_engine import JobEngine
 from application.jobs.portfolio_snapshot_job import handle_portfolio_snapshot
+from application.jobs.benchmark_series_refresh_job import handle_benchmark_series_refresh
 from application.jobs.price_ingestion_job import handle_price_ingestion
 from application.schedulers.aggregation_scheduler import AggregationScheduler
+from application.schedulers.benchmark_series_scheduler import BenchmarkSeriesRefreshScheduler
 from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
 from application.schedulers.freshness_monitor_scheduler import FreshnessMonitorScheduler, SNAPSHOT_INTERVAL_HOURS
 from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
@@ -260,6 +262,7 @@ async def main():
     engine.register_handler("investor_refresh", handle_investor_refresh)
     engine.register_handler("aggregation_refresh", handle_aggregation_refresh)
     engine.register_handler("portfolio_snapshot", handle_portfolio_snapshot)
+    engine.register_handler("benchmark_series_refresh", handle_benchmark_series_refresh)
     engine.register_handler("price_ingestion", handle_price_ingestion)
     engine.register_handler("valuation_computation", handle_valuation_computation)
     engine.register_handler("freshness_snapshot", handle_freshness_snapshot)
@@ -348,6 +351,19 @@ async def main():
         logger.info("Registered portfolio_snapshot planner (interval=%dh)", ps_scheduler.interval_hours)
     else:
         logger.info("Portfolio Snapshot scheduler disabled")
+
+    # Materialised benchmark series (daily, after snapshots + prices land)
+    if getattr(settings, "ENABLE_BENCHMARK_SERIES_SCHEDULER", True):
+        bs_scheduler = BenchmarkSeriesRefreshScheduler()
+        planner.register(
+            name="benchmark_series",
+            plan_fn=bs_scheduler.plan,
+            interval_hours=bs_scheduler.interval_hours,
+            enabled=True,
+        )
+        logger.info("Registered benchmark_series planner (interval=%dh)", bs_scheduler.interval_hours)
+    else:
+        logger.info("Benchmark series scheduler disabled")
 
     # Aggregation (every 24h)
     if getattr(settings, "ENABLE_AGGREGATION_SCHEDULER", True):

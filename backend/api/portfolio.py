@@ -1767,7 +1767,12 @@ async def get_holding_performance_compare(
     benchmarks: str = "SPY",
     user: dict = Depends(get_current_user_dep),
 ) -> BenchmarkCompareResponse:
-    """Compare single-stock performance vs benchmarks using holding-level cash flows. (P-03)"""
+    """Compare single-stock performance vs benchmarks using holding-level cash flows. (P-03)
+
+    Same simulation contract as /portfolio/performance/compare: the benchmark
+    is seeded and simulated from the holding's earliest buy and clipped to the
+    requested period, so its values are timeline-independent.
+    """
     try:
         auth_id = user["sub"]
         db_user_id = _resolve_db_user_id(auth_id)
@@ -1856,7 +1861,12 @@ async def get_performance_compare(
     """
     Compare portfolio performance against benchmark indices.
 
-    All series normalized to 100 at period start for side-by-side comparison.
+    Both the portfolio and each benchmark are dollar series, not normalized
+    indices. Each benchmark is simulated on the SAME cash flows as the
+    portfolio (deposits/withdrawals invested in the index on the same dates)
+    from the account's earliest recorded snapshot, so its value on any given
+    date does not depend on the selected period - the period only clips the
+    visible date range.
     Multiple benchmarks: ?benchmarks=SPY,QQQ
     Optional account_ids filter: ?account_ids=1,3,5 (empty = all accounts)
     """
