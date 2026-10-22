@@ -2,13 +2,14 @@
 
 Imported design skills are advisory only (see README.md).
 
-Two distinct sources, with different license statuses. Read the per-source section;
+Three distinct sources, with different license statuses. Read the per-source section;
 there is no single license covering this directory.
 
 ## Sources
 
 - **Emil Kowalski skills** — `C:\Users\rajes\AppData\Local\Temp\opencode\design-skills-research\emilkowalski-skills\skills`. License: **MIT**.
 - **TikTok-derived design skills** — `C:\Users\rajes\Downloads` (ziahamza skill set). License: **no grant from the original creators**. See `ania-kubow-design/ATTRIBUTION.md`. The code in those skills is original implementation written fresh by the extractor, not transcribed from the videos; redistribution is permitted on the conditions stated in that file (keep attribution and per-pattern video links intact, label reconstructions as reconstructions, do not present the code as the creator's own).
+- **uiux-design-foundations** — distilled from *From Zero to UI/UX Hero!* by Conrad Böhnke (UI Rocket, 2024). License: **no license grant** from the author or publisher. The skill is a fresh paraphrase of study notes, not book body text; code examples are original CSS. See `uiux-design-foundations/ATTRIBUTION.md`.
 
 ## animate
 - animate/RECIPES.md
@@ -66,6 +67,16 @@ there is no single license covering this directory.
 ## review-animations
 - review-animations/SKILL.md
 - review-animations/STANDARDS.md
+
+## uiux-design-foundations
+- uiux-design-foundations/ATTRIBUTION.md
+- uiux-design-foundations/SKILL.md
+- uiux-design-foundations/references/checklists.md
+- uiux-design-foundations/references/code-examples.md
+- uiux-design-foundations/references/ui-foundations.md
+- uiux-design-foundations/references/ux-foundations.md
+- uiux-design-foundations/references/ux-laws.md
+- uiux-design-foundations/skill.yaml
 
 ## write-swift
 - write-swift/SKILL.md
