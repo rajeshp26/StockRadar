@@ -24,6 +24,17 @@ from pathlib import Path
 # else falls back to the framework's own install root. Anchored on __file__ via
 # locate, never on the CWD, so running a framework script from a subdirectory
 # cannot address a different tree.
+# SkillSpec integration (baked-in)
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from skill_contracts.skill_spec import SkillSpec
+    from adapters.skill_adapter import SkillAdapter
+    _SKILL_ADAPTER_AVAILABLE = True
+except Exception:
+    SkillSpec = None
+    SkillAdapter = None
+    _SKILL_ADAPTER_AVAILABLE = False
+
 # Unconditional, BEFORE the import: an importable `framework` from the environment
 # (PYTHONPATH, an installed copy) must never shadow this file's own tree.
 _BOOTSTRAP_ROOT = str(Path(__file__).resolve().parents[2])
