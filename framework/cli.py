@@ -90,11 +90,12 @@ def usage() -> str:
         "usage: framework <command> [args...]\n"
         "\n"
         "commands:\n"
-        "  validate    run the validation suite (validate.py --profile framework|app)\n"
-        "  standalone  prove the package validates holding only its own surface\n"
-        "  init        initialise an application repository (framework.init)\n"
-        "  bootstrap   alias of init - the one-shot install-into-this-repo step\n"
-        "  --version   print the installed distribution version\n"
+        "  validate      run the validation suite (validate.py --profile framework|app)\n"
+        "  standalone    prove the package validates holding only its own surface\n"
+        "  init          initialise an application repository (framework.init)\n"
+        "  bootstrap     alias of init - the one-shot install-into-this-repo step\n"
+        "  integrations  manage framework integrations (opt-in, production-grade)\n"
+        "  --version     print the installed distribution version\n"
     )
 
 
@@ -122,6 +123,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         return init_mod.main(rest)
+    if cmd == "integrations":
+        try:
+            from framework.cli import integrations as integrations_mod
+        except ImportError:
+            print(
+                "framework: `integrations` is not available in this build",
+                file=sys.stderr,
+            )
+            return 2
+        return integrations_mod.main(rest)
     print(f"framework: unknown command {cmd!r}\n\n{usage()}", file=sys.stderr)
     return 2
 

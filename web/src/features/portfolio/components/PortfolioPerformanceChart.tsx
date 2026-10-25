@@ -42,7 +42,18 @@ export function PortfolioPerformanceChart({ accountIds }: { accountIds?: number[
     isError: compareError,
   } = useBenchmarkCompare(period, selectedBenchmarks, accountIds);
 
-  const chartData = buildChartData(perf?.snapshots, compareData, selectedBenchmarks);
+  const chartDataRaw = buildChartData(perf?.snapshots, compareData, selectedBenchmarks);
+  // Defense in depth: enforce window-authoritative axis. Even if the API regresses,
+  // the chart must not stretch to dates outside the portfolio's loaded window.
+  const portfolioDates = (perf?.snapshots || []).map((s) => s.date).sort();
+  const windowStart = portfolioDates[0];
+  const windowEnd = portfolioDates[portfolioDates.length - 1];
+  const chartData = windowStart && windowEnd
+    ? chartDataRaw.filter((d) => {
+        const ds = String(d.date);
+        return ds >= windowStart && ds <= windowEnd;
+      })
+    : chartDataRaw;
   const dateAxis = getDateAxis(
     period,
     chartData.map((d) => String(d.date)),

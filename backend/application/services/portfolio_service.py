@@ -3053,10 +3053,16 @@ class PortfolioService:
                     window_dates=grid,
                 )
                 if series:
+                    window_start_iso = window_start.isoformat()
+                    window_end_iso = end_date.isoformat()
+                    clipped = [
+                        p for p in series
+                        if window_start_iso <= p["date"] <= window_end_iso
+                    ]
                     benchmark_series_list.append({
                         "symbol": sym,
                         "name": sym,
-                        "data": series,
+                        "data": clipped,
                     })
 
         return {
@@ -3652,10 +3658,16 @@ class PortfolioService:
                     window_dates=grid,
                 )
                 if series:
+                    window_start_iso = start_date.isoformat()
+                    window_end_iso = end_date.isoformat()
+                    clipped = [
+                        p for p in series
+                        if window_start_iso <= p["date"] <= window_end_iso
+                    ]
                     benchmark_series_list.append({
                         "symbol": sym,
                         "name": sym,
-                        "data": series,
+                        "data": clipped,
                     })
 
         return {
