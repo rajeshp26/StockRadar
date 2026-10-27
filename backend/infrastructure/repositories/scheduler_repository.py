@@ -895,30 +895,52 @@ class SchedulerRepository:
         the jobs themselves.
 
         Supabase enforces ``job_attempts_job_id_fkey`` — a job cannot be
-        deleted while its ``job_attempts`` rows still exist. The generic
-        attempt prune only removes rows whose ``finished_at`` is older than
-        the window, so a job that is old but whose attempts are newer (or
-        have NULL ``finished_at``) used to violate the FK on every prune cycle.
+        deleted while its ``job_attempts`` rows still exist. Uses batching
+        to avoid URI too long errors when pruning large numbers of jobs.
         """
         cutoff = (now_utc() - timedelta(days=cutoff_days)).isoformat()
-        r = supabase.table(self.JOBS_TABLE) \
-            .select("id") \
-            .eq("status", status) \
-            .lt("updated_at", cutoff) \
-            .execute()
-        job_ids = [row["id"] for row in (r.data or [])]
-        if not job_ids:
-            return 0
+        total_deleted = 0
+        batch_size = 100
+        
+        while True:
+            try:
+                r = supabase.table(self.JOBS_TABLE) \
+                    .select("id") \
+                    .eq("status", status) \
+                    .lt("updated_at", cutoff) \
+                    .limit(batch_size) \
+                    .execute()
+            except Exception as e:
+                logger.error(f"[PRUNE] Failed to fetch prunable jobs: {e}")
+                break
+            job_ids = [row["id"] for row in (r.data or [])]
+            if not job_ids:
+                break
 
-        supabase.table(self.JOB_ATTEMPTS_TABLE) \
-            .delete() \
-            .in_("job_id", job_ids) \
-            .execute()
-        r = supabase.table(self.JOBS_TABLE) \
-            .delete() \
-            .in_("id", job_ids) \
-            .execute()
-        return len(r.data or [])
+            # Delete attempts in smaller batches to avoid URI limits
+            for i in range(0, len(job_ids), 50):
+                batch = job_ids[i:i+50]
+                try:
+                    supabase.table(self.JOB_ATTEMPTS_TABLE) \
+                        .delete() \
+                        .in_("job_id", batch) \
+                        .execute()
+                except Exception as e:
+                    logger.debug(f"[PRUNE] Failed to delete attempts batch: {e}")
+
+            try:
+                r = supabase.table(self.JOBS_TABLE) \
+                    .delete() \
+                    .in_("id", job_ids) \
+                    .execute()
+                total_deleted += len(r.data or [])
+            except Exception as e:
+                logger.error(f"[PRUNE] Failed to delete jobs batch: {e}")
+                break
+            # If we got fewer than batch_size, we're done
+            if len(job_ids) < batch_size:
+                break
+        return total_deleted
 
     def prune_old_records(self) -> dict[str, int]:
         results = {}

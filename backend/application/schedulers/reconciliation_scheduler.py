@@ -119,16 +119,23 @@ class ReconciliationScheduler:
             first_load = _as_date(candidate.get("first_financial_data_loaded_at"), None)
             if cid is None or first_load is None:
                 continue
+            ticker = candidate.get("ticker_symbol")
+            if not ticker or not str(ticker).strip():
+                logger.warning("Reconciliation: skipping company_id=%s - missing ticker_symbol", cid)
+                continue
             expected = _quarter_ends_between(
                 _quarter_start(first_load), watermark
             )
-            if expected - present_by_company.get(cid, set()):
+            missing_periods = expected - present_by_company.get(cid, set())
+            if missing_periods:
                 jobs.append({
                     "job_type": FINANCIAL_JOB_TYPE,
                     "dedupe_key": FINANCIAL_DEDUPE_TEMPLATE.format(company_id=cid),
                     "resource_type": "company",
                     "resource_id": str(cid),
                     "payload": {
+                        "company_id": int(cid) if isinstance(cid, str) and cid.isdigit() else cid,
+                        "ticker_symbol": str(ticker).strip().upper(),
                         "scopes": FINANCIAL_SCOPES,
                         "reasons": [FINANCIAL_REASON],
                     },

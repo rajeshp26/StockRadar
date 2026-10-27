@@ -723,6 +723,35 @@ def _failure_taxonomy():
         return ALL_CLASSES, BLOCKING_CLASSES
 
 
+
+def _suggest_pattern(contract):
+    if not isinstance(contract, dict):
+        return None
+    obj = str(contract.get('objective','')).lower()
+    if 'plan' in obj or 'design' in obj or 'complex' in obj:
+        return {'pattern': 'planning', 'reason': 'complex goal needs decomposition'}
+    if 'search' in obj or 'tool' in obj or 'api' in obj:
+        return {'pattern': 'react', 'reason': 'tool use indicated'}
+    if 'review' in obj or 'critique' in obj:
+        return {'pattern': 'reflection', 'reason': 'quality review needed'}
+    if 'route' in obj or 'classify' in obj:
+        return {'pattern': 'routing', 'reason': 'classification needed'}
+    return {'pattern': 'chaining', 'reason': 'default sequential approach'}
+
+
+def _gateway_hints(contract):
+    if not isinstance(contract, dict):
+        return {}
+    hints = {}
+    if contract.get('agent') in ['security-auditor']:
+        hints['guardrails'] = 'strict'
+    risk = contract.get('risk') or contract.get('_skill_spec_risk')
+    if risk == 'high':
+        hints['human_gateway'] = 'required'
+    return hints
+
+
+
 def task_status(task_id: str, session_alive=None) -> dict:
     contract, events = _task_load(task_id)
     now = datetime.datetime.now(datetime.timezone.utc)

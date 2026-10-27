@@ -135,6 +135,15 @@ class JobEngine:
         )
 
         try:
+            # Validate payload for company_refresh jobs
+            if job_type == "company_refresh":
+                payload = job.get("payload") or {}
+                scopes = payload.get("scopes", [])
+                if "financials" in scopes and (not payload.get("company_id") or not payload.get("ticker_symbol")):
+                    raise ValueError(f"company_refresh with financials scope missing company_id or ticker_symbol: {payload}")
+                if "market_data" in scopes and (not payload.get("company_id") or not payload.get("ticker_symbol")):
+                    raise ValueError(f"company_refresh with market_data scope missing company_id or ticker_symbol: {payload}")
+            
             result = await handler(job)
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
