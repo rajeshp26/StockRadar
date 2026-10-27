@@ -142,8 +142,13 @@ def startup_check(logger=None) -> bool:
     else:
         print(msg, file=sys.stderr)
 
+    # Fail fast on critical dependency drift by default
+    if critical:
+        raise RuntimeError(
+            "PRICE_PREFLIGHT_FATAL: pipeline-critical dependency drift detected: "
+            + ", ".join(sorted(critical))
+        )
     if os.environ.get("PRICE_PREFLIGHT_FATAL", "").strip() in ("1", "true", "yes"):
-        # Only a pipeline-critical drift is fatal; unrelated package drift is noise.
         if critical:
             raise RuntimeError(
                 "PRICE_PREFLIGHT_FATAL: pipeline-critical dependency drift detected: "
