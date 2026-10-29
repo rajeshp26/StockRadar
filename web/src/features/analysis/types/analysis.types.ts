@@ -457,6 +457,22 @@ export interface DividendYieldData {
   yield_history: DividendYieldHistoryPoint[];
 }
 
+export type DividendResolutionLevel = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'unknown';
+
+export interface DividendDataSourceResolution {
+  brokerage_id?: number;
+  brokerage_code?: string;
+  brokerage_name?: string;
+  resolution: DividendResolutionLevel;
+  note?: string | null;
+}
+
+export interface DividendDataResolution {
+  effective: DividendResolutionLevel;
+  sources: DividendDataSourceResolution[];
+  note?: string | null;
+}
+
 export interface DividendAnalysis {
   symbol: string;
   pays_dividend: boolean;
@@ -464,6 +480,7 @@ export interface DividendAnalysis {
   safety: DividendSafetyData | null;
   growth: DividendGrowthData | null;
   yield_analysis: DividendYieldData | null;
+  data_resolution?: DividendDataResolution;
 }
 
 // ── Magic Formula ─────────────────────────────────────────────────────────────

@@ -13,6 +13,11 @@ rather than trusting this summary if the two ever disagree.
 
 This skill covers the implementation stack only. The design system for this repo (dark glass finance UI: tokens in `tokens.css`, component/pattern/data-viz specs, accessibility and motion rules) lives in `apple-ui` — load it together with this skill on every UI task. It is a mandatory pairing, not an option.
 
+Interaction behaviour (state coverage, feedback timing, failure modes, component-system choice)
+is covered by `designmotion-design`; load it when the surface introduces or changes a pattern.
+Advisory CSS/animation craft references live in `design/skills/` and are read on demand, never
+mandatory. Routing precedence: `framework/opencode/skill-routing.md`.
+
 ## Required, no exceptions
 
 | Concern | Tool | Notes |

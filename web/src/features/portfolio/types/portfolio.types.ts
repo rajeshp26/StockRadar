@@ -218,6 +218,20 @@ export const PERIOD_OPTIONS: { label: string; value: TimePeriod }[] = [
   { label: "All Time", value: "ALL" },
 ];
 
+export type DividendResolutionLevel = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'unknown';
+
+export interface DividendDataResolution {
+  effective: DividendResolutionLevel;
+  sources: Array<{
+    brokerage_id?: number;
+    brokerage_code?: string;
+    brokerage_name?: string;
+    resolution: DividendResolutionLevel;
+    note?: string | null;
+  }>;
+  note?: string | null;
+}
+
 export const ACCOUNT_TYPE_COLORS: Record<string, string> = {
   TFSA: "emerald",
   RRSP: "indigo",

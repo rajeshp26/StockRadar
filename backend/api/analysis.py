@@ -107,7 +107,19 @@ async def get_dividend_analysis(
     try:
         sym     = _normalize(symbol)
         service = _get_dividend_service()
-        return await service.get_dividend_analysis(sym)
+        result  = await service.get_dividend_analysis(sym)
+        try:
+            auth_id = user.get("sub") if isinstance(user, dict) else None
+            if auth_id:
+                user_id = _resolve_db_user_id(auth_id)
+                from infrastructure.repositories.portfolio_repository import PortfolioRepository
+                repo = PortfolioRepository()
+                resolution = repo.get_dividend_resolution_for_user(user_id, sym)
+                if resolution:
+                    result["data_resolution"] = resolution
+        except Exception as res_exc:
+            logger.debug("Failed to attach dividend resolution for %s: %s", symbol, res_exc)
+        return result
     except HTTPException:
         raise
     except ValueError as ve:

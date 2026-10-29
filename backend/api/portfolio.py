@@ -2161,3 +2161,22 @@ async def get_market_exposure(
     except Exception as e:
         logger.error(f"Market exposure failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to compute market exposure")
+
+
+@router.get("/portfolio/dividends/resolution", tags=["Portfolio"], status_code=200)
+@limiter.limit("30/minute")
+async def get_dividend_resolution(
+    request: Request,
+    symbol: str | None = None,
+    user: dict = Depends(get_current_user_dep),
+) -> dict:
+    try:
+        db_user_id = _resolve_user(user)
+        service = _get_portfolio_service()
+        res = service.repo.get_dividend_resolution_for_user(db_user_id, symbol)
+        return {"success": True, **res}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get dividend resolution: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get dividend resolution")

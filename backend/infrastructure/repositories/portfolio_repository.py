@@ -1269,6 +1269,89 @@ class PortfolioRepository:
             logger.error(f"Failed to get company currencies: {e}")
             return []
 
+    def get_brokerages_with_resolution(
+        self, brokerage_ids: list[int] | None = None
+    ) -> list[dict[str, Any]]:
+        """Get brokerages with dividend resolution metadata."""
+        try:
+            q = self.client.table("portfolio_brokerages").select(
+                "brokerage_id, brokerage_code, brokerage_name, dividend_resolution, dividend_resolution_note"
+            )
+            if brokerage_ids:
+                q = q.in_("brokerage_id", brokerage_ids)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            logger.error(f"Failed to get brokerages with resolution: {e}")
+            return []
+
+    def get_dividend_resolution_for_user(
+        self, user_id: int, symbol: str | None = None
+    ) -> dict[str, Any]:
+        """Get effective dividend data resolution for user's accounts, optionally filtered by symbol."""
+        try:
+            accounts = self.get_user_accounts(user_id, active_only=True)
+            if not accounts:
+                return {"effective": "unknown", "sources": []}
+
+            account_ids = [a["account_id"] for a in accounts]
+            relevant_account_ids = account_ids
+
+            if symbol:
+                try:
+                    tx = (
+                        self.client.table("portfolio_transactions")
+                        .select("account_id")
+                        .eq("symbol", symbol.upper())
+                        .in_("account_id", account_ids)
+                        .limit(10000)
+                        .execute()
+                    )
+                    tx_accounts = {r["account_id"] for r in (tx.data or [])}
+                    if tx_accounts:
+                        relevant_account_ids = list(tx_accounts)
+                except Exception as e:
+                    logger.debug(f"Failed to filter accounts by symbol for resolution: {e}")
+                    relevant_account_ids = account_ids
+
+            acc_to_broker = {}
+            for a in accounts:
+                if a["account_id"] in relevant_account_ids:
+                    brokerage = a.get("portfolio_brokerages") or {}
+                    acc_to_broker[a["account_id"]] = {
+                        "brokerage_id": a.get("brokerage_id"),
+                        "brokerage_code": brokerage.get("brokerage_code") or a.get("brokerage_code"),
+                        "brokerage_name": brokerage.get("brokerage_name") or a.get("brokerage_name"),
+                    }
+
+            b_ids = list({v["brokerage_id"] for v in acc_to_broker.values() if v.get("brokerage_id")})
+            if not b_ids:
+                return {"effective": "unknown", "sources": []}
+
+            b_map = {b["brokerage_id"]: b for b in self.get_brokerages_with_resolution(b_ids)}
+
+            sources = []
+            for bid, binfo in b_map.items():
+                sources.append(
+                    {
+                        "brokerage_id": bid,
+                        "brokerage_code": binfo.get("brokerage_code"),
+                        "brokerage_name": binfo.get("brokerage_name"),
+                        "resolution": binfo.get("dividend_resolution") or "unknown",
+                        "note": binfo.get("dividend_resolution_note"),
+                    }
+                )
+
+            if not sources:
+                return {"effective": "unknown", "sources": []}
+
+            order = {"daily": 0, "weekly": 1, "monthly": 2, "quarterly": 3, "unknown": 4}
+            effective = min(sources, key=lambda s: order.get(s.get("resolution"), 4))["resolution"]
+            return {"effective": effective, "sources": sources}
+        except Exception as e:
+            logger.error(f"Failed to get dividend resolution for user {user_id}: {e}")
+            return {"effective": "unknown", "sources": []}
+
     def get_companies_info(self, company_ids: list[int]) -> list[dict[str, Any]]:
         """Fetch company info including cdr_ratio for CDR pricing."""
         if not company_ids:

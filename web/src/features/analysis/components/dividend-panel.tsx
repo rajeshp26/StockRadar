@@ -2,7 +2,7 @@
 import React, { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import {
-    TrendingDown, AlertTriangle, TrendingUp, CheckCircle2,
+    TrendingDown, AlertTriangle, TrendingUp, CheckCircle2, Info,
 } from "lucide-react";
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -14,7 +14,7 @@ import {
     fmtCurrency, fmtPct,
 } from "./shared-ui";
 import type {
-    DividendAnalysis, DividendRating,
+    DividendAnalysis, DividendRating, DividendDataResolution, DividendResolutionLevel,
 } from "../types/analysis.types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +217,49 @@ const GrowthLineChart = React.memo(function GrowthLineChart({ data }: { data: { 
 // ─────────────────────────────────────────────────────────────────────────────
 // No-dividend state
 // ─────────────────────────────────────────────────────────────────────────────
+function DataResolutionNotice({ resolution }: { resolution?: DividendDataResolution }) {
+    if (!resolution || !resolution.sources?.length) return null;
+    const eff = resolution.effective;
+    if (eff === 'daily') return null;
+
+    const labels: Record<DividendResolutionLevel, string> = {
+        daily: 'Daily',
+        weekly: 'Weekly',
+        monthly: 'Monthly',
+        quarterly: 'Quarterly',
+        unknown: 'Unknown',
+    };
+
+    const primary = resolution.sources[0];
+    const name = primary?.brokerage_name || primary?.brokerage_code || 'your broker';
+
+    return (
+        <div className="flex items-start gap-3 p-4 rounded-2xl bg-amber-500/8 border border-amber-500/25">
+            <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+                <p className="text-sm text-white/80">
+                    <span className="font-semibold text-white">Dividend data resolution: {labels[eff]}</span> — available from {name}.
+                </p>
+                <p className="text-xs text-white/50 leading-relaxed">
+                    {eff === 'monthly'
+                        ? 'Dividend data from Wealthsimple is provided at monthly/statement level in the exported CSV. Per-day cash flow breakdown is not available from this feed, so values shown are aggregated to the available resolution.'
+                        : eff === 'weekly'
+                        ? 'Dividend data is provided at weekly resolution from your connected brokerage. Some intraday/per-day timing details may be aggregated.'
+                        : eff === 'quarterly'
+                        ? 'Dividend data is provided at quarterly resolution from your connected brokerage. Timing details may be limited.'
+                        : 'Dividend data resolution is limited from your connected brokerage. Some timing/details may be aggregated.'}
+                    {primary?.note ? ` ${primary.note}` : ''}
+                </p>
+                {resolution.sources.length > 1 && (
+                    <p className="text-[11px] text-white/40">
+                        Sources: {resolution.sources.map(s => s.brokerage_name || s.brokerage_code).join(', ')}
+                    </p>
+                )}
+            </div>
+        </div>
+    );
+}
+
 function NoDividendState() {
     return (
         <div className="glass-panel p-12 flex flex-col items-center text-center space-y-6 animate-fade-up">
@@ -298,6 +341,10 @@ export function DividendPanel({ symbol }: { symbol: string }) {
                 </div>
             )}
 
+            {data?.data_resolution && (
+                <DataResolutionNotice resolution={data.data_resolution} />
+            )}
+
             {paysDividend === false && !loading ? (
                 <NoDividendState />
             ) : (
@@ -346,6 +393,12 @@ export function DividendPanel({ symbol }: { symbol: string }) {
                                         <span className="glass-badge-dark">
                                             {fmtFrequency(frequency || "quarterly")} Payer
                                         </span>
+                                        {data?.data_resolution?.effective && data.data_resolution.effective !== 'daily' && (
+                                            <span className="glass-badge" title="Dividend data granularity from your connected brokerage">
+                                                <Info className="h-2.5 w-2.5 mr-1" />
+                                                Data: {data.data_resolution.effective === 'monthly' ? 'Monthly' : data.data_resolution.effective === 'weekly' ? 'Weekly' : data.data_resolution.effective === 'quarterly' ? 'Quarterly' : 'Limited'}
+                                            </span>
+                                        )}
                                     </>
                                 ) : null}
                             </div>
