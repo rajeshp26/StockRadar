@@ -1,0 +1,15 @@
+﻿powershell : Get-Content : Cannot find path 'C:\Project\StockerPro\StockerPro\div_schema2.txt' because it does not 
+exist.
+At line:1 char:1
++ powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content d ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Get-Content : C...does not exist.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+At line:1 char:1
++ Get-Content div_schema2.txt
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Project\Stoc...div_schema2.txt:String) [Get-Content], ItemNotFoundEx 
+   ception
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+ 

@@ -5,7 +5,7 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 
 | Gate | 0 | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|---|
-| G-ENTRY entry | approved plan + declared scope + acceptance criteria, no open questions — dispatch allowed | named missing prerequisite — NO TASK DISPATCH | BLOCKED (python3 absent / unreadable) | — | NOT_APPLICABLE (ENTRY_EXEMPT=TRIVIAL) |
+| G-ENTRY entry | approved plan + declared scope + acceptance criteria, no open questions, routing skills required by the plan — dispatch allowed | named missing prerequisite — NO TASK DISPATCH | BLOCKED (python3 absent / unreadable) | — | NOT_APPLICABLE (ENTRY_EXEMPT=TRIVIAL) |
 | G1 contract   | valid, types in sync, tests green | validation failed / CONTRACT_CHANGE | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no contracts dir) |
 | G2 impact     | impact mapped to N tests | UNKNOWN_IMPACT | — | — | NOT_APPLICABLE (no changes) |
 | G3 architecture | boundaries respected | boundary violation | BLOCKED (pyyaml absent) | — | NOT_APPLICABLE (no architecture rules) |
@@ -17,7 +17,9 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G9 scope      | within declared scope (or SKIP: no plan / no changes) | undeclared files listed | — | — | — |
 | G10 permission | policy conformant | violations found | BLOCKED (python3 absent) | — | NOT_APPLICABLE (opencode.json absent) |
 | G-T0 tool_readiness | tool plan exists, registry present, contracts in place | tool plan missing or tools unavailable | BLOCKED (python3 absent) | — | — |
-| G-T1 tool_utilization | tool evidence present in verification artifacts | tool evidence gaps found | BLOCKED (python3 absent) | — | NO_VERIFICATION_ARTIFACTS |
+| G-T1 tool_utilization | tool evidence present in verification artifacts | tool evidence gaps found, OR no artifact where the plan requires evidence | BLOCKED (python3 absent / plan depth unreadable) | — | NOT_APPLICABLE (no artifacts and the plan does not require evidence) |
+| G-SKILL-COVERAGE | every skill the plan implies by file scope and by its Capability Matrix is named in required_skills | skill coverage errors listed | BLOCKED (python3 absent / plan or schema unreadable) | — | NOT_APPLICABLE (framework/plan/lint_mode=off) |
+| G-SKILL-USE | every skill the plan requires was recorded as invoked in a session attributed to the task | required skill(s) have no recorded invocation | BLOCKED (python3 absent / plan or record store unreadable) | CAPABILITY_MISSING (telemetry plugin absent — invocation unobservable) | NOT_APPLICABLE (lint_mode=off, plan requires no skills, or no telemetry records) |
 | G11 evidence | claims valid, provenance present | invalid claims listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no claims recorded) |
 | G12 provider | healthy — dispatch allowed | unhealthy — NO TASK DISPATCH | BLOCKED (cannot verify provider health) | — | NOT_APPLICABLE (no model resolved) |
 | G13 worker | all workers healthy or terminal | unhealthy worker(s) listed | BLOCKED (cannot read task state) | — | NOT_APPLICABLE (no tasks registered) |
@@ -221,7 +223,6 @@ FAIL (1) is a verdict about the code.
 
 
 ## G-ENTRY is a pre-flight gate - it refuses dispatch, it does not report it
-
 G-ENTRY runs BEFORE any task() dispatch, mirroring G12. A task whose plan does not satisfy
 the entry contract - an approval token (status: approved | approved: true | accepted: true),
 declared files_or_components, acceptance_criteria, and no unresolved open_questions - has no
@@ -231,3 +232,81 @@ skip, and never a pass. ENTRY_EXEMPT=TRIVIAL is the only documented bypass (team
 trivial-request gate) and returns 4 NOT_APPLICABLE - a recorded exemption, not a verdict on
 the plan. Exit 2 means python3 was unavailable; it is never read as pass. G9 remains the
 post-hoc scope check; G-ENTRY is its pre-flight half.
+
+## G-SKILL-COVERAGE separates resolution from selection
+
+`validate.py` proves a skill RESOLVES: its directory exists on a configured `skills.paths`
+root, its frontmatter parses, its `name:` matches the directory, and every skill named in
+`skill-routing.md` is found. Resolution is not selection. A skill can resolve perfectly and
+never be required by any task, which is how a routing table becomes decoration.
+
+G-SKILL-COVERAGE closes selection at the plan, the last point before work starts, and it
+reads two independent sources:
+
+| Source | Rule | What it proves |
+|---|---|---|
+| declared file scope | SC02, SC03 | a plan touching UI paths names `apple-ui` + `frontend-react`; a plan creating a new UI surface also names `designmotion-design` (skill-routing.md:22-24) |
+| the ask's Capability Matrix | CM01-CM05 | every dimension the team-lead matrix declares has a verdict, and every `yes` appears in some task's `required_skills` |
+
+The dimension list is not duplicated in code: it is read from the Capability Matrix table in
+`team-lead.md`, so adding a row to the doc changes what the check demands. An unknown
+dimension in a matrix is a warning (a typo), a missing one is an error (an unanswered claim).
+
+A matrix is optional today (CM05 is a warning): no plan in flight has one, and making its
+absence fatal would block dispatch on a document nobody has written yet. The upgrade path is
+to flip CM05 to an error once every active phase carries a matrix; that switch is a code
+change in `framework/tools/skill_coverage.py`, not a config toggle, so it cannot be relaxed
+by an agent at runtime.
+
+G-SKILL-COVERAGE shares `framework/plan/lint_mode` with the DID-016 plan lint on purpose:
+one switch disables both halves of the pre-dispatch contract, so "temporarily advisory"
+cannot mean two different things in two gates.
+
+## G-SKILL-USE separates requirement from invocation
+
+G-SKILL-COVERAGE proves a plan REQUIRED a skill. It cannot prove the skill was ever loaded.
+That gap is what G-SKILL-USE closes, and it is the only gate in the family that reads
+behaviour instead of intent:
+
+| Question | Artifact | Gate |
+|---|---|---|
+| does the skill resolve and parse? | skill directory + frontmatter | `validate.py` |
+| does the plan require it? | `required_skills` + Capability Matrix | G-SKILL-COVERAGE |
+| was it actually invoked? | `skills_loaded` in the session record | G-SKILL-USE |
+
+It reads `.planning/telemetry/records.jsonl` through `framework/tools/skill_use.py`. There is
+no separate recorder: `framework/opencode/plugin/telemetry.ts` already captures the `skill`
+tool call into `skills_loaded` and flushes it on every heartbeat and final write. A second log
+would be a second source of truth for one fact, and it would put the sensor in agent-writable
+space, where whatever is being measured could edit the measurement.
+
+Only records attributed to the task count. A skill loaded while working on task `T-01` is not
+evidence for task `T-02`, so the gate passes `--task` and filters. With no task id it judges
+every session in the store and says so in its evidence, which is a weaker claim made openly
+rather than a stronger one assumed.
+
+**`unknown` is a sensor defect, not a skill** (SU01). `telemetry.ts` falls back to `unknown`
+when it cannot read the skill name off the tool call. SU01 reports that, and an `unknown`
+entry never satisfies a required skill: otherwise a broken sensor would read as a clean run.
+SU01 is a warning because it is a finding about the instrument, not about the task; SU02 is
+the error, and it names the skill that was never invoked.
+
+Exit 4 covers three distinct non-judgements (mode off, plan requires nothing, store empty).
+Each is emitted with evidence naming which one it was. Exit 3 is reserved for a missing
+telemetry plugin, where no skill call could have been recorded at all: that is a capability
+gap, not a clean run, and it is never reported as 0.
+
+## G-T1: an absent artifact is a failure when the plan required evidence
+
+G-T1 used to report SKIP/pass when no verification artifact existed, making "nothing to
+check" indistinguishable from "checked and clean". It now derives the required depth from the
+plan (`framework/tools/evidence_level.py`) and splits three ways:
+
+| Plan declares | No artifact found | Exit |
+|---|---|---|
+| complexity L2-L4, or any `integration` / `e2e` / `browser` / `data-invariant` criterion | the work asserted more than it proved | 1 FAIL |
+| L0/L1 with only unit/static/manual/contract criteria | nothing was claimed that needs an artifact | 4 NOT_APPLICABLE |
+| no `ENTRY_PLAN` given | depth is underivable, so the gate refuses to guess | 4 NOT_APPLICABLE (evidence names `plan_context: absent`) |
+
+The caller passes `ENTRY_PLAN`; the gate never reads an environment variable for policy,
+because an agent can set one and the plan is the artifact under review.

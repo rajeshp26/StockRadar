@@ -9,10 +9,12 @@
 #   5. Tool failures were handled
 #
 # Exit: 0 required tools used and evidenced | 1 tool usage gaps found | 2 BLOCKED
+#       4 NOT_APPLICABLE (no artifacts AND the plan does not require evidence)
 GATE_NAME="g_tool_utilization"
 . "$(dirname "$0")/_lib.sh"
 
 BLOCKED=2
+ENTRY_PLAN="${ENTRY_PLAN:-}"
 
 have python3 || { log "BLOCKED  python3 unavailable"; persist blocked "no python3"; exit $BLOCKED; }
 
@@ -55,7 +57,7 @@ try:
             gaps.append(os.path.basename(vfile))
     
     if gaps:
-        print(f'GAPS:Tool evidence missing in: {', '.join(gaps)}')
+        print('GAPS:Tool evidence missing in: ' + ', '.join(gaps))
         sys.exit(1)
     
     print('OK')
@@ -70,9 +72,47 @@ rc=$?
 out=$(printf '%s' "$TOOL_EVIDENCE_CHECK" | tr -d '\r')
 
 if [ "$out" = "NO_VERIFICATION_ARTIFACTS" ]; then
-    log "SKIP  no verification artifacts to check"
-    persist pass "no verification artifacts"
-    pass "no verification artifacts to check"
+    # EXIT_CODES.md (G-T1 row) defines exit 4 for the case where there is nothing to judge;
+    # skip() is retired because it reported result=pass on an unjudged gate. But "no artifact"
+    # is only innocent when the task never claimed depth. For L2+ or a real-stack criterion,
+    # an absent artifact is a FAILURE -- the work asserted something it did not prove.
+    # The depth comes from the plan (framework/tools/evidence_level.py), never from an env var:
+    # an agent can set an env var, but the plan is the artifact under review.
+    if [ -z "$ENTRY_PLAN" ] || [ ! -f "$ENTRY_PLAN" ]; then
+        log "NOT_APPLICABLE  no verification artifacts and no ENTRY_PLAN to derive the required depth"
+        persist not_applicable "no artifacts, no plan context"
+        not_applicable "no verification artifacts and no ENTRY_PLAN to derive the required depth" \
+            '{"verification_artifacts":0,"plan_context":"absent"}'
+    fi
+
+    if [ ! -f framework/tools/evidence_level.py ]; then
+        persist blocked "evidence_level.py missing; cannot decide whether artifacts are required"
+        log "BLOCKED  framework/tools/evidence_level.py missing -- cannot judge G-T1"
+        exit $BLOCKED
+    fi
+
+    lvl="$(python3 framework/tools/evidence_level.py "$ENTRY_PLAN" 2>&1)"; lvl_rc=$?
+    lvl="$(printf '%s' "$lvl" | tr -d '\r')"
+    case "$lvl_rc" in
+        0) ;;
+        *) persist blocked "evidence level unreadable (exit $lvl_rc)"
+           log "BLOCKED  evidence level unreadable (exit $lvl_rc): $lvl"
+           exit $BLOCKED ;;
+    esac
+
+    case "$lvl" in
+        REQUIRED*)
+            persist fail "no verification artifact where the plan requires evidence: $lvl"
+            fail "no verification artifact, but the plan requires evidence ($lvl); an absent artifact is not a clean result" ;;
+        OPTIONAL*)
+            log "NOT_APPLICABLE  no verification artifacts; plan does not require them ($lvl)"
+            persist not_applicable "no artifacts; plan does not require evidence"
+            not_applicable "no verification artifacts; the plan does not require them ($lvl)" \
+                '{"verification_artifacts":0,"plan_requires_evidence":false}' ;;
+        *) persist blocked "evidence level produced no verdict: $lvl"
+           log "BLOCKED  evidence level produced no verdict: $lvl"
+           exit $BLOCKED ;;
+    esac
 fi
 
 if [ $rc -ne 0 ]; then

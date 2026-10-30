@@ -166,6 +166,31 @@ if [ "$lint_mode" != "off" ]; then
   fi
 fi
 
+# 4c. Skill coverage: does the plan REQUIRE the skills the routing table mandates?
+# validate.py proves a skill RESOLVES; nothing proved a task SELECTS one, so a plan touching
+# web/src/** could omit apple-ui/frontend-react and still dispatch -- the mandatory rows in
+# skill-routing.md were unread by any machine. Composed from the standalone gate so the
+# verdict is independently runnable and cannot drift from the dispatch decision.
+# ENTRY_PLAN is passed through verbatim: this shell already stat'ed it above, so the child
+# cannot hit a path-resolution difference of its own.
+if [ "$lint_mode" != "off" ]; then
+  ENTRY_TASK="" ENTRY_PLAN="$ENTRY_PLAN" bash framework/gates/g_skill_coverage.sh
+  skill_rc=$?
+  case "$skill_rc" in
+    0) ;;
+    1) if [ "$lint_mode" = "enforce" ]; then
+         persist fail "skill coverage errors block dispatch"
+         fail "skill coverage errors block dispatch; name the missing skill, complete the capability matrix, or change the file scope"
+       fi ;;
+    4) log "NOT_APPLICABLE  skill coverage: skills system not configured in this root" ;;
+    *) if [ "$lint_mode" = "enforce" ]; then
+         persist blocked "skill coverage unreadable (exit $skill_rc)"
+         log "BLOCKED  skill coverage unreadable (exit $skill_rc)"
+         exit $BLOCKED
+       fi ;;
+  esac
+fi
+
 # 5. ASK coverage (DID-012 PR-D1 / invariant I1): an executable task must be bound to a
 # durable ASK record before dispatch. A terminal task is not executable, so the adapter
 # reports NOT_APPLICABLE (4) and the gate continues. Unbound is a hard refusal; an

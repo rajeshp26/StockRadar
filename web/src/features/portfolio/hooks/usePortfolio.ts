@@ -502,6 +502,21 @@ export function useDividendHistory(accountId: number | null) {
     });
 }
 
+export function useAllDividendHistory(accountIds?: number[]) {
+    const { portfolioService } = useServices();
+    const idsParam = accountIds && accountIds.length > 0
+        ? [...accountIds].sort().join(",")
+        : undefined;
+
+    return useQuery<DividendHistoryResponse, Error>({
+        queryKey: QK.portfolioDividendHistory(idsParam || 'all'),
+        queryFn: () => portfolioService.getAllDividendHistory(idsParam),
+        staleTime: STALE.PORTFOLIO,
+        gcTime: GC.PORTFOLIO,
+        retry: 1,
+    });
+}
+
 /**
  * Hook for transactions across all (or specified) accounts.
  * When accountIds is undefined, returns data for ALL accounts.

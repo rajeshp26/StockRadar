@@ -272,7 +272,17 @@ export const TelemetryPlugin: Plugin = async ({ $ }) => {
         }
       }
       if (input?.tool === "skill") {
-        rec.skills_loaded.add(String(input?.args?.name ?? "unknown"))
+        // The skill tool's args are not in one fixed place: the task tool delivers them at
+        // input.input.args (see the note above), other tools at input.args, and a caller may
+        // pass a plain args object. Reading a single location recorded EVERY skill call as
+        // "unknown", so skills_loaded said nothing and G-SKILL-USE could never judge. Two
+        // attempts to guess the shape both got it wrong -- so unwrap until the id (the skill
+        // tool's parameter) or name appears, at any of those depths.
+        const skillIdOf = (o: any, depth = 0): any => {
+          if (!o || typeof o !== "object" || depth > 3) return undefined
+          return o.id || o.name || skillIdOf(o.args, depth + 1) || skillIdOf(o.input, depth + 1)
+        }
+        rec.skills_loaded.add(String(skillIdOf(input) ?? "unknown"))
       }
       if (input?.tool === "bash") {
         const cmd = String(input?.args?.command ?? "")

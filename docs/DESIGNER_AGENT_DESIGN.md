@@ -379,6 +379,9 @@ probes deliberately stopped before design work.
   (F1 in `framework/validate.py` landed directly — not plane-locked).
 - Routing/dispatch wiring: **staged as `docs/designer-agent/ui-designer-routing.patch`**,
   `git apply --check` exit 0 — plane-locked → human (see §10.7).
+- Skill-library integration (`designmotion-design` + the 17-skill advisory corpus): **applied**
+  as `docs/designer-agent/design-skills-integration.patch`, post-apply `--profile framework`
+  0 fail (see §10.8).
 - Static verification: **green** (`--profile framework` 0 fail; plane checker exit 0).
 - End-to-end usability: spawn and approval gate **verified** (§10.4); a full design run is
   still unperformed.
@@ -464,3 +467,335 @@ python framework/validate.py --profile framework    # 0 fail
 python framework/security/check_enforcement_plane.py # exit 0
 git status --short                                    # shows the 3 routed files
 ```
+
+### 10.8 Design-skills integration — `designmotion-design` + the 17-skill corpus
+
+Four defects, one integration. They were all "the file is on disk, so it must be wired":
+
+1. `designmotion-design` sat under `framework/opencode/skills/` but was **untracked and routed
+   nowhere** — spawnable content, no dispatch path.
+2. `apple-ui` and `frontend-react` never pointed at it, and its own `SKILL.md` still pointed at
+   skills that do not exist here (`settigation-code`, `practical-ui`) plus `muse.*` connector
+   tools and `/opt/muse/...` paths from its upstream extraction. A pointer to a nonexistent
+   skill is worse than no pointer: the reader stops looking.
+3. The imported craft corpus in `design/skills/` (17 skills) was **not in `skills.paths`**, so it
+   was unreachable by name even though the importer had written it.
+4. `framework/opencode/skills/ROUTES.md` was not a router. It was 113 lines of literal
+   `diff --git` output pasted into a markdown file instead of applied — its own first body line
+   is `-diff --git a/framework/opencode/skills/ROUTES.md b/framework/opencode/skills/ROUTES.md`
+   `[VERIFIED: docs/designer-agent/design-skills-integration.patch:86-95]` — and it duplicated
+   `skill-routing.md`, the authoritative table.
+
+**Decisions taken (with the trade-off that drove each).**
+
+| Decision | Why, and what it costs |
+|---|---|
+| Extend the two existing routers; do not add a third | `skill-routing.md` is the table the delegation rule names. A second table splits the single source. Cost: the UI region of that table is now four rows instead of two |
+| Mandatory UI loading stays limited to `apple-ui`, `frontend-react`, `designmotion-design` | Three mandatory skills is the most a UI task can hold and still be read. `designmotion-design` is mandatory only when the surface introduces or changes a pattern/system, not on every CSS tweak |
+| All 17 corpus skills **discoverable, none mandatory** | Discoverability is a `skills.paths` entry; mandate is a routing row. Keeping the corpus advisory preserves the recorded eval verdict (corpus is reference, not rule) and avoids a 20-skill mandatory load |
+| `apple-ui` wins finance tokens/motion/data-viz; `designmotion-design` wins behaviour where `apple-ui` is silent; a direct conflict resolves to `apple-ui` and the plan records it | Precedence has to resolve *conflicts*, not suppress *loading*. Silence is the only place a second voice is useful |
+| Delete `ROUTES.md` and `designmotion-design/skill.yaml` | `ROUTES.md` duplicated the router and was corrupted. `skill.yaml` declared `include_in_prompt: false` — upstream muse metadata that contradicted the skill being first-class here |
+
+**Deliverable — `docs/designer-agent/design-skills-integration.patch`** (plane-locked; emitted by
+script, applied by the human — never by an agent):
+
+| # | File | Change |
+|---|---|---|
+| A | `opencode.json` | `skills.paths` += `design/skills` (2 inserted, 1 removed line) |
+| B | `skill-routing.md` | `designmotion-design` row, advisory-corpus row, "UI design precedence" section, Implementer checkbox |
+| C | `skill-integration-matrix.md` | implementer + ui-designer role bindings, dependency-route line, §6 routing-resolution bullet |
+| D | `skills/apple-ui/SKILL.md` | pairing paragraph (behaviour layer + precedence pointer) |
+| E | `skills/frontend-react/SKILL.md` | behaviour-layer pointer, corpus-is-advisory note |
+| F | `skills/designmotion-design/SKILL.md` | repo-real pointers: no `settigation-code`, no `practical-ui`, no `muse.*`, no `/opt/muse` |
+| G | `skills/designmotion-design/skill.yaml` | **deleted** (muse metadata, `include_in_prompt: false`) |
+| H | `skills/ROUTES.md` | **deleted** (corrupted diff, duplicate router) |
+
+`git apply --check --verbose` exit 0 across 8/8 files; `git apply --stat` → 8 files changed,
+57 insertions, 127 deletions. The 127 deletions are the two whole-file removals, not churn.
+
+Two non-plane files changed alongside it, because they state the rule the patch depends on:
+`framework/tools/import_design_skills.py` (the importer's notice now says *discoverable but
+advisory*, and warns that upstream skill names may be phantom here) and `design/skills/README.md`
+(regenerated from that notice).
+
+The emitter is one-shot by construction: it rewrites *current* content, so once the patch is
+applied its anchors no longer match and it stops with `anchor occurs 0 times, expected exactly 1`
+(or `target does not exist`, for the two deleted files) instead of silently re-emitting a patch
+against an already-changed tree.
+
+**New executable check — this is the part §10.7 lacked.** `framework/validate.py` now derives
+its skill roots from `opencode.json` instead of hardcoding one path, and asserts: every
+configured path exists; every configured path is populated; each `SKILL.md` parses and its
+`name:` equals its directory; no name is declared by two configured roots; and every skill named
+in the `Required Skill` column of `skill-routing.md` resolves on a configured path
+`[VERIFIED: framework/validate.py:715-768]`. Resolution is now a gate verdict, not a reading.
+
+**Pre-apply proof of the post-image.** The workspace cannot be validated against a patch it has
+not applied, so the emitter asserts the target state itself: it reads the *post-image*
+`opencode.json` and *post-image* `skill-routing.md`, then re-runs the same checks
+`[VERIFIED: framework/tools/emit_design_skills_integration_patch.py:199-263]`, called before the
+patch is written `[VERIFIED: framework/tools/emit_design_skills_integration_patch.py:419]`:
+
+```
+target check: 108 skills across 2 roots; 23 routed, all resolve
+files: 8, hunks: 13, removed: 127, added: 57, self-check: OK
+```
+
+The check carries teeth: a fixture row naming `not-a-real-skill` must be reported, otherwise the
+routing assertion would only ever be green because it parsed nothing. Writing this exposed a
+real defect in the emitter — `git diff` prints a file that exists only on the source side with
+the *same* path token twice, so both deletion headers carried a stray `OLD/` token. `git apply`
+tolerated it; `patch -p1` and a human reader would not. The emitter now rebuilds every header as
+`a/<path> b/<path>` and refuses any header whose two sides disagree.
+
+**Residual limit, stated plainly.** The new check proves a routed skill *exists and parses*. It
+does not prove the router *selects* it at runtime — resolution is not dispatch. §10.7's gap is
+therefore narrowed (the table is now checked, not just written) but not closed: nothing asserts
+that a UI task actually loaded `designmotion-design`.
+
+**Observed after applying (this session).** The patch was applied by the human and the gate
+re-ran on the real tree:
+
+- `python framework/validate.py --profile framework` → `VALIDATION PASSED [profile=framework;
+  0 fail, 0 warn, 5 not-applicable]`, now including `PASS  skills path is populated
+  (design/skills)`, frontmatter and name/directory checks for all 17 corpus skills, and
+  `PASS  every skill routed in skill-routing.md resolves on a configured path`. The two checks
+  that were vacuous pre-apply are now real.
+- Runtime discovery moved from inferred to observed: the harness surfaced 14 of the 17 corpus
+  skills as available. The other three — `pick-ui-library`, `prototype`, `review-animations` —
+  are **not** a discovery failure: each declares `disable-model-invocation: true` in its own
+  frontmatter, i.e. explicit-invocation-only by upstream design. 17 on disk, 14 auto-surfaced,
+  3 opt-in, 0 missing.
+- `git add -A framework/opencode/skills` warned that `karpathy-guidelines/SKILL.md` will have
+  CRLF replaced by LF. That file is not part of this change; the warning is `core.autocrlf`
+  normalisation on re-add and leaves its content identical.
+- `git apply --check --reverse` on the same patch exits 0, which proves the tree now in place is
+  byte-identical to the post-image that was emitted — no drift between what was reviewed and
+  what landed. `python framework/security/check_enforcement_plane.py` still reports
+  `OK: enforcement plane consistent (8 paths)` after `opencode.json` changed.
+
+So: discovery at the OpenCode layer is **verified**, and selection by the router is still
+instruction-level. The remaining gap is narrower than §10.7's, and it is stated rather than
+assumed.
+
+**Verification after applying:**
+
+```bash
+git apply docs/designer-agent/design-skills-integration.patch
+git add -A framework/opencode/skills     # designmotion-design/ is untracked: its edited
+                                         # SKILL.md and deleted skill.yaml need staging
+python framework/validate.py --profile framework      # adds: skills path is populated (design/skills)
+                                                      # + frontmatter and name/directory checks for
+                                                      #   all 17 corpus skills
+python framework/security/check_enforcement_plane.py  # exit 0
+git status --short                                    # 6 modified, 2 deleted, 1 new directory
+```
+
+Pre-apply, those checks do not run at all: `design/skills` is not a configured root until the
+patch lands, so the pre-apply run is green *without* them. That is why the emitter's
+`verify_target` exists rather than a promise to check later.
+
+### 10.9 Selection is now enforced, not promised
+
+10.8 closed the discovery half: the corpus resolves, and every routed skill is checked for
+existence. It left the selection half as instruction. The concrete failure that survived was
+this shape:
+
+> `apple-ui` resolves, so `validate.py` is green. A plan touches
+> `web/src/features/portfolio/components/DividendsTab.tsx`, names `frontend-react` and
+> `unit-test-authoring`, and omits `apple-ui`. `skill-routing.md:24` says the pair is
+> unconditional. Dispatch proceeds, the implementer never loads the design system, and every
+> gate that ran was telling the truth about something else.
+
+Three things were added, all of them exit codes.
+
+**1. `framework/tools/skill_coverage.py` + `framework/gates/g_skill_coverage.sh`.** The
+plan is the last artifact before work starts, so it is where selection is forced. Two
+independent sources are read:
+
+| Source | Rules | What it proves |
+|---|---|---|
+| declared file scope | SC02, SC03 | a plan touching UI paths names `apple-ui` + `frontend-react`; a new UI surface also names `designmotion-design` |
+| the ask's Capability Matrix | CM01-CM05 | every dimension the matrix declares has a verdict, and every `yes` appears in a task's `required_skills` |
+
+The Capability Matrix instance is a `CAPABILITY-MATRIX.yaml` next to the plan
+(`scope: task | phase`). The *dimension list* is not duplicated in code: it is parsed from the
+Capability Matrix table in `team-lead.md`, so adding a row to the doc changes what the check
+demands. A matrix that exists can no longer say `yes` while the plan requires nothing.
+
+`g_entry.sh` composes the gate, so the check is on the dispatch path, and it shares
+`framework/plan/lint_mode` with the DID-016 plan lint - one switch, one meaning.
+
+**2. `G-T1` no longer reads "no artifact" as clean.** It derives the required depth from the
+plan (`framework/tools/evidence_level.py`): L2+ or any `integration` / `e2e` / `browser` /
+`data-invariant` criterion makes a missing artifact a FAIL (1); an L0/L1 plan whose criteria
+are unit/static/manual makes it NOT_APPLICABLE (4); no plan context is NOT_APPLICABLE with
+`plan_context: absent` recorded, because the gate refuses to invent a depth. The env var is
+never the source - an agent can set one, and the plan is the artifact under review.
+
+**3. A latent crash fixed in passing.** `g_tool_utilization.sh` built its gap message with an
+f-string containing single quotes (`f'... {', '.join(gaps)}'`), which is a syntax error before
+Python 3.12. The gate would have crashed exactly when it had something to report - a failure
+mode that hides failures. Replaced with concatenation.
+
+**4. `G-SKILL-USE` closes the invocation gap — but with the sensor that already exists.**
+`framework/tools/skill_use.py` + `framework/gates/g_skill_use.sh` diff the plan's
+`required_skills` against the skills actually recorded as invoked. The important decision here
+is what it reads: `framework/opencode/plugin/telemetry.ts` already captures the `skill` tool
+call into each session record's `skills_loaded` (line 275) and flushes it on every heartbeat
+and final write. A new recorder log would have been a second source of truth for one fact, kept
+in agent-writable space - the measured party editing the measurement. So the gate reads
+`.planning/telemetry/records.jsonl` and the sensor stays in the plane.
+
+Attribution matters: a skill loaded while working on `T-01` is not evidence for `T-02`, so the
+gate filters records by task. With no task it judges every session and records that weaker
+claim in its evidence rather than assuming a stronger one.
+
+**What this does not do.** G-SKILL-COVERAGE proves the plan REQUIRED the skill; G-SKILL-USE
+proves the call was RECORDED. Neither proves the skill's instructions reached the model's
+context, and a recorded call cannot be distinguished from an exploratory one. A PASS reads as
+"the call happened", never as "the skill was applied".
+
+**Verified in this run**
+
+```bash
+python framework/tools/skill_coverage.py --self-test        # 22/22
+python framework/tools/skill_use.py --self-test             # 8/8
+bash framework/gates/test_g_skill_use.sh                    # 14/14
+
+# Controlled experiment: these two plans differ by ONE line (`- apple-ui`) and both pass
+# plan_lint with 0 errors, so the verdict flip is attributable to required_skills alone.
+ENTRY_PLAN=docs/designer-agent/cases/ce-no-design.md   bash framework/gates/g_entry.sh  # exit 1, SC02
+ENTRY_PLAN=docs/designer-agent/cases/ce-with-design.md bash framework/gates/g_entry.sh  # exit 0
+
+ENTRY_PLAN=<plan with a matrix missing api-design> bash framework/gates/g_entry.sh # exit 1, CM01
+ENTRY_PLAN=<plan, matrix yes browser-verification omitted> bash framework/gates/g_entry.sh # exit 1, CM04
+bash framework/gates/g_tool_utilization.sh                     # exit 4, plan_context: absent
+ENTRY_PLAN=<L2/browser plan> bash framework/gates/g_tool_utilization.sh # exit 1
+ENTRY_PLAN=<L1 unit-only plan> bash framework/gates/g_tool_utilization.sh # exit 4
+ENTRY_PLAN=<plan requiring apple-ui + frontend-react> bash framework/gates/g_skill_use.sh
+#   exit 1, SU01 (1 recorded call was 'unknown') + SU02 x2 — against the real record store
+```
+
+The SC02 comparison is the controlled pair above, committed as
+`docs/designer-agent/cases/ce-{no,with}-design.md`. `diff` between them is one added line,
+`  - apple-ui`, and both are lint-clean, so nothing but selection explains the flip. The
+observed failure is:
+
+```
+[skill_coverage] ERROR SC02 required_skills: plan touches UI files
+  (web/src/features/portfolio/components/DividendSectorChart.tsx) but does not require
+  apple-ui; skill-routing.md:22-24 is unconditional for a UI change
+```
+
+The last line is not a hypothetical. The real `.planning/telemetry/records.jsonl` contains one
+session with `skills_loaded: ["unknown"]` while `tools.skill.count` is 1 — the skill call
+happened and its name was not captured. See 10.10.
+
+### 10.10 What is still instruction-level
+
+Two items from the same review are not closed, and both need a human-applied patch because
+they touch the enforcement plane (`framework/opencode/**`, `opencode.json`) - which is the
+point of the plane, not an obstacle to route around.
+
+**The skill-load sensor is installed, wired into a gate, and broken (one line).** The recorder
+exists: `telemetry.ts:275` reads the `skill` tool call's name into `skills_loaded`. It reads it
+from `input?.args?.name`, and in this harness the args are not on `input.args` - the same
+defect the file already documents two blocks earlier for the `task` tool
+(`telemetry.ts:240-244`: "args were read from input?.args, which is undefined in this
+harness - the task tool delivers them under input.input"), which is why `normalizeTaskArgs`
+exists and is already imported. The skill line was never converted, so every skill call is
+recorded as `"unknown"`.
+
+The evidence is in the store, not in the code reading:
+
+```
+records=622 sessions=1 skills=0 unknown_calls=1
+tools.skill.count = 1            # the call happened
+skills_loaded     = ["unknown"]  # its name was not captured
+```
+
+Both facts come from the same session record, so this is a sensor defect and not "the agent
+never loaded a skill". The fix is one statement, reading the args the way the rest of the file
+already does:
+
+```ts
+if (input?.tool === "skill") {
+  const a = normalizeTaskArgs(input)
+  rec.skills_loaded.add(String(a?.id ?? a?.name ?? "unknown"))
+}
+```
+
+`id` first because that is the `skill` tool's documented parameter (`{"id": "<skill-id>"}`);
+`name` is kept as a fallback so the line is correct under either shape. Until this lands,
+`g_skill_use.sh` fails honestly with SU01 + SU02 rather than passing, which is the intended
+behaviour for a broken instrument — but it also means the gate cannot go green yet. The fix is
+in `docs/designer-agent/remaining-plane-patches.patch`.
+
+**Channel A bounding.** The permissions model supports exactly the boundary the review asked
+for - `{action: "skill", resource: "<skill-id>", effect: "deny"}` with per-agent rules under
+`agents.<id>.permissions`, and a `deny` both hides the skill from the model and rejects
+loading. Two corrections to the original proposal:
+
+- The resource is the **skill ID**, not a path. `design/skills/*` is not a matchable pattern;
+  the 17 corpus IDs have no common prefix, so a per-agent deny needs 17 rules or a rename.
+- This repo's `opencode.json` is V1-shaped (`permission`, `bash`, `task`), yet the V1 shape is
+  demonstrably live on this runtime, not inert: a probe `edit` on
+  `framework/opencode/skill-routing.md` was refused with `Permission denied: edit` before any
+  content was matched, which is the `permission.edit` deny working. So the file does not need a
+  V2 rewrite in order for its rules to take effect. What is still unproven is the per-agent
+  key: V1 nests it as `agent.<id>.permission` while V2 documents
+  `agents.<id>.permissions`, and nothing in this run exercised either. Settle that one key with
+  a throwaway subagent before writing a per-agent deny, or the rule will be silently inert even
+  though the top-level denies work.
+
+**Why the three silent corpus skills are silent.** `pick-ui-library`, `prototype` and
+`review-animations` set `disable-model-invocation: true` in their frontmatter, which is
+documented as equivalent to `metadata.opencode/autoinvoke: false`: the skill stays registered
+and loadable by ID but is omitted from the model's available list. Their descriptions say so
+in prose ("Only runs when explicitly invoked"). This is intentional in the imported corpus,
+not a missing description or a name mismatch - the other 14 surface because they carry a
+description and do not opt out. `review-animations` is the one worth revisiting: three other
+skills point at it ("for critiquing existing motion use review-animations"), so a user asking
+for that review will not be routed to it automatically.
+
+**Capability Matrix row count.** The table in `team-lead.md` has 13 rows, not 14, and it
+carries neither `apple-ui` nor `designmotion-design`. The UI skills are therefore enforced
+only by the path rule (SC02/SC03), not by the declared matrix. The schema parser reads whatever
+the table declares, so the check widens automatically when the rows land -- verified by feeding
+the parser the real document plus the two rows (`skill_coverage.py --self-test`, case "a new
+doc row becomes a required dimension").
+
+**The matrix key is the skill ID, not the dimension label.** This is the one sharp edge in
+`CAPABILITY-MATRIX.yaml`, and it is the intuitive first mistake:
+
+```yaml
+dimensions:
+  apple-ui: yes            # correct: keys are compared to the schema's skill IDs
+  ui-design-system: yes    # wrong: a label. Reports CM01 AND CM03, not a silent pass
+```
+
+`parse_schema` extracts the backticked name from column 3 of the table
+(`Frontend implementation | yes/no | frontend-react`), and `check_matrix` compares matrix keys
+against that list directly. So a label key answers nothing: CM01 fires for the real row it
+meant to answer, and CM03 fires for the key no row declares. Loud, not silent -- pinned by the
+self-test case "label used as key -> CM01 + CM03" so a future refactor cannot turn it quiet.
+
+All three plane changes above are emitted as one reviewed patch:
+
+```bash
+python framework/tools/emit_remaining_plane_patches.py
+# docs/designer-agent/remaining-plane-patches.patch   (3 files, 4 hunks)
+git apply --check docs/designer-agent/remaining-plane-patches.patch && git apply $_
+```
+
+The emitter refuses to write a patch whose hunks do not reproduce the intended post-image, and
+it asserts the *effect* rather than the bytes: the patched table parses to 15 dimensions
+including both design skills, the patched telemetry block no longer reads `input?.args?.name`,
+and `verifier.md` names the gate in both its sequence and its recorded gate map.
+
+Note that `opencode.json` needs no change for any of this. The V1-shaped `permission` block is
+live on this runtime -- an `edit` on `framework/opencode/**` is refused with
+`permission.rejected` before content is even matched -- so there is no V1/V2 rewrite to make
+before rules are written. A rewrite to the V2 `permissions` array is a separate decision.
+

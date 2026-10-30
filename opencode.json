@@ -483,12 +483,10 @@
   },
   "skills": {
     "paths": [
-      "framework/opencode/skills"
+      "framework/opencode/skills",
+      "design/skills"
     ]
   },
-  "plugin": [
-    "file://framework/opencode/plugin/telemetry.ts"
-  ],
   "compaction": {
     "auto": true,
     "prune": true,

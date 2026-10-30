@@ -399,6 +399,23 @@ export class PortfolioService {
         return res.data;
     }
 
+    async getAllDividendHistory(accountIds?: string): Promise<DividendHistoryResponse> {
+        const params: Record<string, string> = {};
+        if (accountIds) params.account_ids = accountIds;
+        const res = await this.api.get<DividendHistoryResponse>(
+            '/portfolio/dividends/history',
+            { params }
+        ).catch(async () => {
+            // Fallback: fetch from all dividends endpoint with extended data if available
+            const res2 = await this.api.get<DividendHistoryResponse>(
+                '/portfolio/dividends/transactions',
+                { params }
+            );
+            return res2;
+        });
+        return res.data;
+    }
+
     // ========================================================================
     // TRANSACTIONS WITH FILTERS
     // ========================================================================

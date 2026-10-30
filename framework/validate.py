@@ -551,15 +551,51 @@ check("streaming tokens de-duplicated",
 check("flush is idempotent",
       "flushGuard.claim()" in _ts and "createFlushGuard" in _ts,
       "session.idle can fire twice")
-check("no duplicate plugin copy",
-      not Path(".opencode/plugins/telemetry.ts").exists(),
-      "an unregistered copy diverges silently and keeps stale checks green")
-_plug = cfg.get("plugin") or []
-check("plugin registered in config", any("telemetry" in str(x) for x in _plug),
-      f"plugin={_plug}")
+# ── Plugin loadability ───────────────────────────────────────────────────────────────────
+# A plugin is verified for LOADABILITY, never for a path string that happens to exist on disk.
+# opencode parses a config plugin entry as a URL first: "file://framework/x.ts" has HOST
+# "framework", so it resolves to \\framework\x.ts, never loads, and logs only a watcher error.
+# The check that used to live here stripped "file://" before testing existence -- it deleted
+# the very syntax that breaks the load, so it stayed green while the collector wrote nothing
+# (records.jsonl stops 2026-10-12; 1597 plugin reconciliations since, none loading
+# telemetry.ts). Never normalise a value before asserting on it.
+def _plugin_entry_problem(entry):
+    """Why a local plugin entry cannot load, or None when the form is sound."""
+    if not entry.startswith("file://"):
+        return None  # bare specifier: resolved by the host as an npm package
+    rest = entry[len("file://"):]
+    if rest.startswith("/") or (len(rest) > 2 and rest[1] == ":"):
+        return None  # absolute file URL: file:///C:/... or file:///abs/path
+    host = rest.split("/")[0] or rest
+    return ("%s is a relative file:// URL -- the host parses %r as the URL host and "
+            "resolves it to \\\\%s\\..., so the plugin silently never loads"
+            % (entry, host, host))
+
+
+_plug = [str(x) for x in (cfg.get("plugin") or [])]
+_discovery = [p for p in (
+    Path(".opencode/plugins/telemetry.ts"), Path(".opencode/plugins/telemetry.js"),
+    Path(".opencode/plugin/telemetry.ts"), Path(".opencode/plugin/telemetry.js"),
+) if p.exists()]
+# Two legal routes to a loaded plugin: a loadable config entry, or the host's discovery
+# directory (the documented route for local plugins). Each is verified on its own; one is
+# never inferred from the other, and neither is inferred from a hand-written path string.
+_loadable = [p for p in _plug if "telemetry" in p and _plugin_entry_problem(p) is None]
+check("telemetry plugin is declared", bool(_plug) or bool(_discovery),
+      "register it in opencode.json (loadable form) or drop a bridge in .opencode/plugins/")
+check("telemetry is loadable, not merely present",
+      bool(_loadable) or bool(_discovery),
+      f"config={_plug} discovery={[str(p) for p in _discovery]}")
 for _p in _plug:
-    _f = str(_p).replace("file://", "")
-    check(f"registered plugin path exists: {_f}", Path(_f).exists())
+    _why = _plugin_entry_problem(_p)
+    check(f"plugin entry is loadable: {_p}", _why is None, _why or "")
+for _b in _discovery:
+    _body = _b.read_text(encoding="utf-8", errors="replace")
+    # A bridge contains no hook logic. A discovery file that implements hooks is a second
+    # implementation: it drifts from the package one while keeping the checks green.
+    check(f"discovery copy is a bridge, not a fork: {_b}",
+          "tool.execute.before" not in _body and "skills_loaded" not in _body,
+          "a second implementation diverges silently from the registered one")
 
 print("\n[11] Contract fixture")
 # Every check below exists because the matching bug was found by execution, not review.
@@ -713,10 +749,27 @@ check("conditional-tool ledger exists", _ledger.exists(),
       "conditional tools need a recorded justification, not a convention")
 
 print("\n-- skills + opencode config schema --")
-_skills = sorted(Path("framework/opencode/skills").glob("*/SKILL.md"))
+import re as _re
+import json as _json
+
+_cfgp = Path("opencode.json")
+_cfg = _json.loads(_cfgp.read_text(encoding="utf-8")) if _cfgp.exists() else {}
+
+# Config is the discovery contract. A skill on disk under an unconfigured root is invisible,
+# and a configured root that does not exist fails silently at startup - both were real bugs.
+_declared_paths = ((_cfg.get("skills") or {}).get("paths") or []) or ["framework/opencode/skills"]
+_missing_paths = [p for p in _declared_paths if not Path(p).is_dir()]
+check("every configured skills path exists", not _missing_paths,
+      "skills.paths entries that do not exist are silent discovery failures: %s" % _missing_paths)
+
+_skills = []
+for _sp in _declared_paths:
+    _found = sorted(Path(_sp).glob("*/SKILL.md"))
+    check(f"skills path is populated ({_sp})", bool(_found),
+          "a configured skills root with no SKILL.md contributes nothing")
+    _skills.extend(_found)
 check("skills directory is populated", len(_skills) >= 4,
       "opencode.json pointed at framework/opencode/skills while it did not exist")
-import re as _re
 for _f in _skills:
     _txt = _f.read_text(encoding="utf-8")
     _m = _re.match(r"^---\n(.*?)\n---\n", _txt, _re.S)
@@ -728,10 +781,29 @@ for _f in _skills:
               bool(_nm) and _nm.group(1) == _f.parent.name,
               "OpenCode resolves skills by directory name")
 
-_cfgp = Path("opencode.json")
+_skill_names = {p.parent.name for p in _skills}
+_dupes = sorted(n for n in _skill_names
+                if sum(1 for p in _skills if p.parent.name == n) > 1)
+check("no skill name is declared by two configured roots", not _dupes,
+      "one name resolving to two directories lets load order decide the content: %s" % _dupes)
+
+# Router truth: a routing row that names a skill resolving nowhere is an instruction to load
+# something that does not exist. That is the failure this table exists to prevent.
+_routing = Path("framework/opencode/skill-routing.md")
+_routed = set()
+if _routing.exists():
+    for _line in _routing.read_text(encoding="utf-8").splitlines():
+        if not _line.startswith("|"):
+            continue
+        _cells = [c.strip() for c in _line.strip().strip("|").split("|")]
+        if len(_cells) < 4:
+            continue
+        _routed |= set(_re.findall(r"`([A-Za-z0-9][A-Za-z0-9-]*)`", _cells[1]))
+_unrouted = sorted(s for s in _routed if s not in _skill_names)
+check("every skill routed in skill-routing.md resolves on a configured path", not _unrouted,
+      "a delegation would load a skill that does not exist: %s" % _unrouted)
+
 if _cfgp.exists():
-    import json as _json
-    _cfg = _json.loads(_cfgp.read_text(encoding="utf-8"))
     _sk = _cfg.get("skills")
     _sk_ok = _sk is None or (
         isinstance(_sk, dict) and isinstance(_sk.get("paths"), list)
@@ -739,12 +811,16 @@ if _cfgp.exists():
     check("skills config uses paths-object form", _sk_ok,
           'OpenCode expects skills: {"paths": ["dir"]} or absent; a bare array fails '
           'config validation ("Expected object | undefined")')
-    check("telemetry plugin is registered", bool(_cfg.get("plugin")),
-          "plugin: [] meant rework telemetry silently collected nothing")
-    _plug = " ".join(_cfg.get("plugin") or [])
+    # A plugin reaches the host by TWO routes: a config entry the host can load, or the
+    # discovery directory. Either is registration; neither is inferred from the other.
+    # Asserting only "plugin: [...] is non-empty" is what stayed green while the entry's
+    # syntax made it unloadable -- see the loadability block above.
+    _disc = [p for p in ("plugins", "plugin")
+             if any((Path(".opencode") / p).glob("telemetry.*"))]
+    check("telemetry plugin is registered", bool(_cfg.get("plugin")) or bool(_disc),
+          "plugin: [] with no discovery copy means telemetry silently collected nothing")
     check("registered plugin file exists",
-          (not _plug) or any(Path(x).exists() for x in
-                             ["framework/opencode/plugin/telemetry.ts", ".opencode/plugins/telemetry.ts"]),
+          bool(_disc) or all(not str(x).startswith("file://") for x in (_cfg.get("plugin") or [])),
           "a registered plugin path that does not exist fails silently at startup")
     check("playwright MCP configured", "playwright" in (_cfg.get("mcp") or {}),
           "browser verification needs a driver available to the verifier")

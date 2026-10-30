@@ -49,7 +49,7 @@ verification:
       command:
       exit_code: 0
       artifact:
-  gates: {g1:, g2:, g3:, g3_5:, g4:, g8:, g11:, g14:}
+  gates: {g1:, g2:, g3:, g3_5:, g4:, g8:, g11:, g14:, skill_use:}
   profiles_run: []
   unverifiable: []
   suspicions_checked: true | false
@@ -109,6 +109,21 @@ is not a pass â€” it means no escape was recorded, so there was nothing to 
 
 A recurrence is a framework-level finding, not a task-level one. Report it and let the Team Lead
 escalate; do not attempt a third fix for the same signature.
+
+## Skill-use completeness
+
+`framework/gates/g_skill_use.sh` runs for any task whose plan declares
+`required_skills`. It diffs the plan's requirement against the skills recorded as
+invoked in `.planning/telemetry/records.jsonl`, filtered to the task. Exit 0 every
+required skill was recorded as invoked, 1 one or more were not, 2 blocked (no plan
+context, unreadable store), 3 capability missing (no telemetry plugin, so nothing could
+have recorded a call), 4 not applicable (no records, or the plan requires no skills).
+
+Run it with `ENTRY_PLAN=<plan path> ENTRY_TASK=<task id>`. Exit 1 is a real finding:
+report the skill that was never loaded rather than accepting the handoff. Exit 3 and 4
+are not passes either -- 3 means the instrument is missing, 4 means there was nothing
+to judge. `SU01` (a call recorded as `unknown`) is a defect in the recorder, not a
+missing skill; report it as such and do not count it as satisfied.
 
 ## Blocker hygiene
 

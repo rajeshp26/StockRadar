@@ -26,6 +26,8 @@ For each ask, determine:
 | API design | yes/no | `api-design` |
 | Database design | yes/no | `database-schema-design` |
 | Frontend implementation | yes/no | `frontend-react` |
+| UI design system | yes/no | `apple-ui` |
+| Interaction design | yes/no | `designmotion-design` |
 | Backend implementation | yes/no | `backend-python` |
 | Unit test authoring | yes/no | `unit-test-authoring` |
 | Performance testing | yes/no | `performance-testing` |
