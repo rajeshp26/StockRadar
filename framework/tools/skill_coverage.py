@@ -75,6 +75,17 @@ UI_PREFIXES = ("web/src/", "web/app/", "mobile/lib/", "web/pages/")
 UI_EXTS = (".tsx", ".jsx", ".css", ".scss", ".sass", ".html", ".dart", ".vue", ".svelte")
 CODE_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".sh", ".dart", ".css", ".md")
 
+# The testing skill set, keyed to the routing row that mandates it. Keep in sync with
+# skill-routing.md:13 -- SC06 cites that row in its message. A test file is the observable
+# signal that a task is testing work; the skill is the technique layer over it.
+TEST_SKILL = "istqb-testing"
+TEST_ROW = "skill-routing.md:19"
+# Exact path SEGMENTS, never substrings: "latest/" contains "test/", and a substring rule would
+# demand a testing skill for a directory that has nothing to do with tests.
+TEST_DIR_SEGMENTS = ("tests", "test", "__tests__", "e2e", "playwright", "spec")
+TEST_NAME_RE = re.compile(
+    r"(^test_.*\.py$|.*_test\.py$|^conftest\.py$|.*\.(test|spec)\.[cm]?[jt]sx?$)", re.I)
+
 KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):[ \t]*(.*)$")
 ITEM_RE = re.compile(r"^[ \t]*-[ \t]+(.*)$")
 SPLIT_RE = re.compile(r"[,\s]+")
@@ -136,6 +147,19 @@ def _is_code_path(path):
     return path.replace("\\", "/").lower().endswith(CODE_EXTS)
 
 
+def _is_test_path(path):
+    """True when the path is a test artefact. Segment-exact, so 'latest/' is not a test dir."""
+    p = path.replace("\\", "/").lower().strip()
+    while p.startswith("./"):
+        p = p[2:]
+    segs = [s for s in p.split("/") if s]
+    if not segs:
+        return False
+    if any(s in TEST_DIR_SEGMENTS for s in segs[:-1]):
+        return True
+    return bool(TEST_NAME_RE.match(segs[-1]))
+
+
 def find(severity, rule, where, message):
     return {"severity": severity, "rule": rule, "where": where, "message": message}
 
@@ -183,6 +207,19 @@ def check(text, skills, routed, exists):
             "WARN", "SC05", "required_skills",
             "'%s' is loadable but no routing row names it; a loadable skill nobody routes is "
             "selected only by chance" % name))
+
+    # SC06 -- the testing half of the same defect. A plan that writes or changes a test is
+    # testing work, and the technique layer (which technique, what coverage, what to leave out)
+    # lives in `istqb-testing`. Naming it is the only point where the requirement can be forced
+    # before dispatch: the skill has a routing row, so without this rule the row is a claim
+    # nobody reads, exactly as the UI rows were before SC02/SC03.
+    tests = [p for p in files if _is_test_path(p)]
+    if tests and TEST_SKILL not in names:
+        rows.append(find(
+            "ERROR", "SC06", "required_skills",
+            "plan touches test files (%s) but does not require %s; %s is the technique layer "
+            "for any test a task writes or changes" % (", ".join(tests[:3]), TEST_SKILL,
+                                                       TEST_ROW)))
     return rows
 
 
@@ -430,9 +467,9 @@ files_or_components:
 
 def _selftest():
     skills = {"apple-ui", "frontend-react", "designmotion-design", "backend-python",
-              "unit-test-authoring", "gsd-sketch", "unrouted-extra"}
+              "unit-test-authoring", "istqb-testing", "gsd-sketch", "unrouted-extra"}
     routed = {"apple-ui", "frontend-react", "designmotion-design", "backend-python",
-              "unit-test-authoring", "gsd-sketch"}
+              "unit-test-authoring", "istqb-testing", "gsd-sketch"}
     existing = {"web/src/features/portfolio/components/DividendsTab.tsx",
                 "backend/api/analysis.py"}
     exists = existing.__contains__
@@ -479,6 +516,27 @@ required_skills:
                    and not ln.startswith("- designmotion-design")),
          ["SC02", "SC03"])
 
+    # 9b-9e. SC06 -- a plan that touches a test is testing work. Both directions are asserted:
+    #    naming the skill is clean, omitting it is an error, and a directory that merely looks
+    #    like a test dir ("latest/") must NOT be treated as one.
+    SELFTEST_PLAN_TEST = """\
+files_or_components:
+- backend/tests/test_discount.py
+- backend/pricing/discount.py
+required_skills:
+- istqb-testing
+- backend-python
+"""
+    case("test plan with istqb-testing -> clean", SELFTEST_PLAN_TEST, [])
+    case("test plan without istqb-testing -> SC06",
+         SELFTEST_PLAN_TEST.replace("- istqb-testing\n", ""), ["SC06"])
+    case("test_*.py outside a tests dir -> SC06",
+         "files_or_components:\n- backend/test_math.py\nrequired_skills:\n- backend-python\n",
+         ["SC06"])
+    case("'latest/' is not a test dir -> clean",
+         "files_or_components:\n- backend/latest/analysis.py\n"
+         "required_skills:\n- backend-python\n- unit-test-authoring\n", [])
+
     # 10-12. `required_skills` repeats once per task. Aggregating across blocks is the whole
     # reason --required-skills exists: a parser that keeps only the first block verifies one
     # task and passes the rest unobserved, which is exactly the defect G-SKILL-USE must not
@@ -512,13 +570,17 @@ required_skills: unit-test-authoring, backend-python
     else:
         with open(doc, encoding="utf-8-sig") as fh:
             base = parse_schema(fh.read())
-        cases.append(("real Capability Matrix yields the 15 declared rows", len(base), 15))
+        cases.append(("real Capability Matrix yields the 16 declared rows", len(base), 16))
         # The claim the plane patch actually makes: both design skills are now dimensions, so
         # CM01 can demand them. Asserted against the real document, so deleting a row turns
         # this red instead of quietly narrowing the matrix check.
         cases.append(("both design skills are declared dimensions",
                       sorted({"apple-ui", "designmotion-design"} & set(base)),
                       ["apple-ui", "designmotion-design"]))
+        # istqb-testing joined the matrix with the ISTQB integration patch; the row count above
+        # was widened 15 -> 16 for the same reason. Deleting the row must fail here, not pass.
+        cases.append(("istqb-testing is a declared dimension",
+                      "istqb-testing" in base, True))
         widened = parse_schema(
             "| Dimension | Required? | Skill |\n"
             "|---|---|---|\n"

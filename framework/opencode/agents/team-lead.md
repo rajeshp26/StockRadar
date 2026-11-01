@@ -30,6 +30,7 @@ For each ask, determine:
 | Interaction design | yes/no | `designmotion-design` |
 | Backend implementation | yes/no | `backend-python` |
 | Unit test authoring | yes/no | `unit-test-authoring` |
+| Test design (ISTQB) | yes/no | `istqb-testing` |
 | Performance testing | yes/no | `performance-testing` |
 | Security research | yes/no | `security-audit` |
 | Browser verification | yes/no | `browser-verification` |

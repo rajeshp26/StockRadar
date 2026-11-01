@@ -77,6 +77,19 @@ Never edit a frozen test to make it pass: a failing test is a defect report (tes
 input, expected versus observed) recorded as a blocker. A stack that cannot be reached is
 UNVERIFIABLE (exit 2 or 3), never a pass.
 
+## Test design (ISTQB)
+
+Load the `istqb-testing` skill when you choose a test technique, state a coverage claim,
+select regression scope, write a defect report, plan or report testing, or review a work
+product. Run its deterministic router first, from the repository root:
+
+    python3 framework/opencode/skills/istqb-testing/router.py --task "<the task text>"
+
+Load the returned `primary` reference before designing; load an additional reference only
+if the task needs that part. `fallback: true` means the task text was too vague to route:
+clarify it rather than defaulting to `fundamentals.md`. Name the technique and the coverage
+achieved in the verification artifact; a test list with neither is not finished.
+
 ## Frontend and browser verification
 
 Two additional gates apply when a task touches the frontend.

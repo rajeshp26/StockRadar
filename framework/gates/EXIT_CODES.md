@@ -246,6 +246,7 @@ reads two independent sources:
 | Source | Rule | What it proves |
 |---|---|---|
 | declared file scope | SC02, SC03 | a plan touching UI paths names `apple-ui` + `frontend-react`; a plan creating a new UI surface also names `designmotion-design` (skill-routing.md:22-24) |
+| declared file scope (tests) | SC06 | a plan touching test files names `istqb-testing`, the technique layer over any test a task writes or changes (skill-routing.md:19) |
 | the ask's Capability Matrix | CM01-CM05 | every dimension the team-lead matrix declares has a verdict, and every `yes` appears in some task's `required_skills` |
 
 The dimension list is not duplicated in code: it is read from the Capability Matrix table in

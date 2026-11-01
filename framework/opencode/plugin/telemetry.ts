@@ -1,4 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin"
+import { spawnSync } from "node:child_process"
 import { resolveExecutionAgent, createStack, normalizeTaskArgs, createFlushGuard } from "./envelope.mjs"
 import { EVENTS, createAttemptRegistry, taxonomyEvent, parseSignals, extractExitCode, isPollOutput } from "./taxonomy.mjs"
 import { parseGateRequired, parseGateExecutionStarted, parseGateLaunch, parseGateLine } from "./gates.mjs"
@@ -554,4 +555,203 @@ export const TelemetryPlugin: Plugin = async ({ $ }) => {
     },
   }
 }
-export default TelemetryPlugin
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// V2 ENTRYPOINT (OpenCode v2.x plugin API)
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// WHY THIS EXISTS
+// ===============
+// v2 validates the default export as a plugin DEFINITION -- `{ id, setup }` or
+// `{ id, effect }` -- and rejects the V1 factory shape outright:
+//
+//   Plugin must export a default definition with an id and an effect or setup function
+//
+// From the host upgrade onward the collector loaded nothing and records.jsonl stopped being
+// written (last row 2026-10-12). A collector that does not load reports zero, and zero is
+// indistinguishable from "no work happened" to every consumer: G-SKILL-USE, G-TELEMETRY-LIVE,
+// report.py. That is a sensor defect, not a quiet period.
+//
+// SHAPE
+// =====
+// v2 registers hooks imperatively inside `setup(ctx)`. The V1 hook bodies above are reused
+// unchanged -- they are the collector, and reimplementing them for v2 would create a second
+// source of truth for the same facts.
+//
+// TRANSLATION, NOT PASS-THROUGH
+// =============================
+// v2 events are `{ id, created, type, durable, location, data }`; the V1 body reads
+// `{ type, properties }`. Handing a v2 event straight to it yields `session_id: ""` and a
+// record full of zeros -- the same silent-zero failure in a new costume. Every mapping below
+// was measured against host v2.2.4 with a probe plugin:
+//
+//   session.execution.started  data.sessionID                      -> session.created
+//   session.step.started       data.model{id,providerID}, .agent    -> chat.params
+//   session.step.ended         data.tokens{input,output,reasoning,cache{read,write}}
+//                                                                  -> message.updated
+//   session.execution.succeeded / .failed / .cancelled / deleted    -> terminal flush
+//
+// DELIBERATELY UNMAPPED
+// =====================
+// `session.usage.updated` carries the CUMULATIVE session token figure. Mapping it alongside
+// `session.step.ended` would count every token twice, so it is dropped on purpose. Dropping
+// is explicit here rather than an accident of a field name that does not exist.
+
+/** v2 `execute.before`/`execute.after` event -> the V1 hook's first parameter. */
+export function v2ToolBefore(e: any) {
+  const input = e?.input ?? e?.args
+  return {
+    tool: String(e?.tool ?? e?.name ?? ""),
+    // `args` is where the V1 bodies read tool arguments (bash: input.args.command,
+    // skill: the unwrapped id). `input` is kept because the task tool has historically
+    // delivered its args there.
+    args: input,
+    input,
+    callID: e?.id,
+    sessionID: e?.sessionID,
+  }
+}
+
+/** v2 `execute.after` event -> [V1 input, V1 output]. v2 carries the tool name itself, so
+ *  no before/after pairing is needed and a dropped event cannot misattribute a result. */
+export function v2ToolAfter(e: any) {
+  const r: any = e?.result
+  let text = ""
+  if (typeof r === "string") text = r
+  else if (typeof r?.output?.output === "string") text = r.output.output
+  else if (r) {
+    try { text = JSON.stringify(r) } catch { text = "" }
+  }
+  const exit = typeof r?.output?.exit === "number" ? r.output.exit
+    : typeof r?.metadata?.exit === "number" ? r.metadata.exit
+    : undefined
+  return [v2ToolBefore(e), { output: text, title: "", exit }] as const
+}
+
+/** One v2 stream event -> the instruction the V1 collector understands.
+ *  `null` means "the collector has no counter for this event" and is explicit. */
+export function v2Event(ev: any, seen: Set<string>) {
+  const t = String(ev?.type ?? "")
+  const d: any = ev?.data ?? {}
+
+  if (t === "session.execution.started") {
+    const sid = String(d.sessionID ?? "")
+    // v2 emits execution.started once PER TURN; V1's session.created fired once per session
+    // and starts a 60s heartbeat interval. Passing every turn through would stack intervals
+    // and multiply the write rate, so only the first turn creates the session.
+    if (!sid || seen.has(sid)) return null
+    seen.add(sid)
+    return { kind: "event" as const,
+             event: { type: "session.created", properties: { info: { id: sid } } } }
+  }
+
+  if (t === "session.step.started") {
+    // v2 has no `chat.params` hook; model/provider identity rides on the step event.
+    return {
+      kind: "chat" as const,
+      input: {
+        model: { modelID: d?.model?.id },
+        provider: { providerID: d?.model?.providerID },
+        agent: d.agent,
+      },
+    }
+  }
+
+  if (t === "session.step.ended") {
+    return {
+      kind: "event" as const,
+      event: {
+        type: "message.updated",
+        properties: { info: { id: d.assistantMessageID, tokens: d.tokens } },
+      },
+    }
+  }
+
+  if (t === "session.compacted") {
+    return { kind: "event" as const, event: { type: "session.compacted", properties: {} } }
+  }
+
+  if (t === "session.execution.succeeded" || t === "session.execution.failed"
+      || t === "session.execution.cancelled" || t === "session.deleted") {
+    // `emit("final")` is idempotent, so the first turn end writes the record and later
+    // terminal events are no-ops; heartbeats keep the series alive in between.
+    return { kind: "event" as const, event: { type: "session.idle", properties: {} } }
+  }
+
+  return null
+}
+
+/** Dispatch one v2 event into the V1 collector. Shared with the test harness so the test
+ *  exercises the production path rather than a copy of it. */
+export async function dispatchV2(ev: any, hooks: any, seen: Set<string>) {
+  const step = v2Event(ev, seen)
+  if (!step) return
+  if (step.kind === "chat") await hooks?.["chat.params"]?.(step.input)
+  else await hooks?.event?.({ event: step.event })
+}
+
+/** v2 does not hand the plugin a `$`. The collector uses exactly two chain methods
+ *  (`.quiet().nothrow()`), so that is all this needs to provide. Commands are repo-relative,
+ *  hence the plugin's own location as cwd.
+ *
+ *  NO SHELL, ON PURPOSE. The V1 host `$` escapes every interpolated value itself. A naive
+ *  reimplementation that concatenates a command string does not, and on Windows cmd.exe
+ *  consumes the quotes inside the JSON payload. Measured on the first write after the v2
+ *  port landed: the record was appended as `{record_version:3,...}` -- every quote stripped --
+ *  which is not JSON and cannot be read back. Building an argv array and spawning without a
+ *  shell removes the whole class: no quoting rules, no metacharacter expansion, no
+ *  command-length ceiling. */
+export function shellFor(cwd: string) {
+  return (strings: TemplateStringsArray, ...values: any[]) => {
+    const argv: string[] = []
+    for (let i = 0; i < strings.length; i++) {
+      const chunk = strings[i].trim()
+      if (chunk) argv.push(...chunk.split(/\s+/))
+      // Each interpolated value is ONE argument, never re-split and never re-quoted.
+      if (i < values.length) argv.push(String(values[i] ?? ""))
+    }
+    const chain = {
+      quiet() { return chain },
+      nothrow() {
+        try {
+          const r = spawnSync(argv[0], argv.slice(1), { cwd, encoding: "utf8", timeout: 60_000 })
+          return Promise.resolve({
+            exitCode: r.status ?? 1,
+            text: () => r.stdout ?? "",
+            stderr: r.stderr ?? "",
+          })
+        } catch (err: any) {
+          return Promise.resolve({ exitCode: 1, text: () => "", stderr: String(err?.message ?? err) })
+        }
+      },
+    }
+    return chain
+  }
+}
+
+export const TelemetryV2 = {
+  id: "telemetry",
+  async setup(ctx: any) {
+    const hooks: any = await TelemetryPlugin({
+      $: shellFor(String(ctx?.location?.directory ?? process.cwd())),
+    })
+
+    await ctx?.tool?.hook?.("execute.before", async (e: any) => {
+      await hooks["tool.execute.before"]?.(v2ToolBefore(e))
+    })
+
+    await ctx?.tool?.hook?.("execute.after", async (e: any) => {
+      const [input, output] = v2ToolAfter(e)
+      await hooks["tool.execute.after"]?.(input, output)
+    })
+
+    const seen = new Set<string>()
+    void (async () => {
+      try {
+        for await (const ev of ctx.event.subscribe()) await dispatchV2(ev, hooks, seen)
+      } catch {
+        // The subscription ends on host unload and on restart; both are normal.
+      }
+    })()
+  },
+}
+
+export default TelemetryV2

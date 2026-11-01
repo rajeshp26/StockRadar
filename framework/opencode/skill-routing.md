@@ -16,6 +16,7 @@ Every delegation must consult this matrix before selecting skills.
 | API contract change | `contract-authoring` | Architect / Implementer | OpenAPI schema changes |
 | Database/schema change | `database-schema-design` | Architect | Table/column/index modifications |
 | Unit tests required | `unit-test-authoring` | Implementer | Any business logic verification |
+| Test design technique, coverage claim, risk-based regression scope, defect report, test plan or work-product review, ISTQB exam prep | `istqb-testing` | Verifier / Implementer / Reviewer | Choosing a technique or stating coverage, selecting regression scope, writing a defect report, planning or reporting testing, reviewing a work product |
 | Performance impact | `performance-testing` | Verifier | Latency, throughput, memory, concurrency |
 | Security concern | `security-audit` | security-auditor | Threat modeling, vulnerability assessment |
 | Design direction for a UI surface is undecided (2-3 comparable mockups before a plan) | `gsd-sketch` + `frontend-react` + `apple-ui` | ui-designer | Before a screen/layout direction enters a plan; the human approval selects the variant |
@@ -97,6 +98,7 @@ software-architecture-design
 ### Implementer
 - [ ] Load ALL skills specified by Team Lead / Planner
 - [ ] `unit-test-authoring` for business logic
+- [ ] `istqb-testing` when choosing a test technique, stating coverage, or writing a defect report
 - [ ] `gsd-debug` reasoning loop before editing assertions, raising timeouts, or retrying a failing test
 - [ ] `designmotion-design` when a UI surface introduces or changes a pattern/system
 - [ ] Do not skip required skills
@@ -106,8 +108,10 @@ software-architecture-design
 - [ ] Verify contract compliance
 - [ ] Verify required skills were actually used
 - [ ] Verify test adequacy via `unit-test-authoring` standards
+- [ ] `istqb-testing` when judging test adequacy by technique and coverage, not by pass count
 
 ### Verifier
 - [ ] `performance-testing` when performance is material
 - [ ] `browser-verification` for visible behavior
+- [ ] `istqb-testing` when choosing a test technique or stating a coverage claim
 - [ ] Load applicable evidence classes per requirement shape

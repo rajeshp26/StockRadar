@@ -14,7 +14,7 @@
 // node:test + node:assert ONLY — no framework dependencies. Deterministic and fast (<15s).
 import { test, describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { TelemetryPlugin } from "./telemetry.ts"
+import { TelemetryPlugin, dispatchV2, shellFor, v2Event, v2ToolAfter, v2ToolBefore } from "./telemetry.ts"
 
 // ─── Stub `$` host template-tag ───────────────────────────────────────────────
 // The plugin invokes the host `$` exactly as:
@@ -168,5 +168,98 @@ describe("telemetry collector integration harness", () => {
     const finals = emitted.filter((e) => e.payload && e.payload.kind === "final")
     assert.equal(finals.length, 1)
     assert.equal(finals[0].payload.session_id, "ses_final")
+  })
+})
+
+
+// ─── V2 adapter ───────────────────────────────────────────────────────────────────────────
+// These cases exist because the v2 payload shapes are DIFFERENT from v1 in ways that fail
+// silently: a pass-through records `session_id: ""` and zero tokens while every counter still
+// looks present. Each shape below was measured on host v2.2.4.
+describe("v2 adapter", () => {
+  it("captures the skill id from a v2 execute.before event", () => {
+    const input = v2ToolBefore({
+      tool: "skill", id: "call_1", sessionID: "ses_x", input: { id: "istqb-testing" },
+    })
+    assert.equal(input.tool, "skill")
+    assert.equal(input.args.id, "istqb-testing")
+    assert.equal(input.callID, "call_1")
+  })
+
+  it("reads v2 bash text and exit from result.output", () => {
+    const [input, output] = v2ToolAfter({
+      tool: "bash", id: "c1", input: { command: "echo hi" }, status: "success",
+      result: { output: { exit: 0, truncated: false, output: "hi\n", status: "success" } },
+    })
+    assert.equal(input.args.command, "echo hi")
+    assert.equal(output.output, "hi\n")
+    assert.equal(output.exit, 0)
+  })
+
+  it("turns the first execution.started into session.created, later turns into nothing", () => {
+    const seen = new Set()
+    const first = v2Event({ type: "session.execution.started", data: { sessionID: "ses_a" } }, seen)
+    assert.equal(first.event.properties.info.id, "ses_a")
+    assert.equal(v2Event({ type: "session.execution.started", data: { sessionID: "ses_a" } }, seen), null)
+  })
+
+  it("does NOT map session.usage.updated -- it would double count step tokens", () => {
+    assert.equal(
+      v2Event({ type: "session.usage.updated", data: { sessionID: "s", tokens: { input: 99 } } }, new Set()),
+      null,
+    )
+  })
+
+  it("maps step tokens to a per-message update", () => {
+    const step = v2Event({
+      type: "session.step.ended",
+      data: { assistantMessageID: "msg_1", tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } } },
+    }, new Set())
+    assert.equal(step.event.type, "message.updated")
+    assert.equal(step.event.properties.info.id, "msg_1")
+    assert.equal(step.event.properties.info.tokens.input, 10)
+  })
+
+  it("spawns with an argv array so a JSON payload keeps its quotes", async () => {
+    // The defect this pins: a shell-concatenated command lost every quote inside the payload
+    // and the record was appended as `{record_version:3,...}` -- unparsable, unrecoverable.
+    const $ = shellFor(process.cwd())
+    const payload = JSON.stringify({ text: "a b", quoted: '"x"' })
+    const r = await $`python3 -c ${'import json,sys;print(json.loads(sys.argv[1])["quoted"])'} ${payload}`
+      .quiet().nothrow()
+    assert.equal(r.exitCode, 0, "spawn failed: " + r.stderr)
+    assert.equal(r.text().trim(), '"x"')
+  })
+
+  it("drives a full v2 session into a final record with real skills and tokens", async () => {
+    const { hooks, emitted } = await makePlugin()
+    const seen = new Set()
+    await dispatchV2({ type: "session.execution.started", data: { sessionID: "ses_v2" } }, hooks, seen)
+    await dispatchV2({
+      type: "session.step.started",
+      data: { sessionID: "ses_v2", agent: "team-lead", model: { id: "big-pickle", providerID: "opencode" } },
+    }, hooks, seen)
+    await hooks["tool.execute.before"](v2ToolBefore({
+      tool: "skill", id: "c1", sessionID: "ses_v2", input: { id: "istqb-testing" },
+    }))
+    await hooks["tool.execute.after"](...v2ToolAfter({
+      tool: "bash", id: "c2", input: { command: "bash framework/gates/g8_state.sh" }, status: "success",
+      result: { output: { exit: 0, output: "[g8] PASS\n", status: "success" } },
+    }))
+    await dispatchV2({
+      type: "session.step.ended",
+      data: { assistantMessageID: "msg_1", tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 5, write: 0 } } },
+    }, hooks, seen)
+    await dispatchV2({ type: "session.execution.succeeded", data: { sessionID: "ses_v2" } }, hooks, seen)
+
+    const final = lastPayload(emitted, "final")
+    assert.ok(final, "expected a final record")
+    assert.equal(final.session_id, "ses_v2")
+    assert.ok(final.skills_loaded.includes("istqb-testing"), "skill id must be recorded, not 'unknown'")
+    assert.equal(final.tokens.input, 10)
+    assert.equal(final.tokens.output, 20)
+    assert.equal(final.tokens.cache_read, 5)
+    assert.ok(final.models_seen["opencode/big-pickle"] >= 1, "model identity comes from step.started")
+    assert.equal(final.gates.g8.result, "pass")
   })
 })

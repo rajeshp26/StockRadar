@@ -21,9 +21,9 @@ section 5, file in construction).
 | ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; designmotion-design for pattern behaviour (states, feedback timing, failure modes); design/skills/ corpus as advisory craft only | skill-routing.md |
 | architect | software-architecture-design for L3/L4; technical-validation; api-design before contract-authoring; database-schema-design for data-model changes | skill-routing.md:64-68 |
 | planner | verify required skills listed per task; consume architect outputs (architecture + contracts + data design); never redesign architecture | skill-routing.md:70-73 |
-| implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; designmotion-design when a UI surface introduces or changes a pattern/system; unit-test-authoring for business logic; karpathy-guidelines per its routing condition (skill-routing.md:24) | skill-routing.md:75-78 |
-| reviewer | verify implementation vs architecture; contract compliance; required-skills-used; unit-test-authoring adequacy standards | skill-routing.md:80-84 |
-| verifier | performance-testing when material; browser-verification for visible behavior; name applicable evidence class per requirement shape | skill-routing.md:86-89; evidence.md:1-19 |
+| implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; designmotion-design when a UI surface introduces or changes a pattern/system; unit-test-authoring for business logic; istqb-testing when choosing a test technique, stating coverage, or writing a defect report; karpathy-guidelines per its routing condition (skill-routing.md:24) | skill-routing.md:75-78 |
+| reviewer | verify implementation vs architecture; contract compliance; required-skills-used; unit-test-authoring adequacy standards; istqb-testing when judging test adequacy by technique and coverage | skill-routing.md:80-84 |
+| verifier | performance-testing when material; browser-verification for visible behavior; istqb-testing when choosing a technique or stating a coverage claim; name applicable evidence class per requirement shape | skill-routing.md:86-89; evidence.md:1-19 |
 
 Imported craft corpus: `design/skills/` is listed in `skills.paths` so its 17 skills are
 loadable by name, but it is **advisory** - never a mandatory binding, never evidence
@@ -77,6 +77,7 @@ a required skill is a G-T1 tool-utilization gap.
 | --- | --- | --- |
 | contract / integration test, exit code | API returns a status | G1 |
 | unit test | business rule produces a value | G4 |
+| test design technique + coverage claim (istqb-testing router output) | a suite must be adequate, not merely green | G4 / G17 |
 | type check + build | type or interface correctness | build |
 | browser screenshot + DOM inspection | visual alignment or styling | G6 |
 | browser navigation + console output | interaction flow end to end | G6 |

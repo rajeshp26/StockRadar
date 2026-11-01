@@ -1,0 +1,451 @@
+{
+  "fallback": {
+    "reason": "no signal matched",
+    "reference": "references/fundamentals.md"
+  },
+  "how_to_use": "Rules are evaluated in array order. Array order is priority order: the first matching rule gives the primary reference. Every matching rule after it gives an additional reference, in priority order, with duplicates removed. Load the primary reference first. Load an additional reference only if the task needs that part. If no rule matches, use the fallback reference and treat the task as needing clarification. This file is the single source of truth for routing. router.py implements exactly this procedure and nothing else.",
+  "package": "istqb-testing",
+  "rules": [
+    {
+      "id": "metamorphic-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-rule.md",
+      "signals": [
+        "metamorphic"
+      ]
+    },
+    {
+      "id": "decision-table-advanced",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-rule.md",
+      "signals": [
+        "minimis",
+        "minimize decision",
+        "checksum",
+        "cause and effect",
+        "extended entry",
+        "infeasible column"
+      ]
+    },
+    {
+      "id": "decision-table-basic",
+      "level": "foundation",
+      "reference": "references/test-techniques.md",
+      "signals": [
+        "decision table"
+      ]
+    },
+    {
+      "id": "state-advanced",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-behaviour.md",
+      "signals": [
+        "switch coverage",
+        "1 switch",
+        "0 switch",
+        "round trip",
+        "extended state",
+        "efsm",
+        "guard condition"
+      ]
+    },
+    {
+      "id": "state-basic",
+      "level": "foundation",
+      "reference": "references/test-techniques.md",
+      "signals": [
+        "state transition",
+        "state machine"
+      ]
+    },
+    {
+      "id": "domain-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-data.md",
+      "signals": [
+        "domain testing",
+        "on point",
+        "off point",
+        "in point",
+        "out point",
+        "on/off",
+        "multi dimensional domain",
+        "multidimensional domain"
+      ]
+    },
+    {
+      "id": "combinatorial-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-data.md",
+      "signals": [
+        "combinatorial",
+        "pairwise",
+        "base choice",
+        "each choice",
+        "n wise",
+        "2 wise"
+      ]
+    },
+    {
+      "id": "random-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-data.md",
+      "signals": [
+        "random testing",
+        "adaptive random",
+        "operational profile",
+        "fuzz",
+        "monkey testing",
+        "chaos testing"
+      ]
+    },
+    {
+      "id": "crud-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-behaviour.md",
+      "signals": [
+        "crud"
+      ]
+    },
+    {
+      "id": "scenario-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-behaviour.md",
+      "signals": [
+        "scenario based",
+        "scenario testing",
+        "use case testing",
+        "activity diagram",
+        "parallel completion"
+      ]
+    },
+    {
+      "id": "charter-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-experience.md",
+      "signals": [
+        "test charter",
+        "session based",
+        "session-based"
+      ]
+    },
+    {
+      "id": "crowd-testing",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-experience.md",
+      "signals": [
+        "crowd testing"
+      ]
+    },
+    {
+      "id": "checklist-design",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-experience.md",
+      "signals": [
+        "checklist design",
+        "maintain checklist",
+        "read do",
+        "do confirm"
+      ]
+    },
+    {
+      "id": "technique-selection",
+      "level": "test-analyst",
+      "reference": "references/ta-test-design-experience.md",
+      "signals": [
+        "technique selection",
+        "selecting test technique",
+        "automating test design",
+        "automate test design",
+        "model based test generation"
+      ]
+    },
+    {
+      "id": "regression-selection",
+      "level": "test-analyst",
+      "reference": "references/ta-risk-based-testing.md",
+      "signals": [
+        "regression selection",
+        "regression scope",
+        "impact analysis",
+        "residual risk",
+        "risk based regression",
+        "regression tests",
+        "choose regression",
+        "select regression"
+      ]
+    },
+    {
+      "id": "risk-analysis",
+      "level": "test-analyst",
+      "reference": "references/ta-risk-based-testing.md",
+      "signals": [
+        "risk analysis",
+        "risk control",
+        "risk based testing",
+        "likelihood and impact",
+        "risk level"
+      ]
+    },
+    {
+      "id": "quality-functional",
+      "level": "test-analyst",
+      "reference": "references/ta-quality-characteristics.md",
+      "signals": [
+        "functional suitability",
+        "functional completeness",
+        "functional correctness",
+        "functional appropriateness",
+        "gold plating"
+      ]
+    },
+    {
+      "id": "quality-usability",
+      "level": "test-analyst",
+      "reference": "references/ta-quality-characteristics.md",
+      "signals": [
+        "usability",
+        "interaction capability",
+        "accessibility",
+        "user engagement",
+        "self descriptiveness",
+        "inclusivity"
+      ]
+    },
+    {
+      "id": "quality-flexibility",
+      "level": "test-analyst",
+      "reference": "references/ta-quality-characteristics.md",
+      "signals": [
+        "adaptability",
+        "installability",
+        "flexibility testing",
+        "portability testing"
+      ]
+    },
+    {
+      "id": "quality-compatibility",
+      "level": "test-analyst",
+      "reference": "references/ta-quality-characteristics.md",
+      "signals": [
+        "interoperability",
+        "coexistence",
+        "compatibility testing"
+      ]
+    },
+    {
+      "id": "defect-prevention",
+      "level": "test-analyst",
+      "reference": "references/ta-defect-prevention.md",
+      "signals": [
+        "defect prevention",
+        "phase containment",
+        "defect removal efficiency",
+        "phase containment effectiveness",
+        "cost of quality",
+        "root cause analysis",
+        "orthogonal defect",
+        "defect detection percentage",
+        "rayleigh",
+        "poisson test"
+      ]
+    },
+    {
+      "id": "review-technique",
+      "level": "test-analyst",
+      "reference": "references/ta-defect-prevention.md",
+      "signals": [
+        "review technique",
+        "perspective based",
+        "role based reviewing",
+        "scenario based reviewing",
+        "checklist based reviewing"
+      ]
+    },
+    {
+      "id": "review-type",
+      "level": "foundation",
+      "reference": "references/static-testing.md",
+      "signals": [
+        "review type",
+        "walkthrough",
+        "technical review",
+        "inspection",
+        "informal review",
+        "review process"
+      ]
+    },
+    {
+      "id": "test-process",
+      "level": "test-analyst",
+      "reference": "references/ta-test-process.md",
+      "signals": [
+        "test analysis",
+        "test design",
+        "test implementation",
+        "test execution",
+        "test oracle",
+        "test data requirement",
+        "keyword driven",
+        "testware",
+        "high level test case",
+        "low level test case",
+        "prepare test cases",
+        "test case preparation"
+      ]
+    },
+    {
+      "id": "foundation-techniques",
+      "level": "foundation",
+      "reference": "references/test-techniques.md",
+      "signals": [
+        "equivalence partitioning",
+        "boundary value",
+        "error guessing",
+        "statement coverage",
+        "branch coverage",
+        "white box",
+        "black box technique",
+        "exploratory testing"
+      ]
+    },
+    {
+      "id": "checklist-basic",
+      "level": "foundation",
+      "reference": "references/test-techniques.md",
+      "signals": [
+        "checklist based testing",
+        "checklist testing"
+      ]
+    },
+    {
+      "id": "sdlc",
+      "level": "foundation",
+      "reference": "references/sdlc.md",
+      "signals": [
+        "shift left",
+        "test level",
+        "test type",
+        "confirmation testing",
+        "maintenance testing",
+        "test first",
+        "sdlc",
+        "software development lifecycle",
+        "regression testing"
+      ]
+    },
+    {
+      "id": "fundamentals",
+      "level": "foundation",
+      "reference": "references/fundamentals.md",
+      "signals": [
+        "seven principles",
+        "testing principle",
+        "tester skill",
+        "test activity",
+        "what is testing",
+        "why testing"
+      ]
+    },
+    {
+      "id": "static-generic",
+      "level": "foundation",
+      "reference": "references/static-testing.md",
+      "signals": [
+        "static testing",
+        "static analysis"
+      ]
+    },
+    {
+      "id": "test-management",
+      "level": "foundation",
+      "reference": "references/test-management.md",
+      "signals": [
+        "test plan",
+        "entry criteria",
+        "exit criteria",
+        "test estimation",
+        "test pyramid",
+        "testing quadrant",
+        "test monitoring",
+        "defect management",
+        "defect report",
+        "severity and priority",
+        "test prioritisation",
+        "test prioritization"
+      ]
+    },
+    {
+      "id": "risk-basic",
+      "level": "foundation",
+      "reference": "references/test-management.md",
+      "signals": [
+        "product risk",
+        "project risk",
+        "risk management"
+      ]
+    },
+    {
+      "id": "test-tools",
+      "level": "foundation",
+      "reference": "references/test-tools.md",
+      "signals": [
+        "test tool",
+        "test automation tool",
+        "tool selection",
+        "automation decision"
+      ]
+    },
+    {
+      "id": "ctfl-exam",
+      "level": "foundation",
+      "reference": "references/exam-and-checklists.md",
+      "signals": [
+        "ctfl exam",
+        "ctfl question",
+        "foundation exam"
+      ]
+    },
+    {
+      "id": "ta-exam",
+      "level": "test-analyst",
+      "reference": "references/ta-role-and-exam.md",
+      "signals": [
+        "test analyst exam",
+        "ta bo",
+        "business outcome",
+        "test analyst role",
+        "test analyst certificate"
+      ]
+    },
+    {
+      "id": "ta-worked-examples",
+      "level": "test-analyst",
+      "reference": "references/ta-worked-examples-and-checklists.md",
+      "signals": [
+        "test analyst practice",
+        "test analyst worked example"
+      ]
+    },
+    {
+      "id": "foundation-worked-examples",
+      "level": "foundation",
+      "reference": "references/worked-examples.md",
+      "signals": [
+        "foundation worked example",
+        "worked example",
+        "test plan skeleton",
+        "defect report template"
+      ]
+    },
+    {
+      "id": "quality-generic",
+      "level": "test-analyst",
+      "reference": "references/ta-quality-characteristics.md",
+      "signals": [
+        "quality characteristic"
+      ]
+    }
+  ],
+  "version": "1.0"
+}

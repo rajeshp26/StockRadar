@@ -19,6 +19,7 @@
 #   SC03 a plan creating a NEW UI surface requires designmotion-design     (skill-routing.md:22)
 #   SC04 code plan with no required_skills at all                           (warning)
 #   SC05 a required skill that no routing row names                         (warning)
+#   SC06 a plan touching test files requires istqb-testing                 (skill-routing.md:19)
 #   CM00 Capability Matrix schema unreadable from team-lead.md              (error)
 #   CM01 a matrix omits a dimension the Capability Matrix declares          (error)
 #   CM02 a matrix verdict is not yes/no, or scope is not task/phase         (error)
