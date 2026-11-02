@@ -597,6 +597,24 @@ for _b in _discovery:
           "tool.execute.before" not in _body and "skills_loaded" not in _body,
           "a second implementation diverges silently from the registered one")
 
+# ── init materialises the bridge ─────────────────────────────────────────────────────────
+# A bridge in THIS tree proves this tree works. It proves nothing about an app: `framework
+# init` is what installs one, and for as long as it copied only bootstrap.ts every initialised
+# app shipped a collector registered nowhere -- the 2026-10-12 freeze, reproduced by install.
+# Verified by CALLING init's materialisation rather than grepping init.py for a filename:
+# "the template ships" and "init copies it" are different claims, and only the second one makes
+# an app record anything.
+from framework import init as _init_mod
+with tempfile.TemporaryDirectory(prefix="init-telemetry-") as _td:
+    _init_mod._materialise_opencode(Path(_td), dry_run=False)
+    _bridge = Path(_td) / ".opencode" / "plugins" / "telemetry.js"
+    _btxt = _bridge.read_text(encoding="utf-8", errors="replace") if _bridge.is_file() else ""
+    check("init materialises the telemetry bridge", _bridge.is_file(),
+          "an installed app would ship a collector that is registered nowhere")
+    check("the materialised bridge carries no hook logic",
+          bool(_btxt) and "tool.execute.before" not in _btxt and "skills_loaded" not in _btxt,
+          "init would install a second implementation that drifts from the collector")
+
 print("\n[11] Contract fixture")
 # Every check below exists because the matching bug was found by execution, not review.
 _cdir = _locate.app_root() / _locate.readiness().get("openapi_schema", ".planning/contracts")
