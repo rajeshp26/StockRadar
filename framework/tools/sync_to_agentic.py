@@ -72,9 +72,17 @@ INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md", ".lifecycle/agents
 # them. `.github` has divergent CI; `.gitignore`/`pyproject.toml` are the
 # distribution repo's own config. The sync tool itself stays source-side: its
 # job is to publish FROM StockerPro, so it does not belong in the artifact.
+#
+# `framework/quality/baseline.json` is per-repository STATE, not mechanism. It
+# records the findings of one repository's code; mirroring it would hand the
+# target a budget sized for someone else's debt, which is worse than no budget
+# at all (it silently permits findings that do not exist there). The module and
+# the README are mirrored; each repo generates its own baseline with
+# `python3 framework/tools/lint_budget.py update --allow-increase --reason ...`.
 EXCLUDE_DEFAULT = [
     ".gitignore", "pyproject.toml", ".github", ".planning", "docs",
     "framework/tools/sync_to_agentic.py",
+    "framework/quality/baseline.json",
 ]
 
 AGENTIC_CANDIDATES = (
