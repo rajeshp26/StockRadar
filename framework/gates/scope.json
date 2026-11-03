@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "why": "This repository is two things at once: the framework's home, and the StockerPro application built with it. G4 is repo-scoped by design ('does this language appear in the tree?'), so with no contract it judged the application too - measured: 1,637 of 1,764 budgeted lint findings and 2,379 of 2,429 collected tests were backend/. That made the gate either red for debt the framework does not own, or green on a budget so loose it stopped ratcheting anything; either way it never answered 'is the framework checked?'. This file states the boundary for the dimensions where a competing authority exists (Python static analysis and pytest). It does NOT narrow the JS branch: G4 runs the project's own declared npm scripts, and nothing else runs them, so scoping them out would be a coverage hole with a tidy explanation.",
+  "owned": [
+    "framework"
+  ],
+  "delegated": [
+    {
+      "path": "backend",
+      "tools": [
+        "ruff",
+        "pytest"
+      ],
+      "authority": {
+        "file": ".github/workflows/ci.yml",
+        "requires": [
+          "ruff-action",
+          "BACKEND_DIR",
+          "pytest tests/"
+        ]
+      },
+      "reason": "The application backend has a pipeline this gate cannot reproduce: a pinned dev environment (pip-sync requirements-dev.txt) and real SUPABASE_*/FIREBASE_* credentials, without which most of its tests cannot run at all. Delegating is a statement about who judges it, not a claim that it passes - and the tokens above are re-verified against ci.yml on every run, so the claim cannot rot quietly. Note the honest gap this leaves: no authority runs mypy or bandit there, which is why backend/pyproject.toml declares mypy configuration that CI never executes."
+    }
+  ]
+}

@@ -79,10 +79,18 @@ INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md", ".lifecycle/agents
 # at all (it silently permits findings that do not exist there). The module and
 # the README are mirrored; each repo generates its own baseline with
 # `python3 framework/tools/lint_budget.py update --allow-increase --reason ...`.
+#
+# `framework/gates/scope.json` is the same class of thing: it names THIS
+# repository's layout, the authorities inside it, and the tokens that prove those
+# authorities still run what is claimed. Mirrored to a repo without a `backend/`
+# it would either fail (stale path) or, worse, describe a boundary that does not
+# exist. The mechanism (`gate_scope.py`, the gate, the README) is mirrored; the
+# contract is drawn per repository.
 EXCLUDE_DEFAULT = [
     ".gitignore", "pyproject.toml", ".github", ".planning", "docs",
     "framework/tools/sync_to_agentic.py",
     "framework/quality/baseline.json",
+    "framework/gates/scope.json",
 ]
 
 AGENTIC_CANDIDATES = (

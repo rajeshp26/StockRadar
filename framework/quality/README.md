@@ -47,7 +47,7 @@ deliberately, in the same change that justifies it:
     python3 framework/tools/lint_budget.py report       # current vs budgeted, by rule
     python3 framework/tools/lint_budget.py check        # exit 0/1/2 - exactly what G4 runs
     python3 framework/tools/lint_budget.py update --reason "burned down E402 in backend/api"
-    python3 framework/tools/lint_budget.py --self-test  # 13 behavioural cases
+    python3 framework/tools/lint_budget.py --self-test  # 18 behavioural cases
 
 Two operational notes, both measured rather than assumed:
 
@@ -67,6 +67,60 @@ Cold start in a repo that predates the budget:
 
 That records what is already there and nothing more. It is the only time `--allow-increase`
 is the honest flag; after that the budget may only shrink.
+
+## Gate scope: what this gate judges, and who judges the rest
+
+A repository can be two things at once. StockerPro is both the framework's home and the
+application built with it, so G4's own question — *does this language appear in the tree?* —
+silently included the application: measured, **1,637 of 1,764** budgeted lint findings and
+**2,379 of 2,429** collected tests were `backend/`, which has its own CI, its own pinned dev
+environment, and Supabase/Firebase credentials a developer machine does not have.
+
+`framework/gates/scope.json` states the boundary, and `framework/tools/gate_scope.py`
+evaluates it. It governs the dimensions where a competing authority exists — Python static
+analysis (`ruff`/`mypy`/`bandit`) and `pytest`. The JS branch stays repo-wide on purpose: it
+runs the project's *own* declared npm scripts, and nothing else runs them, so narrowing it
+would be a coverage hole with a tidy explanation.
+
+| Path | State | Verdict |
+|---|---|---|
+| in `owned` | judged here | normal gate verdict |
+| in `delegated` | judged elsewhere | not scanned; the authority's commands are re-verified every run |
+| neither | judged by nobody | reported with a file count, never dropped |
+
+The delegation is not a comment, it is a claim the gate re-checks. Each entry names an
+`authority.file` and the `authority.requires` tokens that file must still contain:
+
+    "delegated": [{"path": "backend", "tools": ["ruff", "pytest"],
+                   "authority": {"file": ".github/workflows/ci.yml",
+                                 "requires": ["ruff-action", "BACKEND_DIR", "pytest tests/"]}}]
+
+If the authority stops running one of those commands, the delegation is **void** and G4
+fails — a path cannot drift back to unjudged and still read as covered. The same applies to a
+stale entry whose path no longer exists.
+
+Three properties worth stating, because each one is the difference between a boundary and a
+suppression list:
+
+- **No `scope.json` means the whole tree.** Absence is the strict default, so deleting the
+  file widens the scan rather than buying silence.
+- **An unreadable contract fails the gate.** It cannot be evaluated, so it is not guessed at,
+  and it cannot be interpreted as "no scope" (which would widen, harmlessly) or as "empty
+  scope" (which would silently stop judging everything).
+- **Delegation is per path, not per dimension.** `backend` delegated for `ruff`+`pytest` is
+  *not* judged here at all; the fact that nobody runs `mypy` or `bandit` there is reported
+  separately, because "they lint it" is not "they type-check it".
+
+Like the budget, `scope.json` is **per-repository state, not mechanism**: the sync mirrors
+`gate_scope.py`, the gate, and this README, and deliberately does not mirror the contract,
+because a boundary drawn for one repository's layout describes nothing in another.
+
+Commands:
+
+    python3 framework/tools/gate_scope.py check       # owned / delegated / judged-by-nobody
+    python3 framework/tools/gate_scope.py paths       # owned paths, one per line
+    python3 framework/tools/gate_scope.py count --tool ruff   # files this gate would lint
+    python3 framework/tools/gate_scope.py --self-test # 18 behavioural cases
 
 ## Coverage gaps, stated plainly rather than papered over
 

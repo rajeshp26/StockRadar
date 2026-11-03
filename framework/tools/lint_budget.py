@@ -79,15 +79,15 @@ def _ruff_version(binary: str) -> str:
     return out
 
 
-def _ruff_findings(binary: str, root: Path) -> tuple[int, list[dict]]:
-    """Run ruff over the whole tree and return (exit, parsed findings).
+def _ruff_findings(binary: str, root: Path, targets: list[str]) -> tuple[int, list[dict]]:
+    """Run ruff over the gate's scope and return (exit, parsed findings).
 
     ruff exits 1 when it finds anything; that is a normal result, not an error. Exit 2
     means ruff itself failed (bad config, crashed), which must not be mistaken for
     "no findings".
     """
     r = subprocess.run(
-        [binary, "check", ".", "--output-format=json"],
+        [binary, "check", *targets, "--output-format=json"],
         cwd=str(root), capture_output=True, text=True, timeout=900,
     )
     if r.returncode not in (0, 1):
@@ -274,6 +274,29 @@ def _budget_path(args) -> Path:
     return p if p.is_absolute() else _root(args) / p
 
 
+def _scope_targets(root: Path) -> list[str]:
+    """Paths this gate's linter should scan.
+
+    The gate scope contract (framework/gates/scope.json, see framework/tools/gate_scope.py)
+    decides which paths G4 owns; the budget must count exactly what the gate runs, or the
+    two disagree and the budget stops describing the verdict. No contract file means the
+    whole tree -- the stricter default, never a narrower one. An unreadable contract is
+    Blocked, because guessing it would change which code is judged.
+    """
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
+    try:
+        import gate_scope  # noqa: PLC0415 - sibling module, optional for single-file copies
+    except Exception:  # noqa: BLE001 - absent module means "no contract", i.e. whole tree
+        return ["."]
+    try:
+        owned = gate_scope.owned_paths(root)
+    except gate_scope.Blocked as e:
+        raise Blocked(f"gate scope: {e}") from e
+    return owned or ["."]
+
+
 def _gather(args, tool: str):
     adapter = TOOLS[tool]
     binary = args.tool_bin or _which(adapter["binary"])
@@ -283,16 +306,21 @@ def _gather(args, tool: str):
             "or this gate cannot judge static analysis -- a missing tool is never a pass."
         )
     root = _root(args)
+    targets = _scope_targets(root)
     version = adapter["version"](binary)
-    _rc, findings = adapter["findings"](binary, root)
-    return root, version, findings, counts_from(findings, root)
+    _rc, findings = adapter["findings"](binary, root, targets)
+    return root, version, findings, counts_from(findings, root), targets
 
 
 def cmd_check(args) -> int:
     tool = args.tool
-    root, version, findings, current = _gather(args, tool)
+    root, version, findings, current, targets = _gather(args, tool)
     path = _budget_path(args)
     budget_doc = load_budget(path)
+
+    if targets != ["."]:
+        print(f"[lint_budget] scope: {' '.join(targets)} "
+              "(framework/gates/scope.json; paths outside it are not this gate's)")
 
     budget_version = budget_doc.get("tool_version")
     if budget_doc and budget_version and budget_version != version:
@@ -347,7 +375,7 @@ def cmd_check(args) -> int:
 
 def cmd_report(args) -> int:
     tool = args.tool
-    root, version, findings, current = _gather(args, tool)
+    root, version, findings, current, targets = _gather(args, tool)
     path = _budget_path(args)
     budget_doc = load_budget(path)
     budgeted = total_of(budget_doc.get("counts", {}))
@@ -355,6 +383,7 @@ def cmd_report(args) -> int:
 
     print(f"[lint_budget] tool      {tool} {version}")
     print(f"[lint_budget] root      {root}")
+    print(f"[lint_budget] scope     {' '.join(targets)}")
     print(f"[lint_budget] budget    {path} (schema {budget_doc.get('schema', 'absent')})")
     print(f"[lint_budget] baseline  {budgeted} finding(s), generated "
           f"{budget_doc.get('generated_at', 'n/a')}")
@@ -386,7 +415,7 @@ def cmd_update(args) -> int:
               "reason is an exclusion list nobody can review.", file=sys.stderr)
         return 1
     tool = args.tool
-    _root_dir, version, _findings, current = _gather(args, tool)
+    _root_dir, version, _findings, current, _targets = _gather(args, tool)
     path = _budget_path(args)
     old = load_budget(path)
     old_total = total_of(old.get("counts", {}))
@@ -506,6 +535,62 @@ def _self_test() -> int:
                 assert _which("definitely_not_installed_xyz") is None
             finally:
                 os.environ["PATH"] = old
+
+    @case
+    def scope_contract_narrows_the_lint_targets():
+        # The budget must count exactly what the gate runs. In a repo that is both the
+        # framework's home and an application, the gate owns framework/ only; counting the
+        # app's 1,637 findings as framework debt is what made the budget unusable.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "framework" / "gates").mkdir(parents=True)
+            (root / "backend").mkdir()
+            (root / "backend" / "a.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "framework" / "gates" / "scope.json").write_text(
+                json.dumps({"schema": 1, "owned": ["framework"]}), encoding="utf-8")
+            assert _scope_targets(root) == ["framework"], _scope_targets(root)
+
+    @case
+    def absent_scope_contract_means_the_whole_tree():
+        # Absence must read as "scan everything", never as "scan less".
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            assert _scope_targets(Path(td)) == ["."], _scope_targets(Path(td))
+
+    @case
+    def unreadable_scope_contract_blocks_instead_of_widening_or_narrowing():
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "framework" / "gates" / "scope.json"
+            p.parent.mkdir(parents=True)
+            p.write_text("{not json", encoding="utf-8")
+            try:
+                _scope_targets(root)
+            except Blocked:
+                pass
+            else:
+                raise AssertionError("an unreadable scope contract was silently ignored")
+
+    @case
+    def scope_contract_with_no_owned_path_blocks():
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "framework" / "gates" / "scope.json"
+            p.parent.mkdir(parents=True)
+            p.write_text(json.dumps({"schema": 1, "owned": []}), encoding="utf-8")
+            try:
+                _scope_targets(root)
+            except Blocked:
+                pass
+            else:
+                raise AssertionError("an empty scope contract was accepted")
 
     @case
     def corrupt_budget_blocks_instead_of_reading_empty():

@@ -612,6 +612,117 @@ else
   skip_case "pytest project scope and attribution" "pytest + python3"
 fi
 
+# ── Gate scope contract ────────────────────────────────────────────────────────
+# A repository can be both a framework's home and an application. G4 used to answer
+# "is there Python in this tree?" for the whole tree, so it judged the application:
+# measured here, 1,637 of 1,764 budgeted lint findings and 2,379 of 2,429 collected tests
+# were `backend/` -- code with its own CI. framework/gates/scope.json states the boundary.
+#
+# Every case below is a PAIR: the scoped run and the unscoped run of the SAME fixture.
+# The pair is what makes them falsifiable. A single "scoped fixture passes" case would
+# also pass against a gate that simply stopped scanning anything it was told to skip,
+# including the code it owns.
+make_scope_fixture() {
+  local dir="$1" token="$2"
+  mkdir -p "$dir/framework/tools" "$dir/framework/gates" "$dir/.github/workflows"
+  cp "$HERE/../tools/gate_scope.py" "$dir/framework/tools/gate_scope.py"
+  # The budget is what turns a finding into a verdict; without it the gate falls back to
+  # raw ruff and these cases would be asserting on a different code path.
+  cp "$HERE/../tools/lint_budget.py" "$dir/framework/tools/lint_budget.py"
+  printf 'run: %s\n' "$token" > "$dir/.github/workflows/ci.yml"
+}
+
+SCOPE_JSON='{
+  "schema": 1,
+  "owned": ["app"],
+  "delegated": [{"path": "backend", "tools": ["ruff", "pytest"],
+                 "authority": {"file": ".github/workflows/ci.yml", "requires": ["TOKEN"]}}]
+}'
+
+if have ruff; then
+  for variant in scoped unscoped; do
+    d="$TMP/scope_lint_$variant"
+    make_scope_fixture "$d" "ruff-token-here"
+    # Keep the copied tooling out of the linter's own scan, so the case asserts on the
+    # application file and nothing else.
+    printf '[tool.ruff]\nextend-exclude = ["framework"]\n' > "$d/pyproject.toml"
+    mkdir -p "$d/app" "$d/backend"
+    printf 'def add(a, b):\n    return a + b\n' > "$d/app/ok.py"
+    printf 'import os\n\ndef sub(a, b):\n    return a - b\n' > "$d/backend/bad.py"
+    if [ "$variant" = "scoped" ]; then
+      printf '%s\n' "$SCOPE_JSON" | sed 's/TOKEN/ruff-token-here/' > "$d/framework/gates/scope.json"
+    fi
+  done
+  expect_exit_saying \
+    "Scope: a delegated path's lint findings are not this gate's, and scope is reported" \
+    "$TMP/scope_lint_scoped" 0 "\[scope\] owned: app"
+  expect_exit_saying \
+    "Scope: the SAME fixture without the contract still fails on that finding" \
+    "$TMP/scope_lint_unscoped" 1 "NEW finding"
+
+  # A delegation that can no longer be verified must FAIL, not quietly become coverage.
+  # This is the rule that stops scope.json from ageing into a suppression list: the first
+  # time the authority stops running the command, the claim is void.
+  d="$TMP/scope_void"
+  make_scope_fixture "$d" "some-other-command"
+  printf '[tool.ruff]\nextend-exclude = ["framework"]\n' > "$d/pyproject.toml"
+  mkdir -p "$d/app" "$d/backend"
+  printf 'def add(a, b):\n    return a + b\n' > "$d/app/ok.py"
+  printf 'def sub(a, b):\n    return a - b\n' > "$d/backend/bad.py"
+  printf '%s\n' "$SCOPE_JSON" | sed 's/TOKEN/ruff-token-here/' > "$d/framework/gates/scope.json"
+  expect_exit_saying \
+    "Scope: a delegation whose authority no longer runs it FAILS the gate" \
+    "$d" 1 "FAIL scope"
+
+  # An unreadable contract is a FAIL. Reading it as "no contract" would widen the scan
+  # (harmless-ish); reading it as "empty scope" would silently stop judging everything.
+  d="$TMP/scope_corrupt"
+  make_scope_fixture "$d" "ruff-token-here"
+  printf '[tool.ruff]\nextend-exclude = ["framework"]\n' > "$d/pyproject.toml"
+  mkdir -p "$d/app" "$d/backend"
+  printf 'def add(a, b):\n    return a + b\n' > "$d/app/ok.py"
+  printf 'def sub(a, b):\n    return a - b\n' > "$d/backend/bad.py"
+  printf '{not json\n' > "$d/framework/gates/scope.json"
+  expect_exit_saying \
+    "Scope: an unreadable contract FAILS instead of being ignored" \
+    "$d" 1 "FAIL scope"
+else
+  skip_case "gate scope contract (lint half)" ruff
+fi
+
+if have pytest && have python3; then
+  # The pytest half is the one that mattered most here: the root config's testpaths pointed
+  # at the application, so the gate ran 50 application tests and none of the framework's own.
+  for variant in scoped unscoped; do
+    d="$TMP/scope_pytest_$variant"
+    make_scope_fixture "$d" "pytest-token-here"
+    mkdir -p "$d/tests" "$d/svc/tests" "$d/backend/tests"
+    cat > "$d/pyproject.toml" <<'EOF'
+[tool.ruff]
+extend-exclude = ["framework"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "backend/tests"]
+EOF
+    printf 'def add(a, b):\n    return a + b\n' > "$d/tests/test_ok.py"
+    printf 'def test_svc():\n    assert True\n' > "$d/svc/tests/test_svc.py"
+    printf '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' > "$d/backend/pyproject.toml"
+    printf 'def test_bad():\n    assert False\n' > "$d/backend/tests/test_bad.py"
+    # Owned = svc, so the root run targets svc/ and the delegated project is not run at all.
+    printf '%s\n' "$SCOPE_JSON" | sed 's/TOKEN/pytest-token-here/' \
+      | sed 's/"owned": \["app"\]/"owned": ["svc"]/' > "$d/framework/gates/scope.json"
+    if [ "$variant" = "unscoped" ]; then rm -f "$d/framework/gates/scope.json"; fi
+  done
+  expect_exit_saying \
+    "Scope: a delegated project's tests are not run by this gate" \
+    "$TMP/scope_pytest_scoped" 0 "pytest -q svc" "FAIL test"
+  expect_exit_saying \
+    "Scope: the SAME fixture without the contract runs that project and fails" \
+    "$TMP/scope_pytest_unscoped" 1 "FAIL test:backend"
+else
+  skip_case "gate scope contract (pytest half)" "pytest + python3"
+fi
+
 # ── Secrets (language-agnostic) ─────────────────────────────────────────────────
 if have gitleaks; then
   mkdir -p "$TMP/secret_bad"

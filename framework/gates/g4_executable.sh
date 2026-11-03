@@ -37,6 +37,14 @@
 # above the budget fail this gate; findings within it are reported as debt. The budget can
 # only shrink unless a human passes --allow-increase with a stated reason, so it is a
 # standing burndown obligation rather than an exclusion list. See framework/quality/README.md.
+#
+# Rule 5: scope is stated, never assumed. A repository can BE both a framework's home and
+# an application. "Does this language appear in the tree?" then answers a question nobody
+# asked: whether the APPLICATION is checked. framework/gates/scope.json names the paths this
+# gate owns and the paths another authority judges, and that authority's commands are
+# re-verified on every run. Paths owned by neither are reported with a file count rather
+# than dropped. No scope.json means the whole tree -- absence is never narrower scope.
+# See framework/tools/gate_scope.py.
 GATE_NAME=g4_executable
 source "$(dirname "$0")/_lib.sh"
 rc=0; ran=0; unavailable=""
@@ -217,14 +225,72 @@ elif [ -n "$JS_FILES" ]; then
   mark_present javascript
 fi
 
+# ── Gate scope: which paths this gate judges, and who judges the rest ──────────
+# G4 asks a repo-wide question ("does this language appear in the tree?"). When the repo is
+# both a framework's home and an application, that question silently includes the
+# application -- measured here: 1,637 of 1,764 budgeted lint findings and 2,379 of 2,429
+# collected tests were `backend/`, which has its own CI, its own pinned dev environment, and
+# credentials this machine does not have.
+#
+# The contract governs the dimensions where a competing authority exists: Python static
+# analysis (ruff/mypy/bandit) and pytest. The JS branch above deliberately stays repo-wide --
+# it runs the project's OWN declared npm scripts, and nothing else runs them, so narrowing
+# it would be a coverage hole with a tidy explanation.
+#
+# Three states, and the third is why this is not a suppression list:
+#   owned      -> judged here
+#   delegated  -> judged elsewhere, and that claim is re-verified against the authority
+#                 file on every run; when it stops being true this gate FAILS
+#   neither    -> reported with a file count ("judged by nobody"), never dropped
+#
+# No scope.json => every path. An unreadable contract FAILS rather than being ignored: it
+# cannot be evaluated, so it must not be guessed at. The fallback is the whole tree, which
+# is the strict direction -- a contract that cannot be read can never buy silence.
+SCOPE_OWNED=""; SCOPE_SUMMARY=""
+if [ -f framework/tools/gate_scope.py ] && [ -f framework/gates/scope.json ]; then
+  scope_out="$(python3 framework/tools/gate_scope.py check 2>&1)"; scope_rc=$?
+  echo "$scope_out"
+  if [ "$scope_rc" -ne 0 ]; then
+    log "FAIL scope: framework/gates/scope.json could not be honoured (gate_scope.py exit $scope_rc) -- a delegation that can no longer be verified is a suppression list, not coverage"
+    rc=1
+  fi
+  if scope_paths="$(python3 framework/tools/gate_scope.py paths 2>/dev/null)"; then
+    SCOPE_OWNED="$scope_paths"
+    SCOPE_SUMMARY="$(python3 framework/tools/gate_scope.py unjudged 2>/dev/null)"
+  else
+    log "FAIL scope: the owned paths could not be determined; falling back to the whole tree, which cannot yield a pass the contract would have forbidden"
+    rc=1
+  fi
+fi
+
+# Is this repo-relative path one this gate judges? No contract (or one that could not be
+# read -- already failed above) means everything is in scope.
+in_scope() {
+  local f="$1" p
+  [ -n "$SCOPE_OWNED" ] || return 0
+  for p in $SCOPE_OWNED; do
+    [ "$p" = "." ] && return 0
+    case "$f" in "$p"|"$p"/*) return 0 ;; esac
+  done
+  return 1
+}
+# What mypy/bandit are pointed at: the owned paths, or the whole tree without a contract.
+SCOPE_TARGETS="${SCOPE_OWNED:-.}"
+
 # ── Python ─────────────────────────────────────────────────────────────────────
 # Discover sources ANYWHERE, not just the repo root. Root-only globbing misses the
 # conventional src/ + tests/ layout and silently reports "no checks available".
 # `git ls-files` also lists tracked-but-deleted paths, so filter to files that exist.
+# The scope filter runs last, so "python is present" is answered about the code this gate
+# owns: a repository whose only Python is delegated must not claim Python coverage.
 PY_FILES=$(
   { git ls-files '*.py' 2>/dev/null
     find . -name '*.py' "${COMMON_PRUNE[@]}" 2>/dev/null | sed 's|^\./||'
-  } | sort -u | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | head -400
+  } | sort -u | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        in_scope "$f" || continue
+        printf '%s\n' "$f"
+      done | head -400
 )
 
 # Directories whose own pytest configuration would be loaded if pytest ran there. Each is
@@ -283,12 +349,12 @@ if [ -n "$PY_FILES" ]; then
   else
     note_missing ruff
   fi
-  if have mypy;   then run types mypy .;                        mark_static python; else note_missing mypy; fi
+  if have mypy;   then run types mypy $SCOPE_TARGETS;          mark_static python; else note_missing mypy; fi
   # bandit overlaps with ruff's S rules but is kept as a second, independent pass:
   # they don't agree on every finding (measured: ruff's S105 caught a hardcoded
   # password bandit's B105 profile missed on the same file), and this is a
   # security-adjacent check where a second opinion is worth the runtime.
-  if have bandit; then run security bandit -q -r . -x '*/node_modules/*,*/.venv/*'; mark_static python; else note_missing bandit; fi
+  if have bandit; then run security bandit -q -r $SCOPE_TARGETS -x '*/node_modules/*,*/.venv/*'; mark_static python; else note_missing bandit; fi
 
   if have pytest; then
     # ── Test execution: one pytest run per pytest project ───────────────────────
@@ -316,7 +382,14 @@ if [ -n "$PY_FILES" ]; then
     # Exit 5 is "no tests collected": that is a coverage hole to report, not a failure of
     # code that does not exist.
     PYTEST_LOG="${TMPDIR:-/tmp}/g4-pytest-$$.log"
-    PYTEST_ROOTS="$(pytest_projects)"
+    # Scope filter: a subproject is this gate's only if it owns it. Running the delegated
+    # project from its own directory would duplicate the authority that already judges it --
+    # with a worse environment, which is what produced 407 bogus async errors here. The repo
+    # root always stays (if it configures pytest); its TARGETS are narrowed below.
+    PYTEST_ROOTS="$(pytest_projects | while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      if [ "$d" = "." ] || in_scope "$d"; then printf '%s\n' "$d"; fi
+    done)"
     if [ -d tests ] || [ -d test ]; then
       printf '%s\n' "$PYTEST_ROOTS" | grep -qx '\.' \
         || PYTEST_ROOTS="$(printf '.\n%s\n' "$PYTEST_ROOTS" | sed '/^$/d')"
@@ -337,6 +410,18 @@ if [ -n "$PY_FILES" ]; then
       PYTEST_ARGS=(-q)
       if [ "$proj" = "." ]; then
         for sub in $PYTEST_SUBPROJECTS; do PYTEST_ARGS+=("--ignore-glob=$sub/*"); done
+        # The root run targets the paths this gate OWNS, not the root config's testpaths.
+        # Measured here: the root testpaths are ["tests", "backend/tests"] -- the application
+        # -- so the gate ran 50 application tests (43 skipped) and reached NONE of the
+        # framework's own 240. A gate that judges a repository while executing none of that
+        # repository's tests is the coverage hole this whole exercise started from.
+        if [ -n "$SCOPE_OWNED" ]; then
+          root_targets=""
+          for p in $SCOPE_OWNED; do
+            [ -d "$p" ] && root_targets="${root_targets:+$root_targets }$p"
+          done
+          [ -n "$root_targets" ] && PYTEST_ARGS+=($root_targets)
+        fi
       fi
 
       # Preflight, collect only. An option no installed plugin provides is visible at
@@ -393,7 +478,8 @@ EOF
   else
     note_missing pytest
     # Substitute, do not skip. Contract and unit tests are written to run standalone.
-    STANDALONE=$(find tests -name 'test_*.py' 2>/dev/null | sort)
+    # Scoped like everything else: without a contract this looks where it always did.
+    STANDALONE=$(find ${SCOPE_OWNED:-tests test} -name 'test_*.py' 2>/dev/null | sort)
     if [ -n "$STANDALONE" ]; then
       log "pytest unavailable; executing tests standalone"
       for t in $STANDALONE; do run "test:$t" python3 "$t"; mark_covered python; done
@@ -506,6 +592,12 @@ else
 fi
 
 # ── Verdict ────────────────────────────────────────────────────────────────────
+# Scope is part of the verdict, not a footnote: "green" means green for the owned paths,
+# and the line below says which paths those are and whose the rest are.
+if [ -n "$SCOPE_SUMMARY" ]; then
+  log "scope: $SCOPE_SUMMARY"
+fi
+
 if [ -n "$unavailable" ]; then
   log "tools unavailable (not treated as pass): $unavailable"
 fi
