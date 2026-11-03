@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -104,6 +105,33 @@ def _ruff_findings(binary: str, root: Path) -> tuple[int, list[dict]]:
 TOOLS = {
     "ruff": {"version": _ruff_version, "findings": _ruff_findings, "binary": "ruff"},
 }
+
+
+def _which(name: str) -> str | None:
+    """Resolve an executable, including a Windows ``.exe`` reached from a POSIX shell.
+
+    The same gap the gates close with framework/gates/_toolchain.sh: on a WSL host a
+    Windows ``ruff.exe`` is on PATH but bare ``ruff`` is not, and ``shutil.which`` does not
+    try Windows extensions when it is not running on Windows. Measured consequence:
+    ``python3 framework/tools/lint_budget.py check`` reported BLOCKED on a machine where
+    ruff was installed and working -- the gate itself was fine because it sources the
+    toolchain resolver, but the documented standalone command was not. A documented
+    command that lies about the environment is worse than a missing command.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    if os.name == "nt" or Path(name).suffix:
+        # Windows already consults PATHEXT; a name with an extension is explicit.
+        return None
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        for ext in (".exe", ".cmd", ".bat"):
+            candidate = Path(entry) / (name + ext)
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
 
 
 # ── analysis ───────────────────────────────────────────────────────────────────
@@ -248,7 +276,7 @@ def _budget_path(args) -> Path:
 
 def _gather(args, tool: str):
     adapter = TOOLS[tool]
-    binary = args.tool_bin or shutil.which(adapter["binary"])
+    binary = args.tool_bin or _which(adapter["binary"])
     if not binary:
         raise Blocked(
             f"{adapter['binary']} not found on PATH. Install it (framework/quality/README.md) "
@@ -453,6 +481,31 @@ def _self_test() -> int:
     @case
     def path_outside_the_root_is_left_absolute_not_silently_trimmed():
         assert relative_name("/other/place/a.py", Path("/mnt/c/repo")) == "/other/place/a.py"
+
+    @case
+    def windows_exe_is_resolved_from_a_posix_path():
+        # The documented standalone command (`python3 ... check`) reported BLOCKED on WSL
+        # because a Windows ruff.exe is on PATH but bare `ruff` is not. Same gap the gates
+        # close with _toolchain.sh; the tool cannot depend on the caller having sourced it.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            exe = Path(td) / "fakebudgettool.exe"
+            exe.write_bytes(b"")
+            exe.chmod(0o755)  # on a POSIX host an executable bit is required, as for a real binary
+            old = os.environ.get("PATH", "")
+            os.environ["PATH"] = td + os.pathsep + old
+            try:
+                got = _which("fakebudgettool")
+                # Compare canonically: on Windows shutil.which answers with the PATHEXT
+                # spelling (".EXE"), which is the same binary as the ".exe" written above.
+                assert got, "Windows .exe on a POSIX PATH was not resolved"
+                assert os.path.normcase(os.path.abspath(got)) == \
+                       os.path.normcase(os.path.abspath(str(exe))), got
+                # And an unresolvable tool still reads as absent, never as a silent default.
+                assert _which("definitely_not_installed_xyz") is None
+            finally:
+                os.environ["PATH"] = old
 
     @case
     def corrupt_budget_blocks_instead_of_reading_empty():

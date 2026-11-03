@@ -466,6 +466,47 @@ PY
   expect_exit_saying \
     "Budget: linter version drift BLOCKS and is not counted as static coverage" \
     "$TMP/budget_drift" 1 "ruff-budget\("
+
+  # (e) The documented standalone command must resolve the linter ITSELF. The gate
+  # sources _toolchain.sh, so the gate working proves nothing about the command the
+  # README tells a human to run. Measured bug: under WSL,
+  # `python3 framework/tools/lint_budget.py check` printed BLOCKED ("ruff not found on
+  # PATH") on a machine where ruff.exe was installed and the gate was green, because
+  # shutil.which does not try Windows extensions when it is not on Windows. The stub
+  # below is reachable ONLY as `ruff.exe`, and the gate's shim directory is removed
+  # from PATH, so this case fails if the tool ever goes back to a bare which().
+  mkdir -p "$TMP/standalone_bin" "$TMP/standalone/src" \
+           "$TMP/standalone/framework/tools" "$TMP/standalone/framework/quality"
+  cp "$HERE/../tools/lint_budget.py" "$TMP/standalone/framework/tools/lint_budget.py"
+  cat > "$TMP/standalone_bin/ruff.exe" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  --version) echo "ruff 0.0.1-stub"; exit 0 ;;
+esac
+echo "[]"
+exit 0
+STUB
+  chmod +x "$TMP/standalone_bin/ruff.exe"
+  CLEAN_PATH="$PATH"
+  if [ -n "${_FRAMEWORK_TOOLCHAIN_DIR:-}" ]; then
+    CLEAN_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$_FRAMEWORK_TOOLCHAIN_DIR" | tr '\n' ':')"
+  fi
+  ( cd "$TMP/standalone" && PATH="$TMP/standalone_bin:$CLEAN_PATH" \
+      python3 framework/tools/lint_budget.py update --reason "standalone resolver fixture" ) \
+    >/dev/null 2>&1
+  standalone_out="$( cd "$TMP/standalone" && PATH="$TMP/standalone_bin:$CLEAN_PATH" \
+      python3 framework/tools/lint_budget.py check 2>&1 )"
+  standalone_rc=$?
+  if [ "$standalone_rc" -eq 0 ] && printf '%s' "$standalone_out" | grep -q '0 file(s) with new findings'; then
+    printf 'PASS  %s (exit 0, .exe-only linter resolved without the gate shim)\n' \
+      "Budget: the documented standalone command resolves an .exe-only linter"
+    pass=$((pass+1))
+  else
+    printf 'FAIL  %s (exit %d)\n---\n%s\n---\n' \
+      "Budget: the documented standalone command resolves an .exe-only linter" \
+      "$standalone_rc" "$standalone_out"
+    fail=$((fail+1))
+  fi
 else
   skip_case "static-analysis budget gate integration" ruff
 fi
