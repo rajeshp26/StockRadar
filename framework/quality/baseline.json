@@ -1,0 +1,1292 @@
+{
+  "counts": {
+    ".lifecycle/scripts/lifecycle-validate.py": {
+      "E401": 1
+    },
+    ".lifecycle/scripts/orphan-check.py": {
+      "E401": 1
+    },
+    ".lifecycle/tests/test_lifecycle.py": {
+      "E401": 1,
+      "E741": 2
+    },
+    "backend/_tmp_check.py": {
+      "I001": 1,
+      "RUF015": 1
+    },
+    "backend/api/analysis.py": {
+      "B008": 15,
+      "B904": 25
+    },
+    "backend/api/chat.py": {
+      "B008": 2,
+      "B904": 1,
+      "TC001": 1
+    },
+    "backend/api/portfolio.py": {
+      "B008": 40,
+      "B904": 44,
+      "E402": 2,
+      "F841": 4,
+      "RUF002": 1,
+      "W293": 13
+    },
+    "backend/api/stocks.py": {
+      "B008": 3,
+      "I001": 1
+    },
+    "backend/api/super_investors.py": {
+      "B904": 9,
+      "F841": 2,
+      "I001": 1,
+      "RUF006": 1
+    },
+    "backend/api/users.py": {
+      "B008": 3,
+      "B904": 3
+    },
+    "backend/api/valuations.py": {
+      "B008": 42,
+      "B904": 6,
+      "RUF001": 3,
+      "TC001": 2
+    },
+    "backend/api/watchlist_items.py": {
+      "B008": 11,
+      "B904": 4,
+      "N815": 2
+    },
+    "backend/api/watchlists.py": {
+      "B008": 14,
+      "B904": 14,
+      "RUF002": 1,
+      "SIM105": 1
+    },
+    "backend/application/jobs/aggregation_jobs.py": {
+      "B023": 6
+    },
+    "backend/application/jobs/derived_financial_metrics_job.py": {
+      "B023": 3,
+      "F841": 6,
+      "N806": 5,
+      "RUF002": 5,
+      "SIM102": 3,
+      "SIM222": 1
+    },
+    "backend/application/jobs/job_engine.py": {
+      "F841": 1,
+      "SIM105": 2,
+      "W293": 1
+    },
+    "backend/application/jobs/portfolio_snapshot_job.py": {
+      "I001": 1
+    },
+    "backend/application/jobs/price_ingestion_job.py": {
+      "DTZ011": 1
+    },
+    "backend/application/normalizers/statement_normalizer.py": {
+      "TC001": 3,
+      "TC003": 1
+    },
+    "backend/application/parsers/portfolio_parser.py": {
+      "RUF012": 4,
+      "SIM201": 1,
+      "W293": 14
+    },
+    "backend/application/schedulers/aggregation_scheduler.py": {
+      "SIM105": 1
+    },
+    "backend/application/schedulers/earnings_scheduler.py": {
+      "B904": 2,
+      "SIM105": 1
+    },
+    "backend/application/schedulers/market_data_scheduler.py": {
+      "B905": 1,
+      "I001": 1,
+      "RUF007": 1,
+      "SIM105": 1
+    },
+    "backend/application/schedulers/price_ingestion_scheduler.py": {
+      "W293": 1
+    },
+    "backend/application/schedulers/quarter_utils.py": {
+      "SIM108": 1
+    },
+    "backend/application/schedulers/reconciliation_scheduler.py": {
+      "E402": 1
+    },
+    "backend/application/schedulers/super_investors_scheduler.py": {
+      "F841": 1,
+      "RUF013": 1,
+      "SIM105": 1
+    },
+    "backend/application/schedulers/valuation_computation_scheduler.py": {
+      "RUF012": 1
+    },
+    "backend/application/services/ai_service.py": {
+      "TC001": 1
+    },
+    "backend/application/services/caching/cache_manager.py": {
+      "B039": 1
+    },
+    "backend/application/services/canslim_service.py": {
+      "N802": 7,
+      "N806": 8,
+      "RUF002": 1,
+      "RUF059": 1,
+      "TC001": 2
+    },
+    "backend/application/services/dcf_service.py": {
+      "E702": 1,
+      "RUF059": 1,
+      "SIM105": 1,
+      "TC001": 2
+    },
+    "backend/application/services/dcf_suitability.py": {
+      "F841": 1,
+      "N803": 1,
+      "N806": 1,
+      "RUF003": 2,
+      "RUF046": 1,
+      "SIM108": 1
+    },
+    "backend/application/services/ddm_service.py": {
+      "TC001": 2
+    },
+    "backend/application/services/ddm_suitability.py": {
+      "F841": 1,
+      "N803": 1,
+      "N806": 1,
+      "RUF003": 2,
+      "RUF046": 1
+    },
+    "backend/application/services/dividend_analysis_service.py": {
+      "E701": 28,
+      "E722": 4,
+      "RUF001": 9,
+      "RUF003": 1,
+      "SIM105": 1,
+      "TC001": 1
+    },
+    "backend/application/services/dividend_dashboard_service.py": {
+      "F841": 1,
+      "N817": 1,
+      "RUF003": 1,
+      "SIM108": 1,
+      "W293": 2
+    },
+    "backend/application/services/edgar_filing_service.py": {
+      "TC003": 1
+    },
+    "backend/application/services/fundamentals_service.py": {
+      "B905": 1,
+      "E701": 26,
+      "F841": 1,
+      "N806": 2,
+      "SIM105": 1,
+      "SIM108": 1,
+      "TC001": 1
+    },
+    "backend/application/services/magic_formula_service.py": {
+      "RUF059": 1,
+      "TC001": 2
+    },
+    "backend/application/services/moat_analysis_service.py": {
+      "F841": 4,
+      "RUF046": 1,
+      "TC001": 2
+    },
+    "backend/application/services/moat_wacc_service.py": {
+      "TC001": 1
+    },
+    "backend/application/services/owner_earnings_service.py": {
+      "E702": 1,
+      "RUF059": 1,
+      "SIM105": 2,
+      "TC001": 2
+    },
+    "backend/application/services/owner_earnings_suitability.py": {
+      "N803": 1,
+      "N806": 1,
+      "RUF001": 4,
+      "RUF002": 1,
+      "RUF003": 2,
+      "RUF046": 1,
+      "SIM105": 3
+    },
+    "backend/application/services/portfolio_risk_service.py": {
+      "N806": 5,
+      "RUF059": 1,
+      "SIM102": 4
+    },
+    "backend/application/services/portfolio_service.py": {
+      "B905": 1,
+      "E741": 8,
+      "F841": 1,
+      "I001": 2,
+      "N806": 1,
+      "N814": 1,
+      "RUF006": 1,
+      "RUF007": 1,
+      "RUF012": 1,
+      "RUF059": 1,
+      "W293": 7
+    },
+    "backend/application/services/portfolio_value_series_guard.py": {
+      "TC003": 1
+    },
+    "backend/application/services/prompts/company_snapshot.py": {
+      "B905": 1,
+      "E701": 13,
+      "RUF012": 1,
+      "TC001": 1
+    },
+    "backend/application/services/prompts/overview.py": {
+      "E701": 3,
+      "RUF001": 3
+    },
+    "backend/application/services/prompts/suitability.py": {
+      "E701": 41,
+      "E741": 7,
+      "F841": 3,
+      "RUF001": 13
+    },
+    "backend/application/services/recompute_guard.py": {
+      "SIM102": 1,
+      "TC003": 1
+    },
+    "backend/application/services/residual_income_service.py": {
+      "N806": 2,
+      "RUF002": 3,
+      "RUF059": 1,
+      "SIM105": 1,
+      "TC001": 2
+    },
+    "backend/application/services/residual_income_suitability.py": {
+      "N803": 1,
+      "N806": 1,
+      "RUF001": 10,
+      "RUF002": 1,
+      "RUF003": 2,
+      "RUF046": 1,
+      "SIM105": 8
+    },
+    "backend/application/services/risk_assessment_service.py": {
+      "B905": 2,
+      "E731": 1,
+      "F841": 4,
+      "SIM108": 1,
+      "TC001": 3
+    },
+    "backend/application/services/rule1_service.py": {
+      "N803": 1,
+      "N806": 1,
+      "TC001": 2
+    },
+    "backend/application/services/rule1_suitability.py": {
+      "N803": 1,
+      "N806": 4,
+      "RUF003": 3,
+      "RUF046": 1
+    },
+    "backend/application/services/stock_index_comparison_service.py": {
+      "B905": 2,
+      "TC001": 1
+    },
+    "backend/application/services/super_investors_cache.py": {
+      "W292": 1
+    },
+    "backend/application/services/super_investors_service.py": {
+      "B007": 1,
+      "TC002": 1
+    },
+    "backend/application/services/technical_analysis_service.py": {
+      "B905": 2,
+      "RUF002": 1,
+      "TC001": 1
+    },
+    "backend/application/services/valuation_service.py": {
+      "TC001": 12,
+      "W293": 2
+    },
+    "backend/application/services/wacc_roic_service.py": {
+      "TC001": 1
+    },
+    "backend/application/services/watchlist_service.py": {
+      "B904": 1,
+      "RUF006": 2,
+      "TC001": 3
+    },
+    "backend/application/validators/financial_data_validator.py": {
+      "RUF001": 1,
+      "SIM102": 2,
+      "W293": 5
+    },
+    "backend/auth.py": {
+      "B904": 3
+    },
+    "backend/database.py": {
+      "RUF013": 1
+    },
+    "backend/db_gap_check.py": {
+      "B007": 1,
+      "E722": 1,
+      "SIM118": 1
+    },
+    "backend/dependencies.py": {
+      "E402": 1,
+      "RUF022": 1,
+      "UP037": 11
+    },
+    "backend/domain/entities/watchlist.py": {
+      "N815": 4
+    },
+    "backend/domain/exceptions.py": {
+      "N818": 1,
+      "RUF013": 6
+    },
+    "backend/domain/model_types.py": {
+      "W293": 1
+    },
+    "backend/domain/models/analysis_canslim.py": {
+      "E741": 1,
+      "RUF002": 1,
+      "RUF003": 4
+    },
+    "backend/domain/models/analysis_magic_formula.py": {
+      "RUF003": 2
+    },
+    "backend/domain/models/analysis_moat.py": {
+      "TC003": 1
+    },
+    "backend/domain/models/analysis_technical.py": {
+      "RUF003": 2
+    },
+    "backend/domain/models/risk_assessment.py": {
+      "TC003": 1
+    },
+    "backend/domain/models/valuation_dcf.py": {
+      "N815": 40,
+      "TC001": 2
+    },
+    "backend/domain/models/valuation_ddm.py": {
+      "N815": 23
+    },
+    "backend/domain/models/valuation_owner_earnings.py": {
+      "N815": 40,
+      "RUF001": 2,
+      "RUF003": 1,
+      "TC001": 2
+    },
+    "backend/domain/models/valuation_residual_income.py": {
+      "N815": 29,
+      "RUF003": 3,
+      "TC001": 2
+    },
+    "backend/domain/models/valuation_rule1.py": {
+      "N815": 18
+    },
+    "backend/infrastructure/repositories/analysis_repository.py": {
+      "SIM102": 1,
+      "TC001": 1
+    },
+    "backend/infrastructure/repositories/benchmark_series_repository.py": {
+      "TC001": 1
+    },
+    "backend/infrastructure/repositories/event_store.py": {
+      "UP017": 2
+    },
+    "backend/infrastructure/repositories/financial_repository.py": {
+      "I001": 1,
+      "N806": 2,
+      "RUF003": 1,
+      "SIM101": 1,
+      "SIM105": 2,
+      "W293": 2
+    },
+    "backend/infrastructure/repositories/portfolio_repository.py": {
+      "B904": 1,
+      "E402": 6,
+      "N806": 1,
+      "RUF002": 1,
+      "RUF012": 1,
+      "W293": 8
+    },
+    "backend/infrastructure/repositories/portfolio_snapshots_repository.py": {
+      "N806": 3
+    },
+    "backend/infrastructure/repositories/portfolio_value_series_repository.py": {
+      "TC001": 1
+    },
+    "backend/infrastructure/repositories/risk_repository.py": {
+      "TC001": 1
+    },
+    "backend/infrastructure/repositories/scheduler_repository.py": {
+      "SIM105": 1,
+      "SIM110": 1,
+      "W293": 1
+    },
+    "backend/infrastructure/repositories/valuation_repository.py": {
+      "N806": 3
+    },
+    "backend/providers/ai_provider.py": {
+      "SIM117": 1,
+      "TC003": 1,
+      "UP043": 2
+    },
+    "backend/providers/defeat_beta_provider.py": {
+      "B023": 3,
+      "B904": 2,
+      "E402": 6,
+      "F841": 1,
+      "RUF001": 1,
+      "RUF012": 3,
+      "SIM102": 3,
+      "SIM103": 1,
+      "SIM105": 2
+    },
+    "backend/providers/defeatbeta_runtime.py": {
+      "SIM105": 1,
+      "UP035": 1
+    },
+    "backend/providers/edgar_provider.py": {
+      "RUF001": 1
+    },
+    "backend/providers/stockdex_provider.py": {
+      "B007": 1,
+      "I001": 1,
+      "RUF001": 2,
+      "TC003": 1,
+      "W293": 1
+    },
+    "backend/providers/yfinance_provider.py": {
+      "F841": 1,
+      "RUF015": 1,
+      "RUF046": 2,
+      "SIM105": 1,
+      "W293": 1
+    },
+    "backend/pyproject.toml": {
+      "RUF200": 1
+    },
+    "backend/query_snapshots.py": {
+      "DTZ011": 1,
+      "E702": 1,
+      "I001": 1
+    },
+    "backend/scheduler_worker.py": {
+      "I001": 1
+    },
+    "backend/schemas_fundamentals.py": {
+      "TC003": 1
+    },
+    "backend/schemas_portfolio.py": {
+      "E402": 1,
+      "UP042": 1
+    },
+    "backend/scripts/backfill_benchmark_prices.py": {
+      "E402": 6
+    },
+    "backend/scripts/backfill_company_summary.py": {
+      "E402": 4
+    },
+    "backend/scripts/backfill_derived_metrics.py": {
+      "E402": 2
+    },
+    "backend/scripts/backfill_eps_from_parquet.py": {
+      "E402": 6,
+      "N806": 1
+    },
+    "backend/scripts/backfill_holding_prices.py": {
+      "E402": 7,
+      "UP031": 2
+    },
+    "backend/scripts/backfill_initial_holdings.py": {
+      "F841": 1,
+      "SIM105": 1,
+      "UP017": 1
+    },
+    "backend/scripts/backfill_missing_initial.py": {
+      "UP017": 1
+    },
+    "backend/scripts/backfill_portfolio_snapshots.py": {
+      "E402": 10,
+      "E741": 4,
+      "F841": 1,
+      "RUF059": 1,
+      "SIM108": 1,
+      "W293": 1
+    },
+    "backend/scripts/backfill_snapshots.py": {
+      "E402": 7,
+      "RUF013": 1
+    },
+    "backend/scripts/backfill_super_investors.py": {
+      "E402": 3,
+      "N806": 1,
+      "RUF013": 1,
+      "W293": 3
+    },
+    "backend/scripts/backfill_upcoming_dividend_events.py": {
+      "B905": 1,
+      "E402": 3,
+      "RUF007": 1
+    },
+    "backend/scripts/call_real_get_net_deposits.py": {
+      "E402": 1
+    },
+    "backend/scripts/confirm_etf_early_return.py": {
+      "E402": 1
+    },
+    "backend/scripts/design_review_checks.py": {
+      "E731": 1
+    },
+    "backend/scripts/diag_benchmark_series_reuse.py": {
+      "RUF100": 1
+    },
+    "backend/scripts/diagnostics/edgar_api_check.py": {
+      "E402": 2,
+      "I001": 3,
+      "W292": 1,
+      "W293": 2
+    },
+    "backend/scripts/diagnostics/edgar_filings_check.py": {
+      "E402": 1,
+      "I001": 3,
+      "W292": 1
+    },
+    "backend/scripts/e2e_verify.py": {
+      "E731": 1
+    },
+    "backend/scripts/etf_freeze_distribution.py": {
+      "E402": 1
+    },
+    "backend/scripts/etf_pre_seed_appends.py": {
+      "E402": 1,
+      "I001": 1
+    },
+    "backend/scripts/final_verification_report.py": {
+      "B007": 1,
+      "F811": 1,
+      "W292": 1
+    },
+    "backend/scripts/fix_stockdex_millions.py": {
+      "E402": 3
+    },
+    "backend/scripts/full_period_verification.py": {
+      "SIM118": 1
+    },
+    "backend/scripts/gate_chart_series_integrity.py": {
+      "RUF100": 2,
+      "W292": 1
+    },
+    "backend/scripts/ground_truth_scenarios.py": {
+      "E402": 3,
+      "E731": 1
+    },
+    "backend/scripts/measure_compare_db_calls.py": {
+      "F401": 1
+    },
+    "backend/scripts/measure_compare_latency.py": {
+      "F401": 1,
+      "RUF100": 1,
+      "UP017": 1
+    },
+    "backend/scripts/measure_compare_latency_phases.py": {
+      "F401": 1,
+      "UP035": 1
+    },
+    "backend/scripts/measure_snapshot_read_cost.py": {
+      "F401": 1,
+      "F541": 1,
+      "N806": 2
+    },
+    "backend/scripts/migrate_create_portfolio_events.py": {
+      "E402": 1
+    },
+    "backend/scripts/migrate_holding_exchange_override.py": {
+      "E402": 2,
+      "F841": 2,
+      "SIM105": 1
+    },
+    "backend/scripts/migrate_investor_ciks.py": {
+      "B007": 1
+    },
+    "backend/scripts/phase7_backfill.py": {
+      "E402": 8,
+      "RUF002": 1
+    },
+    "backend/scripts/phase7_spot_check.py": {
+      "E402": 1
+    },
+    "backend/scripts/preflight_dependencies.py": {
+      "SIM102": 1
+    },
+    "backend/scripts/price_freshness_diagnosis.py": {
+      "E402": 1
+    },
+    "backend/scripts/price_history_seed_boundary.py": {
+      "E402": 1
+    },
+    "backend/scripts/prove_gap_equals_withdrawals.py": {
+      "E402": 1
+    },
+    "backend/scripts/qqq_insert_times.py": {
+      "E402": 1
+    },
+    "backend/scripts/qqq_september_continuity.py": {
+      "E402": 1
+    },
+    "backend/scripts/query_tfsa_all.py": {
+      "E402": 2
+    },
+    "backend/scripts/query_tfsa_raw.py": {
+      "E402": 2
+    },
+    "backend/scripts/rebuild_account_snapshots.py": {
+      "E402": 8,
+      "E741": 1,
+      "N806": 1,
+      "SIM105": 1,
+      "W292": 1
+    },
+    "backend/scripts/reconcile_holdings.py": {
+      "RUF059": 1
+    },
+    "backend/scripts/reconcile_net_deposits.py": {
+      "E402": 1,
+      "E741": 1,
+      "F401": 1
+    },
+    "backend/scripts/reconcile_snapshots.py": {
+      "RUF010": 2
+    },
+    "backend/scripts/regenerate_historical_snapshots.py": {
+      "E402": 6
+    },
+    "backend/scripts/run_backfill_wsl.py": {
+      "E402": 1
+    },
+    "backend/scripts/scheduler_health.py": {
+      "E402": 1,
+      "I001": 1
+    },
+    "backend/scripts/seed_e2e_data.py": {
+      "B007": 1,
+      "F841": 1
+    },
+    "backend/scripts/seed_e2e_requests.py": {
+      "B007": 1
+    },
+    "backend/scripts/split_daily_and_prices.py": {
+      "E402": 1
+    },
+    "backend/scripts/spy_qqq_created_at_range.py": {
+      "E402": 1
+    },
+    "backend/scripts/step1_backfill_acct9.py": {
+      "N806": 1
+    },
+    "backend/scripts/step2_create_tables.py": {
+      "E402": 2
+    },
+    "backend/scripts/step8_regenerate_snapshots.py": {
+      "B007": 1,
+      "E402": 6,
+      "RUF034": 1
+    },
+    "backend/scripts/step9_rebuild_all_snapshots.py": {
+      "E402": 12,
+      "E701": 7,
+      "E702": 8,
+      "E722": 2,
+      "E741": 1,
+      "I001": 1,
+      "SIM105": 2,
+      "SIM118": 1
+    },
+    "backend/scripts/test_api_output.py": {
+      "E402": 1,
+      "E701": 1
+    },
+    "backend/scripts/test_edgar_values.py": {
+      "B007": 1
+    },
+    "backend/scripts/test_replay_snapshot_job.py": {
+      "E402": 1
+    },
+    "backend/scripts/test_snapshot_architecture.py": {
+      "F841": 1
+    },
+    "backend/scripts/test_startup_check.py": {
+      "F401": 1,
+      "RUF100": 1
+    },
+    "backend/scripts/tfsa_all_period.py": {
+      "E402": 2
+    },
+    "backend/scripts/tfsa_raw.py": {
+      "E402": 1
+    },
+    "backend/scripts/ticker_freshness.py": {
+      "E402": 1,
+      "I001": 1,
+      "RUF010": 2
+    },
+    "backend/scripts/validate_ciks.py": {
+      "E722": 1,
+      "RUF005": 1
+    },
+    "backend/scripts/validate_existing_financial_data.py": {
+      "E402": 2,
+      "RUF024": 1,
+      "W293": 2
+    },
+    "backend/scripts/validate_fixes.py": {
+      "F841": 1
+    },
+    "backend/scripts/validate_holdings.py": {
+      "E402": 1,
+      "E722": 2,
+      "W293": 1
+    },
+    "backend/scripts/validate_perf_table.py": {
+      "E402": 1,
+      "F841": 4
+    },
+    "backend/scripts/validate_pypfopt.py": {
+      "E402": 3,
+      "E712": 1,
+      "F401": 1,
+      "SIM105": 1
+    },
+    "backend/scripts/validation_suite.py": {
+      "E402": 3,
+      "E712": 2,
+      "F841": 2,
+      "RUF015": 1
+    },
+    "backend/scripts/who_wrote_corrupt.py": {
+      "E402": 1
+    },
+    "backend/scripts/why_stale_tickers.py": {
+      "E402": 1,
+      "I001": 1
+    },
+    "backend/shared/alerting.py": {
+      "TC003": 1
+    },
+    "backend/shared/api_tracing.py": {
+      "TC002": 5
+    },
+    "backend/shared/cdr_utils.py": {
+      "B023": 2,
+      "RUF005": 2,
+      "UP028": 1
+    },
+    "backend/shared/exceptions/base.py": {
+      "N818": 1
+    },
+    "backend/shared/fx_service.py": {
+      "SIM109": 1,
+      "UP035": 1
+    },
+    "backend/shared/portfolio_event_payload.py": {
+      "W292": 1
+    },
+    "backend/shared/portfolio_stats.py": {
+      "N806": 2,
+      "RUF002": 1
+    },
+    "backend/shared/price_data_provider.py": {
+      "RUF012": 2,
+      "SIM102": 1,
+      "TC003": 1
+    },
+    "backend/shared/price_utils.py": {
+      "TC003": 1
+    },
+    "backend/shared/reconciliation.py": {
+      "RUF012": 1,
+      "SIM105": 1
+    },
+    "backend/shared/replay_engine.py": {
+      "RUF059": 2
+    },
+    "backend/shared/snapshot_builder.py": {
+      "F841": 1,
+      "SIM103": 1,
+      "W293": 1
+    },
+    "backend/tests/conftest.py": {
+      "E402": 3,
+      "I001": 1,
+      "W292": 1
+    },
+    "backend/tests/fixtures_dividend_pipeline.py": {
+      "RUF005": 2
+    },
+    "backend/tests/integration/test_dashboard_endpoint.py": {
+      "F841": 1,
+      "N806": 6,
+      "SIM117": 9
+    },
+    "backend/tests/integration/test_feature_flags.py": {
+      "N806": 1,
+      "SIM117": 1
+    },
+    "backend/tests/integration/test_portfolio_performance_batch.py": {
+      "E402": 2,
+      "F841": 1,
+      "N802": 1
+    },
+    "backend/tests/integration/test_repository_performance.py": {
+      "SIM117": 1
+    },
+    "backend/tests/integration_test_chat.py": {
+      "B017": 1,
+      "F841": 3
+    },
+    "backend/tests/test_ai_chat.py": {
+      "B017": 2,
+      "E741": 3
+    },
+    "backend/tests/test_ai_migration.py": {
+      "SIM105": 2
+    },
+    "backend/tests/test_auth.py": {
+      "I001": 1,
+      "SIM117": 1
+    },
+    "backend/tests/test_backfill.py": {
+      "SIM117": 3
+    },
+    "backend/tests/test_benchmark_series_materialisation.py": {
+      "F401": 1,
+      "I001": 1,
+      "RUF012": 1
+    },
+    "backend/tests/test_benchmark_timeline_invariance.py": {
+      "F841": 2,
+      "I001": 1
+    },
+    "backend/tests/test_buy_quarter_index.py": {
+      "RUF059": 2
+    },
+    "backend/tests/test_cdr_derived_truth.py": {
+      "SIM117": 1
+    },
+    "backend/tests/test_cdr_lot_splitting.py": {
+      "W292": 1
+    },
+    "backend/tests/test_cdr_mixed_lot_valuation.py": {
+      "W292": 1
+    },
+    "backend/tests/test_cdr_pricing.py": {
+      "RUF059": 5
+    },
+    "backend/tests/test_cdr_ratio_integrity.py": {
+      "B007": 1
+    },
+    "backend/tests/test_checkpoint_provenance.py": {
+      "I001": 1
+    },
+    "backend/tests/test_convert_holding_fx.py": {
+      "RUF059": 1
+    },
+    "backend/tests/test_database.py": {
+      "RUF059": 2
+    },
+    "backend/tests/test_dataloader.py": {
+      "F841": 1
+    },
+    "backend/tests/test_di_wiring.py": {
+      "I001": 1
+    },
+    "backend/tests/test_dividend_dashboard.py": {
+      "RUF003": 24
+    },
+    "backend/tests/test_dividend_integration.py": {
+      "F841": 1
+    },
+    "backend/tests/test_dividend_repository.py": {
+      "RUF059": 4
+    },
+    "backend/tests/test_financial_data_validator.py": {
+      "F401": 1,
+      "W292": 1
+    },
+    "backend/tests/test_freshness_monitor_scheduler.py": {
+      "B009": 1
+    },
+    "backend/tests/test_fundamentals_api_endpoints.py": {
+      "E402": 1
+    },
+    "backend/tests/test_fundamentals_service.py": {
+      "RUF059": 1
+    },
+    "backend/tests/test_fx_conversion.py": {
+      "B905": 2,
+      "N806": 5,
+      "SIM102": 1,
+      "SIM117": 6
+    },
+    "backend/tests/test_gate_chart_series_integrity.py": {
+      "F401": 1,
+      "I001": 1,
+      "W292": 1
+    },
+    "backend/tests/test_job_engine.py": {
+      "B007": 1,
+      "SIM105": 4
+    },
+    "backend/tests/test_moat_analysis_service.py": {
+      "F841": 1,
+      "RUF043": 1
+    },
+    "backend/tests/test_moat_api_endpoints.py": {
+      "E402": 1
+    },
+    "backend/tests/test_moat_keyword_analyzer.py": {
+      "B007": 1
+    },
+    "backend/tests/test_overview_computation.py": {
+      "E402": 1
+    },
+    "backend/tests/test_portfolio_api_latency.py": {
+      "B007": 1,
+      "SIM105": 1,
+      "SIM108": 1
+    },
+    "backend/tests/test_portfolio_e2e_all_tabs.py": {
+      "B007": 1,
+      "F401": 2,
+      "F841": 1,
+      "I001": 1,
+      "N801": 7,
+      "N817": 1,
+      "RUF002": 1,
+      "RUF003": 16,
+      "RUF005": 1
+    },
+    "backend/tests/test_portfolio_e2e_performance.py": {
+      "B007": 1,
+      "E701": 4,
+      "F841": 2
+    },
+    "backend/tests/test_portfolio_holding.py": {
+      "SIM117": 1,
+      "W291": 1
+    },
+    "backend/tests/test_portfolio_overview_filter.py": {
+      "I001": 1
+    },
+    "backend/tests/test_portfolio_performance_500_repro.py": {
+      "E402": 4,
+      "SIM117": 3
+    },
+    "backend/tests/test_portfolio_performance_benchmarks.py": {
+      "RUF012": 2,
+      "RUF013": 1,
+      "SIM108": 1
+    },
+    "backend/tests/test_portfolio_performance_loading.py": {
+      "SIM105": 1
+    },
+    "backend/tests/test_portfolio_performance_regression.py": {
+      "B007": 3
+    },
+    "backend/tests/test_portfolio_performance_spike_suppression.py": {
+      "SIM108": 1,
+      "W292": 1
+    },
+    "backend/tests/test_portfolio_response_cache.py": {
+      "F401": 1,
+      "I001": 1,
+      "RUF005": 1
+    },
+    "backend/tests/test_portfolio_risk_api.py": {
+      "E402": 1,
+      "F841": 1
+    },
+    "backend/tests/test_portfolio_snapshots.py": {
+      "F841": 2,
+      "RUF002": 1,
+      "RUF003": 3,
+      "RUF012": 2,
+      "W293": 4
+    },
+    "backend/tests/test_portfolio_value_series.py": {
+      "F401": 1,
+      "RUF005": 3,
+      "RUF012": 1
+    },
+    "backend/tests/test_price_history_bulk_fetch.py": {
+      "RUF100": 1
+    },
+    "backend/tests/test_price_lookahead_guard.py": {
+      "I001": 1,
+      "RUF059": 2
+    },
+    "backend/tests/test_price_rows.py": {
+      "I001": 1
+    },
+    "backend/tests/test_production_fixes.py": {
+      "F401": 1,
+      "F841": 1,
+      "I001": 1
+    },
+    "backend/tests/test_provider_chain_provenance_integration.py": {
+      "RUF059": 5
+    },
+    "backend/tests/test_reconciliation.py": {
+      "N806": 4
+    },
+    "backend/tests/test_reconciliation_scheduler.py": {
+      "B009": 1
+    },
+    "backend/tests/test_risk_api_endpoints.py": {
+      "E402": 1
+    },
+    "backend/tests/test_risk_assessment_service.py": {
+      "B905": 3,
+      "RUF015": 22
+    },
+    "backend/tests/test_rule1_service.py": {
+      "I001": 1
+    },
+    "backend/tests/test_scheduler_integration.py": {
+      "SIM105": 1
+    },
+    "backend/tests/test_scheduler_planner.py": {
+      "SIM105": 4
+    },
+    "backend/tests/test_scheduler_schema.py": {
+      "F841": 1,
+      "SIM102": 5
+    },
+    "backend/tests/test_scheduler_worker.py": {
+      "B007": 1,
+      "F841": 1,
+      "RUF006": 1,
+      "SIM105": 1
+    },
+    "backend/tests/test_schedulers.py": {
+      "SIM117": 7
+    },
+    "backend/tests/test_snapshot_data_integrity.py": {
+      "E402": 3,
+      "N806": 2
+    },
+    "backend/tests/test_split_handling.py": {
+      "RUF003": 1
+    },
+    "backend/tests/test_split_sync.py": {
+      "F401": 1,
+      "W292": 1
+    },
+    "backend/tests/test_sse_subscription.py": {
+      "F841": 1,
+      "I001": 5
+    },
+    "backend/tests/test_statement_normalizer.py": {
+      "W292": 1
+    },
+    "backend/tests/test_super_investors_api.py": {
+      "F401": 2,
+      "W292": 1
+    },
+    "backend/tests/test_super_investors_cache.py": {
+      "W292": 1
+    },
+    "backend/tests/test_transfer_import_provenance.py": {
+      "I001": 1
+    },
+    "backend/tests/test_verify_integrity.py": {
+      "E402": 1,
+      "RUF012": 1,
+      "RUF059": 2,
+      "W292": 1
+    },
+    "backend/tests/test_watchlist_flow.py": {
+      "I001": 2,
+      "W291": 1,
+      "W293": 1
+    },
+    "backend/tests/test_watchlist_service_unit.py": {
+      "I001": 1,
+      "W293": 4
+    },
+    "backend/tests/test_yfinance_provider.py": {
+      "F841": 1
+    },
+    "backend/tests/unit/test_portfolio_stats.py": {
+      "RUF059": 3
+    },
+    "backend/utils/dataloader.py": {
+      "B905": 1,
+      "UP046": 1
+    },
+    "framework/adapters/code_intel.py": {
+      "E402": 1,
+      "E702": 1
+    },
+    "framework/adapters/execute.py": {
+      "F541": 1,
+      "F841": 1
+    },
+    "framework/adapters/gsd_state.py": {
+      "E402": 1
+    },
+    "framework/adapters/host.py": {
+      "E402": 1
+    },
+    "framework/adapters/opencode_detect.py": {
+      "E402": 1
+    },
+    "framework/adapters/test_control.py": {
+      "E741": 3
+    },
+    "framework/adapters/test_intake.py": {
+      "E731": 1
+    },
+    "framework/architecture/checklist_check.py": {
+      "E401": 1,
+      "E402": 1
+    },
+    "framework/claims/ledger.py": {
+      "E401": 1,
+      "E402": 2,
+      "E702": 4,
+      "F841": 1
+    },
+    "framework/cli/integrations.py": {
+      "F401": 2
+    },
+    "framework/contracts/gen_types.py": {
+      "E702": 5
+    },
+    "framework/contracts/test_validator_types.py": {
+      "E702": 2
+    },
+    "framework/contracts/validate_schema.py": {
+      "E702": 4
+    },
+    "framework/execution_context.py": {
+      "E402": 1,
+      "E702": 6
+    },
+    "framework/frontend/stack_check.py": {
+      "E741": 1
+    },
+    "framework/gates/test_regex_conformance.py": {
+      "F401": 1
+    },
+    "framework/gateways/eval_gateway.py": {
+      "F401": 1
+    },
+    "framework/gateways/guardrails.py": {
+      "F401": 1
+    },
+    "framework/gateways/model_gateway.py": {
+      "F401": 1
+    },
+    "framework/integrations/daemon/service.py": {
+      "F401": 4
+    },
+    "framework/integrations/opencode/__init__.py": {
+      "E402": 1,
+      "F401": 2
+    },
+    "framework/integrations/opencode/strategy.py": {
+      "F401": 2
+    },
+    "framework/llm.py": {
+      "F401": 1
+    },
+    "framework/loops/core_types.py": {
+      "F401": 1
+    },
+    "framework/loops/meta_loop.py": {
+      "F401": 2
+    },
+    "framework/loops/task_loop.py": {
+      "F401": 1
+    },
+    "framework/opencode/skills/instinct/scripts/instinct-cli.py": {
+      "F401": 1,
+      "F541": 14,
+      "F841": 1
+    },
+    "framework/patterns/errors.py": {
+      "F401": 1
+    },
+    "framework/plan/test_plan_lint.py": {
+      "F401": 1
+    },
+    "framework/providers/healthcheck.py": {
+      "E402": 1
+    },
+    "framework/retro/escape_path.py": {
+      "E401": 1
+    },
+    "framework/retro/ledger.py": {
+      "E401": 1,
+      "E402": 1,
+      "E702": 5
+    },
+    "framework/security/check_enforcement_plane.py": {
+      "E402": 1
+    },
+    "framework/security/sync_enforcement_plane.py": {
+      "E402": 1
+    },
+    "framework/telemetry/test_report_telemetry.py": {
+      "E402": 1,
+      "E741": 2
+    },
+    "framework/testing/run_system_tests.py": {
+      "E702": 1
+    },
+    "framework/testing/scenario_matrix.py": {
+      "E741": 1
+    },
+    "framework/testing/test_system_testing.py": {
+      "F811": 1
+    },
+    "framework/tools/emit_change_acceptance_patch.py": {
+      "E741": 3
+    },
+    "framework/tools/emit_design_skills_integration_patch.py": {
+      "E741": 3
+    },
+    "framework/tools/emit_istqb_testing_patch.py": {
+      "E741": 3
+    },
+    "framework/tools/emit_ui_designer_model_patch.py": {
+      "E741": 3
+    },
+    "framework/tools/emit_ui_designer_routing_patch.py": {
+      "E741": 3
+    },
+    "framework/validate.py": {
+      "E401": 1,
+      "E402": 5,
+      "E702": 2
+    },
+    "framework/verification/_state.py": {
+      "E402": 1
+    },
+    "scripts/opencode_ttl_refresh.py": {
+      "F401": 1
+    },
+    "tests/contract/test_api_004.py": {
+      "E702": 2
+    }
+  },
+  "generated_at": "2026-11-02T03:49:16Z",
+  "schema": 1,
+  "tool": "ruff",
+  "tool_version": "ruff 0.15.18",
+  "total": 1764
+}

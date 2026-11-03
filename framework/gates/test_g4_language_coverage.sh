@@ -22,6 +22,14 @@ G4="$HERE/g4_executable.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Resolve tools the same way the gates do. Without this the suite's own `have ruff` /
+# `have pytest` answered "no" on Windows even though both were installed, so the budget
+# and pytest cases below skipped on precisely the platform their bug lived on -- the
+# exact harness defect this file's header warns about ("gating a regression behind an
+# unrelated tool's presence made it unrunnable in the environment where the bug lived").
+# One case further down tests the resolver itself; every other case needs it to work.
+. "$HERE/_toolchain.sh"
+
 pass=0; fail=0; skip=0
 
 expect_exit() {
@@ -326,6 +334,241 @@ EOF
   fi
 else
   skip_case "static-analysis-only regression" "pytest + python3"
+fi
+
+# ── Windows/WSL toolchain resolution ───────────────────────────────────────────
+# On Windows the only bash is WSL's, and WSL resolves a command name to a file of
+# exactly that name. Windows toolchains install `node.exe`, `ruff.exe`, `pytest.exe`,
+# so `command -v node` returned nothing while /mnt/c/nvm4w/nodejs/node.exe sat on
+# PATH. Measured consequence: G4 reported `FAIL types` (node_modules/.bin/tsc is
+# `exec node`) and reported Python as having "zero static analysis" because
+# ruff/mypy/bandit were all invisible -- on every Windows host, on every run.
+#
+# The test finds the tools this host exposes ONLY as .exe, then asserts that sourcing
+# _toolchain.sh makes every one of them resolvable. It is falsifiable in both
+# directions: with an empty .exe-only set it SKIPs rather than claiming a pass, and
+# if the resolver stopped working the AFTER lines would read no.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  cat > "$TMP/toolchain_probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+# $1 = path to _toolchain.sh, $2 = shim dir already on PATH (removed to restore the
+# pre-fix state this case has to observe)
+if [ -n "${2:-}" ]; then
+  PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$2" | tr '\n' ':')"
+fi
+TOOLS="node npm npx tsc eslint prettier ruff mypy bandit pytest gitleaks cppcheck java javac"
+exe_only=""
+for t in $TOOLS; do
+  command -v "$t" >/dev/null 2>&1 && continue
+  for d in $(printf '%s' "$PATH" | tr ':' '\n'); do
+    if [ -n "$d" ] && [ -x "$d/$t.exe" ]; then exe_only="$exe_only $t"; break; fi
+  done
+done
+printf 'EXE_ONLY=%s\n' "${exe_only# }"
+. "$1"
+for t in $exe_only; do
+  a=no; command -v "$t" >/dev/null 2>&1 && a=yes
+  printf 'AFTER %s=%s\n' "$t" "$a"
+done
+PROBE
+  probe_out="$(bash "$TMP/toolchain_probe.sh" "$HERE/_toolchain.sh" "${_FRAMEWORK_TOOLCHAIN_DIR:-}" 2>&1)"
+  exe_only="$(printf '%s\n' "$probe_out" | sed -n 's/^EXE_ONLY=//p')"
+  if [ -z "$exe_only" ]; then
+    skip_case "WSL .exe toolchain resolution" "no tool is exposed only as .exe on this host"
+  else
+    unresolved="$(printf '%s\n' "$probe_out" | sed -n 's/^AFTER \([^=]*\)=no$/\1/p')"
+    if [ -z "$unresolved" ]; then
+      printf 'PASS  %s (resolved .exe-only: %s)\n' \
+        "WSL interop: sourcing _toolchain.sh resolves every .exe-only tool" "$exe_only"
+      pass=$((pass+1))
+    else
+      printf 'FAIL  %s (still unresolved after _toolchain.sh: %s)\n---\n%s\n---\n' \
+        "WSL interop: sourcing _toolchain.sh resolves every .exe-only tool" "$unresolved" "$probe_out"
+      fail=$((fail+1))
+    fi
+  fi
+else
+  skip_case "WSL .exe toolchain resolution" "not running under WSL"
+fi
+
+# ── Static-analysis budget: the ratchet must ratchet ───────────────────────────
+# A tree-wide linter on a repository with history reports every pre-existing finding,
+# so G4 could never pass there and therefore never ran. framework/tools/lint_budget.py
+# records the existing findings per (file, rule) and fails only on NEW ones.
+#
+# These cases test the GATE INTEGRATION, not the module's comparison logic (that has
+# its own --self-test). Each fixture carries a copy of the real tool so the gate takes
+# its budget path, and a ruff config that keeps the copied tool out of its own scan.
+if have ruff; then
+  make_budget_fixture() {
+    local dir="$1"
+    mkdir -p "$dir/src" "$dir/framework/tools" "$dir/framework/quality"
+    cp "$HERE/../tools/lint_budget.py" "$dir/framework/tools/lint_budget.py"
+    # The copied tool is itself Python; without this it would be scanned and its own
+    # findings would land in the budget the case asserts on.
+    cat > "$dir/pyproject.toml" <<'EOF'
+[tool.ruff]
+extend-exclude = ["framework"]
+EOF
+    # One genuine finding: an unused import (ruff F401).
+    cat > "$dir/src/app.py" <<'EOF'
+import os
+
+
+def add(a, b):
+    return a + b
+EOF
+    ( cd "$dir" && python3 framework/tools/lint_budget.py update --reason "fixture seed" >/dev/null 2>&1 )
+  }
+
+  # (a) Findings are recorded, nothing changed: the gate must PASS. This is the
+  # falsifiable half -- without it, (b)/(c) could be satisfied by failing every
+  # fixture that has a budget, which would prove nothing.
+  make_budget_fixture "$TMP/budget_ok"
+  expect_exit_saying \
+    "Budget: recorded finding passes, reported as debt not failure" \
+    "$TMP/budget_ok" 0 "0 file\(s\) with new findings" "NEW finding"
+
+  # (b) A NEW finding above the budget must FAIL the gate, and must say which. Same
+  # tree, same budget, one added violation -- the only difference is the new error.
+  make_budget_fixture "$TMP/budget_new"
+  cat > "$TMP/budget_new/src/app.py" <<'EOF'
+import os
+import sys
+
+
+def add(a, b):
+    return a + b
+EOF
+  expect_exit_saying \
+    "Budget: a NEW finding above the budget FAILS the gate" \
+    "$TMP/budget_new" 1 "NEW finding" 
+
+  # (c) No budget file at all is zero tolerance, not "everything is new debt to
+  # accept". This is what keeps the ratchet from being able to raise itself.
+  make_budget_fixture "$TMP/budget_absent"
+  rm -f "$TMP/budget_absent/framework/quality/baseline.json"
+  expect_exit_saying \
+    "Budget: absent budget means zero tolerance, same verdict as raw ruff" \
+    "$TMP/budget_absent" 1 "NEW finding"
+
+  # (d) A budget produced by a different linter version must BLOCK, never be compared
+  # silently. Findings are a function of the linter: an upgraded ruff that adds a rule
+  # would otherwise "create" hundreds of findings and read as a developer's mistake.
+  make_budget_fixture "$TMP/budget_drift"
+  python3 - "$TMP/budget_drift/framework/quality/baseline.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["tool_version"] = "ruff 0.0.0-not-installed"
+json.dump(d, open(p, "w"), indent=2, sort_keys=True)
+PY
+  expect_exit_saying \
+    "Budget: linter version drift BLOCKS and is not counted as static coverage" \
+    "$TMP/budget_drift" 1 "ruff-budget\("
+else
+  skip_case "static-analysis budget gate integration" ruff
+fi
+
+# ── pytest: one run per project, correct attribution ───────────────────────────
+# Three failures this block pins down, each measured on a real monorepo:
+#   1. a subproject's own pytest config must be the one applied;
+#   2. a subproject must not be collected a second time by the repo-root run;
+#   3. a pytest config option no installed plugin provides must be reported
+#      UNAVAILABLE, never as the failure of every test that plugin would drive.
+if have pytest && have python3; then
+  CLEAN_PY='def add(a, b):
+    return a + b
+'
+
+  # (1) Config scope. pytest resolves its configfile from the directory it runs in.
+  # The fixture's subproject sets addopts = "-k zzz_nothing", which selects no test.
+  # If the gate ran svc from the repo root, that addopts line would never be read and
+  # the test would run and pass; the only way to observe "no tests collected" is to
+  # have applied svc's own configuration.
+  mkdir -p "$TMP/py_config_scope/svc/tests"
+  printf '%s' "$CLEAN_PY" > "$TMP/py_config_scope/app.py"
+  cat > "$TMP/py_config_scope/svc/pyproject.toml" <<'EOF'
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-k zzz_nothing_matches"
+EOF
+  cat > "$TMP/py_config_scope/svc/tests/test_x.py" <<'EOF'
+def test_x():
+    assert True
+EOF
+  expect_exit_saying \
+    "pytest: a subproject is run from its own directory, so its config applies" \
+    "$TMP/py_config_scope" 0 "pytest-tests\(svc: no tests collected"
+
+  # (2) A subproject's tests must not also be collected by the root run. The root
+  # config here names svc/tests explicitly (the shape that defeated --ignore), so
+  # only an --ignore-glob split prevents the double collection.
+  mkdir -p "$TMP/py_root_split/svc/tests" "$TMP/py_root_split/tests"
+  printf '%s' "$CLEAN_PY" > "$TMP/py_root_split/app.py"
+  cat > "$TMP/py_root_split/pyproject.toml" <<'EOF'
+[tool.pytest.ini_options]
+testpaths = ["tests", "svc/tests"]
+EOF
+  cat > "$TMP/py_root_split/svc/pyproject.toml" <<'EOF'
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+EOF
+  cat > "$TMP/py_root_split/svc/tests/test_s.py" <<'EOF'
+def test_s():
+    assert True
+EOF
+  cat > "$TMP/py_root_split/tests/test_r.py" <<'EOF'
+def test_r():
+    assert True
+EOF
+  split_out="$(cd "$TMP/py_root_split" && bash "$G4" 2>&1)"; split_rc=$?
+  if [ "$split_rc" -eq 0 ] && printf '%s' "$split_out" | grep -q -- '--ignore-glob=svc/\*'; then
+    printf 'PASS  %s\n' "pytest: the root run globs out subprojects, so nothing is collected twice"
+    pass=$((pass+1))
+  else
+    printf 'FAIL  %s (exit %d; expected 0 and a --ignore-glob=svc/* argument)\n---\n%s\n---\n' \
+      "pytest: the root run globs out subprojects, so nothing is collected twice" "$split_rc" "$split_out"
+    fail=$((fail+1))
+  fi
+
+  # (3a) Unknown config option + failing test -> UNAVAILABLE, gate stays green. The
+  # option name is deliberately one no plugin can provide, so this is deterministic
+  # on every host (a real option like asyncio_mode would pass where pytest-asyncio is
+  # installed and fail where it is not).
+  mkdir -p "$TMP/py_env_gap/svc/tests"
+  printf '%s' "$CLEAN_PY" > "$TMP/py_env_gap/app.py"
+  cat > "$TMP/py_env_gap/svc/pyproject.toml" <<'EOF'
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+not_a_real_pytest_option = true
+EOF
+  cat > "$TMP/py_env_gap/svc/tests/test_g.py" <<'EOF'
+def test_g():
+    assert False
+EOF
+  expect_exit_saying \
+    "pytest: an unhonoured config option is UNAVAILABLE, not N code failures" \
+    "$TMP/py_env_gap" 0 "pytest-env\(svc:" "FAIL test:svc"
+
+  # (3b) The counter-test that makes (3a) meaningful: the same failing test under a
+  # VALID config must FAIL the gate. Without this pair, (3a) would be satisfied by a
+  # gate that never fails on pytest at all.
+  mkdir -p "$TMP/py_real_fail/svc/tests"
+  printf '%s' "$CLEAN_PY" > "$TMP/py_real_fail/app.py"
+  cat > "$TMP/py_real_fail/svc/pyproject.toml" <<'EOF'
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+EOF
+  cat > "$TMP/py_real_fail/svc/tests/test_f.py" <<'EOF'
+def test_f():
+    assert False
+EOF
+  expect_exit_saying \
+    "pytest: a genuine failure under a valid config still FAILS the gate" \
+    "$TMP/py_real_fail" 1 "FAIL test:svc" "pytest-env"
+else
+  skip_case "pytest project scope and attribution" "pytest + python3"
 fi
 
 # ── Secrets (language-agnostic) ─────────────────────────────────────────────────

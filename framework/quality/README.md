@@ -26,6 +26,48 @@ reports it under "tools unavailable" and moves on. What you get per language:
 - Checkstyle and PMD are jars/scripts, not `apt`/`pip`/`npm` packages, hence the env-var discovery pattern instead of a `have <binary>` check. Versions used during verification: Checkstyle 10.20.2 (`checkstyle-10.20.2-all.jar`), PMD 7.8.0 (`pmd-dist-7.8.0-bin.zip`), both pulled from their GitHub release assets. Newer releases should work the same way; nothing here pins to those exact versions on purpose.
 - Cppcheck 2.13.0 (Ubuntu's `apt` package) was used for verification; the MISRA addon (`misra.py`) ships inside the same package, no separate install.
 
+## Static-analysis debt is ratcheted, not swept
+
+`framework/tools/lint_budget.py` is what lets G4 run on a repository that already has
+findings. It records how many findings exist per `(file, rule)` together with the linter
+version that produced them, in a committed budget (`framework/quality/baseline.json`):
+
+| Situation | Verdict |
+|---|---|
+| finding covered by the budget | **debt** — reported, non-blocking |
+| finding not covered by the budget | **NEW** — gate fails (exit 1) |
+| fewer findings than budgeted | **shrinkage** — reported, locked in by the next `update` |
+| no budget file | **zero tolerance** — same verdict as raw `ruff check .`, i.e. stricter |
+| linter version changed / tool missing / budget unreadable | **BLOCKED** (exit 2), reported as unavailable, never as static coverage |
+
+`update` refuses to raise the total without `--allow-increase --reason`, so the budget is a
+standing burndown obligation rather than an exclusion list that rots silently. Refresh it
+deliberately, in the same change that justifies it:
+
+    python3 framework/tools/lint_budget.py report       # current vs budgeted, by rule
+    python3 framework/tools/lint_budget.py check        # exit 0/1/2 - exactly what G4 runs
+    python3 framework/tools/lint_budget.py update --reason "burned down E402 in backend/api"
+    python3 framework/tools/lint_budget.py --self-test  # 13 behavioural cases
+
+Two operational notes, both measured rather than assumed:
+
+- **The budget is per repository, not mirrored by the framework sync.** `framework/`
+  sync copies the module and this README; it cannot copy a baseline, because the findings
+  are a property of the code the gate is pointed at. Every repo needs its own.
+- **Paths are canonicalised** (`_canon_path`) before comparison: one file reached as
+  `/mnt/c/Project/x/app.py` under WSL and `C:\Project\x\app.py` under Windows is one key.
+  Without that fold, a budget written by `python` and checked by `python3` reported 1,764
+  new *and* 1,764 improved findings in the same run — a false alarm that would have made
+  the gate untrustworthy on the only platform it had to work on.
+
+Cold start in a repo that predates the budget:
+
+    python3 framework/tools/lint_budget.py update --allow-increase \
+      --reason "initial baseline: pre-existing debt, no new findings accepted from here"
+
+That records what is already there and nothing more. It is the only time `--allow-increase`
+is the honest flag; after that the budget may only shrink.
+
 ## Coverage gaps, stated plainly rather than papered over
 
 - **Arithmetic magic numbers vs. comparison magic numbers.** Python's `ruff` `PLR2004` rule only fires on magic values in *comparisons* (`if x == 42`), not arithmetic (`x * 86400`). Checkstyle's `MagicNumber` check (Java) is stricter — it fires on the arithmetic case too. There is no equally strict off-the-shelf Python equivalent wired in here; a custom Ruff/Pylint plugin would be a further increment, not something this patch invents.

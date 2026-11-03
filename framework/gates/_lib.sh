@@ -6,6 +6,12 @@ if [ -z "${BASH_VERSION:-}" ]; then
   exit 2
 fi
 
+# Resolve the Windows toolchain before any gate tests for a tool by name. Without this,
+# `have node` / `have ruff` / `have pytest` return false on Windows even though the
+# binaries are installed, because WSL resolves only extensionless names and Windows
+# installs `.exe`. See framework/gates/_toolchain.sh for the measurement and the fix.
+. "$(dirname "${BASH_SOURCE[0]}")/_toolchain.sh"
+
 # Shared gate helpers. Every gate is a command with an exit code.
 # The model interprets results; it does not decide whether a gate passed.
 set -uo pipefail

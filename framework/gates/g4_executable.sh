@@ -30,6 +30,13 @@
 # language-agnostic secrets scan. Each branch is independently gated on file
 # presence (does this language appear in the tree?) and tool presence (is the
 # binary/jar actually available?) -- never both at once, per rule 2 above.
+#
+# Pre-existing findings are DEBT, not a verdict on today's change. Static analysis runs
+# through framework/tools/lint_budget.py: a committed, reviewable budget records how many
+# findings exist per (file, rule) plus the linter version that produced them. Findings
+# above the budget fail this gate; findings within it are reported as debt. The budget can
+# only shrink unless a human passes --allow-increase with a stated reason, so it is a
+# standing burndown obligation rather than an exclusion list. See framework/quality/README.md.
 GATE_NAME=g4_executable
 source "$(dirname "$0")/_lib.sh"
 rc=0; ran=0; unavailable=""
@@ -56,6 +63,20 @@ mark_covered() { case " $covered " in *" $1 "*) ;; *) covered="${covered:+$cover
 # language pass on a passing test suite alone with zero lint/security tooling
 # present -- functionally correct code with a hardcoded password in it, unflagged.
 mark_static() { mark_covered "$1"; case " $static_covered " in *" $1 "*) ;; *) static_covered="${static_covered:+$static_covered }$1";; esac; }
+
+# A pytest configuration option that no installed plugin provides. The signal is pytest's
+# own `PytestConfigWarning: Unknown config option: <name>` -- the repository stating that the
+# configuration it declares was not in effect -- not a guess at a traceback. Reporting it as
+# UNAVAILABLE rather than FAIL is the difference between "your environment is incomplete"
+# and "your change broke tests"; the option name is extracted only to make the report
+# actionable. Deliberate tradeoff: a permanently unknown option means that project's tests
+# never fail this gate, which is why the notice is loud rather than a quiet note.
+pytest_env_gap() {
+  local proj="$1" logfile="$2" opt
+  opt="$(sed -n 's/.*Unknown config option: *\([A-Za-z0-9_-]*\).*/\1/p' "$logfile" | head -1)"
+  note_missing "pytest-env($proj: pytest option '${opt:-unknown}' is unknown, so the plugin that provides it is not installed and this project's own pytest configuration was never applied. Install the declared dev requirements (e.g. '$proj/requirements-dev.txt' or '$proj/requirements-dev.in') and re-run -- these are not code failures.)"
+  log "not counting $proj failures as code failures: the declared pytest configuration was not in effect"
+}
 
 # Shared exclusion set for every per-language `find` below. This exists because an
 # earlier revision gave each language its own independently-typed exclusion list,
@@ -206,6 +227,24 @@ PY_FILES=$(
   } | sort -u | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | head -400
 )
 
+# Directories whose own pytest configuration would be loaded if pytest ran there. Each is
+# an independent test project and must be run separately (see the call site for why).
+# A directory that configures pytest but holds no tests is not a project: running there
+# only produces pytest exit 5, which adds noise rather than coverage.
+pytest_projects() {
+  local cfg d
+  for cfg in $(find . -maxdepth 3 \
+        \( -name 'pytest.ini' -o -name 'tox.ini' -o -name 'pyproject.toml' \) \
+        "${COMMON_PRUNE[@]}" 2>/dev/null | sed 's|^\./||' | sort); do
+    case "$cfg" in
+      *.toml) grep -q '\[tool\.pytest\.ini_options\]' "$cfg" 2>/dev/null || continue ;;
+    esac
+    d="$(dirname "$cfg")"
+    { [ -d "$d/tests" ] || [ -d "$d/test" ] || [ -f "$d/conftest.py" ]; } || continue
+    printf '%s\n' "$d"
+  done | sort -u
+}
+
 if [ -n "$PY_FILES" ]; then
   mark_present python
   # ruff's *default* rule selection is pyflakes + basic pycodestyle only -- it will
@@ -214,7 +253,36 @@ if [ -n "$PY_FILES" ]; then
   # framework/quality/python/pyproject.ruff.toml for the baseline this framework
   # ships; G4 runs whatever config the project actually has, same as it does for
   # eslint -- it does not silently inject one.
-  if have ruff;   then run lint ruff check .;                   mark_static python; else note_missing ruff; fi
+  # Static analysis runs through the budget ratchet (framework/tools/lint_budget.py) when
+  # the module is present. Why: a tree-wide linter on a repository with history reports
+  # every pre-existing finding, so the gate could never pass and therefore never ran in
+  # practice -- the same failure this framework already solved once for the frontend stack
+  # (framework/frontend/stack_check.py: "Ratchet, not sweep"), which ships
+  # framework/frontend/baseline.json. G4 was the only gate without a ratchet.
+  #
+  # The budget allows exactly the recorded findings and fails on anything above them, so
+  # this is strictly no weaker than `ruff check .`:
+  #   * no budget file           -> every finding is new -> same verdict as raw ruff
+  #   * budget present           -> budgeted findings are debt, new ones fail the gate
+  #   * budget for another tool  -> BLOCKED, never a silent comparison (see below)
+  # Exit 2 from the budget means it could not judge (tool missing, unreadable budget, or a
+  # linter version change). That is reported as unavailable, NOT as static coverage, and
+  # `run` has already failed the gate -- a "could not judge" must never read as a pass.
+  if have ruff; then
+    if [ -f framework/tools/lint_budget.py ]; then
+      run lint python3 framework/tools/lint_budget.py check
+      case "$LAST_RUN_RC" in
+        0|1) mark_static python ;;
+        *)   note_missing "ruff-budget(could not judge — see [lint_budget] above; refresh deliberately with 'python3 framework/tools/lint_budget.py update --reason ...')" ;;
+      esac
+    else
+      # Stricter fallback, not a weakening: without the budget module every finding counts,
+      # which is exactly what the raw linter does.
+      run lint ruff check .; mark_static python
+    fi
+  else
+    note_missing ruff
+  fi
   if have mypy;   then run types mypy .;                        mark_static python; else note_missing mypy; fi
   # bandit overlaps with ruff's S rules but is kept as a second, independent pass:
   # they don't agree on every finding (measured: ruff's S105 caught a hardcoded
@@ -223,7 +291,105 @@ if [ -n "$PY_FILES" ]; then
   if have bandit; then run security bandit -q -r . -x '*/node_modules/*,*/.venv/*'; mark_static python; else note_missing bandit; fi
 
   if have pytest; then
-    run test pytest -q; mark_covered python
+    # ── Test execution: one pytest run per pytest project ───────────────────────
+    # Two failures this shape exists to prevent, both measured on a real monorepo.
+    #
+    # 1. CONFIG SCOPE. pytest reads its configuration from the rootdir it discovers. With
+    #    a bare `pytest` that rootdir is the directory it was invoked in, so a root-level
+    #    run in a repo whose subproject configures pytest (backend/pyproject.toml:
+    #    `asyncio_mode = "auto"`, `testpaths = ["tests"]`) never loads that config. The
+    #    measured consequence was not a subtle one: 407 async tests errored with "async
+    #    def functions are not natively supported" instead of executing, purely because
+    #    the option that tells pytest how to run them was never read. Running each
+    #    project from its own directory is the only correct scope for a monorepo, and
+    #    pytest resolves that directory's configfile as the rootdir (verified:
+    #    rootdir=backend, configfile=pyproject.toml).
+    #
+    # 2. MISATTRIBUTION. When a pytest plugin the config depends on is not installed,
+    #    pytest reports `PytestConfigWarning: Unknown config option: <name>` and then
+    #    fails every test that plugin was there to drive. Those are not code defects.
+    #    Counting them as failures blames a change for an incomplete environment, which
+    #    rule 2 forbids -- a missing tool is UNAVAILABLE, never FAIL. The signal used is
+    #    pytest's own warning that the repo's declared configuration is not in effect,
+    #    not a guess about a traceback.
+    #
+    # Exit 5 is "no tests collected": that is a coverage hole to report, not a failure of
+    # code that does not exist.
+    PYTEST_LOG="${TMPDIR:-/tmp}/g4-pytest-$$.log"
+    PYTEST_ROOTS="$(pytest_projects)"
+    if [ -d tests ] || [ -d test ]; then
+      printf '%s\n' "$PYTEST_ROOTS" | grep -qx '\.' \
+        || PYTEST_ROOTS="$(printf '.\n%s\n' "$PYTEST_ROOTS" | sed '/^$/d')"
+    fi
+    [ -n "$PYTEST_ROOTS" ] || PYTEST_ROOTS="."
+    # A subproject's tests must be collected ONCE, by the run that applies its config. A
+    # root-level run would collect them again (measured: root collected 2429 tests, of
+    # which 2379 belonged to backend) with the wrong configuration -- the same 407 bogus
+    # async errors, arriving through the back door. So the root run ignores each subproject.
+    PYTEST_SUBPROJECTS="$(printf '%s\n' "$PYTEST_ROOTS" | grep -vx '\.' || true)"
+
+    while IFS= read -r proj; do
+      [ -n "$proj" ] || continue
+      # --ignore-glob, not --ignore: measured, --ignore=backend did NOT prevent collection
+      # when the root config's own `testpaths` names backend/tests explicitly (2429 tests
+      # still collected), while --ignore-glob='backend/*' reduced the root run to its own
+      # 50. The glob is what actually splits the two projects.
+      PYTEST_ARGS=(-q)
+      if [ "$proj" = "." ]; then
+        for sub in $PYTEST_SUBPROJECTS; do PYTEST_ARGS+=("--ignore-glob=$sub/*"); done
+      fi
+
+      # Preflight, collect only. An option no installed plugin provides is visible at
+      # collection time, so there is no reason to spend the suite's full runtime finding
+      # out: measured on the repo this gate was fixed against, the environment gap was
+      # visible in the 5 s collection step while the suite itself took ~17 min to run.
+      # This is a preflight, not a check, so it does not count toward `ran`.
+      pre_rc=0
+      ( cd "$proj" && pytest --co -q "${PYTEST_ARGS[@]}" ) </dev/null >"$PYTEST_LOG" 2>&1 || pre_rc=$?
+      if grep -q 'Unknown config option' "$PYTEST_LOG"; then
+        pytest_env_gap "$proj" "$PYTEST_LOG"
+        continue
+      fi
+      if [ "$pre_rc" -eq 5 ]; then
+        note_missing "pytest-tests($proj: no tests collected)"
+        continue
+      fi
+
+      ran=$((ran+1))
+      log "run test:$proj: (cd $proj && pytest ${PYTEST_ARGS[*]})"
+      proj_rc=0
+      ( cd "$proj" && pytest "${PYTEST_ARGS[@]}" ) </dev/null >"$PYTEST_LOG" 2>&1 || proj_rc=$?
+      case "$proj_rc" in
+        0)
+          mark_covered python
+          ;;
+        5)
+          note_missing "pytest-tests($proj: no tests collected)"
+          ;;
+        *)
+          # Belt and braces: if the warning only surfaced during the run rather than at
+          # collection, attribute it the same way instead of inventing failures.
+          if grep -q 'Unknown config option' "$PYTEST_LOG"; then
+            pytest_env_gap "$proj" "$PYTEST_LOG"
+          else
+            log "FAIL test:$proj (pytest exit $proj_rc)"
+            tail -n 25 "$PYTEST_LOG"
+            rc=1
+          fi
+          ;;
+      esac
+    done <<EOF
+$PYTEST_ROOTS
+EOF
+    rm -f "$PYTEST_LOG"
+
+    # A project whose suite could not be judged must not leave the test dimension silently
+    # empty. Same substitute the `pytest unavailable` path below uses.
+    case " $covered " in
+      *" python "*) ;;
+      *) # shellcheck disable=SC2086
+         run syntax python3 -m py_compile $PY_FILES; mark_covered python ;;
+    esac
   else
     note_missing pytest
     # Substitute, do not skip. Contract and unit tests are written to run standalone.
