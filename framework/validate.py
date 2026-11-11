@@ -32,6 +32,16 @@ if _BOOTSTRAP_ROOT not in sys.path:
     sys.path.insert(0, _BOOTSTRAP_ROOT)
 from framework import locate as _locate
 
+# The executable gate router. [8] asserts it CONSUMES `impact_to_gates` rather than that the
+# key merely exists, and [43] asserts every routing table names a gate that is implemented.
+# Guarded so a broken router fails a named check instead of taking down the suite.
+try:
+    from framework.verifier import route as _route
+    _ROUTE_OK = True
+except Exception as _route_e:  # pragma: no cover - fail loud, never silent
+    _ROUTE_OK = False
+    _ROUTE_ERR = repr(_route_e)
+
 FAILS, WARNS, SKIPS = [], [], []
 
 
@@ -42,7 +52,8 @@ def _resolve_profile() -> str:
     exits 0 with its app-dependent checks reported NOT_APPLICABLE - the exit 4 verdict
     EXIT_CODES.md already defines for an unevaluable check. `app` additionally asserts
     rollout wiring (contracts, Playwright), which the README places under Rollout, not
-    Install. The default infers `app` once either contracts or an app manifest exist.
+    Install. The default infers `framework` whenever the framework's own source tree is
+    present, and `app` otherwise (a carved app with the framework installed as a wheel).
     """
     if "--profile" in sys.argv:
         i = sys.argv.index("--profile")
@@ -50,6 +61,16 @@ def _resolve_profile() -> str:
             return sys.argv[i + 1]
         print("validate.py: --profile must be 'framework' or 'app'", file=sys.stderr)
         sys.exit(2)
+    # The framework's own source checkout always validates as the framework. The previous
+    # heuristic inferred `app` from a root `package.json` -- which the framework's own
+    # reference scaffold supplied, so the framework checkout validated itself as an
+    # application and never ran its own suite. Moving the scaffold out of the root would have
+    # flipped the inference to `framework` for an accidental reason, so name the real
+    # condition: the framework tree is present on disk (source checkout) or it is not (a
+    # carved app, where the framework arrives as an installed wheel -- the case
+    # `framework standalone` proves with an explicit `--profile app`).
+    if Path("framework/locate.py").exists():
+        return "framework"
     if Path("package.json").exists():
         return "app"
     cdir = Path(".planning/contracts")
@@ -145,7 +166,12 @@ def sh(cmd, timeout=120):
     else:
         argv, shell_kw = cmd, True
     try:
-        r = subprocess.run(argv, shell=shell_kw, capture_output=True, text=True, timeout=timeout)
+        # Decode as UTF-8 with replacement, not as the host locale. A gate that prints one
+        # non-cp1252 byte (a box-drawing character, a curly quote in a product name) kills the
+        # reader thread with UnicodeDecodeError, and the caller then sees `r.stdout is None`
+        # and crashes on `None + None` -- a decode problem reported as a validator defect.
+        r = subprocess.run(argv, shell=shell_kw, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         # A slow gate is evidence "blocked", never a crashed suite. 124 mirrors
         # the POSIX timeout(1) convention.
@@ -156,7 +182,13 @@ def sh(cmd, timeout=120):
                 path.unlink()
             except OSError:
                 pass
-    return r.returncode, (r.stdout + r.stderr).strip()
+    # A CompletedProcess can carry None pipes even with capture_output=True: observed on
+    # Windows when the WSL bash that runs g4_executable.sh exits 1 and its handles are
+    # lost. Concatenating them unconditionally turned a legitimate gate FAIL into
+    # `TypeError: unsupported operand type(s) for +: 'NoneType' and 'NoneType'` -- a suite
+    # crash that hides the gate's verdict instead of reporting it. A missing stream is an
+    # empty stream: the exit code is the verdict, the text is commentary.
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
 def _finalize():
@@ -475,7 +507,60 @@ check("g1 reports a declared exit code", rc in (0, 1, 2, 4), f"rc={rc}")
 if rc == 4:
     WARNS.append("g1 returned 4 NOT_APPLICABLE (no contracts dir) - skipped, not passed")
 check("g1 refuses to pass without contract tests",
-      not (rc == 0 and "no tests/contract" in out), "passed without tests")
+      # Path-independent: G1's message names the RESOLVED contract-test directory
+      # (`no <dir> directory`), which is no longer a fixed `tests/contract`. Matching the
+      # stable half of the message keeps this assertion alive when the binding moves.
+      not (rc == 0 and ("a contract without tests is not a gate" in out
+                        or "contains no test_*.py" in out)),
+      "passed without tests")
+
+print("\n[6b] Reference application contract (framework-owned fixture)")
+# The fixture moved out of the repository root, so G1 in this profile correctly reports
+# NOT_APPLICABLE: the framework owns no application contract. Left there, the move would also
+# have removed the only in-tree execution of the contract machinery -- schema validation,
+# generated-type drift and the contract tests would have been exercised nowhere except the
+# wheel-building `framework standalone` run. So the fixture is driven explicitly here, through
+# an app binding that points at it, using the same three executables G1 calls.
+_fix = Path("framework/reference-app")
+_fix_schema = _fix / "contracts" / "api-004.openapi.yaml"
+check("reference app ships a contract", _fix_schema.exists(),
+      "framework/reference-app/contracts/api-004.openapi.yaml is the fixture's source of truth")
+if _fix_schema.exists():
+    _fix_cfg = {
+        # app_root is absolute because the config lives in a temp directory: a relative
+        # app_root resolves against the CONFIG's directory, not the caller's cwd.
+        "app_root": Path.cwd().as_posix(),
+        "state_folder": ".planning",
+        "readiness": {
+            "openapi_schema": (_fix / "contracts").as_posix(),
+            "contract_tests": (_fix / "tests/contract").as_posix(),
+            "python_types_dir": (_fix / "src/backend/contracts").as_posix(),
+            "typescript_types_dir": (_fix / "src/frontend/contracts").as_posix(),
+        },
+    }
+    _fix_dir = Path(tempfile.mkdtemp(prefix="fixcfg-"))
+    (_fix_dir / "framework.config.json").write_text(
+        json.dumps(_fix_cfg, indent=2), encoding="utf-8")
+    _fix_env = {**os.environ, "FRAMEWORK_CONFIG": str(_fix_dir / "framework.config.json")}
+
+    def _fix_run(argv):
+        return subprocess.run([sys.executable, *argv], capture_output=True, text=True,
+                              env=_fix_env, timeout=180)
+
+    def _brief(r):
+        lines = [line for line in ((r.stdout or "") + (r.stderr or "")).splitlines()
+                 if line.strip()]
+        return " | ".join(lines[-3:])
+
+    _r = _fix_run(["framework/contracts/validate_schema.py", _fix_schema.as_posix()])
+    check("reference app schema validates", _r.returncode == 0, _brief(_r))
+
+    _r = _fix_run(["framework/contracts/gen_types.py",
+                   "--schema", _fix_schema.as_posix(), "--check"])
+    check("reference app generated types are in sync", _r.returncode == 0, _brief(_r))
+
+    _r = _fix_run([(_fix / "tests/contract/test_api_004.py").as_posix()])
+    check("reference app contract tests pass", _r.returncode == 0, _brief(_r))
 
 print("\n[7] Context Builder constraints")
 cb = Path("framework/opencode/tools/context-builder.ts").read_text(encoding="utf-8")
@@ -492,7 +577,21 @@ check("zero-retry conflicts", "contract_conflict: 0" in rp and "architecture_con
 check("TEST_FAILED route names the debug skill", "skill: gsd-debug" in rp,
       "a failing test must route into the gsd-debug reasoning loop, not bounce back free")
 prof = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
-check("impact drives gates", "impact_to_gates" in prof)
+# `impact_to_gates` must DRIVE the router, not merely exist as a key. For every scope the
+# table declares, the router's output for that scope alone must equal the table's entry --
+# so a table edited without a working consumer fails here instead of staying documentation.
+try:
+    import yaml as _yaml8
+    _prof8 = _yaml8.safe_load(prof) or {}
+except Exception as _e8:
+    _prof8 = {}
+_imp8 = (_prof8.get("impact_to_gates") or {}) if isinstance(_prof8, dict) else {}
+check("impact drives gates (router output equals the table for every scope)",
+      _ROUTE_OK and bool(_imp8) and all(
+          _route.routed_gates({"scope": _s}, [], _prof8) == [str(_g) for _g in _gates]
+          for _s, _gates in _imp8.items()),
+      "router does not reproduce impact_to_gates" if _ROUTE_OK else
+      f"router unimportable: {_ROUTE_ERR}")
 check("browser missing driver is unverifiable", "report_unverifiable" in prof)
 # The merge tiers bind the H1/H2/H3 line to the *merge* decision (the /gsd-ship review
 # prompt). Without them that question has no framework answer and is settled by
@@ -685,7 +784,12 @@ if _g4.exists():
           "a missing runner must not silently reduce the check count")
     check("G4 avoids network-fetching tsc", "node_modules/.bin/tsc" in _c4,
           "npx --yes can fail on network and read as a type error")
-    check("G4 requires node_modules before npm scripts", "-d node_modules" in _c4,
+    # Path-independent: the guard is "test for a node_modules DIRECTORY before running an
+    # npm script", and the directory it tests is now the bound app's, not the repo root's.
+    # Pinning the literal `-d node_modules` made this assertion fail when the binding moved,
+    # which would have been a true statement about the old code and a false one about the new.
+    check("G4 requires node_modules before npm scripts",
+          re.search(r'-d\s+"?[^"\s]*node_modules"?', _c4) is not None,
           "'eslint: not found' exit 1 is indistinguishable from a real lint error")
     check("G4 guards mid-loop assertion weakening", "assertion-integrity" in _c4,
           "a test-only change set netting removed assertions with no source change is "
@@ -898,7 +1002,12 @@ check("G6 never emits exit 2", "exit 2" not in _g6,
       "G6 must emit only 0/1/3; a second code for UNVERIFIABLE defeats exit 3")
 check("G6 defines UNVERIFIABLE=3", "UNVERIFIABLE=3" in _g6,
       "exit 3 must be named, not a bare literal")
-_g6_unver = _g6.count("exit $UNVERIFIABLE")
+# Every path that cannot judge must route to exit 3. Two forms are equivalent and both are
+# canonical: the literal `exit $UNVERIFIABLE` and the `_lib.sh` helper `unverifiable`, which
+# emits the `[gate]` line, writes the gate record and exits 3. Counting only the literal would
+# report a gate that uses the helper as having zero unverifiable paths -- a false failure that
+# pushes an author back to the bare exit, which writes no record.
+_g6_unver = _g6.count("exit $UNVERIFIABLE") + len(re.findall(r"^\s*unverifiable\b", _g6, re.M))
 check("G6 routes every missing precondition to exit 3", _g6_unver >= 5,
       f"only {_g6_unver} paths exit UNVERIFIABLE; driver/config/spec gaps must all use it")
 
@@ -1331,17 +1440,18 @@ check("collector reads task args via a fallback chain (not purely input?.args)",
       "real runtime nests task args under input; reading input?.args alone yields "
       "execution_agent 'unknown'")
 
-# (d) The g4 hook: package.json must declare a "test" script running node --test so
-# g4_executable.sh executes the harness as part of the executable chain.
-_tl_pkg = Path("package.json")
-if _tl_pkg.exists():
-    import json as _tl_json
-    _tl_scripts = _tl_json.loads(_tl_pkg.read_text(encoding="utf-8")).get("scripts") or {}
-    _tl_test_script = _tl_scripts.get("test", "")
-    check("package.json declares a test script that reaches node --test",
-          ("node --test" in _tl_test_script or _tl_test_script.endswith("framework/tools/run_tests.mjs")),
-          "g4 runs `npm test` when a test script exists; the script must reach node --test "
-          "so the telemetry harness is part of the executable chain")
+# (d) The g4 hook: g4 must execute the framework's OWN JavaScript suites. This used to be
+# reached through a root `package.json` "test" script, which meant the framework's harness was
+# only run because the framework's manifest sat at the repository root -- the same coupling
+# that made g4's JS branch judge the reference scaffold instead of the application. g4 now
+# runs the harness directly and runs the bound app's npm scripts separately; the assertion
+# follows the mechanism instead of the file that used to imply it.
+_g4_src = Path("framework/gates/g4_executable.sh")
+check("g4 executes the framework JS harness",
+      "node framework/tools/run_tests.mjs" in
+      (_g4_src.read_text(encoding="utf-8") if _g4_src.exists() else ""),
+      "the framework's plugin/experiment suites have no other authority; if g4 does not run "
+      "them nothing does")
 
 # The runner is the sanctioned entry point; guard its delegation so the chain
 # cannot silently stop reaching node --test.
@@ -3297,8 +3407,15 @@ if _g17.exists():
     _g17t = _g17.read_text(encoding="utf-8")
     check("g17 self-identifies as g17_system_tests", 'GATE_NAME="g17_system_tests"' in _g17t,
           "GATE_NAME literal missing")
-    check("g17 has explicit UNVERIFIABLE and NOT_APPLICABLE exits",
-          "exit $UNVERIFIABLE" in _g17t and "exit $NOT_APPLICABLE" in _g17t, "exit literals missing")
+    # Same equivalence as the G6 check: `unverifiable` / `not_applicable` are the canonical
+    # helpers (they emit the `[gate]` line, write the gate record and exit 3 / 4), so a gate
+    # that routes through them is MORE explicit than a bare exit literal, not less.
+    _g17_unver = ("exit $UNVERIFIABLE" in _g17t
+                  or re.search(r"^\s*unverifiable\b", _g17t, re.M) is not None)
+    _g17_na = ("exit $NOT_APPLICABLE" in _g17t
+               or re.search(r"^\s*not_applicable\b", _g17t, re.M) is not None)
+    check("g17 has explicit UNVERIFIABLE and NOT_APPLICABLE exits", _g17_unver and _g17_na,
+          "exit literals missing")
     check("g17 is on the functional profile",
           "./framework/gates/g17_system_tests.sh" in
           Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8"),
@@ -3339,6 +3456,257 @@ try:
           "bypass route present")
 except (OSError, ValueError, KeyError) as _e17:
     check("opencode.json system-test permissions readable", False, str(_e17))
+
+# ---- DID-018: the verification contract (one vocabulary, one artifact, one closure gate) ----
+# The decision chain was impact -> criterion -> skill -> gate -> evidence with five nodes and
+# no artifact between them: the evidence-tag vocabulary was copied into four modules with no
+# canonical copy, `impact_to_gates` was executed by nothing, and `AC-n` was minted by the plan
+# lint and then dropped. This block asserts the fix: the table is canonical, the legacy copies
+# still MIRROR it (checked, not edited -- plan_lint.py is agent-immutable), every routed gate
+# exists, every routed skill resolves, and the artifact round-trips from plan to closure.
+print("\n[43] Verification contract (evidence table, router, closure gate)")
+try:
+    from framework.verifier import evidence as _ev43
+    from framework.verifier import matrix as _mx43
+    _vc43_ok, _vc43_err = True, ""
+except Exception as _e43:  # pragma: no cover - fail loud, never silent
+    _vc43_ok, _vc43_err = False, repr(_e43)
+check("verifier modules import (evidence, matrix, route)",
+      _vc43_ok and _ROUTE_OK, _vc43_err or ("" if _ROUTE_OK else _ROUTE_ERR))
+
+_table43 = {}
+if _vc43_ok:
+    try:
+        _table43 = _ev43.load_table(".")
+    except Exception as _e43:  # noqa: BLE001 - any failure is "no table", reported below
+        _table43 = {}
+        check("canonical evidence table loads", False, str(_e43))
+    else:
+        check("canonical evidence table loads", bool(_table43),
+              "framework/verifier/evidence_classes.yaml declares no classes")
+
+if _table43:
+    check("the table declares the full tag vocabulary (%d classes)" % len(_table43),
+          set(_table43) == {"unit", "contract", "static", "integration", "e2e", "browser",
+                            "data-invariant", "manual"},
+          "unexpected class set: %s" % ", ".join(sorted(_table43)))
+
+    # The four legacy copies are a checked mirror. plan_lint.py is agent-immutable, so this
+    # asserts agreement instead of editing it; a table row added without updating the copy
+    # turns this red rather than drifting silently.
+    _legacy43 = {}
+    try:
+        import importlib.util as _ilu43
+        for _key43, _rel43, _attr43 in (
+                ("plan_lint.tags", "framework/plan/plan_lint.py", "EVIDENCE_TAGS"),
+                ("plan_lint.real", "framework/plan/plan_lint.py", "REAL_TAGS"),
+                ("evidence_level.real", "framework/tools/evidence_level.py", "REAL_STACK_TAGS"),
+                ("system_test_lint.real", "framework/testing/system_test_lint.py", "REAL_TAGS")):
+            _spec43 = _ilu43.spec_from_file_location("_vc43_" + _key43.replace(".", "_"), _rel43)
+            _mod43 = _ilu43.module_from_spec(_spec43)
+            _spec43.loader.exec_module(_mod43)
+            _legacy43[_key43] = tuple(getattr(_mod43, _attr43))
+    except Exception as _e43:  # noqa: BLE001
+        _legacy43 = {}
+        check("legacy evidence-tag copies import", False, repr(_e43))
+    else:
+        _want_all = set(_table43)
+        _want_real = set(_ev43.real_stack_tags(_table43))
+        # Order is presentation (plan_lint prints the tuple in its error message), so the
+        # mirror is compared as a VOCABULARY: same tags, any order. The real-stack subsets
+        # are compared the same way.
+        check("plan_lint.EVIDENCE_TAGS mirrors the table", set(_legacy43["plan_lint.tags"]) == _want_all,
+              "got %s want %s" % (sorted(_legacy43["plan_lint.tags"]), sorted(_want_all)))
+        check("plan_lint.REAL_TAGS mirrors the table's real_stack rows",
+              set(_legacy43["plan_lint.real"]) == _want_real,
+              "got %s want %s" % (sorted(_legacy43["plan_lint.real"]), sorted(_want_real)))
+        check("evidence_level.REAL_STACK_TAGS mirrors the table",
+              set(_legacy43["evidence_level.real"]) == _want_real,
+              "got %s want %s" % (sorted(_legacy43["evidence_level.real"]), sorted(_want_real)))
+        check("system_test_lint.REAL_TAGS mirrors the table",
+              set(_legacy43["system_test_lint.real"]) == _want_real,
+              "got %s want %s" % (sorted(_legacy43["system_test_lint.real"]), sorted(_want_real)))
+
+    # A table that routes to a gate with no implementation is a routing gap dressed as
+    # coverage -- the same failure as a check that cannot fail.
+    _table_gates43 = sorted({g for _s43 in _table43.values() for g in _s43["gates"]})
+    _unknown43 = _route.unknown_gates(_table_gates43, ".") if _ROUTE_OK else ["router missing"]
+    check("every gate the table routes to is implemented (%s)" % ", ".join(_table_gates43),
+          not _unknown43, "; ".join(_unknown43))
+
+    # A table that names a skill no root provides makes SC07 demand an unloadable skill.
+    try:
+        import importlib.util as _ilu43b
+        _sc43_spec = _ilu43b.spec_from_file_location(
+            "_vc43_skillcov", "framework/tools/skill_coverage.py")
+        _sc43 = _ilu43b.module_from_spec(_sc43_spec)
+        _sc43_spec.loader.exec_module(_sc43)
+        _loadable43 = set(_sc43.load_skills(_sc43.load_roots(".")))
+    except Exception as _e43:  # noqa: BLE001
+        _loadable43 = set()
+        check("configured skills roots are readable", False, repr(_e43))
+    else:
+        _named43 = sorted({s for _s43 in _table43.values() for s in _s43["skills"]})
+        _phantom43 = [s for s in _named43 if s not in _loadable43]
+        check("every skill the table names resolves in a configured root",
+              not _phantom43, "phantom: %s" % ", ".join(_phantom43))
+
+    # The router must refuse an unknown scope rather than silently routing nothing.
+    _refused43 = False
+    if _ROUTE_OK:
+        try:
+            _route.routed_gates({"scope": "galaxy"}, [], _prof8)
+        except _route.RouteError:
+            _refused43 = True
+        except Exception:  # noqa: BLE001
+            _refused43 = False
+    check("the router refuses an impact scope the table does not declare", _refused43,
+          "an undeclared scope routed silently")
+
+# Closure gate wiring: the artifact is only an artifact if something judges it.
+_p43 = Path("framework/verifier/profiles.yaml").read_text(encoding="utf-8")
+check("g19 closure is on the functional profile", "./framework/gates/g19_closure.sh" in _p43,
+      "profile membership missing")
+check("EXIT_CODES documents G19",
+      "| G19 closure" in Path("framework/gates/EXIT_CODES.md").read_text(encoding="utf-8"),
+      "EXIT_CODES row missing")
+check("g_entry emits the matrix before dispatch",
+      "framework/verifier/matrix.py emit" in
+      Path("framework/gates/g_entry.sh").read_text(encoding="utf-8"),
+      "dispatch does not derive the matrix, so nothing downstream can judge closure")
+
+# Executable fixture: plan -> matrix -> closure -> drift -> waiver. The pointer is written into
+# the fixture's own tree (state_root) so the live task's pointer is never repointed.
+if _vc43_ok and _table43:
+    _tmp43 = Path(tempfile.mkdtemp(prefix="vc43_"))
+    try:
+        _plan43 = _tmp43 / "T-PLAN.md"
+        _plan43.write_text("\n".join([
+            "status: approved",
+            "acceptance_criteria:",
+            "  - AC-1 [e2e] the portfolio page renders four periods from the real database",
+            "  - AC-2 [unit] the parser returns 4 for an empty ledger",
+            "files_or_components:",
+            "  - web/src/app/portfolio/page.tsx",
+            "  - backend/portfolio/service.py",
+        ]) + "\n", encoding="utf-8", newline="\n")
+        _mxpath43 = _mx43.matrix_path_for(str(_plan43))
+        _code43, _out43 = _mx43.emit(str(_plan43), root=".", state_root=str(_tmp43))
+        check("emit builds one row per criterion and routes their gates", _code43 == 0,
+              _out43)
+        if _code43 == 0:
+            _m43 = _mx43.load_matrix(_mxpath43)
+            check("emit derives the impact scope with a recorded basis",
+                  _m43["impact"].get("scope") == "cross_component"
+                  and bool(_m43["impact"].get("basis")),
+                  "impact = %r" % (_m43.get("impact"),))
+            # AC-1, literally: one [e2e] criterion -> exactly one row, gates [g17], pending.
+            _rows43 = [r for r in _m43["rows"] if r["id"] == "AC-1"]
+            check("AC-1: one [e2e] criterion -> exactly one row, gates [g17], status pending",
+                  len(_rows43) == 1 and _rows43[0]["gates"] == ["g17"]
+                  and _rows43[0]["status"] == "pending",
+                  "rows = %r" % (_rows43,))
+            check("the impact gates are unioned into required_gates",
+                  "g17" in _m43["required_gates"] and "g1" in _m43["required_gates"],
+                  "required_gates = %s" % _m43.get("required_gates"))
+
+            # AC-2, against the REAL profiles.yaml: cross_component plus a [browser] row.
+            _gates43 = _route.routed_gates({"scope": "cross_component"},
+                                           [{"gates": ["g6", "g17"]}], _prof8)
+            check("AC-2: cross_component + [browser] routes g1,g2,g3,g4,g5,g6,g9,g17",
+                  set(_gates43) == {"g1", "g2", "g3", "g4", "g5", "g6", "g9", "g17"},
+                  "got %s" % ", ".join(_gates43))
+
+            # AC-3: refuses closure AND names the criterion that is open.
+            _code43, _out43 = _mx43.check(matrix_path=_mxpath43, plan_path=str(_plan43),
+                                          root=".")
+            check("AC-3: a pending matrix refuses closure and names the open criterion",
+                  _code43 == 1 and any("AC-1" in line for line in _out43),
+                  "exit %r, output = %r" % (_code43, _out43))
+
+            _art43 = _tmp43 / "junit.xml"
+            _art43.write_text("<testsuite/>\n", encoding="utf-8", newline="\n")
+            _mx43.record(_mxpath43, ac="AC-1", gate="g17", exit_code=0,
+                         artifact=str(_art43), stack_reached=True)
+            _mx43.record(_mxpath43, ac="AC-2", gate="g4", exit_code=0, artifact=str(_art43))
+            _code43, _ = _mx43.check(matrix_path=_mxpath43, plan_path=str(_plan43), root=".")
+            check("bound evidence closes every criterion", _code43 == 0, "exit %r" % _code43)
+
+            # A criterion routed to two gates cannot close on one. `browser` routes
+            # [g6, g17] because g6 proves the visible behaviour and g17 proves the stack was
+            # real; that pairing means nothing if a single artifact closes the row. Before this
+            # rule, a Playwright run against a mocked backend could close a criterion that
+            # claims real data -- the exact defect the whole change exists to remove.
+            _plan43b = _tmp43 / "BROWSER-PLAN.md"
+            _plan43b.write_text("\n".join([
+                "status: approved",
+                "impact: cross_component",
+                "acceptance_criteria:",
+                "  - AC-1 [browser] the chart shows the real series in a real browser",
+                "files_or_components:",
+                "  - web/src/app/portfolio/page.tsx",
+            ]) + "\n", encoding="utf-8", newline="\n")
+            _code43, _ = _mx43.emit(str(_plan43b), root=".", state_root=str(_tmp43))
+            _mxb43 = _mx43.matrix_path_for(str(_plan43b))
+            _mx43.record(_mxb43, ac="AC-1", gate="g6", exit_code=0,
+                         artifact=str(_art43), stack_reached=True)
+            check("one of two routed gates leaves the criterion pending",
+                  _mx43.load_matrix(_mxb43)["rows"][0]["status"] == "pending",
+                  "status = %r" % _mx43.load_matrix(_mxb43)["rows"][0]["status"])
+            _bad43 = _mx43.record(_mxb43, ac="AC-1", gate="g4", exit_code=0,
+                                  artifact=str(_art43))
+            check("a gate that was not routed for the criterion is refused",
+                  _bad43[0] == 1, "exit %r: %s" % (_bad43[0], _bad43[1]))
+            _mx43.record(_mxb43, ac="AC-1", gate="g17", exit_code=0,
+                         artifact=str(_art43), stack_reached=True)
+            _code43, _ = _mx43.check(matrix_path=_mxb43, plan_path=str(_plan43b), root=".")
+            check("both routed gates close the criterion", _code43 == 0,
+                  "exit %r" % _code43)
+
+            # AC-4: a real-stack pass with no bound artifact is a claim, not evidence. This is
+            # the shape a hand-written "it passed" takes, so it must not close a criterion.
+            _mx43.record(_mxpath43, ac="AC-1", gate="g17", exit_code=0, stack_reached=True)
+            _code43, _out43 = _mx43.check(matrix_path=_mxpath43, plan_path=str(_plan43),
+                                          root=".")
+            check("AC-4: a real-stack pass without artifact_sha256 refuses closure",
+                  _code43 == 1 and any("artifact hash" in line for line in _out43),
+                  "exit %r, output = %r" % (_code43, _out43))
+
+            # A real-stack pass whose evidence cannot confirm the stack was reached is
+            # unverifiable, never a pass -- the exact defect the matrix exists to catch.
+            _mx43.record(_mxpath43, ac="AC-1", gate="g17", exit_code=0,
+                         artifact=str(_art43), stack_reached=False)
+            check("real-stack evidence without stack_reached is unverifiable, not pass",
+                  _mx43.load_matrix(_mxpath43)["rows"][0]["status"] == "unverifiable",
+                  "status = %r" % _mx43.load_matrix(_mxpath43)["rows"][0]["status"])
+            _mx43.waive(_mxpath43, "AC-1", "rajes", "supabase snapshot unavailable offline")
+            _code43, _ = _mx43.check(matrix_path=_mxpath43, plan_path=str(_plan43), root=".")
+            check("a human waiver closes a row no gate can prove", _code43 == 0,
+                  "exit %r" % _code43)
+
+            with open(_plan43, "a", encoding="utf-8", newline="\n") as _fh43:
+                _fh43.write("review: changed\n")
+            _code43, _ = _mx43.check(matrix_path=_mxpath43, plan_path=str(_plan43), root=".")
+            check("a plan changed after emission makes the matrix unverifiable",
+                  _code43 == 3, "exit %r" % _code43)
+
+        # The gate-facing seam: a gate learns whether it was routed from the ARTIFACT, not
+        # from an environment variable. On a Windows host the only bash is WSL, which does
+        # not inherit the caller's environment, so an env-only input reads as absent.
+        _code43, _ = _mx43.emit(str(_plan43), root=".", state_root=str(_tmp43))
+        _gates43b, _src43b = _mx43.required_gates_from_pointer(root=".", state_root=str(_tmp43))
+        check("a gate can read its routing from the matrix pointer",
+              _code43 == 0 and _gates43b == ["g1", "g2", "g3", "g4", "g5", "g9", "g17"]
+              and bool(_src43b),
+              "gates = %r" % (_gates43b,))
+
+        # A pointer whose target is gone is a LOST artifact, never "nothing to close".
+        os.unlink(_mxpath43)
+        _gone43 = _mx43.check(matrix_path=str(_mxpath43), plan_path=None, root=".")
+        check("a matrix deleted after emission is unverifiable, not not-applicable",
+              _gone43[0] == 3, "exit %r: %s" % (_gone43[0], _gone43[1]))
+    finally:
+        shutil.rmtree(_tmp43, ignore_errors=True)
 
 _finalize()
 

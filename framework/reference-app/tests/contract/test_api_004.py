@@ -9,13 +9,45 @@ These assert the IMPLEMENTATION against the SCHEMA. They are not unit tests of b
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+_HERE = Path(__file__).resolve()
 
 
-from framework.contracts.validator import validate_instance, load_contract
-from src.backend.auth_service import handle_refresh
+def _find(relative: str) -> Path | None:
+    """Nearest ancestor that contains ``relative``."""
+    for parent in _HERE.parents:
+        if (parent / relative).exists():
+            return parent
+    return None
 
-SCHEMA = Path(".planning/contracts/api-004.openapi.yaml")
+
+# Two layouts, one test, resolved instead of pinned. As a CONSUMER (staged by `framework init`
+# or installed as a wheel) the app root is two levels up and the contract lives in the
+# documented `.planning/contracts/`. Inside the framework's own checkout the fixture is NOT the
+# app root: its `contracts/` and `src/` sit under `framework/reference-app/`. Pinning either
+# layout made the test runnable in exactly one of them -- and the one it could not run in is
+# where `framework validate` executes it.
+APP_ROOT = _find("src/backend/auth_service.py")
+if APP_ROOT is None:  # pragma: no cover - structural failure, not a test failure
+    raise SystemExit("cannot locate the reference application root from " + str(_HERE))
+sys.path.insert(0, str(APP_ROOT))
+
+# `framework` is a dependency of the app, never a copy of it: in the framework's checkout it
+# is the sibling source tree; in a carved app it is the installed wheel on sys.path.
+_FW_ROOT = _find("framework/contracts/validator.py")
+if _FW_ROOT is not None:
+    sys.path.insert(0, str(_FW_ROOT))
+
+# The imports below MUST follow the sys.path setup above: the app root and the framework root
+# are discovered at runtime, so hoisting them would import from whatever the caller's path
+# happens to contain.
+from framework.contracts.validator import validate_instance, load_contract  # noqa: E402
+from src.backend.auth_service import handle_refresh  # noqa: E402
+
+# Consumer layout first (the documented one), fixture layout as the fallback.
+SCHEMA = next((p for p in (APP_ROOT / ".planning/contracts/api-004.openapi.yaml",
+                           APP_ROOT / "contracts/api-004.openapi.yaml") if p.exists()), None)
+if SCHEMA is None:  # pragma: no cover - structural failure, not a test failure
+    raise SystemExit("cannot locate api-004.openapi.yaml under " + str(APP_ROOT))
 CONTRACT = load_contract(SCHEMA)
 OP = ("/auth/refresh", "post")
 
@@ -87,8 +119,10 @@ if __name__ == "__main__":
             t()
             print(f"  PASS  {t.__name__}")
         except AssertionError as e:
-            failed.append((t.__name__, str(e))); print(f"  FAIL  {t.__name__}: {e}")
+            failed.append((t.__name__, str(e)))
+            print(f"  FAIL  {t.__name__}: {e}")
         except Exception as e:
-            failed.append((t.__name__, repr(e))); print(f"  ERROR {t.__name__}: {e!r}")
+            failed.append((t.__name__, repr(e)))
+            print(f"  ERROR {t.__name__}: {e!r}")
     print(f"\n{len(TESTS) - len(failed)}/{len(TESTS)} contract tests passed")
     sys.exit(1 if failed else 0)

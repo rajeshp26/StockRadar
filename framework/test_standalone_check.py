@@ -29,11 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import standalone_check
 
-# The reference application the guard stages: the `--profile app` self-fixture (plan 4.1).
-DIRS = ("src", "tests", ".planning/contracts")
+# The reference application the guard stages: the framework-owned `--profile app` self-fixture
+# (plan 4.1). It lives at `framework/reference-app/` inside the package; `contracts/` is staged
+# into the app's `.planning/contracts` because that is the layout `framework init` migrates.
+DIRS = ("src", "tests", "contracts")
 FILES = ("package.json", "vite.config.ts", "playwright.config.ts",
          "tsconfig.json", "components.json", "index.html")
 OPTIONAL = ".gitattributes"
+APP_REL = Path("framework") / "reference-app"
 
 _results: list[tuple[str, bool]] = []
 
@@ -48,15 +51,18 @@ def build_root(base: Path, *, omit: str = "") -> Path:
     """Synthetic framework root holding the reference application. `omit` drops one required
     entry so the guard must refuse rather than trim the surface."""
     root = base / "root"
-    root.mkdir(parents=True)
-    for name in (*DIRS, *FILES, OPTIONAL):
+    app = root / APP_REL
+    app.mkdir(parents=True)
+    for name in (*DIRS, *FILES):
         if name == omit:
             continue
-        target = root / name
+        target = app / name
         if name in DIRS:
             target.mkdir(parents=True)
         else:
             target.write_text("stub\n", encoding="utf-8")
+    if OPTIONAL != omit:
+        (root / OPTIONAL).write_text("stub\n", encoding="utf-8")
     return root
 
 

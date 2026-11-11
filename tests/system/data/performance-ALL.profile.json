@@ -1,0 +1,30 @@
+{
+  "note": "Structural profile of the live performance series. Monetary values are deliberately not reproduced: this file records the facts the assertions were derived from, not the account's holdings.",
+  "source": "GET http://127.0.0.1:8001/portfolio/performance?period=ALL (real backend, real Supabase database)",
+  "captured_at": "2026-11-10T03:05:00Z",
+  "period": "ALL",
+  "snapshots": 24,
+  "first_date": "2021-01-07",
+  "last_date": "2026-11-08",
+  "accounts": 3,
+  "account_ids": [9, 8, 7],
+  "snapshot_fields": ["cash_balance", "cost_basis", "date", "holdings", "net_deposits", "value"],
+  "observed": {
+    "dates_strictly_increasing": true,
+    "net_deposits_monotonic_non_decreasing": true,
+    "values_positive": true,
+    "money_two_decimal_places": true,
+    "period_windows_share_values_on_shared_dates": {"YTD": true, "1Y": true},
+    "period_windows_share_terminal_value": {"YTD": true, "1Y": true},
+    "unknown_account_filter_snapshot_count": 0,
+    "unauthenticated_status": 401,
+    "forged_token_status": 401,
+    "repeated_read_identical": true
+  },
+  "known_defect_not_asserted": {
+    "probe": "GET /portfolio/performance?period=ALL&account_ids=abc",
+    "status": 500,
+    "detail": "Failed to get portfolio performance",
+    "why_not_a_test": "AC-1 says nothing about malformed account_ids, so a test for it would be asserting a requirement the plan does not contain. Recorded here so the defect is not lost."
+  }
+}

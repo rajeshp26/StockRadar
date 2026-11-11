@@ -1,0 +1,14 @@
+{
+  "note": "Real-data manifest for the system tests (DID-017). Each entry records where the data came from, when it was captured, and the structural shapes the suite exercises. The dataset file is a profile, not a payload: this repository must not carry a real account's holdings.",
+  "datasets": [
+    {
+      "id": "perf-all-2026-11-10",
+      "source": "GET http://127.0.0.1:8001/portfolio/performance?period=ALL against the real backend and the real Supabase database",
+      "captured_at": "2026-11-10T03:05:00Z",
+      "file": "performance-ALL.profile.json",
+      "sha256": "be2b2082ffd28ceff14ad73bab4e89b873426e0bcf91d722077775ca30693932",
+      "rows": 24,
+      "shapes": ["multi_account", "long_history", "monthly_snapshots"]
+    }
+  ]
+}

@@ -34,11 +34,14 @@ namespaces = false
 # Non-.py runtime data. Gates are bash, the surface is Markdown/TypeScript; none is importable,
 # all of it is required at runtime. `framework.opencode` is the relocated surface, shipped whole.
 [tool.setuptools.package-data]
-framework = ["**/*.json", "**/*.yaml", "**/*.yml", "**/*.sh", "**/*.md", "**/*.txt", "**/*.ts", "**/*.mjs", "**/*.js", "**/Dockerfile"]
+framework = ["**/*.json", "**/*.yaml", "**/*.yml", "**/*.sh", "**/*.md", "**/*.txt", "**/*.ts", "**/*.tsx", "**/*.css", "**/*.html", "**/*.py", "**/*.mjs", "**/*.js", "**/*.cjs", "**/Dockerfile"]
 "framework.opencode" = ["**/*"]
 
 [tool.pytest.ini_options]
 # Canonical suites: framework contract tests + consolidated backend tests.
-# Diagnostic scripts live outside these paths and are never collected.
-testpaths = ["tests", "backend/tests"]
-norecursedirs = [".*", "node_modules", "dist", "build", "backend/scripts", "docs"]
+# The framework-owned reference app lives under framework/reference-app/ and is exercised by
+# `framework standalone` (its own staged venv), never by the repository pytest run: its contract
+# test imports `src.backend`, which only resolves inside the staged application.
+testpaths = ["framework/contracts", "backend/tests"]
+norecursedirs = [".*", "node_modules", "dist", "build", "backend/scripts", "docs",
+                 "framework/reference-app"]

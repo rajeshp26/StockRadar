@@ -34,9 +34,19 @@ RULES
               (row 22: a new surface introduces a pattern/system by definition)
   SC04 WARN   the plan declares code files but has no `required_skills` at all
   SC05 WARN   a required skill resolves but no routing row names it (loadable, unrouted)
+  SC06 ERROR  the plan touches test files but omits `istqb-testing` (the technique layer)
+  SC07 ERROR  the plan declares `AC-n [tag]` criteria whose evidence class owns skills the
+              plan does not require (e.g. `[e2e]` -> `system-test-authoring`)
 
-SC02/SC03 are the ones with teeth: they are the difference between "the skill resolves" and
-"the skill was required". Both clear by naming the skill, or by not touching UI files.
+SC02/SC03/SC06/SC07 are the ones with teeth: they are the difference between "the skill
+resolves" and "the skill was required". All clear by naming the skill, or by not making the
+claim that routes to it.
+
+SC07 is the DERIVED half of routing. CM04 checks the Capability Matrix's DECLARED rows
+(`apple-ui: yes` must be named), but a plan's acceptance criteria route to skills through the
+evidence table without ever passing through the matrix. `evidence_classes.yaml` says an
+`[e2e]` criterion is owned by `system-test-authoring`; before SC07 nothing read that column,
+so a plan could claim a real-stack criterion and never require the skill that authors it.
 
 WHAT THIS DOES NOT PROVE
 ========================
@@ -80,6 +90,13 @@ CODE_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".sh", ".dart", ".css"
 # signal that a task is testing work; the skill is the technique layer over it.
 TEST_SKILL = "istqb-testing"
 TEST_ROW = "skill-routing.md:19"
+
+# SC07 -- the DERIVED half of skill routing. The tag -> skills mapping is read from the
+# canonical evidence table, never copied here: `framework/verifier/evidence.py` is its only
+# reader and a second copy is the exact defect this framework is closing.
+EVIDENCE_REL = "framework/verifier/evidence.py"
+# `AC-1 [e2e] ...` in list form and in a flow/inline block both match; only the tag is read.
+AC_TAG_RE = re.compile(r"\bAC-\d+\s*\[([A-Za-z0-9-]+)\]", re.I)
 # Exact path SEGMENTS, never substrings: "latest/" contains "test/", and a substring rule would
 # demand a testing skill for a directory that has nothing to do with tests.
 TEST_DIR_SEGMENTS = ("tests", "test", "__tests__", "e2e", "playwright", "spec")
@@ -164,9 +181,10 @@ def find(severity, rule, where, message):
     return {"severity": severity, "rule": rule, "where": where, "message": message}
 
 
-def check(text, skills, routed, exists):
+def check(text, skills, routed, exists, tag_skills=None):
     """Pure check. `skills` = loadable names, `routed` = names a routing row mentions,
-    `exists(path)` = does this repo-relative path exist on disk."""
+    `exists(path)` = does this repo-relative path exist on disk,
+    `tag_skills` = {evidence tag: [skills that own it]} from the canonical table."""
     rows = []
     required = collect_lists(text, "required_skills")
     files = [p for p in collect_lists(text, "files_or_components") if "/" in p or "." in p]
@@ -220,6 +238,24 @@ def check(text, skills, routed, exists):
             "plan touches test files (%s) but does not require %s; %s is the technique layer "
             "for any test a task writes or changes" % (", ".join(tests[:3]), TEST_SKILL,
                                                        TEST_ROW)))
+
+    # SC07 -- derived skill routing. An acceptance criterion's evidence tag names the skills
+    # that own that evidence class, and nothing read that column: a plan could declare
+    # `AC-1 [e2e]` and never require `system-test-authoring`. CM04 covers the DECLARED matrix
+    # rows only, so this is the half with no mechanism. Table-owned, not code-owned: adding a
+    # skill to a class in evidence_classes.yaml widens this check with no code change.
+    if tag_skills:
+        declared_tags = {m.group(1).lower() for m in AC_TAG_RE.finditer(text)}
+        for tag in sorted(declared_tags & set(tag_skills)):
+            # Only loadable skills are demanded: a table naming a phantom skill is a table
+            # defect, and validate.py owns that check. Blaming the plan for it would send the
+            # implementer to fix a file they did not write.
+            missing = [s for s in tag_skills[tag] if s in skills and s not in names]
+            if missing:
+                rows.append(find(
+                    "ERROR", "SC07", "required_skills",
+                    "plan declares [%s] criteria but does not require %s; %s owns the evidence "
+                    "for a [%s] criterion" % (tag, " + ".join(missing), EVIDENCE_REL, tag)))
     return rows
 
 
@@ -386,6 +422,29 @@ def check_matrix(schema, required, scope, dims, matrix_rel):
     return rows
 
 
+def load_tag_skills(root="."):
+    """{evidence tag: [skills]} from the canonical table, or None when it cannot be read.
+
+    Deliberately an import of the canonical reader rather than a YAML parse here: a second
+    reader is a second copy of the decision, and a second copy is what drifted in the first
+    place. `evidence.py` is the only module allowed to interpret the table.
+    """
+    import importlib.util
+    path = os.path.join(root, EVIDENCE_REL)
+    if not os.path.isfile(path):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("_fw_evidence", path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        table = mod.load_table(root)
+    except Exception:  # noqa: BLE001 - any read failure is "cannot judge", never "clean"
+        return None
+    return {tag: list(spec_["skills"]) for tag, spec_ in table.items() if spec_["skills"]}
+
+
 def check_file(plan_path, root="."):
     with open(plan_path, encoding="utf-8-sig") as fh:
         text = fh.read()
@@ -394,7 +453,15 @@ def check_file(plan_path, root="."):
 
     def exists(rel):
         return os.path.exists(os.path.join(root, rel.replace("\\", "/")))
-    rows = check(text, set(skills), routed, exists)
+    tag_skills = load_tag_skills(root)
+    rows = check(text, set(skills), routed, exists, tag_skills)
+
+    # An unreadable evidence table means SC07 could not judge, and "could not judge" is not
+    # "clean" -- the same contract CM00 holds for the Capability Matrix schema.
+    if tag_skills is None:
+        rows.append(find("ERROR", "SC07", "required_skills",
+                         "evidence class table unreadable from %s; cannot judge whether the "
+                         "skills each acceptance-criterion tag owns were required" % EVIDENCE_REL))
 
     # Capability matrix: the DECLARED half of routing. SC02/SC03 derive requirements from
     # file scope; the matrix records the ask's own claims, so a matrix that says 'yes' while
@@ -467,17 +534,32 @@ files_or_components:
 
 def _selftest():
     skills = {"apple-ui", "frontend-react", "designmotion-design", "backend-python",
-              "unit-test-authoring", "istqb-testing", "gsd-sketch", "unrouted-extra"}
+              "unit-test-authoring", "istqb-testing", "gsd-sketch", "unrouted-extra",
+              "system-test-authoring", "browser-verification", "contract-authoring"}
     routed = {"apple-ui", "frontend-react", "designmotion-design", "backend-python",
-              "unit-test-authoring", "istqb-testing", "gsd-sketch"}
+              "unit-test-authoring", "istqb-testing", "gsd-sketch", "system-test-authoring",
+              "browser-verification", "contract-authoring"}
+    # The canonical tag -> skills map, as evidence_classes.yaml declares it. Passed in
+    # explicitly so the pure check stays pure and the cases are readable; `check_file`
+    # loads the real table through `evidence.load_table`.
+    tag_skills = {
+        "unit": ["unit-test-authoring"],
+        "contract": ["contract-authoring"],
+        "static": [],
+        "integration": ["system-test-authoring"],
+        "e2e": ["system-test-authoring"],
+        "browser": ["browser-verification", "system-test-authoring"],
+        "data-invariant": ["system-test-authoring"],
+        "manual": [],
+    }
     existing = {"web/src/features/portfolio/components/DividendsTab.tsx",
                 "backend/api/analysis.py"}
     exists = existing.__contains__
 
     cases = []
 
-    def case(name, text, want_rules, want_sev=None):
-        got = check(text, skills, routed, exists)
+    def case(name, text, want_rules, want_sev=None, tags=None):
+        got = check(text, skills, routed, exists, tags)
         rules = sorted({r["rule"] for r in got
                         if want_sev is None or r["severity"] == want_sev})
         cases.append((name, rules, sorted(want_rules)))
@@ -537,6 +619,37 @@ required_skills:
          "files_or_components:\n- backend/latest/analysis.py\n"
          "required_skills:\n- backend-python\n- unit-test-authoring\n", [])
 
+    # 9f-9j. SC07 -- the DERIVED half of routing. A criterion's evidence tag names the skills
+    #    that own that evidence class. Both directions are asserted, plus the multi-skill
+    #    class (browser) where naming only one of two is still a gap.
+    E2E_PLAN = """\
+files_or_components:
+- web/e2e/portfolio-performance-realdata.spec.ts
+acceptance_criteria:
+- AC-1 [e2e] the portfolio page renders four periods from the real database
+required_skills:
+- system-test-authoring
+- istqb-testing
+"""
+    case("[e2e] criterion with system-test-authoring -> clean", E2E_PLAN, [],
+         tags=tag_skills)
+    case("[e2e] criterion without system-test-authoring -> SC07",
+         E2E_PLAN.replace("- system-test-authoring\n", ""), ["SC07"], tags=tag_skills)
+    # No table supplied => no SC07. The rule is table-driven, so a caller that cannot read
+    # the table must not silently invent a requirement -- check_file reports SC07 instead.
+    case("[e2e] criterion with no table -> no SC07",
+         E2E_PLAN.replace("- system-test-authoring\n", ""), [], tags=None)
+    case("browser criterion naming only one of its two skills -> SC07",
+         "acceptance_criteria:\n- AC-1 [browser] the dashboard renders at 375px\n"
+         "required_skills:\n- system-test-authoring\n", ["SC07"], tags=tag_skills)
+    case("browser criterion naming both skills -> clean",
+         "acceptance_criteria:\n- AC-1 [browser] the dashboard renders at 375px\n"
+         "required_skills:\n- system-test-authoring\n- browser-verification\n", [],
+         tags=tag_skills)
+    case("class owning no skills demands nothing",
+         "acceptance_criteria:\n- AC-1 [manual] a human signs off the copy\n"
+         "required_skills:\n- backend-python\n", [], tags=tag_skills)
+
     # 10-12. `required_skills` repeats once per task. Aggregating across blocks is the whole
     # reason --required-skills exists: a parser that keeps only the first block verifies one
     # task and passes the rest unobserved, which is exactly the defect G-SKILL-USE must not
@@ -570,15 +683,23 @@ required_skills: unit-test-authoring, backend-python
     else:
         with open(doc, encoding="utf-8-sig") as fh:
             base = parse_schema(fh.read())
-        cases.append(("real Capability Matrix yields the 16 declared rows", len(base), 16))
+        # Asserted by NAME, not by exact count. A count breaks on a legitimate ADDITION (which
+        # is how a row gets added at all -- the `system-test-authoring` row arrives that way),
+        # while a name assertion fails exactly when a depended-on row is deleted. The floor
+        # catches a table that was gutted wholesale.
+        _matrix_rows = {"apple-ui", "designmotion-design", "istqb-testing", "frontend-react",
+                        "backend-python", "unit-test-authoring"}
+        cases.append(("every routing-dependent skill is a declared matrix row",
+                      sorted(_matrix_rows - set(base)), []))
+        cases.append(("the Capability Matrix has not been gutted", len(base) >= 16, True))
         # The claim the plane patch actually makes: both design skills are now dimensions, so
         # CM01 can demand them. Asserted against the real document, so deleting a row turns
         # this red instead of quietly narrowing the matrix check.
         cases.append(("both design skills are declared dimensions",
                       sorted({"apple-ui", "designmotion-design"} & set(base)),
                       ["apple-ui", "designmotion-design"]))
-        # istqb-testing joined the matrix with the ISTQB integration patch; the row count above
-        # was widened 15 -> 16 for the same reason. Deleting the row must fail here, not pass.
+        # istqb-testing joined the matrix with the ISTQB integration patch. Deleting the row
+        # must fail here, not pass.
         cases.append(("istqb-testing is a declared dimension",
                       "istqb-testing" in base, True))
         widened = parse_schema(

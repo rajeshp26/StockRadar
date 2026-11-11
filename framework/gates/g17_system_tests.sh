@@ -18,29 +18,38 @@ NOT_APPLICABLE=4
 BLOCKED=2
 UNVERIFIABLE=3
 
-have python3 || { log "BLOCKED  python3 unavailable"; persist blocked "no python3"; exit $BLOCKED; }
+have python3 || { log "BLOCKED  python3 unavailable"; persist blocked "no python3"; \
+  precondition_missing "python3 unavailable; the system-test harness cannot run" '{"python3":null}'; }
 
 plan="${SYSTEM_PLAN:-}"
 if [ -z "$plan" ] && [ -n "${SYSTEM_TASK:-}" ]; then
   plan="$(python3 framework/adapters/gsd_state.py plan-path --task "$SYSTEM_TASK" 2>/dev/null | tr -d '\r')"
 fi
 if [ -z "$plan" ]; then
-  log "NOT_APPLICABLE  no plan given (set SYSTEM_PLAN or SYSTEM_TASK); ASK completion is guarded separately"
-  gate_result not_applicable 4
-  exit $NOT_APPLICABLE
+  not_applicable "no plan given (set SYSTEM_PLAN or SYSTEM_TASK); ASK completion is guarded separately" \
+    '{"plan":null}'
 fi
 if [ ! -f "$plan" ]; then
-  log "BLOCKED  plan not readable: $plan"
   persist blocked "plan not readable"
-  exit $BLOCKED
+  precondition_missing "plan not readable: $plan" "{\"plan\":\"$plan\"}"
 fi
 
 out="$(python3 framework/testing/run_system_tests.py verify --plan "$plan" 2>&1)"; rc=$?
 out="$(printf '%s' "$out" | tr -d '\r')"
 case "$rc" in
-  0) persist pass "$out"; pass "system-test evidence verified: $out" ;;
+  0) persist pass "$out"
+     # Bind the file the harness judged. `matrix.py check` requires a real-stack row to carry an
+     # artifact hash for EVERY routed gate, and g17's evidence IS the green result document --
+     # without it the criterion would read as "a gate said pass", which is the claim this whole
+     # change exists to replace. The path is the harness's own convention (run_system_tests.py
+     # `paths()`); verify() has already confirmed the file exists and is untampered.
+     gate_artifact "${plan%.md}.system-tests.green.result.json"
+     pass "system-test evidence verified: $out" ;;
   1) persist fail "$out"; fail "system-test evidence missing or invalid: $out" ;;
-  3) persist unverifiable "$out"; log "UNVERIFIABLE  $out"; gate_result unverifiable 3; exit $UNVERIFIABLE ;;
-  4) log "NOT_APPLICABLE  $out"; persist not_applicable "$out"; gate_result not_applicable 4; exit $NOT_APPLICABLE ;;
-  *) persist blocked "harness exit $rc: $out"; log "BLOCKED  harness exit $rc: $out"; exit $BLOCKED ;;
+  3) persist unverifiable "$out"
+     unverifiable "harness could not judge: $out" '{"harness_exit":3}' ;;
+  4) persist not_applicable "$out"
+     not_applicable "$out" '{"harness_exit":4}' ;;
+  *) persist blocked "harness exit $rc: $out"
+     precondition_missing "harness exit $rc: $out" "{\"harness_exit\":$rc}" ;;
 esac

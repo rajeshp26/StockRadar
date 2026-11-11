@@ -110,6 +110,35 @@ gate_result() {
   printf '[gate] %s result=%s exit=%s ms=%s\n' "$(gate_id)" "$result" "$exit_code" "$(gate_elapsed_ms)"
 }
 
+# ─── The gate writes its own record (evidence provenance) ─────────────────────
+# `matrix.py record --gate g6` lets the CALLER name the gate, so an artifact of the wrong
+# shape could be filed under a routed gate and the row carried a pass it did not earn.
+# The gate therefore writes <state_root>/verification/gates/<gate>.json at the moment it
+# judges, and `matrix.py record --from-gate` takes the gate identity, exit code and artifact
+# hashes FROM THAT FILE. The caller can only name the criterion.
+#
+# Artifacts must be per-run and immutable: a fixed path (e.g. last-run.txt) is rewritten by
+# the next run, which silently invalidates every record bound to it.
+GATE_ARTIFACTS=()
+gate_artifact() {
+  [ -n "${1:-}" ] && GATE_ARTIFACTS+=("$1")
+  return 0
+}
+
+# Never fatal: a gate that judged must still report its verdict if the record cannot be
+# written. A missing record then reads as "no evidence" downstream, which is the safe side.
+gate_record_write() {
+  local result="$1" exit_code="$2" detail="${3:-}"
+  local args=(--path "$STATE_ROOT/verification/gates/$(gate_id).json"
+              --gate "$(gate_id)" --name "$GATE_NAME" --result "$result"
+              --exit "$exit_code" --at "$(date -u +%FT%TZ)")
+  [ -n "$detail" ] && args+=(--detail "$detail")
+  [ -n "${GATE_SELECTION:-}" ] && args+=(--selection "$GATE_SELECTION")
+  local a
+  for a in ${GATE_ARTIFACTS[@]+"${GATE_ARTIFACTS[@]}"}; do args+=(--artifact "$a"); done
+  python3 framework/gates/gate_record.py "${args[@]}" >/dev/null 2>&1 || true
+}
+
 # Emit the explicit NOT_REACHED disposal line (never inferred from absence).
 gate_not_reached() {
   printf '[gate] %s result=not_reached\n' "$(gate_id)"
@@ -137,6 +166,7 @@ non_judgement() {
     *) fail "reason_code '$reason' requires JSON evidence as arg 2; got '${evidence:-<empty>}'" ;;
   esac
   log "$* [reason=$reason evidence=$evidence]"
+  gate_record_write "$reason" "$exit_code" "$*"
   printf '[gate] %s result=%s exit=%s ms=%s evidence=%s\n' \
     "$(gate_id)" "$reason" "$exit_code" "$(gate_elapsed_ms)" "$evidence"
   exit "$exit_code"
@@ -155,6 +185,7 @@ capability_missing()   { non_judgement capability_missing   3 "${2:-}" "$1"; }
 unverifiable() {
   local message="$1" evidence="${2:-}"
   log "$message [reason=unverifiable]"
+  gate_record_write unverifiable 3 "$message"
   if [ -n "$evidence" ]; then
     printf '[gate] %s result=unverifiable exit=3 ms=%s evidence=%s\n' \
       "$(gate_id)" "$(gate_elapsed_ms)" "$evidence"
@@ -172,8 +203,8 @@ skip() {
   fail "skip() is retired: it reported result=pass for an unjudged gate. Use not_applicable / precondition_missing / capability_missing / unverifiable with evidence."
 }
 
-pass() { log "PASS  $*"; gate_result pass 0; exit 0; }
-fail() { log "FAIL  $*"; gate_result fail 1; exit 1; }
+pass() { log "PASS  $*"; gate_record_write pass 0 "$*"; gate_result pass 0; exit 0; }
+fail() { log "FAIL  $*"; gate_record_write fail 1 "$*"; gate_result fail 1; exit 1; }
 
 # Persist immediately — OpenCode prunes tool output.
 persist() {

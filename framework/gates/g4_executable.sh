@@ -146,6 +146,30 @@ if [ -n "$test_changed" ] && [ -z "$src_changed" ]; then
 fi
 
 # ── JS / TS ────────────────────────────────────────────────────────────────────
+# The app the config BINDS, not the repository root. Before readiness was wired in, this
+# gate ran the root `package.json` scripts -- the framework's own Vite reference scaffold --
+# while the product's manifest sat in `web/` and was never linted, built or tested. That is
+# the worst of the two failure modes: a green run that proves nothing about the application.
+# The JS branch stays app-wide rather than scope-narrowed, because the project's own npm
+# scripts are the only authority that runs them (framework/gates/scope.json).
+where() { python3 framework/locate.py --get "$1" 2>/dev/null | tr -d '\r'; }
+APP_MANIFEST="$(where frontend_manifest)"
+APP_DIR="."
+[ -z "$APP_MANIFEST" ] || APP_DIR="$(dirname "$APP_MANIFEST")"
+
+# npm scripts resolve their manifest from the CWD, so they must run in the app directory.
+# A subshell keeps that from leaking into the Python/C branches below, which stay rooted at
+# the repository the gate is judging.
+run_in() {
+  local dir="$1" label="$2"; shift 2
+  log "run $label (cwd $dir): $*"
+  ran=$((ran+1))
+  ( cd "$dir" && "$@" )
+  LAST_RUN_RC=$?
+  [ "$LAST_RUN_RC" -eq 0 ] || { log "FAIL $label"; rc=1; }
+  return "$LAST_RUN_RC"
+}
+
 JS_FILES=$(
   { git ls-files '*.js' '*.jsx' '*.ts' '*.tsx' 2>/dev/null
     find . \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' \) \
@@ -154,12 +178,12 @@ JS_FILES=$(
   } | sort -u | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | head -400
 )
 
-if [ -f package.json ]; then
+if [ -n "$APP_MANIFEST" ] && [ -f "$APP_MANIFEST" ]; then
   # "Present" (needs coverage) if there's actual JS/TS/JSX/TSX source, OR the project
   # declares scripts to run even with none found yet (e.g. a fresh scaffold). A bare
   # package.json with no scripts and no source files (a minimal tooling manifest) is
   # not held to this -- there is nothing to check yet, not a gap to report.
-  HAS_JS_SCRIPTS=$(grep -qE '"(lint|test|build)"' package.json && echo 1 || echo 0)
+  HAS_JS_SCRIPTS=$(grep -qE '"(lint|test|build)"' "$APP_MANIFEST" && echo 1 || echo 0)
   if [ -n "$JS_FILES" ] || [ "$HAS_JS_SCRIPTS" = "1" ]; then
     mark_present javascript
   fi
@@ -183,46 +207,61 @@ if [ -f package.json ]; then
     # "lint" script and check that it is actually installed. Only then run it, and
     # only then count it as static coverage. A linter that genuinely ran and found
     # real problems still fails the gate through `run` (rc=1) exactly as before.
-    if [ -d node_modules ]; then
-      if grep -q '"lint"' package.json; then
-        LINT_CMD=$(sed -n 's/.*"lint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -1)
+    if [ -d "$APP_DIR/node_modules" ]; then
+      if grep -q '"lint"' "$APP_MANIFEST"; then
+        LINT_CMD=$(sed -n 's/.*"lint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$APP_MANIFEST" | head -1)
         LINT_BIN=""
         [ -n "$LINT_CMD" ] && LINT_BIN="${LINT_CMD%% *}"
-        if [ -n "$LINT_BIN" ] && { [ -x "node_modules/.bin/$LINT_BIN" ] || have "$LINT_BIN"; }; then
-          run lint npm run lint --silent
+        if [ -n "$LINT_BIN" ] && { [ -x "$APP_DIR/node_modules/.bin/$LINT_BIN" ] || have "$LINT_BIN"; }; then
+          run_in "$APP_DIR" lint npm run lint --silent
           mark_static javascript
         elif [ -n "$LINT_BIN" ]; then
-          note_missing "lint-binary('$LINT_BIN' declared in package.json but not installed; run 'npm i -D $LINT_BIN')"
+          note_missing "lint-binary('$LINT_BIN' declared in $APP_MANIFEST but not installed; run 'npm i -D $LINT_BIN')"
         else
           # Script declared but its command line could not be parsed by the sed above
           # (multi-line, interpolated, or an unusual form). Run it for real and claim
           # static coverage only if it actually came back green -- never assume.
-          run lint npm run lint --silent
+          run_in "$APP_DIR" lint npm run lint --silent
           [ "$LAST_RUN_RC" -eq 0 ] && mark_static javascript
         fi
       fi
       # test/build genuinely executed whenever npm ran them: coverage is credited for
       # the attempt, and a missing or failing runner surfaces as rc=1 through `run`,
       # which is a loud failure rather than a silent pass.
-      grep -q '"test"'  package.json && { run test  npm test      --silent; mark_covered javascript; }
-      grep -q '"build"' package.json && { run build npm run build --silent; mark_covered javascript; }
+      grep -q '"test"'  "$APP_MANIFEST" && { run_in "$APP_DIR" test  npm test      --silent; mark_covered javascript; }
+      grep -q '"build"' "$APP_MANIFEST" && { run_in "$APP_DIR" build npm run build --silent; mark_covered javascript; }
     else
-      note_missing "node_modules(npm scripts: run 'npm ci')"
+      note_missing "node_modules($APP_DIR: run 'npm ci')"
     fi
   else
     note_missing npm
   fi
   # Only use a locally installed tsc. `npx --yes` reaches the network and a fetch failure
   # would otherwise be indistinguishable from a type error.
-  if [ -f tsconfig.json ]; then
-    if [ -x node_modules/.bin/tsc ]; then run types node_modules/.bin/tsc --noEmit; mark_static javascript
-    elif have tsc;                   then run types tsc --noEmit;                  mark_static javascript
+  if [ -f "$APP_DIR/tsconfig.json" ]; then
+    if [ -x "$APP_DIR/node_modules/.bin/tsc" ]; then run_in "$APP_DIR" types "$APP_DIR/node_modules/.bin/tsc" --noEmit; mark_static javascript
+    elif have tsc;                             then run types tsc --noEmit;                                mark_static javascript
     else note_missing tsc; fi
   fi
 elif [ -n "$JS_FILES" ]; then
-  # JS/TS/JSX/TSX source with no package.json at all: still real code, still needs
-  # coverage tracked, even though there's no npm script machinery to hang a check off.
+  # JS/TS/JSX/TSX source with no bound package.json: still real code, still needs coverage
+  # tracked, even though there's no npm script machinery to hang a check off.
   mark_present javascript
+fi
+
+# The framework's OWN JavaScript suites (plugin + experiments). They are framework-owned, so
+# they are NOT reached through the application's package.json -- g4 runs the bound app's npm
+# scripts, and the framework harness is not the app's. It used to run only because the
+# framework's package.json sat at the repository root, which is exactly the coupling that
+# made the JS branch judge the wrong manifest. Running it directly keeps the harness in the
+# executable chain without pretending the application owns it.
+if [ -f framework/tools/run_tests.mjs ]; then
+  if have node; then
+    run framework-js node framework/tools/run_tests.mjs
+    mark_covered javascript
+  else
+    note_missing "node(framework JS suites: framework/tools/run_tests.mjs)"
+  fi
 fi
 
 # ── Gate scope: which paths this gate judges, and who judges the rest ──────────
@@ -233,9 +272,9 @@ fi
 # credentials this machine does not have.
 #
 # The contract governs the dimensions where a competing authority exists: Python static
-# analysis (ruff/mypy/bandit) and pytest. The JS branch above deliberately stays repo-wide --
-# it runs the project's OWN declared npm scripts, and nothing else runs them, so narrowing
-# it would be a coverage hole with a tidy explanation.
+# analysis (ruff/mypy/bandit) and pytest. The JS branch above is NOT scope-narrowed: it runs
+# the bound app's OWN declared npm scripts, and nothing else runs them (there is no CI job
+# for the frontend), so scoping them out would be a coverage hole with a tidy explanation.
 #
 # Three states, and the third is why this is not a suppression list:
 #   owned      -> judged here

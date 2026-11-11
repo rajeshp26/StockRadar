@@ -12,9 +12,10 @@ the run this performs:
   1. build the wheel from this tree (or accept one passed with --wheel);
   2. create a throwaway virtualenv and install the wheel into it (no deps - the venv shares this
      interpreter's site-packages, so the run stays offline);
-  3. stage the reference application - the `--profile app` self-fixture (plan 4.1): src/,
-     package.json, the vite/playwright/tsconfig/components/index.html scaffold, tests/, and
-     .planning/contracts - into a scratch directory, deliberately WITHOUT framework/,
+  3. stage the reference application - the framework-owned fixture at
+     `framework/reference-app/` (plan 4.1): src/, package.json, the
+     vite/playwright/tsconfig/components/index.html scaffold, tests/, and contracts/ (staged
+     into .planning/contracts) - into a scratch directory, deliberately WITHOUT framework/,
      .opencode/ or .lifecycle/;
   4. `framework init` there - the real bind path: writes framework.config.json, scaffolds the
      state tree, and migrates .planning/{decisions,contracts};
@@ -39,9 +40,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TIMEOUT_S = 1800
 BIN = "Scripts" if sys.platform == "win32" else "bin"
 
-# The reference application - the `--profile app` self-fixture (plan 4.1). Staging ONLY these
-# paths is the point: the framework tree (framework/, .opencode/, .lifecycle/) is exactly what
-# the installed package must replace, so none of it is copied into the scratch app.
+# The reference application - the `--profile app` self-fixture (plan 4.1). It lives INSIDE the
+# framework package (`framework/reference-app/`) because the framework owns it: it is not
+# application code, and the repository root must not carry it. Staging ONLY these paths is the
+# point: the framework tree (framework/, .opencode/, .lifecycle/) is exactly what the installed
+# package must replace, so none of it is copied into the scratch app.
 REQUIRED = (
     "src",
     "package.json",
@@ -51,11 +54,26 @@ REQUIRED = (
     "components.json",
     "index.html",
     "tests",
-    ".planning/contracts",
 )
 OPTIONAL = (".gitattributes",)
 
+# The fixture keeps its contract under `contracts/` so the fixture tree contains no `.planning/`
+# directory (that name is runtime state and is gitignored at the repository root). `framework
+# init` migrates `.planning/contracts` in the staged app, so staging maps one layout to the other.
+STATE_SEED = ("contracts",)
+REFERENCE_APP_NAME = "reference-app"
+
 _IGNORED = shutil.ignore_patterns(".manifest", "__pycache__", "*.pyc", "node_modules")
+
+
+def _reference_app() -> Path:
+    """The fixture directory: `<parent-of-package>/framework/reference-app`.
+
+    ROOT is the directory that CONTAINS the `framework` package - the repository root in-tree,
+    site-packages when installed. Appending `framework/<name>` therefore resolves in both
+    layouts, and keeps the tests' ROOT override as the single seam.
+    """
+    return ROOT / "framework" / REFERENCE_APP_NAME
 
 USAGE = """usage: framework standalone [--keep] [--wheel PATH] [--help]
 
@@ -88,9 +106,10 @@ def _tail(text, n=1):
 
 
 def _stage(scaffold):
+    app = _reference_app()
     staged, missing = [], []
     for name in REQUIRED:
-        src = ROOT / name
+        src = app / name
         if not src.exists():
             missing.append(name)
         elif src.is_dir():
@@ -99,6 +118,13 @@ def _stage(scaffold):
         else:
             shutil.copy2(src, scaffold / name)
             staged.append(name)
+    for name in STATE_SEED:
+        src = app / name
+        if not src.exists():
+            missing.append(f".planning/{name}")
+            continue
+        shutil.copytree(src, scaffold / ".planning" / name, ignore=_IGNORED)
+        staged.append(f".planning/{name}")
     for name in OPTIONAL:
         if (ROOT / name).exists():
             shutil.copy2(ROOT / name, scaffold / name)
@@ -165,6 +191,29 @@ def _build_wheel(dist):
         if last.returncode == 0 and wheels:
             return wheels[-1], last
     return None, last
+
+
+def _wheel_ships_reference_app(wheel):
+    """(ok, reason): does the wheel actually carry the reference application?
+
+    Staging reads the fixture from the SOURCE tree, so a wheel that forgot it would still let
+    every other step pass -- and `framework standalone` run from the installed package would
+    then fail for a reason this guard exists to catch. The fixture travels as package data,
+    which is exactly the kind of entry a glob in pyproject.toml can silently miss, so it is
+    asserted against the built artefact rather than assumed.
+    """
+    import zipfile
+    want = ("framework/" + REFERENCE_APP_NAME + "/package.json",
+            "framework/" + REFERENCE_APP_NAME + "/src/frontend/main.tsx")
+    try:
+        with zipfile.ZipFile(wheel) as zf:
+            names = set(zf.namelist())
+    except (OSError, zipfile.BadZipFile) as exc:
+        return False, repr(exc)
+    missing = [n for n in want if n not in names]
+    if missing:
+        return False, "wheel is missing " + ", ".join(missing)
+    return True, ""
 
 
 def _make_venv(tmp):
@@ -240,6 +289,12 @@ def main(argv=None):
                 print("BLOCKED: wheel build failed :: " + _tail(r.stderr or r.stdout, 2))
                 return 2
         print("wheel: " + wheel.name)
+
+        ships, reason = _wheel_ships_reference_app(wheel)
+        if not ships:
+            print("BLOCKED: the wheel does not ship the reference application :: " + reason)
+            return 2
+        print("  wheel ships the reference application (package data present)")
 
         venv_dir, vpy = _make_venv(tmp)
         if not vpy.exists():

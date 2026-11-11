@@ -3,13 +3,10 @@
 GATE_NAME=g5-stack
 source "$(dirname "$0")/_lib.sh"
 
-# No frontend in the repo at all => nothing to conform to. This is a genuine
-# not-applicable, not a vacuous pass: there is no artefact of this class to judge.
-if [ ! -d src/frontend ] && [ ! -f package.json ]; then
-  not_applicable "no frontend present (no src/frontend, no package.json)" \
-    '{"checked":["src/frontend","package.json"],"found":false}'
-fi
-
+# No frontend in the repo at all => nothing to conform to. The decision lives in
+# stack_check.py, which resolves the app through framework/locate.py (readiness block).
+# Duplicating a hardcoded `src/frontend` test here is what let this gate judge the root
+# reference scaffold while the product lived in `web/`.
 out="$(python3 framework/frontend/stack_check.py 2>&1)"; rc=$?
 echo "$out"
 case "$rc" in

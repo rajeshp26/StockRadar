@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -72,12 +73,16 @@ _GSD_TEXT_SUFFIXES = frozenset({
 _ABS_CONFIG_DIR_RE = re.compile(r"[A-Za-z]:/[^ \t\r\n\"')`]*?[/\\]\.opencode(?![A-Za-z0-9_-])")
 _ABS_SURFACE_RE = re.compile(r"[A-Za-z]:/[^ \t\r\n\"')`]*?[/\\]framework[/\\]opencode(?![A-Za-z0-9_-])")
 
-USAGE = """usage: framework init [--app-root DIR] [--force] [--dry-run] [--validate] [--help]
+USAGE = """usage: framework init [--app-root DIR] [--frontend DIR] [--force] [--dry-run] [--validate] [--help]
 
 Bind an application repository: write framework.config.json, scaffold the state tree, and
 migrate .planning/{decisions,contracts} into it (copy + verify; source retained).
 
   --app-root DIR   application root to bind (default: the config's app_root, else the CWD)
+  --frontend DIR   frontend application directory, relative to the app root. Written into
+                   config `readiness` so G5/G6 judge the PRODUCT rather than the repo root.
+                   Omit to auto-detect; if more than one candidate exists init refuses to
+                   guess and names them.
   --source REF     framework pin recorded in the config (git+https URL or index ref)
   --force          overwrite an existing framework.config.json and re-copy migrated files
   --dry-run        report the actions without changing anything
@@ -109,19 +114,133 @@ def _default_app_root() -> Path:
     return Path.cwd()
 
 
-def _config_template(source: str | None) -> dict:
+def _config_template(source: str | None, readiness: dict | None = None) -> dict:
     meta: dict = {"distribution": DIST}
     version = _installed_version()
     if version:
         meta["version"] = version
     if source:
         meta["source"] = source
-    return {"framework": meta, "app_root": ".", "state_folder": STATE_FOLDER}
+    template: dict = {"framework": meta, "app_root": ".", "state_folder": STATE_FOLDER}
+    if readiness:
+        template["readiness"] = readiness
+    return template
+
+
+# ---------------------------------------------------------------- app binding (readiness)
+# `readiness` is what points the gates at the PRODUCT instead of the repository root. Without
+# it, G5 judges `src/frontend/**` + the root `package.json` and G6 runs the root
+# `playwright.config.ts`: in a repo whose application lives in `web/`, both pass while judging
+# the reference scaffold, and a green run proves nothing about the app. init is the only place
+# that can establish the binding before any gate runs, so it must not leave it to a human to
+# discover after the first vacuous pass.
+READINESS_DIRS = ("src", "app", "pages", "components")
+PRIMITIVE_DIR_CANDIDATES = ("src/components/ui", "components/ui", "app/components/ui",
+                            "src/ui", "ui")
+SPEC_DIR_CANDIDATES = ("e2e", "tests/e2e", "playwright", "tests/playwright")
+_FRONTEND_MARKERS = frozenset({"next", "react", "vue", "svelte", "@angular/core", "vite",
+                               "nuxt", "astro", "solid-js", "@sveltejs/kit"})
+_SKIP_DIRS = frozenset({"node_modules", "dist", "build", ".next", "coverage", ".framework",
+                        ".planning", "venv", ".venv", "__pycache__", "site-packages",
+                        "playwright-report", "test-results"})
+_MAX_DEPTH = 3
+
+
+def _frontend_candidates(app_root: Path) -> list[Path]:
+    """Directories under the app root that look like a frontend application.
+
+    A candidate has a `package.json` naming a frontend framework, or a Playwright config.
+    Bounded in depth and skipping build/dependency directories so the walk stays cheap and
+    never descends into `node_modules`.
+    """
+    root = app_root.resolve()
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        here = Path(dirpath)
+        if len(here.relative_to(root).parts) >= _MAX_DEPTH:
+            dirnames[:] = []
+        dirnames[:] = sorted(d for d in dirnames
+                             if d not in _SKIP_DIRS and not d.startswith("."))
+        if "package.json" not in filenames:
+            continue
+        try:
+            pkg = json.loads((here / "package.json").read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        deps = set()
+        for key in ("dependencies", "devDependencies", "peerDependencies"):
+            deps |= set((pkg.get(key) or {}).keys())
+        if deps & _FRONTEND_MARKERS or (here / "playwright.config.ts").is_file():
+            found.append(here)
+    return found
+
+
+def _first_existing(base: Path, candidates) -> str | None:
+    for rel in candidates:
+        if (base / rel).is_dir():
+            return rel
+    return None
+
+
+def _readiness_for(app_root: Path, frontend: Path) -> dict:
+    """A `readiness` block derived from what is actually on disk under `frontend`.
+
+    The values are grounded in existing directories rather than invented: a glob list that
+    matches nothing would leave G5 with an empty scope and a vacuous pass, which is the defect
+    this binding exists to remove. Whatever is written is visible in framework.config.json and
+    a human can correct it; an omitted block is invisible.
+    """
+    try:
+        rel = frontend.resolve().relative_to(app_root.resolve()).as_posix()
+    except ValueError:
+        rel = "."
+    prefix = "" if rel in (".", "") else rel + "/"
+
+    src = _first_existing(frontend, READINESS_DIRS) or "src"
+    primitive = _first_existing(frontend, PRIMITIVE_DIR_CANDIDATES)
+    specs = _first_existing(frontend, SPEC_DIR_CANDIDATES) or "tests/e2e"
+
+    block = {
+        "frontend_manifest": prefix + "package.json",
+        "playwright_config": prefix + "playwright.config.ts",
+        "browser_specs": prefix + specs,
+        "frontend_globs": [prefix + src + "/**/*.tsx", prefix + src + "/**/*.ts",
+                           prefix + src + "/**/*.css"],
+    }
+    if primitive:
+        block["primitive_dirs"] = [prefix + primitive + "/"]
+    return block
+
+
+def _resolve_readiness(app_root: Path, explicit: str | None) -> tuple[dict | None, str]:
+    """(readiness block or None, human-readable explanation).
+
+    Refuses to guess when more than one frontend candidate exists: picking one silently is how
+    a gate ends up judging the wrong application, and the mistake is invisible afterwards.
+    """
+    if explicit:
+        frontend = (app_root / explicit).resolve()
+        if not (frontend / "package.json").is_file():
+            return None, ("--frontend %s has no package.json; readiness left unset" % explicit)
+        return _readiness_for(app_root, frontend), "bound to --frontend %s" % explicit
+
+    candidates = _frontend_candidates(app_root)
+    if not candidates:
+        return None, ("no frontend application detected; readiness left unset (gates fall back "
+                      "to the repo-root defaults)")
+    if len(candidates) > 1:
+        names = ", ".join(c.resolve().relative_to(app_root.resolve()).as_posix()
+                          for c in candidates)
+        return None, ("%d frontend candidates found (%s); refusing to guess -- re-run with "
+                      "--frontend DIR to bind one" % (len(candidates), names))
+    frontend = candidates[0]
+    rel = frontend.resolve().relative_to(app_root.resolve()).as_posix()
+    return _readiness_for(app_root, frontend), "auto-detected frontend at %s" % rel
 
 
 def _parse(argv: list[str]) -> dict | None:
     opts: dict = {
-        "app_root": None, "source": None, "force": False,
+        "app_root": None, "source": None, "force": False, "frontend": None,
         "dry_run": False, "validate": False, "help": False,
     }
     i = 0
@@ -149,6 +268,13 @@ def _parse(argv: list[str]) -> dict | None:
             opts["source"] = argv[i]
         elif arg.startswith("--source="):
             opts["source"] = arg.split("=", 1)[1]
+        elif arg == "--frontend":
+            i += 1
+            if i >= len(argv):
+                return None
+            opts["frontend"] = argv[i]
+        elif arg.startswith("--frontend="):
+            opts["frontend"] = arg.split("=", 1)[1]
         else:
             return None
         i += 1
@@ -323,7 +449,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         report = [f"app root: {app_root}"]
-        report.append(_write_config(app_root, _config_template(opts["source"]),
+        readiness, readiness_note = _resolve_readiness(app_root, opts["frontend"])
+        report.append(f"readiness: {readiness_note}")
+        report.append(_write_config(app_root, _config_template(opts["source"], readiness),
                                     opts["force"], opts["dry_run"]))
         report.extend(_scaffold(app_root, opts["dry_run"]))
         report.extend(_materialise_opencode(app_root, opts["dry_run"]))

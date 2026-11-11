@@ -10,7 +10,18 @@ from pathlib import Path
 
 from framework.contracts.validator import load_contract, validate_instance
 
-_CONTRACT = load_contract(Path(".planning/contracts/api-004.openapi.yaml"))
+# The contract is resolved, not pinned to the consumer layout. A carved app keeps it at the
+# documented `.planning/contracts/`; the framework's own checkout keeps it in the fixture's
+# `contracts/`. A hardcoded consumer path made this module importable only after staging,
+# which is why it could not be exercised in-tree.
+_HERE = Path(__file__).resolve()
+_APP_ROOT = next((p for p in _HERE.parents if (p / "src/backend").is_dir()), _HERE.parents[2])
+_CONTRACT_PATH = next(
+    (p for p in (_APP_ROOT / ".planning/contracts/api-004.openapi.yaml",
+                 _APP_ROOT / "contracts/api-004.openapi.yaml") if p.exists()),
+    _APP_ROOT / ".planning/contracts/api-004.openapi.yaml")
+
+_CONTRACT = load_contract(_CONTRACT_PATH)
 _OP = ("/auth/refresh", "post")
 
 # Stand-in for a token store. Real implementations inject this.

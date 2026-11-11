@@ -17,9 +17,24 @@ import sys
 from pathlib import Path
 
 ROOT = Path.cwd()
-STACK = ROOT / "framework/frontend_stack.yaml"
-LEDGER = ROOT / "framework/frontend/effect_justifications.yaml"
-BASELINE = ROOT / "framework/frontend/baseline.json"
+
+# Config-driven binding (framework/locate.py). Without this the gate judged the repository
+# root -- `package.json` and `src/frontend/**` -- while the product lived in `web/`, so a
+# green run described the reference scaffold and never looked at the application.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import locate  # noqa: E402  (framework/locate.py, resolved by the path insert above)
+
+# Framework-owned inputs are package-relative, never cwd-relative: they ship with the
+# framework, so they must resolve the same way no matter which app directory invoked it.
+STACK = locate.framework_root() / "frontend_stack.yaml"
+LEDGER = locate.framework_root() / "frontend/effect_justifications.yaml"
+BASELINE = locate.framework_root() / "frontend/baseline.json"
+
+MANIFEST = Path(locate.resolved("frontend_manifest") or "package.json")
+FE_ROOT = MANIFEST.parent
+PLAYWRIGHT_CONFIG = Path(locate.resolved("playwright_config") or "playwright.config.ts")
+FE_GLOBS = locate.frontend_globs()
+PRIMITIVE_DIRS = locate.primitive_dirs()
 
 BLOCKED, FAIL, PASS, NOT_APPLICABLE = 2, 1, 0, 4
 
@@ -56,9 +71,9 @@ def glob_match(path: str, globs: list[str]) -> bool:
 
 
 def read_manifest() -> tuple[dict, str | None]:
-    pj = ROOT / "package.json"
+    pj = MANIFEST
     if not pj.exists():
-        return {}, "package.json absent"
+        return {}, "frontend manifest absent: %s" % pj.as_posix()
     try:
         data = json.loads(pj.read_text())
     except Exception as e:
@@ -72,8 +87,10 @@ def read_manifest() -> tuple[dict, str | None]:
 def main() -> int:
     stack = load_yaml(STACK)
     ledger = load_yaml(LEDGER)
-    fglobs = stack.get("frontend_globs", [])
-    prim = stack.get("primitive_dirs", [])
+    # Globs and primitive dirs come from locate: the contract supplies the defaults, the
+    # app's readiness block binds them to the real application layout.
+    fglobs = FE_GLOBS
+    prim = PRIMITIVE_DIRS
     required = stack["tiers"]["required"]
     conditional = stack["tiers"]["conditional"]
 
@@ -87,12 +104,15 @@ def main() -> int:
     # A generated contract type file is not an application. Reporting PASS when nothing
     # was evaluated is a vacuous pass — the exact failure class this framework exists to
     # prevent. Distinguish "nothing to judge" (NOT_APPLICABLE) from "judged, conformant".
-    has_components = any(ROOT.glob("src/frontend/**/*.tsx"))
-    has_manifest = (ROOT / "package.json").exists()
+    # The manifest is resolved from the app binding, so a product under web/ is judged as
+    # the application instead of being shadowed by the root reference scaffold.
+    has_components = any(next(iter(ROOT.glob(g)), None) is not None for g in fglobs)
+    has_manifest = MANIFEST.exists()
     frontend_exists = has_components or has_manifest
     if not frontend_exists:
         print("NOT_APPLICABLE: no frontend application present "
-              "(no *.tsx under src/frontend, no package.json). Nothing was evaluated.")
+              "(no file matches the frontend globs, no %s). Nothing was evaluated."
+              % MANIFEST.as_posix())
         return NOT_APPLICABLE
 
     if dep_err:
@@ -106,15 +126,20 @@ def main() -> int:
             if pkg and pkg not in deps:
                 findings.append(f"{concern}: required tool {tool} ({pkg}) not in package.json")
             mf = spec.get("marker_file")
-            if mf and not (ROOT / mf).exists():
-                findings.append(f"{concern}: required tool {tool} missing marker file {mf}")
+            # Marker files are app files, so they resolve against the frontend root the
+            # binding names, not the repository root. A root-relative lookup passed while
+            # the scaffold's components.json sat at the top and failed the moment the real
+            # manifest moved into `web/` -- both answers describe a file the app does not own.
+            if mf and not ((FE_ROOT / mf).exists() or (ROOT / mf).exists()):
+                findings.append(f"{concern}: required tool {tool} missing marker file "
+                                f"{(FE_ROOT / mf).as_posix()}")
             for alt in spec.get("forbidden_alternates", []):
                 if alt in deps:
                     findings.append(
                         f"{concern}: forbidden alternate '{alt}' present; standard is {tool}")
 
     # --- shadcn config assertions --------------------------------------------------
-    cj = ROOT / "components.json"
+    cj = FE_ROOT / "components.json"
     sc = stack.get("shadcn_config", {})
     if cj.exists():
         try:
@@ -135,10 +160,13 @@ def main() -> int:
     # --- Responsive validation: viewports must actually be configured --------------
     rv = next((s for s in required if s["concern"] == "responsive_validation"), None)
     if rv:
-        cfg = next((p for p in (ROOT / "playwright.config.ts", ROOT / "playwright.config.js")
-                    if p.exists()), None)
+        candidates = [PLAYWRIGHT_CONFIG]
+        if PLAYWRIGHT_CONFIG.suffix == ".ts":
+            candidates.append(PLAYWRIGHT_CONFIG.with_suffix(".js"))
+        cfg = next((p for p in candidates if p.exists()), None)
         if cfg is None:
-            findings.append("responsive_validation: no playwright.config found")
+            findings.append("responsive_validation: no playwright.config found at %s"
+                            % PLAYWRIGHT_CONFIG.as_posix())
         else:
             txt = cfg.read_text()
             # Count PROJECTS, not keyword occurrences. A single project containing both
@@ -148,12 +176,20 @@ def main() -> int:
             block = ""
             if "projects:" in txt:
                 block = txt.split("projects:", 1)[1]
+            # Slice per project FIRST. A fixed-size lookahead window runs past the end of
+            # the project it started in, so a project that declares no viewport inherits
+            # the NEXT project's width and two real viewports collapse into one -- a false
+            # FAIL. Boundaries come from each `{ name: "<project>"` start.
+            starts = [m.start() for m in re.finditer(r"\{\s*name\s*:\s*[\"'\`]", block)]
+            chunks = [block[a:b] for a, b in zip(starts, starts[1:] + [len(block)])]
             widths, projects = set(), 0
-            for m in re.finditer(r"\{\s*name\s*:\s*[\"'\`]([^\"'\`]+)", block):
+            for chunk in chunks:
+                named = re.search(r"name\s*:\s*[\"'\`]([^\"'\`]+)", chunk)
+                if not named:
+                    continue
                 projects += 1
-                tail = block[m.end():m.end() + 400]
-                w = re.search(r"width\s*:\s*(\d+)", tail)
-                dev = re.search(r"devices\[\s*[\"'\`]([^\"'\`]+)", tail)
+                w = re.search(r"width\s*:\s*(\d+)", chunk)
+                dev = re.search(r"devices\[\s*[\"'\`]([^\"'\`]+)", chunk)
                 widths.add(w.group(1) if w else (dev.group(1) if dev else f"proj{projects}"))
             need = int(rv.get("min_viewports", 2))
             if len(widths) < need:

@@ -154,6 +154,172 @@ def readiness() -> dict:
     return value if isinstance(value, dict) else {}
 
 
+# ---------------------------------------------------------------- resolved targets
+# WHY THESE LIVE HERE
+# -------------------
+# `readiness()` existed and `validate.py` honoured it, but every GATE hardcoded the
+# repository root: g5 judged `src/frontend/**` + root `package.json`, g6 ran the root
+# `playwright.config.ts` over `tests/e2e`. In a repo whose product lives in `web/`, that
+# meant the gates judged the Vite reference scaffold while the product was never looked at,
+# and a green run proved nothing. One resolver, used by the gates, is the fix.
+READINESS_DEFAULTS = {
+    "openapi_schema": ".planning/contracts",
+    "contract_tests": "tests/contract",
+    # Where `framework/contracts/gen_types.py` writes the generated types. These are app
+    # paths, not framework paths: a product with `backend/` + `web/` writes somewhere else
+    # than the reference layout, and a hardcoded target is how a gate ends up diffing types
+    # nobody imports (MISSING/DRIFT reported against a file the app never reads).
+    "python_types_dir": "src/backend/contracts",
+    "typescript_types_dir": "src/frontend/contracts",
+    "frontend_manifest": "package.json",
+    "playwright_config": "playwright.config.ts",
+    "browser_specs": "tests/e2e",
+}
+
+
+def _rel(path) -> str:
+    """Render a path cwd-relative, POSIX-style, so a WSL/POSIX shell can stat it.
+
+    The gates run under bash on Windows via WSL interop, where a `C:\\...` path is not
+    addressable. A cwd-relative path carries no flavour and resolves everywhere.
+    """
+    try:
+        return Path(os.path.relpath(Path(path), Path.cwd())).as_posix()
+    except (ValueError, OSError):
+        return Path(path).as_posix()
+
+
+def resolved(key: str) -> str:
+    """An app-relative readiness target, resolved and rendered cwd-relative."""
+    raw = readiness().get(key, READINESS_DEFAULTS.get(key))
+    if not raw:
+        return ""
+    return _rel(app_root() / str(raw))
+
+
+def _stack_globs():
+    try:
+        import yaml
+        path = framework_root() / "frontend_stack.yaml"
+        with open(path, encoding="utf-8-sig") as fh:
+            return (yaml.safe_load(fh) or {}).get("frontend_globs") or []
+    except (ImportError, OSError, ValueError):
+        return []
+
+
+def _stack_primitive_dirs():
+    try:
+        import yaml
+        path = framework_root() / "frontend_stack.yaml"
+        with open(path, encoding="utf-8-sig") as fh:
+            return (yaml.safe_load(fh) or {}).get("primitive_dirs") or []
+    except (ImportError, OSError, ValueError):
+        return []
+
+
+def frontend_globs() -> list[str]:
+    """Frontend file globs, resolved against the app root.
+
+    `readiness.frontend_globs` wins. Otherwise the stack contract's globs are prefixed with
+    the frontend manifest's directory, so a manifest at `web/package.json` turns
+    `src/frontend/**` into `web/src/frontend/**` instead of judging the repository root.
+    A product with a different layout (Next.js `src/app/**`) must declare its own globs --
+    a guess would judge the wrong files, which is the defect this replaces.
+    """
+    override = readiness().get("frontend_globs")
+    if isinstance(override, list) and override:
+        return [str(g) for g in override]
+    base = Path(resolved("frontend_manifest")).parent
+    prefix = "" if str(base) in (".", "") else base.as_posix().rstrip("/") + "/"
+    return [prefix + str(g) for g in _stack_globs()]
+
+
+def primitive_dirs() -> list[str]:
+    """Directories exempt from raw-element rules, resolved against the app root."""
+    override = readiness().get("primitive_dirs")
+    if isinstance(override, list) and override:
+        return [str(d) for d in override]
+    base = Path(resolved("frontend_manifest")).parent
+    prefix = "" if str(base) in (".", "") else base.as_posix().rstrip("/") + "/"
+    return [prefix + str(d) for d in _stack_primitive_dirs()]
+
+
+def _glob_to_regex(pattern: str) -> str:
+    """Translate one glob to a POSIX ERE fragment.
+
+    Plain groups only: the consumer is `grep -E`, which is POSIX ERE and has no
+    non-capturing `(?:...)`. Emitting one makes GNU grep warn "? at start of expression"
+    and match a different expression than intended, so the gate would filter frontend files
+    by a pattern nobody wrote.
+    """
+    import re
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return "".join(out)
+
+
+def frontend_globs_regex() -> str:
+    """One anchored ERE matching any frontend file, for `grep -E` in the gates."""
+    globs = frontend_globs()
+    if not globs:
+        return "^$"  # never matches: no frontend contract, so no file is a frontend change
+    return "^(" + "|".join(_glob_to_regex(g) for g in globs) + ")$"
+
+
+def describe() -> dict:
+    """Everything a gate needs to locate the app, as cwd-relative strings."""
+    out = {
+        "app_root": _rel(app_root()),
+        "state_root": _rel(state_root()),
+        "frontend_globs": frontend_globs(),
+        "frontend_globs_regex": frontend_globs_regex(),
+        "primitive_dirs": primitive_dirs(),
+    }
+    for key in READINESS_DEFAULTS:
+        out[key] = resolved(key)
+    return out
+
+
+def main(argv=None):
+    import argparse
+    import json
+    ap = argparse.ArgumentParser(description="resolved framework paths")
+    ap.add_argument("--get", help="print one resolved value")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    data = describe()
+    if a.get:
+        if a.get not in data:
+            print("NOT_FOUND: %s (known: %s)" % (a.get, ", ".join(sorted(data))))
+            return 2
+        value = data[a.get]
+        print(",".join(value) if isinstance(value, list) else value)
+        return 0
+    if a.json:
+        print(json.dumps(data, indent=2))
+    else:
+        for key in sorted(data):
+            value = data[key]
+            print("%s: %s" % (key, ",".join(value) if isinstance(value, list) else value))
+    return 0
+
+
+
 def bootstrap_sys_path() -> Path:
     """Put the import root on sys.path and return it (legacy/direct-run support).
 
@@ -165,3 +331,7 @@ def bootstrap_sys_path() -> Path:
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     return root
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

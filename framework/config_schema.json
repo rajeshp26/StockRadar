@@ -48,13 +48,31 @@
     },
     "readiness": {
       "type": "object",
-      "description": "App-specific paths the five readiness checks target (Phase A step 4).",
+      "description": "App-specific paths the readiness checks and the gates target (Phase A step 4). Omitted keys fall back to the repo-root defaults in framework/locate.py, which is only correct when the application IS the repository root.",
       "properties": {
         "openapi_schema": { "type": "string" },
         "contract_tests": { "type": "string" },
+        "python_types_dir": {
+          "type": "string",
+          "description": "Directory gen_types.py writes Python contract types into, relative to app_root. G1 diffs this path for drift, so it must be the directory the backend actually imports from."
+        },
+        "typescript_types_dir": {
+          "type": "string",
+          "description": "Directory gen_types.py writes TypeScript contract types into, relative to app_root. G1 diffs this path for drift, so it must be the directory the frontend actually imports from."
+        },
         "frontend_manifest": { "type": "string" },
         "playwright_config": { "type": "string" },
-        "browser_specs": { "type": "string" }
+        "browser_specs": { "type": "string" },
+        "frontend_globs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Globs G5 treats as frontend source, relative to app_root. Declare these when the app's layout differs from the stack contract's src/frontend default (e.g. a Next.js app under web/src)."
+        },
+        "primitive_dirs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Directories exempt from G5's raw-element rules (the shadcn primitive directory), relative to app_root."
+        }
       },
       "additionalProperties": true
     }

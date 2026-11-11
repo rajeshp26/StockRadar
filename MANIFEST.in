@@ -14,7 +14,10 @@ include docs/AGENTIC_ARCHITECTURE.md
 include docs/framework-portability-assessment.md
 recursive-include framework *.json *.yaml *.yml *.sh *.md *.txt *.ts *.mjs *.js *.cjs
 recursive-include .lifecycle *
-recursive-include reference-app *
+# The reference application is framework-owned and must travel with the distribution: the
+# standalone proof stages it from inside the installed package. `*` (not the extension list
+# above) because it also carries .py, .tsx, .css and .html the app needs to build.
+recursive-include framework/reference-app *
 global-exclude *.pyc
 global-exclude *.py[cod]
 global-exclude __pycache__/*

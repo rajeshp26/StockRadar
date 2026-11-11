@@ -27,6 +27,7 @@ document is wrong. Generated claims about gate behaviour must cite this file.
 | G15 tripwires | no eval tripwire hits | violations listed | BLOCKED (grep/awk absent) | — | NOT_APPLICABLE (no changed eval files) |
 | G16 state-health | task/ledger store readable | broken task(s) or unreadable tail listed | BLOCKED (python3 absent / adapter error) | — | NOT_APPLICABLE (no tasks, no ledger) |
 | G17 system-tests | fresh passing harness evidence for every real-stack criterion | evidence missing, stale, tampered or failing | BLOCKED (python3 / plan unreadable) | UNVERIFIABLE (stack unreachable) | NOT_APPLICABLE (no plan given, or no real-stack criteria) |
+| G19 closure | every acceptance criterion has a fresh, bound, passing artifact or a human waiver | at least one criterion pending, failed or unverifiable | BLOCKED (matrix or plan unreadable, python3 absent) | UNVERIFIABLE (the matrix drifted from the plan, or the pointer names a matrix that no longer exists) | NOT_APPLICABLE (no plan and no matrix given, or the plan declares no criteria) |
 | G-EXEC exec-integrity | matrix 38/38 checks pass | deviations listed | BLOCKED (python3 absent) | — | NOT_APPLICABLE (no matrix module) |
 | G-SANDBOX capability | sandbox enforceable via the chosen backend (native bubblewrap or container) — target execution permitted | isolation control failed (target writable / env leaked / egress open) | BLOCKED (probe could not run) | capability missing (no enforceable native backend and no usable container) | NOT_APPLICABLE (SANDBOX_EXEC_REQUIRED=0) |
 | G18 security-audit | no open confirmed high/critical finding | open confirmed high/critical finding, or findings/ledger fail validation | BLOCKED (run dir or artifact missing) | UNVERIFIABLE (validators absent, or no POSIX-capable interpreter — native node lacks O_NOFOLLOW and the container is unavailable) | NOT_APPLICABLE (no audit run dir) |
@@ -57,8 +58,30 @@ exists, G8 returns exit 1 and completion is refused -- the same enforcement shap
 applies to retrospectives. Exit 0 means zero open records; exit 2 means the store could
 not be read (python3/pyyaml absent or unparsable state), which is never read as zero.
 
-## G9 skips are not silent passes
+## G19 judges the matrix, and a lost matrix is not an empty one
 
+G19 closes the loop the decision chain was missing: every acceptance criterion the plan
+declares must have a fresh, bound, passing artifact or an explicit human waiver. The matrix
+is produced by `matrix.py emit` at dispatch (`g_entry.sh` block 4d) and pointed at by
+`<state_root>/verification/current.json`.
+
+Two consequences worth stating, because both were bugs:
+
+* **A pointer whose matrix no longer exists is UNVERIFIABLE (3), not NOT_APPLICABLE.** The
+  pointer names a decision; if the artifact is gone, the decision was lost. Reporting
+  "nothing to close" would let a deleted matrix read as a clean task.
+* **NOT_APPLICABLE (4) requires that there was nothing to judge in the first place** — no
+  plan and no matrix given at all, or a plan that declares no criteria. A task with a plan
+  and no matrix is a FAILURE (1): `g_entry` was supposed to emit one.
+
+The matrix is also how a gate learns *why* it was routed. `matrix.py required-gates` prints
+the artifact's `required_gates`, and `g6` uses it to decide whether the task has a
+visible-behaviour requirement. That replaced an environment variable, because on a Windows
+host the only bash is WSL, which does **not** inherit the caller's environment — a
+PowerShell `$env:REQUIREMENT_SHAPE` is empty inside `bash -c`, so the documented input read
+as absent and the gate fell back to guessing.
+
+## G9 skips are not silent passes
 G9 judges changed source files against the plan's declared files_or_components. With no plan
 context or no source changes it logs SKIP and exits 0 -- that is "nothing was judged", not
 "scope respected". A skip must be reported as skipped, never counted as a passed check.
@@ -196,6 +219,22 @@ interpreter could judge: Windows `node.exe` cannot enforce no-follow input, and 
 fallback was unavailable. It tries native `node` first and falls through to the sandbox
 container's POSIX `node`, so a host with the image reaches a real verdict instead of exit 3. It is
 UNVERIFIABLE, never a false FAIL. Exit 4 means no audit run dir was given — nothing to judge.
+
+## G19 closes the requirement, not the diff
+
+G19 judges the verification matrix written by `framework/verifier/matrix.py emit` at dispatch:
+one row per acceptance criterion, carrying the method, gates and skills its evidence class
+derived (`framework/verifier/evidence_classes.yaml`) and the impact scope that set the gate
+breadth (`framework/verifier/profiles.yaml`). Exit 0 means every row is `pass` with a bound
+artifact, or `waived` by a named human with a reason. Exit 1 means at least one row is
+`pending`, `fail` or `unverifiable` -- and `unverifiable` is never a pass, so a green gate that
+could not confirm the real stack was reached refuses completion. Exit 3 means the matrix no
+longer matches the plan's digest: the plan changed after emission, so the recorded evidence
+does not correspond to the approved requirements. Exit 4 means there was nothing to judge.
+
+This is the gate that makes `AC-n` the unit of completion. Before it existed, a criterion could
+be tagged `[e2e]` and no component downstream of the plan lint ever asked whether it had
+evidence.
 
 ## Exit 3 is the most important code in the framework
 

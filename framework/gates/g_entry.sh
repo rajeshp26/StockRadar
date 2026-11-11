@@ -191,6 +191,44 @@ if [ "$lint_mode" != "off" ]; then
   esac
 fi
 
+# 4d. Verification matrix (the artifact the decision chain was missing). `AC-n` was minted by
+# the plan lint and then dropped: nothing downstream could answer "did AC-3 pass?", so a plan
+# could declare `AC-1 [e2e] "portfolio renders four real periods"` and the only gate that ran
+# drove a mocked scaffold spec. This derives one row per criterion from
+# framework/verifier/evidence_classes.yaml, routes the gates that must produce its evidence
+# (impact breadth x evidence depth), and writes the matrix g19_closure judges. An underivable
+# row is a dispatch error under enforce, never a silent omission.
+if [ "$lint_mode" != "off" ]; then
+  if [ ! -f framework/verifier/matrix.py ]; then
+    if [ "$lint_mode" = "enforce" ]; then
+      persist blocked "framework/verifier/matrix.py missing under enforce"
+      log "BLOCKED  framework/verifier/matrix.py missing while lint_mode=enforce"
+      exit $BLOCKED
+    fi
+  else
+    matrix_out="$(python3 framework/verifier/matrix.py emit --plan "$ENTRY_PLAN" --root . 2>&1)"
+    matrix_rc=$?
+    matrix_out="$(printf '%s' "$matrix_out" | tr -d '\r')"
+    case "$matrix_rc" in
+      0) log "verification matrix:"$'\n'"$matrix_out" ;;
+      4) log "NOT_APPLICABLE  verification matrix: $matrix_out" ;;
+      1) if [ "$lint_mode" = "enforce" ]; then
+           persist fail "verification matrix cannot be derived"
+           fail "verification matrix cannot be derived; fix the acceptance criteria:"$'\n'"$matrix_out"
+         else
+           log "WARN  verification matrix (advisory under lint_mode=warn):"$'\n'"$matrix_out"
+         fi ;;
+      *) if [ "$lint_mode" = "enforce" ]; then
+           persist blocked "verification matrix unreadable (exit $matrix_rc)"
+           log "BLOCKED  verification matrix unreadable (exit $matrix_rc):"$'\n'"$matrix_out"
+           exit $BLOCKED
+         else
+           log "WARN  verification matrix unavailable (exit $matrix_rc); advisory only"
+         fi ;;
+    esac
+  fi
+fi
+
 # 5. ASK coverage (DID-012 PR-D1 / invariant I1): an executable task must be bound to a
 # durable ASK record before dispatch. A terminal task is not executable, so the adapter
 # reports NOT_APPLICABLE (4) and the gate continues. Unbound is a hard refusal; an

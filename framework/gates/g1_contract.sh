@@ -12,7 +12,18 @@
 GATE_NAME=g1_contract
 source "$(dirname "$0")/_lib.sh"
 
-CONTRACT_DIR="$STATE_ROOT/contracts"
+# Resolved app binding (framework/locate.py). The contract directory and the contract-test
+# directory are APP paths: a product keeps its schemas wherever its config says, and a
+# hardcoded `tests/contract` here silently graded a directory the app does not own. Values
+# are cwd-relative and POSIX-shaped because this gate runs under bash on Windows via WSL
+# interop. An empty result means the resolver is unavailable, and the historical default is
+# kept so a tree without framework/locate.py still runs.
+where() { python3 framework/locate.py --get "$1" 2>/dev/null | tr -d '\r'; }
+
+CONTRACT_DIR="$(where openapi_schema)"
+[ -n "$CONTRACT_DIR" ] || CONTRACT_DIR="$STATE_ROOT/contracts"
+CONTRACT_TESTS="$(where contract_tests)"
+[ -n "$CONTRACT_TESTS" ] || CONTRACT_TESTS="tests/contract"
 [ -d "$CONTRACT_DIR" ] || { persist skip "no contracts dir"; not_applicable "no contracts directory" "{\"checked\":\"$CONTRACT_DIR\",\"exists\":false}"; }
 
 SCHEMAS=$(find "$CONTRACT_DIR" -name '*.openapi.y*ml' 2>/dev/null | sort || true)
@@ -54,16 +65,16 @@ for s in $CHANGED_CONTRACTS; do
 done
 
 # ── 4. Contract tests are the actual gate ──────────────────────────────────────
-if [ ! -d tests/contract ]; then
-  log "FAIL no tests/contract directory — a contract without tests is not a gate"
+if [ ! -d "$CONTRACT_TESTS" ]; then
+  log "FAIL no $CONTRACT_TESTS directory — a contract without tests is not a gate"
   rc=1
 else
-  TESTS=$(find tests/contract -name 'test_*.py' 2>/dev/null | sort || true)
+  TESTS=$(find "$CONTRACT_TESTS" -name 'test_*.py' 2>/dev/null | sort || true)
   if [ -z "$TESTS" ]; then
-    log "FAIL tests/contract exists but contains no test_*.py — not a gate"
+    log "FAIL $CONTRACT_TESTS exists but contains no test_*.py — not a gate"
     rc=1
   elif have pytest; then
-    pytest -q tests/contract || { log "contract tests failed (pytest)"; rc=1; }
+    pytest -q "$CONTRACT_TESTS" || { log "contract tests failed (pytest)"; rc=1; }
   else
     # Standalone fallback. Contract tests must be runnable without an optional install.
     log "pytest unavailable; running contract tests standalone"

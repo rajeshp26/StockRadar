@@ -3,7 +3,7 @@ profiles:
   functional:
     always: true
     evidence: [unit_test, integration_test]
-    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh", "./framework/gates/g9_scope.sh", "./framework/gates/g11_evidence.sh", "./framework/gates/g14_integrity.sh", "./framework/gates/g16_state_health.sh", "./framework/gates/g17_system_tests.sh"]
+    commands: ["./framework/gates/g4_executable.sh", "./framework/gates/g8_blockers.sh", "./framework/gates/g9_scope.sh", "./framework/gates/g11_evidence.sh", "./framework/gates/g14_integrity.sh", "./framework/gates/g16_state_health.sh", "./framework/gates/g17_system_tests.sh", "./framework/gates/g19_closure.sh"]
 
   contract:
     when: {contract_change: true}
@@ -50,9 +50,15 @@ profiles:
     commands: []
     human_gate: H3
 
-# g5 = frontend stack conformance, g6 = browser verification.
-# g6 is appended by the Verifier whenever a requirement's shape is visible_behaviour,
-# regardless of impact class — a local CSS change can still break visible behaviour.
+# g5 = frontend stack conformance, g6 = browser verification. g6 is appended by the Verifier
+# whenever a requirement's shape is visible_behaviour, regardless of impact class — a local CSS
+# change can still break visible behaviour.
+#
+# These tables are EXECUTED by framework/verifier/route.py: `matrix.py emit` unions
+# impact_to_gates[scope] with the gates each criterion's evidence class names, and stores the
+# result as `required_gates` in the verification matrix. g19_closure judges whether that set
+# was honoured. Before route.py existed, validate.py asserted only that the *string*
+# "impact_to_gates" appeared in this file -- a check that could not fail while nothing read it.
 impact_to_gates:
   local:            [g2, g4, g9]
   component:        [g2, g4, g5, g9]

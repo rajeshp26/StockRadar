@@ -31,6 +31,7 @@ For each ask, determine:
 | Backend implementation | yes/no | `backend-python` |
 | Unit test authoring | yes/no | `unit-test-authoring` |
 | Test design (ISTQB) | yes/no | `istqb-testing` |
+| System test authoring | yes/no | `system-test-authoring` |
 | Performance testing | yes/no | `performance-testing` |
 | Security research | yes/no | `security-audit` |
 | Browser verification | yes/no | `browser-verification` |
