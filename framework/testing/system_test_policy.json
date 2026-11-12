@@ -19,6 +19,10 @@
     "require_db": false
   },
   "min_total_tests": 3,
+  "baseline": {
+    "_comment": "A freeze is an APPROVAL, not a checkpoint: it records a commit signed by a key the agent does not hold, whose tree carries the frozen suite, and verify re-checks both. Setting require_signed false reduces the lock to drift detection -- it can then no longer prove the suite predates the implementation, so a re-freeze can launder an edit. Only the harness's own test roots turn it off, in their copied policy.",
+    "require_signed": true
+  },
   "min_per_ac": {"positive": 1, "break": 1},
   "break_kinds": ["negative", "boundary", "abuse", "idempotency", "concurrency", "regression"],
   "require_plan_for_completion": false,

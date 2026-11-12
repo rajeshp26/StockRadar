@@ -72,6 +72,8 @@ plane change).
     framework/opencode/**agents, rules, skills, plugin, config
     framework/plan/**   plan lint + eval cases (DID-016)
     framework/testing/**system-test harness + policy (DID-017)
+    framework/gates/**  gates: the commands that judge (immutable)
+    framework/verifier/**verification contract: evidence table, matrix, closure (immutable)
     framework/security/**plane source + sync/check (immutable)
 <!-- enforcement-plane: end -->
 

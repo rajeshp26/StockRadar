@@ -110,6 +110,10 @@ def proj(tmp_path, monkeypatch):
     pol_path = tmp_path / "framework/testing/system_test_policy.json"
     pol = json.loads(pol_path.read_text())
     pol["runners"][0]["cmd"][0] = sys.executable
+    # The test root is not a git repository and holds no approver's key, so the signed-baseline
+    # control is declared off in THIS copy of the policy. The shipped policy keeps it on, and
+    # test_the_shipped_policy_requires_a_signed_baseline is what holds that line.
+    pol["baseline"] = {"require_signed": False}
     pol_path.write_text(json.dumps(pol))
     td = tmp_path / "tests/system/data"
     td.mkdir(parents=True)
@@ -264,6 +268,37 @@ def test_code_change_after_green_run_makes_result_stale(proj):
     assert h(mods, tmp, "verify", "--plan", plan) == 0
     (tmp / "svc/total.py").write_text("x = 2\n")
     assert h(mods, tmp, "verify", "--plan", plan) == 1
+
+
+# ------------------------------------------------------- the freeze is an approval (patch 04)
+def test_the_shipped_policy_requires_a_signed_baseline():
+    """Where it counts, the control is ON.
+
+    A freeze lock alone proves the suite did not change after it was frozen; it cannot prove the
+    freeze happened before the implementation. Only the signature does that, so a policy that
+    turns it off is the bypass, and this asserts the shipped one does not.
+    """
+    pol = json.loads((ROOT / "framework/testing/system_test_policy.json").read_text(
+        encoding="utf-8-sig"))
+    assert (pol.get("baseline") or {}).get("require_signed") is True
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git needed for the signed-baseline check")
+def test_freeze_refuses_an_unsigned_baseline(proj):
+    tmp, svc, mods = proj
+    pol_path = tmp / "framework/testing/system_test_policy.json"
+    pol = json.loads(pol_path.read_text())
+    pol["baseline"] = {"require_signed": True}
+    pol_path.write_text(json.dumps(pol))
+    (tmp / "svc").mkdir()
+    (tmp / "svc/total.py").write_text("x = 1\n")
+    for c in (["init", "-q"], ["add", "-A"],
+              ["-c", "user.email=a@b", "-c", "user.name=t", "commit", "-qm", "init"]):
+        subprocess.run(["git"] + c, cwd=tmp, check=True, capture_output=True)
+    plan = prepare(tmp, mods)
+    # HEAD is a real commit and the suite is committed, but nobody signed it, so there is no
+    # approver: the freeze is refused rather than recorded as if it were one.
+    assert h(mods, tmp, "freeze", "--plan", plan) == 2
 
 
 # ------------------------------------------------------------------ ASK completion guard

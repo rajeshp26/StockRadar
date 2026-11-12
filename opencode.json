@@ -28,6 +28,8 @@
       "framework/opencode/**": "deny",
       "framework/plan/**": "deny",
       "framework/testing/**": "deny",
+      "framework/gates/**": "deny",
+      "framework/verifier/**": "deny",
       "framework/security/**": "deny"
     },
     "webfetch": "deny",
@@ -117,6 +119,8 @@
           "framework/opencode/**": "deny",
           "framework/plan/**": "deny",
           "framework/testing/**": "deny",
+          "framework/gates/**": "deny",
+          "framework/verifier/**": "deny",
           "framework/security/**": "deny"
         },
         "task": {
@@ -271,6 +275,8 @@
           "framework/opencode/**": "deny",
           "framework/plan/**": "deny",
           "framework/testing/**": "deny",
+          "framework/gates/**": "deny",
+          "framework/verifier/**": "deny",
           "framework/security/**": "deny"
         },
         "task": {

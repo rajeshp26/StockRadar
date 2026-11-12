@@ -6,26 +6,37 @@ frozen suite is byte-identical, runs the suite against the REAL stack, and write
 the hashes of the JUnit XML and the log plus the state of the code under test. The gate and the
 ASK-completion guard accept only that file, and only while it is still fresh.
 
-  freeze     lint must be clean; record sha256 of every test file, the data manifest and the plan
+  freeze     lint must be clean; record the SIGNED BASELINE, sha256 of every test file, the data
+             manifest and the plan digest
   run        verify freeze + data hashes -> preflight the stack -> run -> parse JUnit -> write result
   verify     is there a fresh, passing, untampered result for every real-stack criterion?
   ask-gate   verify every plan that declares `ask_id: <ASK>` (used by intake COMPLETED)
 
+The baseline is what makes the freeze an approval instead of a checkpoint. A freeze lock proves
+the suite did not change after it was frozen; it cannot prove the freeze happened before the
+implementation, and an agent that can edit the suite and re-freeze it can launder the edit. So
+`freeze` requires a commit signed by a key the agent does not hold, whose tree carries exactly the
+frozen suite (configuration management: DO-178C 7, ISO 26262-8 7, IEC 62304 8). The suite stays
+writable -- authorship is not the thing being controlled, the baseline is. `verify` re-checks the
+signature and the suite at that commit, so a re-freeze cannot move the baseline.
+
 Phases: --phase red (before implementation; proves the tests CAN fail) | green (after).
-Exit: 0 ok | 1 failed | 2 BLOCKED/UNVERIFIABLE (stack down, config missing) | 3 unverifiable
-(verify only: result says the stack was unreachable) | 4 not applicable
+Exit: 0 ok | 1 failed | 2 BLOCKED/UNVERIFIABLE (stack down, config missing, no signed baseline) |
+3 unverifiable (verify only: result says the stack was unreachable) | 4 not applicable
 """
 from __future__ import annotations
 
 import argparse
 import datetime
-import hashlib
 import importlib.util
 import json
 import os
 import re
+import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -71,19 +82,97 @@ def git(root, *args):
         return None
 
 
+def git_rc(root, *args, env=None):
+    """git with the exit code kept.
+
+    `git()` above collapses every failure to None, which is right for a best-effort read and wrong
+    for a control decision: a non-zero exit with empty stdout is a diagnostic on stderr, never a
+    clean result (git-runner rule).
+    """
+    try:
+        r = subprocess.run(["git"] + list(args), cwd=root, capture_output=True, text=True,
+                           timeout=120, env=env)
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, "", str(exc)
+
+
 def code_state(root, policy):
-    head = git(root, "rev-parse", "HEAD")
-    if head is None:
-        return None
-    ex = [":!" + policy["test_dir"], ":!.planning"]
-    diff = git(root, "diff", "HEAD", "--", ".", *ex) or ""
-    untracked = (git(root, "ls-files", "--others", "--exclude-standard", "--", ".", *ex) or "")
-    h = hashlib.sha256((head.strip() + diff).encode("utf-8", "replace"))
-    for f in sorted(untracked.split()):
-        fp = os.path.join(root, f)
-        if os.path.isfile(fp):
-            h.update(f.encode()); h.update(open(fp, "rb").read())
-    return h.hexdigest()
+    """Content identity of the working tree -- the tree hash git would record.
+
+    Why not `HEAD + git diff HEAD + untracked files`: that identifies the tree by its
+    REPRESENTATION, so committing an unchanged tree changes the identity and voids evidence that
+    is still valid. Measured: after commit 33a98f6c of an unchanged tree, g17 reported "code
+    changed since the green run". A baseline is a content hash.
+
+    The index is a throwaway one: the real index and the working tree are not touched, and the
+    frozen suite is excluded because the lock already binds it byte for byte.
+    """
+    tmp = tempfile.mkdtemp(prefix="code-state-")
+    try:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
+        rc, _, _ = git_rc(root, "read-tree", "HEAD", env=env)
+        if rc != 0:
+            return None
+        rc, _, _ = git_rc(root, "add", "-A", "--", ".", env=env)
+        if rc != 0:
+            return None
+        for path in (policy.get("test_dir", ""), ".planning"):
+            if path:
+                git_rc(root, "rm", "-r", "-f", "--cached", "-q", "--ignore-unmatch", "--",
+                       path, env=env)
+        rc, out, _ = git_rc(root, "write-tree", env=env)
+        return out.strip() if rc == 0 else None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# git signature status (%G?): G good, U good but the key is not in the trust db. Trust is a local
+# key-management decision; the signature being cryptographically valid is the property that
+# matters, so both are accepted. Everything else -- N unsigned, B bad, E cannot check, X/Y
+# expired, R revoked -- is a refusal.
+SIGNATURE_OK = {"G", "U"}
+
+BASELINE_HINT = (
+    "  A baseline is an APPROVAL, not a checkpoint: sign it with a key the agent does not hold.\n"
+    "    ssh:   git config gpg.format ssh\n"
+    "           git config user.signingkey ~/.ssh/id_ed25519.pub\n"
+    "           git config gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers\n"
+    "    gpg:   git config user.signingkey <KEYID>\n"
+    "    then:  git commit --allow-empty -S -m 'baseline: <what you are approving>'\n"
+    "           run_system_tests.py freeze --plan <plan> --baseline <sha>")
+
+
+def baseline_state(root, rev):
+    """-> (baseline dict, error). A baseline is a signed commit whose tree carries the suite."""
+    rc, out, err = git_rc(root, "rev-parse", "--verify", "%s^{commit}" % rev)
+    if rc != 0:
+        return None, "baseline %r is not a commit: %s" % (rev, (err or out).strip()[:200])
+    commit = out.strip()
+    rc, out, err = git_rc(root, "log", "-1", "--format=%G?%x00%GS%x00%s%x00%B", commit)
+    if rc != 0:
+        return None, "cannot read baseline %s: %s" % (commit[:12], (err or "").strip()[:200])
+    fields = (out.split("\x00") + ["", "", "", ""])[:4]
+    status, signer, subject, message = (f.strip() for f in fields)
+    if status not in SIGNATURE_OK:
+        return None, ("baseline %s has no verifiable signature (git signature status %r)\n%s"
+                      % (commit[:12], status, BASELINE_HINT))
+    return {"commit": commit, "signature": status, "signer": signer, "subject": subject,
+            "message": message}, None
+
+
+def suite_at(root, commit, files):
+    """Frozen paths whose content differs between the commit's tree and the working tree."""
+    bad = []
+    for rel in sorted(files):
+        rc, out, _ = git_rc(root, "rev-parse", "%s:%s" % (commit, rel))
+        if rc != 0:
+            bad.append("%s (absent from the baseline commit)" % rel)
+            continue
+        rc, now_blob, _ = git_rc(root, "hash-object", "--", rel)
+        if rc != 0 or out.strip() != now_blob.strip():
+            bad.append(rel)
+    return bad
 
 
 def tracked_files(root, policy):
@@ -115,6 +204,17 @@ def lint_clean(root, plan):
     return errs, tests, policy
 
 
+def baseline_required(policy):
+    """Is the freeze an APPROVAL (signed baseline) or just a checkpoint?
+
+    Default true, so a policy that predates this block is still strict. Only the harness's own test
+    roots turn it off, and they do it in their copied policy -- `framework/testing/system_test_policy.json`
+    is a plane file, and validate.py asserts the shipped value is true. Turning it off in a real root
+    is the bypass this control exists to prevent.
+    """
+    return bool((policy.get("baseline") or {}).get("require_signed", True))
+
+
 def cmd_freeze(a):
     errs, tests, policy = lint_clean(a.root, a.plan)
     if errs:
@@ -122,10 +222,31 @@ def cmd_freeze(a):
             print("[harness] ERROR %s %s: %s" % (e["rule"], e["where"], e["message"]))
         print("[harness] cannot freeze: fix the lint errors above")
         return 1
-    lock = {"frozen_at": now(), "plan_digest": plan_digest(a.plan),
-            "files": tracked_files(a.root, policy), "tests": len(tests)}
+    files = tracked_files(a.root, policy)
+    if baseline_required(policy):
+        base, why = baseline_state(a.root, a.baseline)
+        if why:
+            print("[harness] BLOCKED %s" % why)
+            return 2
+        drift = suite_at(a.root, base["commit"], files)
+        if drift:
+            print("[harness] BLOCKED the frozen suite is not the suite in baseline %s: %s"
+                  % (base["commit"][:12], ", ".join(drift[:4])))
+            print("[harness] commit the suite and sign THAT commit, then freeze against it -- "
+                  "otherwise the baseline approves something other than what runs")
+            return 2
+    else:
+        base = {"commit": None, "signature": "disabled", "signer": None,
+                "subject": "baseline signing disabled by system_test_policy.json", "message": ""}
+        print("[harness] NOTE baseline signing is disabled by policy: this freeze is a checkpoint, "
+              "not an approval, and the lock cannot prove the suite predates the implementation")
+    lock = {"frozen_at": now(), "plan_digest": plan_digest(a.plan), "files": files,
+            "tests": len(tests), "baseline": base}
     json.dump(lock, open(paths(a.plan)["lock"], "w"), indent=1)
-    print("[harness] frozen %d test(s) in %d file(s)" % (len(tests), len(lock["files"])))
+    print("[harness] frozen %d test(s) in %d file(s)%s"
+          % (len(tests), len(files),
+             " at baseline %s (signed by %s)" % (base["commit"][:12], base["signer"] or "unknown")
+             if base["commit"] else ""))
     return 0
 
 
@@ -134,13 +255,55 @@ def check_lock(root, plan, policy):
     if not os.path.isfile(lp):
         return "no freeze lock: run `run_system_tests.py freeze --plan` before implementation"
     lock = json.load(open(lp))
+    if baseline_required(policy):
+        base = lock.get("baseline") or {}
+        if not base.get("commit"):
+            return ("the freeze lock carries no baseline (it predates the signed-baseline rule): "
+                    "re-freeze against a signed commit")
+        cur, why = baseline_state(root, base["commit"])
+        if why:
+            return "the baseline no longer verifies: %s" % why
+        if cur["commit"] != base["commit"] or cur["signature"] != base.get("signature"):
+            return ("the baseline moved since the freeze (signature %r -> %r); re-review and "
+                    "re-freeze" % (base.get("signature"), cur["signature"]))
     if lock["plan_digest"] != plan_digest(plan):
         return "plan changed after the suite was frozen; re-review, re-freeze"
     now_files = tracked_files(root, policy)
     if now_files != lock["files"]:
         diff = sorted(set(now_files.items()) ^ set(lock["files"].items()))
         return "frozen suite or data changed: %s" % ", ".join(sorted({d[0] for d in diff})[:4])
+    if baseline_required(policy):
+        drift = suite_at(root, lock["baseline"]["commit"], lock["files"])
+        if drift:
+            return ("the frozen suite is not the suite in baseline %s: %s"
+                    % (lock["baseline"]["commit"][:12], ", ".join(drift[:4])))
     return None
+
+
+PROBE_DEADLINES = (5, 15, 30)
+
+
+def probe_once(url, timeout):
+    """-> (verdict, reason) with verdict in ok | transient | fatal.
+
+    The distinction is the point: a refused connection or a 5xx is a definitive answer about the
+    stack and retrying it only wastes time, while a timeout on the first Windows->WSL connection
+    after idle is a property of the transport. Measured on this project: the health path answers
+    200 on the second attempt. Treating that as "stack unreachable" made a healthy run report
+    UNVERIFIABLE, which is honest but useless -- and a check that cries wolf gets ignored.
+    """
+    try:
+        urllib.request.urlopen(url, timeout=timeout)
+        return "ok", None
+    except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            return "fatal", "stack answered HTTP %d at the health path" % exc.code
+        return "ok", None
+    except (urllib.error.URLError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, (socket.timeout, TimeoutError)) or "timed out" in str(reason):
+            return "transient", str(reason)
+        return "fatal", str(reason)
 
 
 def probe(policy):
@@ -149,13 +312,22 @@ def probe(policy):
     if st.get("require_base_url", True):
         if not base:
             return "environment variable %s is not set (real stack base URL)" % st.get("base_url_env")
-        try:
-            urllib.request.urlopen(base.rstrip("/") + st.get("health_path", "/"), timeout=5)
-        except urllib.error.HTTPError as exc:
-            if exc.code >= 500:
-                return "stack answered HTTP %d at the health path" % exc.code
-        except (urllib.error.URLError, OSError) as exc:
-            return "stack unreachable at %s: %s" % (base, exc)
+        url = base.rstrip("/") + st.get("health_path", "/")
+        retried = []
+        for deadline in PROBE_DEADLINES:
+            verdict, why = probe_once(url, deadline)
+            if verdict == "ok":
+                if retried:
+                    print("[harness] NOTE the stack answered only after %d retry(ies) (%s); the "
+                          "first connection after idle can time out" % (len(retried),
+                                                                       "; ".join(retried)))
+                break
+            if verdict == "fatal":
+                return "stack unreachable at %s: %s" % (base, why)
+            retried.append("%ds: %s" % (deadline, why))
+        else:
+            return "stack unreachable at %s after %d attempts: %s" % (
+                base, len(PROBE_DEADLINES), "; ".join(retried))
     if st.get("require_db") and not os.environ.get(st.get("db_url_env", "")):
         return "environment variable %s is not set (real database)" % st.get("db_url_env")
     return None
@@ -306,8 +478,19 @@ def verify_plan(root, plan):
             return 1, "%s has no fully passing system tests in the result" % ac
     red = paths(plan, "red")["result"]
     exempt = keys.get("system_tests_red_exempt", {}).get("scalar", "")
-    if len(exempt.split()) >= 4:
-        return 0, "pass (red-first exempt: %s)" % exempt[:60]
+    if exempt.strip():
+        if not baseline_required(policy):
+            return 0, "pass (red-first exempt: %s)" % exempt[:60]
+        # A self-granted waiver is the same hole one level up. The red phase proves the suite CAN
+        # fail; excusing it is an approver's decision, so it has to live inside the signed
+        # baseline. A plan line alone is the implementer excusing the implementer.
+        base_msg = (json.load(open(paths(plan)["lock"])).get("baseline") or {}).get("message", "")
+        trailers = [ln for ln in base_msg.splitlines() if ln.lower().startswith("red-exempt:")]
+        if not trailers or len(trailers[0].split(":", 1)[1].split()) < 4:
+            return 1, ("the plan declares system_tests_red_exempt, but the signed baseline does "
+                       "not: put `Red-Exempt: <four words or more>` in the baseline commit message "
+                       "and re-freeze")
+        return 0, "pass (red-first exempt, approved in baseline: %s)" % trailers[0][:70]
     if not os.path.isfile(red):
         return 1, "no red-phase result: run the frozen suite BEFORE implementing to prove it can " \
                   "fail, or declare system_tests_red_exempt: <reason> in the plan"
@@ -366,6 +549,9 @@ def main(argv=None):
         s.add_argument("--plan", required=True)
         if name == "run":
             s.add_argument("--phase", choices=("red", "green"), required=True)
+        if name == "freeze":
+            s.add_argument("--baseline", default="HEAD",
+                           help="signed commit whose tree carries the frozen suite (default HEAD)")
     s = sub.add_parser("ask-gate")
     s.add_argument("--ask", required=True)
     a = ap.parse_args(argv)
