@@ -118,9 +118,10 @@ echo "== g17: the frozen system-test suite, on the same live stack =="
 #   * `run` cannot launder an edit. It refuses to start unless the frozen suite and the data
 #     manifest are byte-identical to the freeze lock, so re-running is not re-freezing. Freezing
 #     is the author's deliberate act and is deliberately NOT part of this script.
-#   * `verify` (inside g17) then re-checks the result: hashes, plan digest, and `code_state` --
-#     HEAD + the working-tree diff + every untracked, non-ignored file. That is why the run sits
-#     here, immediately before the gate: any edit in between invalidates it, by design.
+#   * `verify` (inside g17) then re-checks the result: hashes, plan digest, and `code_state` -- the
+#     identity of the code under test. That is why the run sits here, immediately before the gate:
+#     any edit in between invalidates it, by design. (Patch 04 makes that identity the working
+#     tree's content tree hash; before it, committing an unchanged tree also invalidated the run.)
 #
 # Credentials come from the app's own dotenv files through one helper, because WSL bash does not
 # inherit the caller's environment and a second copy of the addresses would drift.
