@@ -246,10 +246,14 @@ if [ -n "$APP_MANIFEST" ] && [ -f "$APP_MANIFEST" ]; then
   #      "web/web/node_modules/.bin/tsc: No such file or directory" on a tree where that
   #      shim exists -- a check that cannot run, reported against the code under test. The
   #      path is now relative to the directory `run_in` enters.
-  #   2. `-x` MEANS "EXECUTABLE", NOT "CAN RUN". The npm shim's shebang execs `node`; where
-  #      node is not on PATH the shim dies with 127 having checked nothing. Measured: the
-  #      shell that runs this gate resolves `npm` but has no `node`, so the direct shim
-  #      invocation could not run even though `npm run lint` did. Rule 2: that is
+  #   2. `-x` MEANS "EXECUTABLE", NOT "CAN RUN". The npm shim's shebang execs `node`, so
+  #      where `node` does not resolve the shim dies with 127 having checked nothing.
+  #      Measured in a plain shell here: `command -v node` is empty while `npm` resolves,
+  #      and `node_modules/.bin/tsc` prints "15: exec: node: not found", rc=127. A gate
+  #      does not run in that shell -- _lib.sh sources _toolchain.sh, which supplies a
+  #      working `node` -- so in practice the probe passes and the check runs. That is the
+  #      point: `-x` cannot tell those two situations apart, so it must not be used as
+  #      proof that a check executed. Rule 2: a tool that is present but cannot execute is
   #      UNAVAILABLE -- never a FAIL, and never static coverage. Probe by executing
   #      --version first, the same way the lint branch resolves its binary before use.
   if [ -f "$APP_DIR/tsconfig.json" ]; then
