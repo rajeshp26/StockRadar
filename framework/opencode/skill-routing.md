@@ -21,7 +21,7 @@ Every delegation must consult this matrix before selecting skills.
 | Security concern | `security-audit` | security-auditor | Threat modeling, vulnerability assessment |
 | Design direction for a UI surface is undecided (2-3 comparable mockups before a plan) | `gsd-sketch` + `frontend-react` + `apple-ui` | ui-designer | Before a screen/layout direction enters a plan; the human approval selects the variant |
 | UI surface introduces or changes a pattern/system (screen, form, table, navigation, feedback surface, overlay, motion) | `designmotion-design` + `apple-ui` | Implementer / Reviewer | State coverage, feedback timing, failure modes, component-system choice; `apple-ui` still wins on finance tokens, motion values and data-viz |
-| Design craft reference outside the finance design system (CSS effect, named UX law, animation recipe, library comparison) | `design/skills/` corpus (advisory): `ania-kubow-design` for CSS, `uiux-design-foundations` for principles | any role, on demand | Read-only craft reference, never mandatory and never evidence (AGENTS.md > agent definition > skill content) |
+| Design craft reference outside the finance design system (CSS effect, named UX law, animation recipe, library comparison) | `framework/design/skills/` corpus (advisory): `ania-kubow-design` for CSS, `uiux-design-foundations` for principles | any role, on demand | Read-only craft reference, never mandatory and never evidence (AGENTS.md > agent definition > skill content) |
 | UI change | `apple-ui` + `frontend-react` | Implementer | Components, styling, animation, icons, finance dashboard design |
 | Backend logic change | `backend-python` | Implementer | Endpoints, business logic, persistence |
 | Visible behavior change | `browser-verification` | Verifier | Playwright specs, visual validation |
@@ -40,7 +40,7 @@ resolves conflicts only; it never suppresses loading.
 - `designmotion-design` wins on interaction behaviour (state coverage, feedback timing,
   failure modes, component-system choice) where `apple-ui` is silent.
 - If both specify the same thing, `apple-ui` wins and the plan records the conflict.
-- `design/skills/` (imported craft corpus) is advisory: load it on demand, never as a rule
+- `framework/design/skills/` (imported craft corpus) is advisory: load it on demand, never as a rule
   and never as evidence (AGENTS.md > agent definition > skill content).
 - `frontend-react` is the implementation stack and does not by itself decide design; it
   pairs with `apple-ui` for finance surfaces.

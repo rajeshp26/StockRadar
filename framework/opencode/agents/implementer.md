@@ -93,7 +93,7 @@ VERIFIED controlled term.
 
 ## System tests are not yours to edit (DID-017)
 
-`tests/system/**` is written by the verifier from the requirements and frozen before you implement.
+`backend/tests/system/**` is written by the verifier from the requirements and frozen before you implement.
 You cannot edit it, and you must not work around that. Run
 `python3 framework/testing/run_system_tests.py run --plan <plan> --phase green` to see failures,
 then fix the code, not the test. If a frozen test looks wrong, stop and record a blocker for
@@ -119,8 +119,8 @@ framework. Report both.
 Load only what the task needs:
 
 - `apple-ui` â€” any UI/design work in this repo: dark glass finance dashboard tokens (`tokens.css`), component specs, data-viz, motion, accessibility. Load together with `frontend-react` on every UI task.
-- `frontend-react` â€” anything under `src/frontend`, components, styling, icons, animation
-- `backend-python` â€” anything under `src/backend`, endpoints, business logic, persistence
+- `frontend-react` â€” anything under `web/`, components, styling, icons, animation
+- `backend-python` â€” anything under `backend/`, endpoints, business logic, persistence
 - `contract-authoring` â€” adding or changing an HTTP contract
 - `browser-verification` â€” authoring a Playwright spec for visible behaviour
 - `unit-test-authoring` â€” writing unit tests that prove behavior, not just pass

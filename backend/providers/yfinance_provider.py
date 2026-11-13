@@ -173,7 +173,7 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         """
         tkr = yf.Ticker(self._resolve_symbol(symbol, exchange))
         try:
-            # D1 (docs/price-history-professional-model.md): store RAW OHLC as the
+            # D1 (backend/docs/price-history-professional-model.md): store RAW OHLC as the
             # provider serves it. Adjusted values are derived from the owned `splits`
             # calendar at write time — provider Adj Close is unreliable (no-op for
             # some names, mixed with dividend effects for others).

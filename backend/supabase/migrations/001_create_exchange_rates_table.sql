@@ -1,6 +1,6 @@
 -- 001_create_exchange_rates_table.sql
 -- Migration: Create exchange_rates table for FX currency conversion.
--- Part of the FX Currency Conversion feature (design doc: docs/FX_CURRENCY_CONVERSION_DESIGN.md)
+-- Part of the FX Currency Conversion feature (design doc: backend/docs/FX_CURRENCY_CONVERSION_DESIGN.md)
 
 CREATE TABLE IF NOT EXISTS exchange_rates (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

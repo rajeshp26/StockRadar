@@ -37,7 +37,7 @@ INVARIANTS ASSERTED (same discipline as emit_design_skills_integration_patch.py)
   including `apple-ui` and `designmotion-design` -- the semantic effect, not just the bytes
 - the patched telemetry.ts skill block no longer reads `input?.args?.name`
 
-Emits `docs/designer-agent/remaining-plane-patches.patch`.
+Emits `framework/docs/designer-agent/remaining-plane-patches.patch`.
 """
 
 from __future__ import annotations

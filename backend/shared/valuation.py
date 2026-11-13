@@ -25,7 +25,7 @@ the exact same decision instead of silently omitting FX.
 
 The function is pure: it performs no I/O and takes the FX rate as an argument.
 Callers own rate lookup (per the "convert at the edge" rule in
-``docs/FX_CURRENCY_CONVERSION_DESIGN.md``) and pass it in.
+``backend/docs/FX_CURRENCY_CONVERSION_DESIGN.md``) and pass it in.
 """
 
 from __future__ import annotations

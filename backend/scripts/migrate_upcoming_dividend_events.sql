@@ -8,7 +8,7 @@
 -- per company.  When a provider updates its prediction, the existing row
 -- is replaced (not duplicated) via UNIQUE(company_id, data_source).
 -- 
--- See docs/Dividend_Data_Pipeline_Design.md §7.3 Step 4 for full design.
+-- See backend/docs/Dividend_Data_Pipeline_Design.md §7.3 Step 4 for full design.
 -- ============================================================================
 
 -- Drop if re-running (safe for idempotent dev migrations)

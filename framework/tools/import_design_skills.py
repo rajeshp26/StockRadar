@@ -18,7 +18,7 @@ Usage
 -----
   python framework/tools/import_design_skills.py \
       --source <dir-of-skill-dirs> \
-      --dest design/skills \
+      --dest framework/design/skills \
       [--exclude write-swift,animate-expo] \
       [--only prototype,break-ui] \
       [--license MIT] \
@@ -78,7 +78,7 @@ def copy_skill(skill: Path, dest: Path) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Import design skills (advisory corpus).")
     parser.add_argument("--source", required=True, help="Directory containing skill dirs.")
-    parser.add_argument("--dest", default="design/skills", help="Corpus destination.")
+    parser.add_argument("--dest", default="framework/design/skills", help="Corpus destination.")
     parser.add_argument("--only", default="", help="Comma list; import only these names.")
     parser.add_argument("--exclude", default="", help="Comma list; skip these names.")
     parser.add_argument("--license", default="MIT", help="SPDX id recorded in attribution.")

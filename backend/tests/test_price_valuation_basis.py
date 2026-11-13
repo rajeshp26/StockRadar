@@ -1,5 +1,5 @@
 """Valuation price basis for the portfolio value series (see the 2026-10-18
-amendment in docs/price-history-professional-model.md).
+amendment in backend/docs/price-history-professional-model.md).
 
 `PortfolioRepository.get_all_prices_historical` feeds portfolio VALUATION. The
 replay engine applies splits to SHARE counts at their effective dates, so the

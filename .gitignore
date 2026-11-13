@@ -28,6 +28,7 @@ backend/.venv_wsl/
 # Validation reports (contain raw financial data)
 backend/validation_report_*.txt
 validation_report_*.txt
+pypfopt_validation_results.json
 
 # Logs
 backend/backfill_log.txt
@@ -44,10 +45,10 @@ backend/account_audit.py
 backend/check_events_*.py
 
 # Raw financial data exports
-docs/*_raw.json
+**/docs/*_raw.json
 
 # Broker activity exports (contain personal financial data)
-docs/activities-export-*.csv
+**/docs/activities-export-*.csv
 
 # Debug screenshots (may contain personal data)
 web/debug-*.png
@@ -89,12 +90,12 @@ backend/stderr.log
 backend/stdout.log
 
 # DB migration data dumps (ephemeral, large files)
-docs/migration_baseline/table_data/
-docs/migration_baseline/BACKUP_*.sql
-docs/migration_baseline/view_*.json
+**/docs/migration_baseline/table_data/
+**/docs/migration_baseline/BACKUP_*.sql
+**/docs/migration_baseline/view_*.json
 
 # Generated tool output
-docs/graphify-out/
+**/docs/graphify-out/
 
 # Detection caches. With framework.config.json present, locate.manifest_dir() resolves to
 # <state_root>.parent/.manifest (here: the repo root); without it, the legacy framework/.manifest.
@@ -192,4 +193,9 @@ web/scripts/
 # Root-level scratch state and generated verification output
 /.blocker_*.json
 /verification_output/
-docs/*.patch
+
+# Local Supabase CLI runtime state. The tracked project moved to backend/supabase/;
+# this guards a leftover root-level `supabase/` working directory.
+/supabase/.branches/
+/supabase/.temp/
+**/docs/*.patch

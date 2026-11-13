@@ -25,7 +25,7 @@ post-image of telemetry.ts there, and drives the REAL plugin with node --test-fr
 every arg shape must record the real skill id. That is a pre-apply proof of the bytes this
 patch contains, not a hope.
 
-Emits docs/designer-agent/skill-sensor-patch.patch
+Emits framework/docs/designer-agent/skill-sensor-patch.patch
 """
 
 from __future__ import annotations

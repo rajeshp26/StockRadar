@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "agentic-lifecycle"
 dynamic = ["version"]
 description = "Agentic engineering lifecycle framework for OpenCode: agents, skills, gates, and an agent-immutable enforcement plane."
-readme = "README.md"
+readme = "framework/docs/README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Rajesh P" }]
 dependencies = ["PyYAML>=6.0"]
@@ -44,4 +44,4 @@ framework = ["**/*.json", "**/*.yaml", "**/*.yml", "**/*.sh", "**/*.md", "**/*.t
 # test imports `src.backend`, which only resolves inside the staged application.
 testpaths = ["framework/contracts", "backend/tests"]
 norecursedirs = [".*", "node_modules", "dist", "build", "backend/scripts", "docs",
-                 "framework/reference-app"]
+                 "framework/reference-app", "backend/tests/system"]

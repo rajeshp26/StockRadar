@@ -5,7 +5,7 @@ description: Apply UX-pattern system rules from designmotionhq on TikTok: choose
 
 # Designmotion Design
 
-Apply UX pattern system rules from designmotionhq when you build or review a user interface. Use this skill when you need to decide what system a component belongs to, which states it must cover, how fast it must respond, and how it should fail. Use it for screens, forms, tables, navigation, feedback surfaces, overlays, and motion. For pure CSS effects and copy-paste snippets use `design/skills/ania-kubow-design`; for React implementation in this repo use `frontend-react`; for general principles and named UX laws use `design/skills/uiux-design-foundations`. This repository has no `settigation-code` or `practical-ui` skill — do not send a reader looking for either.
+Apply UX pattern system rules from designmotionhq when you build or review a user interface. Use this skill when you need to decide what system a component belongs to, which states it must cover, how fast it must respond, and how it should fail. Use it for screens, forms, tables, navigation, feedback surfaces, overlays, and motion. For pure CSS effects and copy-paste snippets use `framework/design/skills/ania-kubow-design`; for React implementation in this repo use `frontend-react`; for general principles and named UX laws use `framework/design/skills/uiux-design-foundations`. This repository has no `settigation-code` or `practical-ui` skill — do not send a reader looking for either.
 
 **In this repository:** `apple-ui` owns finance visual tokens, motion values and data-viz and
 wins on those; this skill owns interaction behaviour and wins where `apple-ui` is silent.
@@ -68,13 +68,13 @@ Implement with `frontend-react`. Precedence and mandatory routing:
 - Say what this skill does not cover. It does not cover the 5-video gap between the 81-video TikTok profile header and the 76-pattern free library, and it does not cover the creator's paid UX Engine plugin, its skills, commands, or sub-agents. Do not invent either.
 - Say what the extraction could not verify. Dates, like counts, comments, and per-video hashtags were not part of the library pages used, and video audio was not the source for this package. The notes are paraphrases of the library breakdowns, which the creator describes as one pattern, one video, one takeaway.
 - Do not present a reconstruction as the creator's source. Give a minimal pattern in your own words that implements the described rule, and link the source pattern page for the creator's version.
-- Do not duplicate sister skills. When a topic overlaps, keep the system rules here and point to the sister skill for its layer: pure CSS effects to `design/skills/ania-kubow-design`, React implementation to `frontend-react`, principles and laws to `design/skills/uiux-design-foundations`, and checkable finance guideline values to `apple-ui`.
+- Do not duplicate sister skills. When a topic overlaps, keep the system rules here and point to the sister skill for its layer: pure CSS effects to `framework/design/skills/ania-kubow-design`, React implementation to `frontend-react`, principles and laws to `framework/design/skills/uiux-design-foundations`, and checkable finance guideline values to `apple-ui`.
 
 ## Where this fits in this repository
 
 - Sister skills are repo paths, not upstream names: `apple-ui` (finance design system),
   `frontend-react` (implementation stack), `browser-verification` (visible-behaviour
-  evidence), and the advisory craft corpus in `design/skills/` (including
+  evidence), and the advisory craft corpus in `framework/design/skills/` (including
   `ania-kubow-design` and `uiux-design-foundations`).
 - The `muse.*` connector tools and `/opt/muse/...` paths this skill was extracted with do
   not exist in this repository. Do not call them; use the repo tools named above.

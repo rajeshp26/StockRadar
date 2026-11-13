@@ -1,5 +1,5 @@
 -- StockerPro v3 Scheduler Architecture — Control Plane Tables
--- Design: docs/BACKGROUND_SCHEDULER_DESIGN.md §4.1
+-- Design: backend/docs/BACKGROUND_SCHEDULER_DESIGN.md §4.1
 -- Run this against your Supabase database (SQL editor or psql)
 
 -- ============================================================================

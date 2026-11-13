@@ -137,7 +137,7 @@ class OpenCodeKeepAliveStrategy(KeepAliveStrategy):
         
         try:
             # Use the production script
-            script_path = Path(__file__).parent.parent.parent / "scripts" / "opencode_ttl_refresh.py"
+            script_path = Path(__file__).resolve().parents[2] / "tools" / "opencode_ttl_refresh.py"
             if not script_path.exists():
                 self.logger.error(f"Keep-alive script not found: {script_path}")
                 return False

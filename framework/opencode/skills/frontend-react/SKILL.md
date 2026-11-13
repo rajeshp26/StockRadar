@@ -1,6 +1,6 @@
 ---
 name: frontend-react
-description: Implement or modify React UI in this repository. Use when the task touches src/frontend, components, styling, icons, animation, or any visible behaviour. Covers the mandated stack — shadcn/ui, Tailwind v4, Lucide, Motion — and the rules G5 enforces.
+description: Implement or modify React UI in this repository. Use when the task touches web/src, components, styling, icons, animation, or any visible behaviour. Covers the mandated stack — shadcn/ui, Tailwind v4, Lucide, Motion — and the rules G5 enforces.
 ---
 
 # Frontend React implementation
@@ -15,7 +15,7 @@ This skill covers the implementation stack only. The design system for this repo
 
 Interaction behaviour (state coverage, feedback timing, failure modes, component-system choice)
 is covered by `designmotion-design`; load it when the surface introduces or changes a pattern.
-Advisory CSS/animation craft references live in `design/skills/` and are read on demand, never
+Advisory CSS/animation craft references live in `framework/design/skills/` and are read on demand, never
 mandatory. Routing precedence: `framework/opencode/skill-routing.md`.
 
 ## Required, no exceptions
@@ -26,7 +26,7 @@ mandatory. Routing precedence: `framework/opencode/skill-routing.md`.
 | Styling | Tailwind v4 | Config lives in CSS via `@theme`. `components.json` `tailwind.config` stays empty. |
 | Icons | `lucide-react` | Never inline an `<svg>` outside `components/ui/`. |
 | Animation | `motion` | Import from `motion/react`. Not `framer-motion` — that alias is deprecated. |
-| Browser testing | `@playwright/test` | Specs in `tests/e2e/`. |
+| Browser testing | `@playwright/test` | Specs in `web/e2e/`. |
 | Responsive validation | Playwright projects | At least two distinct viewport widths. |
 
 ## Mechanical rules on files you touch
@@ -34,7 +34,7 @@ mandatory. Routing precedence: `framework/opencode/skill-routing.md`.
 - No `style={{ ... }}`. Use Tailwind utilities. Escape hatch, only with a reason on the line:
   `// stack-allow: inline-style`
 - No raw `<button>`, `<input>`, `<select>`, `<textarea>`, `<dialog>` outside
-  `src/frontend/components/ui/`. Import the shadcn primitive.
+  `web/src/components/ui/`. Import the shadcn primitive.
 - No inline `<svg>` outside `components/ui/`. Use a Lucide icon.
 
 These are checked only on files the current task changed. Pre-existing violations elsewhere
@@ -53,11 +53,11 @@ requirement ID. Do not add the dependency and then request the justification.
 ## Contracts
 
 Never redeclare a request or response type that a contract already defines. Import from
-`src/frontend/contracts/`, which is generated. Those files carry a do-not-edit banner and G1
+`web/src/contracts/`, which is generated. Those files carry a do-not-edit banner and G1
 compares them against the schema — hand edits are detected as drift.
 
 Transport code goes in a hand-authored sibling module (see
-`src/frontend/features/auth/client.ts`), never inside the generated file.
+`web/src/lib/api.ts`), never inside the generated file.
 
 ## Definition of done for a UI task
 

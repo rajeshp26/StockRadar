@@ -51,21 +51,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # The application-only top-level entries. These exist in StockerPro and must
 # NEVER be mirrored into the distribution repo. Guard, not scope.
-APP_ONLY = {
-    ".idx", ".modified", "backend", "dev.nix", "docker-compose.yml",
-    "features", "icon.png", "mobile", "pypfopt_validation_results.json",
-    "run.sh", "scripts", "shell.nix", "supabase", "web",
-}
+APP_ONLY = {".idx", "backend", "mobile", "web"}
 
 # The framework surface mirrored by default. StockerPro's `framework/` and
 # agentic's `framework/` are the SAME tree (verified), so it can never carry
 # application code; opencode.json + AGENTS.md are the root framework files.
 # `.lifecycle/agents` carries the agent charters that the thin pointers in
-# framework/opencode/agents/ resolve to, and `design` carries the advisory
-# design-skill corpus the ui-designer agent reads. Publishing the pointers
-# without either leaves broken references in the distribution repo, so both
-# are part of the default surface - no per-run flags to remember.
-INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md", ".lifecycle/agents", "design"]
+# framework/opencode/agents/ resolve to. The advisory design-skill corpus the
+# ui-designer agent reads now lives at framework/design/skills, so it travels
+# with `framework` and needs no separate entry.
+INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md", ".lifecycle/agents"]
 
 # Paths the distribution repo owns itself, or that carry application content.
 # `docs/` is excluded because StockerPro holds ~90 *application* design docs
@@ -88,7 +83,7 @@ INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md", ".lifecycle/agents
 # exist. The mechanism (`gate_scope.py`, the gate, the README) is mirrored; the
 # contract is drawn per repository.
 EXCLUDE_DEFAULT = [
-    ".gitignore", "pyproject.toml", ".github", ".planning", "docs",
+    ".gitignore", "pyproject.toml", ".github", ".planning",
     "framework/tools/sync_to_agentic.py",
     "framework/quality/baseline.json",
     "framework/gates/scope.json",

@@ -56,17 +56,19 @@ verification:
   suspicions_open: N
 ```
 
-You may not edit source. You may add or amend tests only when the task authorises it.
+You may not edit source. Your only standing write targets are `.planning/` verification
+records and the frozen suite under `backend/tests/system/`.
 
 ## System testing (DID-017)
 
 For any criterion tagged `[integration]`, `[e2e]`, `[browser]` or `[data-invariant]` you are the
 black-box tester. Load the `system-test-authoring` skill and follow it. Work from the requirements
-and the real data only: do not read application source (`backend/`, `src/`); your permissions deny it.
+and the real data only: do not read application source (`backend/`, `src/`); your permissions
+deny it, with one exception - `backend/tests/system/`, the frozen suite you author.
 
-1. Profile the real data into `tests/system/data/MANIFEST.json`.
+1. Profile the real data into `backend/tests/system/data/MANIFEST.json`.
 2. `python3 framework/testing/scenario_matrix.py --plan <plan>`; resolve every row.
-3. Write the tests in `tests/system/` (real stack, no mocks, tags `AC-n kind:... data:... shape:...`).
+3. Write the tests in `backend/tests/system/` (real stack, no mocks, tags `AC-n kind:... data:... shape:...`).
 4. `python3 framework/testing/system_test_lint.py --plan <plan> --matrix <matrix>` until no ERROR.
 5. `python3 framework/testing/run_system_tests.py freeze --plan <plan>`, then `run --phase red`.
    Hand back to team-lead. Do not implement.

@@ -831,7 +831,7 @@ class SupabaseFinancialRepository:
         ``adjustment_factor`` (PI(from/to), rounded to 15dp) and ``adj_close``
         (rounded to 4dp, telescopes back to the served series) are materialized
         at the same choke point, so every row — scheduler, backfill, or API —
-        lands scale-consistent. See docs/price-history-professional-model.md.
+        lands scale-consistent. See backend/docs/price-history-professional-model.md.
         """
         if not rows:
             return {"count": 0, "gate_rejected": {}}

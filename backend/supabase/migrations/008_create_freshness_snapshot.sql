@@ -1,6 +1,6 @@
 -- 008_create_freshness_snapshot.sql
 -- Migration: Create freshness_snapshot table for the Data Freshness Monitoring feature.
--- Part of Data Freshness & Reconciliation (design doc: docs/DATA_FRESHNESS_RECONCILIATION.md)
+-- Part of Data Freshness & Reconciliation (design doc: backend/docs/DATA_FRESHNESS_RECONCILIATION.md)
 
 CREATE TABLE IF NOT EXISTS freshness_snapshot (
     id              BIGSERIAL PRIMARY KEY,

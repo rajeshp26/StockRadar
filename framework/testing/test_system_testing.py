@@ -115,7 +115,7 @@ def proj(tmp_path, monkeypatch):
     # test_the_shipped_policy_requires_a_signed_baseline is what holds that line.
     pol["baseline"] = {"require_signed": False}
     pol_path.write_text(json.dumps(pol))
-    td = tmp_path / "tests/system/data"
+    td = tmp_path / "backend/tests/system/data"
     td.mkdir(parents=True)
     (td / "accounts.json").write_text(json.dumps({"accounts": [
         {"name": "a1", "items": [1, 2, 3]}, {"name": "a2", "items": [5, 5, 10]}]}))
@@ -124,7 +124,7 @@ def proj(tmp_path, monkeypatch):
     (td / "MANIFEST.json").write_text(json.dumps({"datasets": [{
         "id": "accts", "source": "export of the real test snapshot", "captured_at": "2026-10-10",
         "file": "accounts.json", "sha256": sha, "rows": 2, "shapes": ["single_lot", "mixed_lot"]}]}))
-    (tmp_path / "tests/system/test_total.py").write_text(TEST_PY)
+    (tmp_path / "backend/tests/system/test_total.py").write_text(TEST_PY)
     plans = tmp_path / ".planning/plans"
     plans.mkdir(parents=True)
     (plans / "feat.md").write_text(PLAN_TEXT)
@@ -177,20 +177,20 @@ def test_clean_suite_passes_lint(proj):
 ])
 def test_lint_rejects_bad_tests(proj, body, rule):
     tmp, _svc, mods = proj
-    (tmp / "tests/system/test_bad.py").write_text(body)
+    (tmp / "backend/tests/system/test_bad.py").write_text(body)
     assert rule in rules(mods, tmp)
 
 
 def test_lint_requires_a_break_it_test_per_criterion(proj):
     tmp, _svc, mods = proj
-    p = tmp / "tests/system/test_total.py"
+    p = tmp / "backend/tests/system/test_total.py"
     p.write_text(p.read_text().replace("kind:negative", "kind:positive"))
     assert "ST07" in rules(mods, tmp, str(tmp / ".planning/plans/feat.md"))
 
 
 def test_lint_rejects_tampered_dataset_and_unknown_data_tag(proj):
     tmp, _svc, mods = proj
-    (tmp / "tests/system/data/accounts.json").write_text('{"accounts": []}')
+    (tmp / "backend/tests/system/data/accounts.json").write_text('{"accounts": []}')
     assert "ST06" in rules(mods, tmp)
 
 
@@ -224,7 +224,7 @@ def test_editing_a_frozen_test_is_refused(proj):
     plan = prepare(tmp, mods)
     h(mods, tmp, "freeze", "--plan", plan)
     svc.bug = False
-    p = tmp / "tests/system/test_total.py"
+    p = tmp / "backend/tests/system/test_total.py"
     p.write_text(p.read_text().replace("< 0.01, a[\"name\"]", "< 99, a[\"name\"]"))
     assert h(mods, tmp, "run", "--plan", plan, "--phase", "green") == 1
     assert h(mods, tmp, "verify", "--plan", plan) == 1
@@ -390,5 +390,5 @@ def test_http_patch_method_is_not_mistaken_for_mock_patch(proj):
         "        def patch(self, u):\n"
         "            return 200\n"
         "    assert C().patch('/x') == 200\n")
-    (tmp / "tests/system/test_http.py").write_text(body)
+    (tmp / "backend/tests/system/test_http.py").write_text(body)
     assert "ST01" not in rules(mods, tmp)

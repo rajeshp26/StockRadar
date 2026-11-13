@@ -22,7 +22,7 @@ class DividendDashboardService:
     """Portfolio-level dividend dashboard aggregation.
 
     Every metric reuse strategy is documented in the design doc:
-    ``docs/Dividends_Redesign_Feasibility.md`` §3.5 Reuse Traceability Matrix.
+    ``web/docs/Dividends_Redesign_Feasibility.md`` §3.5 Reuse Traceability Matrix.
     """
 
     def __init__(

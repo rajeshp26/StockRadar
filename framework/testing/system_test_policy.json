@@ -1,12 +1,13 @@
 {
   "_comment": "DID-017. Plane file: agents cannot edit it. TAILOR forbidden_imports, runners and stack to your project.",
-  "test_dir": "tests/system",
-  "data_manifest": "tests/system/data/MANIFEST.json",
+  "_test_dir_note": "The suite lives inside the product it tests, so the repository root holds only the two projects. The runner passes --confcutdir={test_dir}: a conftest.py above the suite is outside the freeze hash, so it must not participate in the run.",
+  "test_dir": "backend/tests/system",
+  "data_manifest": "backend/tests/system/data/MANIFEST.json",
   "forbidden_imports": ["backend", "src", "infrastructure", "shared", "domain", "app"],
   "runners": [
     {
       "name": "api",
-      "cmd": ["python3", "-m", "pytest", "{test_dir}", "-q", "-p", "no:cacheprovider", "--junitxml={junit}"],
+      "cmd": ["python3", "-m", "pytest", "{test_dir}", "--confcutdir={test_dir}", "-q", "-p", "no:cacheprovider", "--junitxml={junit}"],
       "env": {},
       "timeout_s": 900
     }

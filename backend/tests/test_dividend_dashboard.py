@@ -6,7 +6,7 @@ Covers:
 - Correctness tests (CT*) — exact arithmetic assertions
 - Edge case tests (EC*) — mapping 1:1 to design doc Section 10
 
-See docs/Dividends_Redesign_Feasibility.md §15 for the full test plan.
+See web/docs/Dividends_Redesign_Feasibility.md §15 for the full test plan.
 """
 
 from unittest.mock import MagicMock

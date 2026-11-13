@@ -8,6 +8,10 @@ requires-python = ">=3.13,<3.14"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+# The frozen black-box suite (DID-017) needs a live stack and the harness owns its
+# red/green runs; `pytest backend/tests/system` still collects it, because an explicit
+# path bypasses this exclusion.
+norecursedirs = ["tests/system"]
 
 [tool.coverage.run]
 source = ["backend"]

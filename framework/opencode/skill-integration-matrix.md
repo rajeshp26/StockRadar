@@ -18,16 +18,16 @@ section 5, file in construction).
 | team-lead | requirements-authoring for every feature request; karpathy-guidelines per its routing condition (skill-routing.md:24); consult routing matrix for every delegation; record required skills in Tool Plan | skill-routing.md:59-62 |
 | researcher | technical-validation for any material unknown | skill-routing.md:66 |
 | security-auditor | security-audit for a scoped audit of a security-sensitive diff; technical-validation for material unknowns | skill-routing.md |
-| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; designmotion-design for pattern behaviour (states, feedback timing, failure modes); design/skills/ corpus as advisory craft only | skill-routing.md |
+| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; designmotion-design for pattern behaviour (states, feedback timing, failure modes); framework/design/skills/ corpus as advisory craft only | skill-routing.md |
 | architect | software-architecture-design for L3/L4; technical-validation; api-design before contract-authoring; database-schema-design for data-model changes | skill-routing.md:64-68 |
 | planner | verify required skills listed per task; consume architect outputs (architecture + contracts + data design); never redesign architecture | skill-routing.md:70-73 |
 | implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; designmotion-design when a UI surface introduces or changes a pattern/system; unit-test-authoring for business logic; istqb-testing when choosing a test technique, stating coverage, or writing a defect report; karpathy-guidelines per its routing condition (skill-routing.md:24) | skill-routing.md:75-78 |
 | reviewer | verify implementation vs architecture; contract compliance; required-skills-used; unit-test-authoring adequacy standards; istqb-testing when judging test adequacy by technique and coverage | skill-routing.md:80-84 |
 | verifier | performance-testing when material; browser-verification for visible behavior; istqb-testing when choosing a technique or stating a coverage claim; name applicable evidence class per requirement shape | skill-routing.md:86-89; evidence.md:1-19 |
 
-Imported craft corpus: `design/skills/` is listed in `skills.paths` so its 17 skills are
+Imported craft corpus: `framework/design/skills/` is listed in `skills.paths` so its 17 skills are
 loadable by name, but it is **advisory** - never a mandatory binding, never evidence
-(`design/skills/README.md`). Only `apple-ui`, `frontend-react` and `designmotion-design`
+(`framework/design/skills/README.md`). Only `apple-ui`, `frontend-react` and `designmotion-design`
 hold UI slots above.
 
 ## 2. Skill dependency route

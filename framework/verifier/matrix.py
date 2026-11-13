@@ -464,7 +464,7 @@ def waive(matrix_path, ac, by, reason):
 def _orphan_tests(matrix, root="."):
     """Test files that name no criterion. Warnings only: regression suites are legitimate."""
     out = []
-    dirs = ["tests/system"]
+    dirs = ["backend/tests/system"]
     try:
         import locate
         rd = locate.readiness()

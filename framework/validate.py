@@ -3442,14 +3442,17 @@ try:
     _cfg17 = _json17.loads(Path("opencode.json").read_text(encoding="utf-8-sig"))
     _ie = list(_cfg17["agent"]["implementer"]["permission"]["edit"].items())
     _keys = [k for k, _v in _ie]
-    check("implementer cannot edit tests/system/** (deny placed after the tests/** allow)",
-          dict(_ie).get("tests/system/**") == "deny"
-          and _keys.index("tests/system/**") > _keys.index("tests/**"), "permission missing/misordered")
+    check("implementer cannot edit the frozen system suite (deny after the backend/** allow)",
+          dict(_ie).get("backend/tests/system/**") == "deny"
+          and _keys.index("backend/tests/system/**") > _keys.index("backend/**"),
+          "permission missing/misordered")
     _vp = _cfg17["agent"]["verifier"]["permission"]
-    check("verifier may write tests/system/** but cannot read application source",
-          _vp["edit"].get("tests/system/**") == "allow"
+    check("verifier may write the frozen system suite but cannot read application source",
+          _vp["edit"].get("backend/tests/system/**") == "allow"
           and _vp.get("read", {}).get("backend/**") == "deny"
-          and _vp.get("read", {}).get("src/**") == "deny", "verifier black-box permissions missing")
+          and _vp.get("read", {}).get("backend/tests/system/**") == "allow"
+          and _vp.get("read", {}).get("src/**") == "deny",
+          "verifier black-box permissions missing")
     check("verifier has no grep/glob/git-diff/Get-Content route around the read deny",
           _vp.get("grep") == "deny" and _vp.get("glob") == "deny"
           and not any(k in _vp["bash"] for k in ("git diff*", "git show*", "git log*", "Get-Content*")),

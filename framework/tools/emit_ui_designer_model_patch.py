@@ -13,7 +13,7 @@ registered agent:
 `opencode.json` is an edit-deny enforcement-plane file, so the fields cannot be written by an
 agent - they are emitted as a patch for a human to apply, exactly like the first one.
 
-Emits `docs/designer-agent/ui-designer-model.patch`, verified by `git apply --check`.
+Emits `framework/docs/designer-agent/ui-designer-model.patch`, verified by `git apply --check`.
 """
 
 from __future__ import annotations

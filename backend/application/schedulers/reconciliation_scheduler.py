@@ -22,7 +22,7 @@ For each tracked super-investor, expected quarter-ends run over the last
 SUPER_INVESTORS_INITIAL_QUARTERS quarters ending at the last completed quarter.
 A holdings history shorter than that window enqueues investor_refresh:{cik}.
 
-Design: docs/DATA_FRESHNESS_RECONCILIATION.md
+Design: backend/docs/DATA_FRESHNESS_RECONCILIATION.md
 """
 
 import logging

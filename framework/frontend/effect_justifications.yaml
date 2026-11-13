@@ -13,7 +13,7 @@
 #
 # - tool: GSAP
 #   requirement: REQ-041
-#   scope: ["src/frontend/features/onboarding/*.tsx"]
+#   scope: ["web/src/features/onboarding/*.tsx"]
 #   justification: >
 #     Seven-step scroll-scrubbed sequence with mid-flight reversal and per-step easing.
 #   motion_insufficient_because: >

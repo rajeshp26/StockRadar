@@ -21,7 +21,7 @@ Trivial asks (single step, unambiguous) skip this skill; `ENTRY_EXEMPT=TRIVIAL` 
    |---|---|---|
    | code | what exists today, who calls it | `python3 framework/adapters/code_intel.py locate --symbol <name>`, then open the file; cite `path:lines` |
    | architecture | boundaries, contracts, ownership | `framework/architecture_rules.yaml`, `.planning/contracts/`, callers via impact |
-   | design | prior decisions, existing docs | `.planning/decisions/`, `docs/` |
+   | design | prior decisions, existing docs | `.planning/decisions/`, `backend/docs/`, `web/docs/` |
    | environment | versions, flags, services, grants | run the command, record it in the claim ledger |
    | data | real shapes, duplicates, nulls, mixed cases | query the real data; note counts; list every distinct shape |
 

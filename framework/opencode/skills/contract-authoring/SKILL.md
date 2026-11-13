@@ -15,7 +15,7 @@ Each contract is three files under the state root's `contracts/`:
 
 - `api-NNN.openapi.yaml` — the schema, the single source of truth
 - `api-NNN.meta.yaml` — `id`, `version`, `status`, `owner`, `consumers`
-- generated types in `src/backend/contracts/` and `src/frontend/contracts/`
+- generated types in `backend/contracts/` and `web/src/contracts/`
 
 Regenerate after any schema edit:
 
@@ -26,7 +26,7 @@ bash framework/gates/g1_contract.sh
 
 ## A contract without tests is not a gate
 
-G1 fails when `tests/contract/` is absent for a changed contract. Informational YAML was the
+G1 fails when `backend/tests/contract/` is absent for a changed contract. Informational YAML was the
 original design flaw; the test suite is what makes the boundary real. Every contract needs
 tests covering: each declared status, required-field rejection, optional-field omission, and
 the absence of undeclared responses.

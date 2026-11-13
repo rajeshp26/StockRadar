@@ -129,9 +129,9 @@ Agents run one at a time; independence comes from the order and from permissions
 models. For a plan with `[integration]`, `[e2e]`, `[browser]` or `[data-invariant]` criteria:
 
 1. planner: plan declares `ask_id`, lint clean.
-2. verifier (black-box): manifest, scenario matrix, tests in `tests/system/`, lint clean, `freeze`,
+2. verifier (black-box): manifest, scenario matrix, tests in `backend/tests/system/`, lint clean, `freeze`,
    `run --phase red`.
-3. implementer: code until the frozen suite passes; cannot edit `tests/system/**`.
+3. implementer: code until the frozen suite passes; cannot edit `backend/tests/system/**`.
 4. verifier: `run --phase green`, then `g17_system_tests.sh`.
 5. Mark the ASK COMPLETED only afterwards. The transition is refused without fresh, passing,
    harness-produced evidence.

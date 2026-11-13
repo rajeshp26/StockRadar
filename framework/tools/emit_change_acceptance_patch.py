@@ -27,7 +27,7 @@ WHY (C) IS A SKILL NOTE AND NOT AN EDIT TO ``ship.md``
 =====================================================
 ``framework/opencode/gsd-core/workflows/ship.md`` is vendored GSD-core: it carries upstream
 issue references (#2589, #1950, ADR-2008) and the repo already tracks local upstream
-divergence separately in ``gsd-core-upstream.patch`` (which patches ``bin/install.js``).
+divergence separately in ``framework/docs/patches/gsd-core-upstream.patch`` (which patches ``bin/install.js``).
 Adding local policy to the vendored workflow creates a divergence the next upstream pull
 must rebase. The local wrapper skill is where this repo's policy about that workflow
 belongs - the same pattern used for the ``ui-designer`` executor note on ``gsd-sketch``.
@@ -40,7 +40,7 @@ Editing it now would mix two authors' in-flight changes. A patch lets the human 
 hunk after that session commits - and the emitter re-reads the file, so regenerate it
 against the committed tree immediately before applying.
 
-Emits ``docs/change-acceptance/change-acceptance-enforcement.patch``.
+Emits ``framework/docs/change-acceptance/change-acceptance-enforcement.patch``.
 
 INVARIANTS ASSERTED
 ===================

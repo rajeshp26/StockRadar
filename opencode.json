@@ -259,15 +259,21 @@
       "permission": {
         "edit": {
           "*": "deny",
-          "src/**": "allow",
-          "tests/**": "allow",
-          "tests/system/**": "deny",
-          "docs/**": "allow",
+          "backend/**": "allow",
+          "backend/tests/system/**": "deny",
+          "web/**": "allow",
+          "mobile/**": "allow",
+          "framework/docs/**": "allow",
           "package.json": "allow",
           "package-lock.json": "allow",
           "components.json": "allow",
           "tsconfig*.json": "allow",
           "*.config.*": "allow",
+          "**/.env": "deny",
+          "**/.env.*": "deny",
+          "**/*.pem": "deny",
+          "**/*.key": "deny",
+          "**/service-account.json": "deny",
           ".opencode/**": "deny",
           "opencode.json": "deny",
           "AGENTS.md": "deny",
@@ -358,18 +364,19 @@
         "edit": {
           "*": "deny",
           ".planning/**/VERIFICATION.md": "allow",
-          "tests/**": "ask",
-          "tests/system/**": "allow",
+          "backend/tests/system/**": "allow",
           ".planning/**/*.SYSTEM-MATRIX.md": "allow"
         },
         "read": {
           "*": "allow",
           "backend/**": "deny",
+          "backend/tests/system/**": "allow",
           "src/**": "deny"
         },
         "list": {
           "*": "allow",
           "backend/**": "deny",
+          "backend/tests/system/**": "allow",
           "src/**": "deny"
         },
         "grep": "deny",
@@ -423,7 +430,7 @@
       "_model_rationale": "Runs gates and transcribes exit codes. Least reasoning-intensive role."
     },
     "ui-designer": {
-      "description": "Designs UI and produces 2-3 throwaway HTML mockup variants for human approval, grounded in design/skills. Foreground only.",
+      "description": "Designs UI and produces 2-3 throwaway HTML mockup variants for human approval, grounded in framework/design/skills. Foreground only.",
       "mode": "subagent",
       "permission": {
         "edit": {
@@ -482,15 +489,27 @@
     }
   },
   "references": {
-    "docs": {
-      "path": "docs",
-      "description": "Full project documentation: architecture, design, testing, security, migration guides"
+    "backend-docs": {
+      "path": "backend/docs",
+      "description": "Backend, data, API, architecture and migration documentation"
+    },
+    "web-docs": {
+      "path": "web/docs",
+      "description": "Frontend UI/UX and component documentation"
+    },
+    "mobile-docs": {
+      "path": "mobile/docs",
+      "description": "Flutter mobile app documentation"
+    },
+    "framework-docs": {
+      "path": "framework/docs",
+      "description": "Agentic lifecycle framework documentation"
     }
   },
   "skills": {
     "paths": [
       "framework/opencode/skills",
-      "design/skills"
+      "framework/design/skills"
     ]
   },
   "compaction": {

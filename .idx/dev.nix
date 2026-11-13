@@ -32,7 +32,7 @@
       onStart = {
         # Automatically start the backend in its safe Nix environment
         # This ensures the API is ready as soon as the workstation is opened
-        start-backend = "nix-shell shell.nix --run 'cd backend && ./start.sh'";
+        start-backend = "nix-shell backend/shell.nix --run 'cd backend && ./start.sh'";
       };
     };
 

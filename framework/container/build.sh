@@ -5,7 +5,7 @@
 # the POSIX toolchain the vendored validators need -- node >=18 (they require O_NOFOLLOW,
 # which a Windows node.exe lacks), python3, git -- and it is the fallback isolation
 # boundary for target-controlled execution when bubblewrap/user-namespaces are absent.
-# See framework/security/sandbox_policy.yaml and docs/CONTAINER_TOOLCHAIN.md.
+# See framework/security/sandbox_policy.yaml and framework/docs/CONTAINER_TOOLCHAIN.md.
 #
 # Idempotent. Run it once after installing (or when the Dockerfile changes).
 #

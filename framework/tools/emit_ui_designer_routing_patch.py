@@ -23,7 +23,7 @@ All three target files sit under ``framework/opencode/**`` - enforcement-plane, 
 so the edits are emitted as a patch a HUMAN applies with ``git apply``, like the two before
 it. This script NEVER modifies the repository.
 
-Emits ``docs/designer-agent/ui-designer-routing.patch``.
+Emits ``framework/docs/designer-agent/ui-designer-routing.patch``.
 
 INVARIANTS ASSERTED
 ===================
@@ -65,7 +65,7 @@ EDITS: list[tuple[str, list[tuple[str, str, int | None]]]] = [
             (
                 "| security-auditor | security-audit for a scoped audit of a security-sensitive diff; technical-validation for material unknowns | skill-routing.md |",
                 "| security-auditor | security-audit for a scoped audit of a security-sensitive diff; technical-validation for material unknowns | skill-routing.md |\n"
-                "| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; design/skills/ corpus as advisory craft only | skill-routing.md |",
+                "| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; framework/design/skills/ corpus as advisory craft only | skill-routing.md |",
                 4,
             ),
             (

@@ -6,8 +6,9 @@ description: Write and run black-box system, integration and end-to-end tests fr
 # System-test authoring (black-box, real stack)
 
 You are the tester. You know the requirements and the real data. You do **not** know the
-implementation, and you must not look: open no file under `backend/` or `src/`. A test written
-from the code proves the code agrees with itself. A test written from the requirement can disagree.
+implementation, and you must not look: open no file under `backend/` or `src/`, except
+`backend/tests/system/`, where you write the tests. A test written from the code proves the code
+agrees with itself. A test written from the requirement can disagree.
 
 Three rules the tooling enforces: tests come from the **requirements**, run against the **real
 running stack** with **real data**, and try to **break** it. Work one criterion at a time; the
@@ -17,13 +18,13 @@ scripts do the bookkeeping, you supply judgement.
 
 1. **Read the plan's criteria** (`AC-n [e2e|integration|browser|data-invariant] ...`). Restate what a
    user would observe. If a criterion cannot be observed from outside, send the plan back.
-2. **Profile the real data** and write `tests/system/data/MANIFEST.json`. List every distinct shape
+2. **Profile the real data** and write `backend/tests/system/data/MANIFEST.json`. List every distinct shape
    that exists (single holding, mixed kinds, duplicates, nulls, old rows, oversized). Save the
    extract as a file next to the manifest; record its sha256. Shapes you did not list will not be
    tested; look for the odd ones.
 3. **Generate the matrix:** `python3 framework/testing/scenario_matrix.py --plan <plan>`. It lists
    every criterion x data shape x break-it scenario. Do not delete rows.
-4. **Write tests** in `tests/system/` for the rows (templates below). One behaviour per test.
+4. **Write tests** in `backend/tests/system/` for the rows (templates below). One behaviour per test.
 5. **Resolve every matrix row** as `test:<name>` or `NA: <real reason, four words or more>`.
 6. **Lint:** `python3 framework/testing/system_test_lint.py --plan <plan> --matrix <matrix>`. Fix
    every ERROR. Do not edit the lint or the policy.

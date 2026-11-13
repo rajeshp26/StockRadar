@@ -5,13 +5,13 @@ WHY THIS EXISTS
 ===============
 `designmotion-design` was added under `framework/opencode/skills/` but nothing routes to it,
 `apple-ui` / `frontend-react` cross-link to nothing, and the imported craft corpus is invisible
-because `design/skills` is not in `skills.paths`. The previous attempt wrote a literal git diff
+because `framework/design/skills` is not in `skills.paths`. The previous attempt wrote a literal git diff
 into `framework/opencode/skills/ROUTES.md` instead of applying one, and that file duplicated
 `framework/opencode/skill-routing.md`, the authoritative router.
 
 This patch finishes the integration:
 
-    A. opencode.json                          skills.paths += design/skills (discoverable)
+    A. opencode.json                          skills.paths += framework/design/skills (discoverable)
     B. skill-routing.md                       designmotion row, advisory-corpus row, precedence
     C. skill-integration-matrix.md            role bindings, route, verification method
     D. apple-ui/SKILL.md                      pairing + precedence pointer
@@ -23,7 +23,7 @@ This patch finishes the integration:
 Every target is plane-locked (edit-deny), so this script NEVER modifies the repository; it writes
 a patch a HUMAN applies with `git apply`.
 
-Emits `docs/designer-agent/design-skills-integration.patch`.
+Emits `framework/docs/designer-agent/design-skills-integration.patch`.
 
 INVARIANTS ASSERTED
 ===================
@@ -59,7 +59,7 @@ EDITS["opencode.json"] = [(
     '  "skills": {\n'
     '    "paths": [\n'
     '      "framework/opencode/skills",\n'
-    '      "design/skills"\n'
+    '      "framework/design/skills"\n'
     '    ]\n'
     '  },',
 )]
@@ -68,7 +68,7 @@ EDITS["framework/opencode/skill-routing.md"] = [
     (
         "| UI change | `apple-ui` + `frontend-react` | Implementer | Components, styling, animation, icons, finance dashboard design |",
         "| UI surface introduces or changes a pattern/system (screen, form, table, navigation, feedback surface, overlay, motion) | `designmotion-design` + `apple-ui` | Implementer / Reviewer | State coverage, feedback timing, failure modes, component-system choice; `apple-ui` still wins on finance tokens, motion values and data-viz |\n"
-        "| Design craft reference outside the finance design system (CSS effect, named UX law, animation recipe, library comparison) | `design/skills/` corpus (advisory): `ania-kubow-design` for CSS, `uiux-design-foundations` for principles | any role, on demand | Read-only craft reference, never mandatory and never evidence (AGENTS.md > agent definition > skill content) |\n"
+        "| Design craft reference outside the finance design system (CSS effect, named UX law, animation recipe, library comparison) | `framework/design/skills/` corpus (advisory): `ania-kubow-design` for CSS, `uiux-design-foundations` for principles | any role, on demand | Read-only craft reference, never mandatory and never evidence (AGENTS.md > agent definition > skill content) |\n"
         "| UI change | `apple-ui` + `frontend-react` | Implementer | Components, styling, animation, icons, finance dashboard design |",
     ),
     (
@@ -83,7 +83,7 @@ EDITS["framework/opencode/skill-routing.md"] = [
         "- `designmotion-design` wins on interaction behaviour (state coverage, feedback timing,\n"
         "  failure modes, component-system choice) where `apple-ui` is silent.\n"
         "- If both specify the same thing, `apple-ui` wins and the plan records the conflict.\n"
-        "- `design/skills/` (imported craft corpus) is advisory: load it on demand, never as a rule\n"
+        "- `framework/design/skills/` (imported craft corpus) is advisory: load it on demand, never as a rule\n"
         "  and never as evidence (AGENTS.md > agent definition > skill content).\n"
         "- `frontend-react` is the implementation stack and does not by itself decide design; it\n"
         "  pairs with `apple-ui` for finance surfaces.\n"
@@ -103,14 +103,14 @@ EDITS["framework/opencode/skill-integration-matrix.md"] = [
         "| implementer | load ALL skills named by Team Lead / Planner; apple-ui + frontend-react for any UI work; designmotion-design when a UI surface introduces or changes a pattern/system; unit-test-authoring for business logic; karpathy-guidelines per its routing condition (skill-routing.md:24) | skill-routing.md:75-78 |",
     ),
     (
-        "| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; design/skills/ corpus as advisory craft only | skill-routing.md |",
-        "| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; designmotion-design for pattern behaviour (states, feedback timing, failure modes); design/skills/ corpus as advisory craft only | skill-routing.md |",
+        "| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; framework/design/skills/ corpus as advisory craft only | skill-routing.md |",
+        "| ui-designer | gsd-sketch to drive variant generation; frontend-react + apple-ui as stack and design-language baseline; designmotion-design for pattern behaviour (states, feedback timing, failure modes); framework/design/skills/ corpus as advisory craft only | skill-routing.md |",
     ),
     (
         "## 2. Skill dependency route",
-        "Imported craft corpus: `design/skills/` is listed in `skills.paths` so its 17 skills are\n"
+        "Imported craft corpus: `framework/design/skills/` is listed in `skills.paths` so its 17 skills are\n"
         "loadable by name, but it is **advisory** - never a mandatory binding, never evidence\n"
-        "(`design/skills/README.md`). Only `apple-ui`, `frontend-react` and `designmotion-design`\n"
+        "(`framework/design/skills/README.md`). Only `apple-ui`, `frontend-react` and `designmotion-design`\n"
         "hold UI slots above.\n"
         "\n"
         "## 2. Skill dependency route",
@@ -136,7 +136,7 @@ EDITS["framework/opencode/skills/apple-ui/SKILL.md"] = [(
     "**Pairing:** implement with `frontend-react`; for interaction behaviour (state coverage,\n"
     "feedback timing, failure modes, component-system choice) load `designmotion-design` too. This\n"
     "skill owns finance visual tokens, motion values and data-viz; `designmotion-design` owns\n"
-    "behaviour where this skill is silent. Advisory craft references live in `design/skills/`.\n"
+    "behaviour where this skill is silent. Advisory craft references live in `framework/design/skills/`.\n"
     "Routing: `framework/opencode/skill-routing.md`.",
 )]
 
@@ -146,14 +146,14 @@ EDITS["framework/opencode/skills/frontend-react/SKILL.md"] = [(
     "\n"
     "Interaction behaviour (state coverage, feedback timing, failure modes, component-system choice)\n"
     "is covered by `designmotion-design`; load it when the surface introduces or changes a pattern.\n"
-    "Advisory CSS/animation craft references live in `design/skills/` and are read on demand, never\n"
+    "Advisory CSS/animation craft references live in `framework/design/skills/` and are read on demand, never\n"
     "mandatory. Routing precedence: `framework/opencode/skill-routing.md`.",
 )]
 
 EDITS["framework/opencode/skills/designmotion-design/SKILL.md"] = [
     (
         "Apply UX pattern system rules from designmotionhq when you build or review a user interface. Use this skill when you need to decide what system a component belongs to, which states it must cover, how fast it must respond, and how it should fail. Use it for screens, forms, tables, navigation, feedback surfaces, overlays, and motion. When you need a pure CSS effect with copy-paste code, use the ania-kubow-design skill instead. When you need a JavaScript or React implementation, use the settigation-code skill instead. When you need a general principle or a named UX law, use the uiux-design-foundations skill instead. When you need a checkable guideline value, use the practical-ui skill instead.",
-        "Apply UX pattern system rules from designmotionhq when you build or review a user interface. Use this skill when you need to decide what system a component belongs to, which states it must cover, how fast it must respond, and how it should fail. Use it for screens, forms, tables, navigation, feedback surfaces, overlays, and motion. For pure CSS effects and copy-paste snippets use `design/skills/ania-kubow-design`; for React implementation in this repo use `frontend-react`; for general principles and named UX laws use `design/skills/uiux-design-foundations`. This repository has no `settigation-code` or `practical-ui` skill — do not send a reader looking for either.\n"
+        "Apply UX pattern system rules from designmotionhq when you build or review a user interface. Use this skill when you need to decide what system a component belongs to, which states it must cover, how fast it must respond, and how it should fail. Use it for screens, forms, tables, navigation, feedback surfaces, overlays, and motion. For pure CSS effects and copy-paste snippets use `framework/design/skills/ania-kubow-design`; for React implementation in this repo use `frontend-react`; for general principles and named UX laws use `framework/design/skills/uiux-design-foundations`. This repository has no `settigation-code` or `practical-ui` skill — do not send a reader looking for either.\n"
         "\n"
         "**In this repository:** `apple-ui` owns finance visual tokens, motion values and data-viz and\n"
         "wins on those; this skill owns interaction behaviour and wins where `apple-ui` is silent.\n"
@@ -162,7 +162,7 @@ EDITS["framework/opencode/skills/designmotion-design/SKILL.md"] = [
     ),
     (
         "- Do not duplicate sister skills. When a topic overlaps, keep the system rules here and point to the sister skill for its layer: pure CSS effects to ania-kubow-design, JavaScript and React implementations to settigation-code, principles and laws to uiux-design-foundations, and guideline values to practical-ui.",
-        "- Do not duplicate sister skills. When a topic overlaps, keep the system rules here and point to the sister skill for its layer: pure CSS effects to `design/skills/ania-kubow-design`, React implementation to `frontend-react`, principles and laws to `design/skills/uiux-design-foundations`, and checkable finance guideline values to `apple-ui`.",
+        "- Do not duplicate sister skills. When a topic overlaps, keep the system rules here and point to the sister skill for its layer: pure CSS effects to `framework/design/skills/ania-kubow-design`, React implementation to `frontend-react`, principles and laws to `framework/design/skills/uiux-design-foundations`, and checkable finance guideline values to `apple-ui`.",
     ),
     (
         "## Available connectors\n"
@@ -173,7 +173,7 @@ EDITS["framework/opencode/skills/designmotion-design/SKILL.md"] = [
         "\n"
         "- Sister skills are repo paths, not upstream names: `apple-ui` (finance design system),\n"
         "  `frontend-react` (implementation stack), `browser-verification` (visible-behaviour\n"
-        "  evidence), and the advisory craft corpus in `design/skills/` (including\n"
+        "  evidence), and the advisory craft corpus in `framework/design/skills/` (including\n"
         "  `ania-kubow-design` and `uiux-design-foundations`).\n"
         "- The `muse.*` connector tools and `/opt/muse/...` paths this skill was extracted with do\n"
         "  not exist in this repository. Do not call them; use the repo tools named above.",

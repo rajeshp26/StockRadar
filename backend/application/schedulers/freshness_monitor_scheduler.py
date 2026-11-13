@@ -30,7 +30,7 @@ Alerting
 Coverage below FRESHNESS_ALERT_THRESHOLD_PCT (config, default 95.0) logs an
 ERROR-level FRESHNESS ALERT line a watcher can page on.
 
-Design: docs/DATA_FRESHNESS_RECONCILIATION.md
+Design: backend/docs/DATA_FRESHNESS_RECONCILIATION.md
 """
 
 import logging

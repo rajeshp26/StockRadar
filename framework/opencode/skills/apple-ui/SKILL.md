@@ -12,7 +12,7 @@ You are designing a **live, data-dense, trustworthy** dark finance interface —
 **Pairing:** implement with `frontend-react`; for interaction behaviour (state coverage,
 feedback timing, failure modes, component-system choice) load `designmotion-design` too. This
 skill owns finance visual tokens, motion values and data-viz; `designmotion-design` owns
-behaviour where this skill is silent. Advisory craft references live in `design/skills/`.
+behaviour where this skill is silent. Advisory craft references live in `framework/design/skills/`.
 Routing: `framework/opencode/skill-routing.md`.
 
 ## When to use

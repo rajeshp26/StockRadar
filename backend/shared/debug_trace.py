@@ -2,7 +2,7 @@
 
 Why this module exists
 ----------------------
-A production defect (``docs/EVENT_REPLAY_SEAM_DROP_ROOT_CAUSE_ANALYSIS.md``)
+A production defect (``backend/docs/EVENT_REPLAY_SEAM_DROP_ROOT_CAUSE_ANALYSIS.md``)
 silently dropped and duplicated rows inside a paginated query. It could only be
 diagnosed by hand-written probe scripts, for two reasons:
 

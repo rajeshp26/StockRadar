@@ -12,7 +12,7 @@
 --                        raw ~2.3x higher)
 --   The professional model (Bloomberg/FactSet/S&P convention) stores raw prices
 --   plus an adjustment factor; adjusted = raw x factor. Design locked in
---   docs/price-history-professional-model.md (D1-D8).
+--   backend/docs/price-history-professional-model.md (D1-D8).
 --
 -- SEMANTICS
 --   adjustment_factor(d) = PI(1 / parse_split_factor(s)) for all splits s with

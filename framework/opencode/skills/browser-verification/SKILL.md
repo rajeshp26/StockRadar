@@ -35,7 +35,8 @@ Assert measurable facts, not impressions.
 - Console: collect `console` errors and `pageerror`, then assert the array is empty.
 - Prefer `getByTestId` / roles over CSS selectors, so a class rename does not fake a failure.
 
-See `tests/e2e/session-card.spec.ts` for the pattern.
+See `framework/reference-app/tests/e2e/session-card.spec.ts` for the pattern, and the
+application's own specs under `web/e2e/`.
 
 ## Playwright MCP
 

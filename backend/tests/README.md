@@ -1,36 +1,44 @@
-# StockerPro Testing Guide
+# StockerPro testing guide
 
-This document outlines the testing strategy for the StockerPro application and provides instructions for running the various types of tests.
+How the product is tested, layer by layer, and how to run each layer.
 
-## Testing Philosophy
+## Layers
 
-We employ a multi-layered testing strategy to ensure the quality and reliability of our application. This includes:
+| Path | Layer | Runs against |
+|---|---|---|
+| `backend/tests/` (loose `test_*.py`) | unit / integration | mocks, or the Supabase CLI stack |
+| `backend/tests/unit/` | unit | nothing |
+| `backend/tests/integration/` | integration | a real repository / the local Supabase stack |
+| `backend/tests/e2e/` | end-to-end | the real stack over HTTP (`RUN_E2E=true`) |
+| `backend/tests/system/` | system, black-box, frozen | the running stack (`SYSTEM_TEST_BASE_URL`) |
+| `web/e2e/` | browser | Playwright against the running web app |
 
-- **Unit Tests**: To verify the functionality of individual components in isolation.
-- **Integration Tests**: To ensure that different parts of the system work together as expected.
-- **End-to-End (E2E) Tests**: To simulate real user scenarios and validate the complete application workflow.
+Unit, integration and end-to-end tests are written by the team and belong to the code they
+cover. System tests are written by the framework verifier from the requirements, frozen before
+implementation, and then left alone (DID-017) - a failing frozen test is a defect report, not a
+test to edit.
 
-## Directory Structure
+## Running
 
-All tests are located in the `tests/` directory, which is organized as follows:
-
-- `tests/backend/`: Contains all tests for the Python backend, including unit and integration tests.
-- `tests/e2e/`: Contains end-to-end tests that simulate real user workflows.
-
-## Running Tests
-
-### Backend Tests
-
-To run the backend tests, use the following command from the project root:
-
-```bash
-pytest backend/tests/
-```
-
-### End-to-End Tests
-
-To run the end-to-end tests, use the following command from the project root:
+From the repository root:
 
 ```bash
-python tests/e2e/test_user_sync.py
+pytest backend/tests
 ```
+
+`backend/tests/system/` is deliberately excluded from that run (`norecursedirs` in
+`pyproject.toml`): it needs a live stack and the harness owns its red and green runs.
+
+```bash
+RUN_E2E=true pytest backend/tests/e2e
+```
+
+System tests - always through the harness, which freezes, hashes and runs the suite:
+
+```bash
+python3 framework/testing/run_system_tests.py freeze --plan <plan>
+python3 framework/testing/run_system_tests.py run --plan <plan> --phase green
+```
+
+The backend runs inside its Nix environment:
+`nix-shell backend/shell.nix --run 'bash backend/start.sh'`.
