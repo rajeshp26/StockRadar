@@ -238,8 +238,28 @@ if [ -n "$APP_MANIFEST" ] && [ -f "$APP_MANIFEST" ]; then
   fi
   # Only use a locally installed tsc. `npx --yes` reaches the network and a fetch failure
   # would otherwise be indistinguishable from a type error.
+  #
+  # Two defects measured (2026-11-11) in the invocation this replaces:
+  #   1. DOUBLE PREFIX. `run_in` already cd's into $APP_DIR, so passing
+  #      "$APP_DIR/node_modules/.bin/tsc" resolved to "<app>/<app>/node_modules/...": the
+  #      type checker could never run. Measured here: g4 reported
+  #      "web/web/node_modules/.bin/tsc: No such file or directory" on a tree where that
+  #      shim exists -- a check that cannot run, reported against the code under test. The
+  #      path is now relative to the directory `run_in` enters.
+  #   2. `-x` MEANS "EXECUTABLE", NOT "CAN RUN". The npm shim's shebang execs `node`; where
+  #      node is not on PATH the shim dies with 127 having checked nothing. Measured: the
+  #      shell that runs this gate resolves `npm` but has no `node`, so the direct shim
+  #      invocation could not run even though `npm run lint` did. Rule 2: that is
+  #      UNAVAILABLE -- never a FAIL, and never static coverage. Probe by executing
+  #      --version first, the same way the lint branch resolves its binary before use.
   if [ -f "$APP_DIR/tsconfig.json" ]; then
-    if [ -x "$APP_DIR/node_modules/.bin/tsc" ]; then run_in "$APP_DIR" types "$APP_DIR/node_modules/.bin/tsc" --noEmit; mark_static javascript
+    if [ -x "$APP_DIR/node_modules/.bin/tsc" ]; then
+      if ( cd "$APP_DIR" && node_modules/.bin/tsc --version ) >/dev/null 2>&1; then
+        run_in "$APP_DIR" types node_modules/.bin/tsc --noEmit
+        mark_static javascript
+      else
+        note_missing "tsc($APP_DIR/node_modules/.bin/tsc is present but cannot execute -- its shebang needs 'node' on PATH, which this shell does not provide; install node for the shell that runs g4)"
+      fi
     elif have tsc;                             then run types tsc --noEmit;                                mark_static javascript
     else note_missing tsc; fi
   fi
