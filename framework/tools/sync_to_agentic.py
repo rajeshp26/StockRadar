@@ -44,6 +44,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -235,16 +236,59 @@ def apply_changes(stock, agentic, changes, rev):
 # --------------------------------------------------------------------------- #
 
 def verify(repo: Path) -> list[tuple[str, bool, int]]:
+    """Run the verification commands in `repo` and report what failed.
+
+    A verification step that can fail without naming the check is a defect in the
+    instrument: it turns a 15-minute run into an unattributable exit code. MEASURED
+    (2026-11-11): this function printed only the last line of output, so
+    `validate --profile framework exit=1` in the source repo could not be diagnosed
+    at all -- the failing check's name had been discarded. So a failure now prints
+    the lines that look like failures and persists the full output to a log whose
+    path is named, while a pass still costs exactly one line.
+    """
     env = dict(os.environ, PYTHONUTF8="1")
     results = []
+    log_dir = None
     for argv, label in VERIFY_COMMANDS:
         r = subprocess.run(argv, cwd=str(repo), capture_output=True, text=True,
                            encoding="utf-8", errors="replace", env=env)
-        results.append((label, r.returncode == 0, r.returncode))
-        tail = (r.stdout or r.stderr).strip().splitlines()
-        if tail:
-            print("    %s" % tail[-1].strip()[:110])
+        passed = r.returncode == 0
+        results.append((label, passed, r.returncode))
+        text = r.stdout or ""
+        if r.stderr:
+            text = text + "\n" + r.stderr if text else r.stderr
+        if passed:
+            tail = text.strip().splitlines()
+            if tail:
+                print("    %s" % tail[-1].strip()[:110])
+            continue
+
+        print("    FAILED: %s (exit=%d)" % (label, r.returncode))
+        for line in _failure_lines(text):
+            print("      %s" % line.strip()[:160])
+        if log_dir is None:
+            log_dir = Path(tempfile.mkdtemp(prefix="sync-verify-"))
+        log = log_dir / ("%s.log" % "".join(
+            c if c.isalnum() else "-" for c in label).strip("-"))
+        log.write_text(text, encoding="utf-8")
+        print("      full output: %s" % log)
     return results
+
+
+def _failure_lines(text: str, limit: int = 20) -> list[str]:
+    """The lines worth reading when a verification command fails.
+
+    Prefers lines that name a verdict (`FAIL`, `FAILURE(S)`, `BLOCKED`, a traceback,
+    an error) over a bare tail: the failing check is what the reader needs, and the
+    tail of a 900-line validator run is a summary, not a cause. Falls back to the
+    tail when nothing matches, so an unlabelled crash is still shown.
+    """
+    lines = text.splitlines()
+    marked = [ln for ln in lines
+              if any(m in ln for m in ("FAIL", "FAILURE", "BLOCKED", "Traceback",
+                                       "Error", "error:", "ERROR"))]
+    return marked[:limit] if marked else lines[-limit:]
+
 
 
 def print_report(repo: Path, results: list[tuple[str, bool, int]]) -> bool:
