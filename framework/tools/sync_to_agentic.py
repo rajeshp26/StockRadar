@@ -63,11 +63,17 @@ APP_ONLY = {".idx", "backend", "mobile", "web"}
 INCLUDE_DEFAULT = ["framework", "opencode.json", "AGENTS.md", ".lifecycle/agents"]
 
 # Paths the distribution repo owns itself, or that carry application content.
-# `docs/` is excluded because StockerPro holds ~90 *application* design docs
-# that are not part of the distribution - mirroring the directory would leak
-# them. `.github` has divergent CI; `.gitignore`/`pyproject.toml` are the
+# `.github` has divergent CI; `.gitignore`/`pyproject.toml` are the
 # distribution repo's own config. The sync tool itself stays source-side: its
 # job is to publish FROM StockerPro, so it does not belong in the artifact.
+#
+# Documentation is target-owned. StockerPro's top-level `docs/` holds
+# application data (raw JSON, CSVs, patches) and is outside the default scope;
+# the restructure put the framework's documentation at `framework/docs/`, which
+# IS inside the mirrored `framework` include, so it has to be named here. The
+# distribution publishes its own docs at `docs/` (AGENTIC_ARCHITECTURE.md,
+# framework-portability-assessment.md, integrations/), and the two copies have
+# already drifted apart.
 #
 # `framework/quality/baseline.json` is per-repository STATE, not mechanism. It
 # records the findings of one repository's code; mirroring it would hand the
@@ -87,6 +93,17 @@ EXCLUDE_DEFAULT = [
     "framework/tools/sync_to_agentic.py",
     "framework/quality/baseline.json",
     "framework/gates/scope.json",
+    # See the note above: the restructure moved the framework's documentation
+    # under the mirrored `framework` include. The directory also carries this
+    # repository's work history - 16 `.patch` files that are already applied and
+    # target pre-restructure paths, plus recorded eval runs - which a consumer
+    # would read as instructions to follow.
+    "framework/docs",
+    # StockerPro's one-shot repository split. It deletes `framework/`,
+    # `.lifecycle/` and the reference-app scaffold, and is bound to this
+    # repository's plan (.omo/plans/framework-repo-split.md). Running it in the
+    # distribution would destroy the artifact: migration history, not mechanism.
+    "framework/tools/split_framework_repo.ps1",
 ]
 
 AGENTIC_CANDIDATES = (
