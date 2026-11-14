@@ -55,6 +55,13 @@ CANDIDATES = (
     "/usr/bin/opencode",
 )
 
+# This process runs as a loop with no user watching it, so every child it spawns must be
+# console-free. On Windows a child created without CREATE_NO_WINDOW is given a new console when
+# its parent owns none, which shows up as a console window appearing and vanishing on the
+# desktop. The telemetry plugin had the same defect on a 60-second timer (patch 08); this is the
+# 45-minute one. Zero elsewhere, where the flag does not exist and there is no console to hide.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def resolve_cli(explicit: str) -> str | None:
     """Return a CLI path that understands `api`, or None."""
@@ -66,7 +73,7 @@ def resolve_cli(explicit: str) -> str | None:
         try:
             r = subprocess.run(
                 [cand, "api", "get", "/api/info"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW,
             )
         except (OSError, subprocess.SubprocessError):
             continue
@@ -78,7 +85,7 @@ def resolve_cli(explicit: str) -> str | None:
         try:
             r = subprocess.run(
                 [onpath, "api", "get", "/api/info"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW,
             )
             if r.returncode == 0:
                 return onpath
@@ -92,7 +99,7 @@ def refresh(exe: str, location: str) -> bool:
     try:
         r = subprocess.run(
             [exe, "api", "delete", "/api/debug/location", "--data", body],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"  refresh error: {exc}", flush=True)
