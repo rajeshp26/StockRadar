@@ -124,10 +124,10 @@ VERIFY_COMMANDS = (
 # git helpers
 # --------------------------------------------------------------------------- #
 
-def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+def git(repo: Path, *args: str, input=None) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        capture_output=True, text=True, encoding="utf-8", errors="replace", input=input,
     )
 
 
@@ -388,17 +388,32 @@ def main() -> int:
     if args.commit and changes:
         ident = git(stock, "config", "user.name").stdout.strip()
         email = git(stock, "config", "user.email").stdout.strip()
-        r = git(agentic, "add", "-A")
+        # Commit ONLY the paths this sync wrote. `git add -A` plus a plain `git commit` would
+        # also publish whatever else was pending in the target -- a human's staged rename, a
+        # gate artifact the verify run above just produced -- under a commit titled "sync from
+        # StockerPro". That is a false attribution and an unreviewable diff: the sync owns its
+        # own files and nothing else.
+        #
+        # Narrowing the `add` alone is not enough, because `git commit` commits the whole index.
+        # `--only` with the same pathspec list makes the commit itself scoped: those paths are
+        # recorded, and anything else already staged stays staged and uncommitted for its owner.
+        #
+        # `--pathspec-from-file=-` keeps 1243 paths off the command line, which on Windows would
+        # exceed the limit.
+        pathspec = "\0".join(p for _kind, p in changes) + "\0"
+        r = git(agentic, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+                input=pathspec)
         if r.returncode == 0:
             r = git(agentic, "-c", "user.name=%s" % ident, "-c", "user.email=%s" % email,
-                    "commit", "-m", "chore(framework): sync from StockerPro")
+                    "commit", "--only", "--pathspec-from-file=-", "--pathspec-file-nul",
+                    "-m", "chore(framework): sync from StockerPro", input=pathspec)
         print("commit: %s" % ("ok" if r.returncode == 0 else r.stderr.strip()))
         print()
 
     if changes and not args.commit:
         print("next: push the source yourself, then publish the target:")
         print("  git -C \"%s\" push origin main" % stock)
-        print("  git -C \"%s\" add -A && git -C \"%s\" commit -m \"chore(framework): sync from StockerPro\"" % (agentic, agentic))
+        print("  python framework/tools/sync_to_agentic.py --commit   # stages only the mirrored paths")
         print("  git -C \"%s\" push origin main" % agentic)
 
     return 0 if ok else 2
