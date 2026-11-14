@@ -94,7 +94,14 @@ def _verdict(ok, warn_only=False, app_only=False, profile=None):
     return "WARN" if warn_only else "FAIL"
 
 
-def check(name, ok, detail="", warn_only=False, app_only=False):
+def check(name, ok, detail="", warn_only=False, app_only=False, skip=False):
+    # `skip` is for an assertion whose SUBJECT is absent, never for one that failed. A policy
+    # that declares no system-test suite has no directory to protect, so the check is
+    # inapplicable; a policy that declares one and finds it unprotected has failed.
+    if skip:
+        SKIPS.append(f"{name}: {detail}")
+        print(f"  N/A  {name} — {detail}")
+        return
     v = _verdict(ok, warn_only, app_only)
     if v == "PASS":
         print(f"  PASS  {name}")
@@ -3426,6 +3433,7 @@ if _g17.exists():
 for _f in ("system_test_lint.py", "scenario_matrix.py", "run_system_tests.py",
            "system_test_policy.json"):
     check("framework/testing/%s exists" % _f, Path("framework/testing", _f).exists(), "missing")
+_pol17 = {}
 try:
     import json as _json17
     _pol17 = _json17.loads(Path("framework/testing/system_test_policy.json").read_text(
@@ -3440,23 +3448,41 @@ check("intake COMPLETED transition is guarded by the system-test harness",
       "completion guard missing")
 try:
     _cfg17 = _json17.loads(Path("opencode.json").read_text(encoding="utf-8-sig"))
-    _ie = list(_cfg17["agent"]["implementer"]["permission"]["edit"].items())
-    _keys = [k for k, _v in _ie]
-    check("implementer cannot edit the frozen system suite (deny after the backend/** allow)",
-          dict(_ie).get("backend/tests/system/**") == "deny"
-          and _keys.index("backend/tests/system/**") > _keys.index("backend/**"),
-          "permission missing/misordered")
+    # The suite's location belongs to the policy, not to this file. Repeating the literal here
+    # would make the assertion stop describing the configuration it claims to check as soon as a
+    # project tailors `test_dir` -- it would keep passing while the deny it guards had moved.
+    _td17 = str(_pol17.get("test_dir") or "").strip().strip("/")
+    # Independent of the suite location: the black-box guarantee is that the verifier has no
+    # route around its read deny, whatever directory the suite lives in.
     _vp = _cfg17["agent"]["verifier"]["permission"]
-    check("verifier may write the frozen system suite but cannot read application source",
-          _vp["edit"].get("backend/tests/system/**") == "allow"
-          and _vp.get("read", {}).get("backend/**") == "deny"
-          and _vp.get("read", {}).get("backend/tests/system/**") == "allow"
-          and _vp.get("read", {}).get("src/**") == "deny",
-          "verifier black-box permissions missing")
     check("verifier has no grep/glob/git-diff/Get-Content route around the read deny",
           _vp.get("grep") == "deny" and _vp.get("glob") == "deny"
-          and not any(k in _vp["bash"] for k in ("git diff*", "git show*", "git log*", "Get-Content*")),
+          and not any(k in _vp.get("bash", {}) for k in ("git diff*", "git show*", "git log*", "Get-Content*")),
           "bypass route present")
+    if not _td17:
+        # No suite is declared, so there is no directory to protect and no configuration to
+        # have an opinion about. This is the one genuinely inapplicable case.
+        check("frozen system suite is protected by permissions", False,
+              "system_test_policy.json declares no test_dir", skip=True)
+    else:
+        _suite17 = _td17 + "/**"
+        _top17 = _td17.split("/")[0] + "/**"
+        _ie = dict(_cfg17["agent"]["implementer"]["permission"]["edit"])
+        _keys = list(_ie)
+        # A missing entry is a FAIL, not a skip. The policy says the suite exists and where it
+        # is; if no deny covers it the implementer falls back to the default `ask`, so the
+        # freeze hash would be the only control left. Absent protection is not inapplicable.
+        check("implementer cannot edit the frozen system suite (deny after the %s allow)" % _top17,
+              _ie.get(_suite17) == "deny"
+              and _top17 in _keys and _suite17 in _keys
+              and _keys.index(_suite17) > _keys.index(_top17),
+              "no deny for %s in opencode.json, or it is ordered before %s" % (_suite17, _top17))
+        check("verifier may write the frozen system suite but cannot read application source",
+              _vp.get("edit", {}).get(_suite17) == "allow"
+              and _vp.get("read", {}).get(_top17) == "deny"
+              and _vp.get("read", {}).get(_suite17) == "allow"
+              and _vp.get("read", {}).get("src/**") == "deny",
+              "verifier black-box permissions missing for %s" % _suite17)
 except (OSError, ValueError, KeyError) as _e17:
     check("opencode.json system-test permissions readable", False, str(_e17))
 
