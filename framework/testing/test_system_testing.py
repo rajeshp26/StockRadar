@@ -102,6 +102,18 @@ def _load(path, name):
     return m
 
 
+def suite_dir(root):
+    """The suite directory the POLICY declares, so no test carries the layout as a literal.
+
+    The fixture pins a non-default ``test_dir`` in its copy of the policy, so a module that
+    hardcodes ``backend/tests/system`` fails here instead of quietly passing. That is the
+    property the harness exists to have: the policy is the single place a project tailors the
+    suite location, and ``run_system_tests.py`` / ``system_test_lint.py`` already read it.
+    """
+    pol = json.loads((root / "framework/testing/system_test_policy.json").read_text())
+    return root / pol["test_dir"]
+
+
 @pytest.fixture()
 def proj(tmp_path, monkeypatch):
     for sub in ("testing", "plan"):
@@ -114,8 +126,12 @@ def proj(tmp_path, monkeypatch):
     # control is declared off in THIS copy of the policy. The shipped policy keeps it on, and
     # test_the_shipped_policy_requires_a_signed_baseline is what holds that line.
     pol["baseline"] = {"require_signed": False}
+    # A non-default layout, so the harness is proven to follow the policy rather than a
+    # literal. suite_dir() reads these two values back; nothing else knows the path.
+    pol["test_dir"] = "suite/system"
+    pol["data_manifest"] = "suite/system/data/MANIFEST.json"
     pol_path.write_text(json.dumps(pol))
-    td = tmp_path / "backend/tests/system/data"
+    td = suite_dir(tmp_path) / "data"
     td.mkdir(parents=True)
     (td / "accounts.json").write_text(json.dumps({"accounts": [
         {"name": "a1", "items": [1, 2, 3]}, {"name": "a2", "items": [5, 5, 10]}]}))
@@ -124,7 +140,7 @@ def proj(tmp_path, monkeypatch):
     (td / "MANIFEST.json").write_text(json.dumps({"datasets": [{
         "id": "accts", "source": "export of the real test snapshot", "captured_at": "2026-10-10",
         "file": "accounts.json", "sha256": sha, "rows": 2, "shapes": ["single_lot", "mixed_lot"]}]}))
-    (tmp_path / "backend/tests/system/test_total.py").write_text(TEST_PY)
+    (suite_dir(tmp_path) / "test_total.py").write_text(TEST_PY)
     plans = tmp_path / ".planning/plans"
     plans.mkdir(parents=True)
     (plans / "feat.md").write_text(PLAN_TEXT)
@@ -177,20 +193,20 @@ def test_clean_suite_passes_lint(proj):
 ])
 def test_lint_rejects_bad_tests(proj, body, rule):
     tmp, _svc, mods = proj
-    (tmp / "backend/tests/system/test_bad.py").write_text(body)
+    (suite_dir(tmp) / "test_bad.py").write_text(body)
     assert rule in rules(mods, tmp)
 
 
 def test_lint_requires_a_break_it_test_per_criterion(proj):
     tmp, _svc, mods = proj
-    p = tmp / "backend/tests/system/test_total.py"
+    p = suite_dir(tmp) / "test_total.py"
     p.write_text(p.read_text().replace("kind:negative", "kind:positive"))
     assert "ST07" in rules(mods, tmp, str(tmp / ".planning/plans/feat.md"))
 
 
 def test_lint_rejects_tampered_dataset_and_unknown_data_tag(proj):
     tmp, _svc, mods = proj
-    (tmp / "backend/tests/system/data/accounts.json").write_text('{"accounts": []}')
+    (suite_dir(tmp) / "data/accounts.json").write_text('{"accounts": []}')
     assert "ST06" in rules(mods, tmp)
 
 
@@ -224,7 +240,7 @@ def test_editing_a_frozen_test_is_refused(proj):
     plan = prepare(tmp, mods)
     h(mods, tmp, "freeze", "--plan", plan)
     svc.bug = False
-    p = tmp / "backend/tests/system/test_total.py"
+    p = suite_dir(tmp) / "test_total.py"
     p.write_text(p.read_text().replace("< 0.01, a[\"name\"]", "< 99, a[\"name\"]"))
     assert h(mods, tmp, "run", "--plan", plan, "--phase", "green") == 1
     assert h(mods, tmp, "verify", "--plan", plan) == 1
@@ -390,5 +406,5 @@ def test_http_patch_method_is_not_mistaken_for_mock_patch(proj):
         "        def patch(self, u):\n"
         "            return 200\n"
         "    assert C().patch('/x') == 200\n")
-    (tmp / "backend/tests/system/test_http.py").write_text(body)
+    (suite_dir(tmp) / "test_http.py").write_text(body)
     assert "ST01" not in rules(mods, tmp)

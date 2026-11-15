@@ -461,10 +461,32 @@ def waive(matrix_path, ac, by, reason):
 
 
 # ---------------------------------------------------------------- check
+def _policy_test_dir(root="."):
+    """The system-test suite directory, taken from the policy that declares it.
+
+    ``framework/testing/system_test_policy.json`` is the one place a project tailors the
+    harness, and ``run_system_tests.py`` / ``system_test_lint.py`` both read
+    ``policy["test_dir"]``. The literal that used to sit in ``_orphan_tests`` made a
+    tailored policy silently ignored: the distribution ships this module with its own
+    ``test_dir`` and the scan still walked StockerPro's directory. Reading the policy is
+    what makes the module portable, and an absent policy is an empty scan, never a
+    stale hardcoded one.
+    """
+    path = os.path.join(root, "framework", "testing", "system_test_policy.json")
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            return str(json.load(fh).get("test_dir") or "").strip().strip("/")
+    except (OSError, ValueError):
+        return ""
+
+
 def _orphan_tests(matrix, root="."):
     """Test files that name no criterion. Warnings only: regression suites are legitimate."""
     out = []
-    dirs = ["backend/tests/system"]
+    dirs = []
+    td = _policy_test_dir(root)
+    if td:
+        dirs.append(td)
     try:
         import locate
         rd = locate.readiness()
