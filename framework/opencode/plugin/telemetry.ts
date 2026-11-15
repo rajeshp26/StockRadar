@@ -712,7 +712,26 @@ export function shellFor(cwd: string) {
       quiet() { return chain },
       nothrow() {
         try {
-          const r = spawnSync(argv[0], argv.slice(1), { cwd, encoding: "utf8", timeout: 60_000 })
+          // windowsHide is not cosmetic here, and the reason is measurable rather than
+          // stylistic. This collector runs inside `opencode.exe serve --service`, and that
+          // server owns no console: a process listing shows no conhost.exe whose parent is the
+          // server, while every MCP child it spawns is likewise console-free. A child created
+          // without CREATE_NO_WINDOW when the parent has no console gets a NEW one, so each
+          // spawn below allocates a console window that appears and disappears.
+          //
+          // What makes it visible rather than theoretical is the cadence: `hb =
+          // setInterval(heartbeat, 60_000)` fires `emit()` once a minute for the whole life of
+          // a session, and `emit()` reaches this function. Measured on 2026-11-14 from
+          // .planning/telemetry/records.jsonl: two live sessions, each heartbeat record
+          // advancing duration_s by exactly +60 -- two console windows per minute while the
+          // editor was open.
+          //
+          // Every other spawn site in this repository already passes windowsHide: true (22 of
+          // them, in framework/opencode/hooks/ and framework/experiments/). This was the only
+          // one that did not, and the only one on a timer.
+          const r = spawnSync(argv[0], argv.slice(1), {
+            cwd, encoding: "utf8", timeout: 60_000, windowsHide: true,
+          })
           return Promise.resolve({
             exitCode: r.status ?? 1,
             text: () => r.stdout ?? "",
