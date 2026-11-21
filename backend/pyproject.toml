@@ -8,6 +8,16 @@ requires-python = ">=3.13,<3.14"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+# Declared so `-m integration` selects deliberately and the marks stop emitting
+# PytestUnknownMarkWarning. An unregistered mark still works, which is why the
+# warning was tolerated - but a selection vocabulary nobody declared cannot be
+# trusted in CI.
+markers = [
+    "integration: needs a live stack (database, PostgREST, or network); gated by RUN_INTEGRATION_TESTS=1",
+    "data_integrity: asserts an invariant over real data",
+    "e2e: exercises a full user-visible flow",
+    "browser: proves visible behaviour through a browser driver",
+]
 # The frozen black-box suite (DID-017) needs a live stack and the harness owns its
 # red/green runs; `pytest backend/tests/system` still collects it, because an explicit
 # path bypasses this exclusion.
@@ -15,7 +25,10 @@ norecursedirs = ["tests/system"]
 
 [tool.coverage.run]
 source = ["backend"]
-omit = ["tests/*", "scripts/*", "__pycache__/*"]
+# Only scratch is excluded. Durable tooling under scripts/ is measured: it runs with
+# production credentials, so "not application code" was never a reason to leave it
+# unmeasured, just a reason nobody looked.
+omit = ["tests/*", "scripts/scratch/*", "__pycache__/*"]
 
 [tool.coverage.report]
 show_missing = true
@@ -71,6 +84,8 @@ warn_unused_configs = true
 disallow_untyped_defs = false  # Gradual adoption
 check_untyped_defs = true
 ignore_missing_imports = true
+# Deliberate scope, not an oversight: mypy covers the application. Tracked scripts
+# are covered by ruff and bandit; only scratch is excluded everywhere.
 exclude = [
     "tests/",
     "scripts/",
@@ -83,5 +98,7 @@ exclude = [
 # Bandit (Security Scanner)
 # =============================================================================
 [tool.bandit]
-exclude_dirs = ["tests", "scripts", "venv", ".venv"]
+# Scratch is the only exclusion, for the same reason as coverage: tracked scripts
+# run against real credentials and deserve a security scan.
+exclude_dirs = ["tests", "scripts/scratch", "venv", ".venv"]
 skips = ["B101"]  # allow assert in non-test code

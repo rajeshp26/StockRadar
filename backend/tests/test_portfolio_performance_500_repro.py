@@ -35,6 +35,22 @@ from shared.snapshot_builder import (
     build_snapshot_row,
 )
 
+
+@pytest.fixture(autouse=True)
+def _stub_edgar_provider():
+    """I1d: these tests patch ``config.settings`` wholesale, which turns
+    EDGAR_IDENTITY into a MagicMock and crashes EdgarToolsProvider's PII mask
+    when PortfolioService builds its provider chain. Stub at the DI boundary.
+    """
+    with (
+        patch("dependencies.get_edgar_provider", return_value=MagicMock()),
+        # portfolio_service holds its own reference to the real settings object;
+        # patching config.settings does not disable FX there. Keep this unit
+        # test off the live exchange-rate DB.
+        patch("application.services.portfolio_service.settings.ENABLE_FX_CONVERSION", False),
+    ):
+        yield
+
 # MOCK SETUP
 
 class MockSupabaseResponse:
@@ -477,7 +493,12 @@ async def test_3_get_portfolio_performance_via_snapshot_path():
     )
 
     mock_snapshots_repo = MagicMock(spec=PortfolioSnapshotsRepository)
-    mock_snapshots_repo.get_portfolio_snapshots.return_value = []
+    # I1d: the service reads get_first_snapshot_date() and the scalar-only
+    # get_portfolio_snapshots_series(), not get_portfolio_snapshots(). An
+    # unconfigured MagicMock here returned another MagicMock, which then broke
+    # min(first_dates). Return no stored snapshots so the legacy fallback runs.
+    mock_snapshots_repo.get_first_snapshot_date.return_value = None
+    mock_snapshots_repo.get_portfolio_snapshots_series.return_value = []
 
     with patch.object(PortfolioService, '_period_to_date_range', return_value=(start_date, end_date)):
         with patch('config.settings') as mock_settings:

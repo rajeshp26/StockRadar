@@ -219,7 +219,13 @@ class EdgarToolsProvider(StockDataProvider):
     def __init__(self, identity: str | None = None):
         self._identity: str = self._resolve_identity(identity)
         self._initialized: bool = False
-        logger.info("EdgarToolsProvider created (identity=%s)", self._identity)
+        # I21/I26: the identity is ``Name local@domain`` and the name/local part
+        # are PII. Never log it raw, and drop the per-construction line to DEBUG
+        # (this provider is constructed ~6x/window across DI/service paths).
+        logger.debug(
+            "EdgarToolsProvider created (identity=%s)",
+            self._mask_identity(self._identity),
+        )
 
     # ──────────────────────────────────────────────────────────────────────
     # StockDataProvider interface — not available from SEC filings
@@ -290,7 +296,7 @@ class EdgarToolsProvider(StockDataProvider):
 
             result = self._normalise(raw_df, symbol)
             logger.debug(
-                "[EDGAR][%s] %s %s: %d labels × %d periods",
+                "[EDGAR][%s] %s %s: %d labels x %d periods",
                 symbol, period, statement, len(result.index), len(result.columns),
             )
             return result
@@ -499,13 +505,29 @@ class EdgarToolsProvider(StockDataProvider):
         try:
             from edgar import set_identity
             set_identity(self._identity)
-            logger.info("[EDGAR] SEC identity set: %s", self._identity)
+            # Keep the confirmation (once per instance) but mask the PII (I26).
+            logger.info("[EDGAR] SEC identity set: %s", self._mask_identity(self._identity))
         except ImportError:
             logger.error("[EDGAR] edgartools not installed — pip install edgartools")
         except Exception as e:
             logger.warning("[EDGAR] set_identity failed (continuing): %s", e)
         finally:
             self._initialized = True
+
+    @staticmethod
+    def _mask_identity(identity: str) -> str:
+        """Log-safe form of an SEC identity (I21/I26).
+
+        SEC identities are ``Name local@domain``. The name and the email
+        local-part are personally identifying; keep only the domain so an
+        operator can confirm which mailbox is configured, and redact the rest.
+        """
+        if not identity:
+            return "<unset>"
+        _, sep, domain = identity.rpartition("@")
+        if not sep or not domain:
+            return "<redacted>"
+        return f"<redacted>@{domain}"
 
     @staticmethod
     def _resolve_identity(explicit: str | None) -> str:

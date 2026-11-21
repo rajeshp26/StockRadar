@@ -49,21 +49,32 @@ REQ_FILE = Path(__file__).resolve().parent.parent / "requirements.txt"
 PIPELINE_CRITICAL = ("defeatbeta-api", "duckdb")
 
 
+def _canonical(name: str) -> str:
+    """PEP 503 canonical name: runs of ``-_.`` collapse to ``-``, lowercased."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def _parse_pins(path: Path) -> dict[str, str]:
-    """Return {canonical_name: version} for every ``name==version`` line.
+    """Return {canonical_name: version} for every ``name[extras]==version`` line.
 
     requirements.txt mixes pinned (``==``) and ranged (``>=``) entries and carries
     ``# via ...`` provenance comments; only exact pins are contracts we can fail on.
+
+    Two details matter for a *trustworthy* comparator (I11):
+      * extras (``httpx[http2]==...``, ``coverage[toml]==...``) must still be read --
+        the old regex ignored them, so drift in those packages was invisible;
+      * names are canonicalised (PEP 503) so a declared alias resolves to the same
+        distribution ``importlib.metadata`` reports, avoiding false "NOT INSTALLED".
     """
     pins: dict[str, str] = {}
     for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line or line.startswith("-"):
             continue
-        m = re.match(r"^([A-Za-z0-9._-]+)\s*==\s*([^\s;]+)", line)
+        m = re.match(r"^([A-Za-z0-9._-]+)(?:\[[^\]]+\])?\s*==\s*([^\s;]+)", line)
         if not m:
             continue
-        pins[m.group(1)] = m.group(2)
+        pins[_canonical(m.group(1))] = m.group(2)
     return pins
 
 
@@ -142,18 +153,20 @@ def startup_check(logger=None) -> bool:
     else:
         print(msg, file=sys.stderr)
 
-    # Fail fast on critical dependency drift by default
+    # Fail fast on critical dependency drift by default.
     if critical:
         raise RuntimeError(
             "PRICE_PREFLIGHT_FATAL: pipeline-critical dependency drift detected: "
             + ", ".join(sorted(critical))
         )
+    # With the explicit opt-in, ALL drift is fatal -- not just pipeline-critical.
+    # (The previous nested `if critical` here was unreachable: critical already
+    # raised above, so PRICE_PREFLIGHT_FATAL did nothing. I11.)
     if os.environ.get("PRICE_PREFLIGHT_FATAL", "").strip() in ("1", "true", "yes"):
-        if critical:
-            raise RuntimeError(
-                "PRICE_PREFLIGHT_FATAL: pipeline-critical dependency drift detected: "
-                + ", ".join(sorted(critical))
-            )
+        raise RuntimeError(
+            "PRICE_PREFLIGHT_FATAL: dependency drift detected: "
+            + ", ".join(sorted(n for n, _, _ in drift))
+        )
     return False
 
 

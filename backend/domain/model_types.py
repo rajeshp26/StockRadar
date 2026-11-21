@@ -262,7 +262,7 @@ class DividendRows(BaseModel):
 
 class UpcomingDividendEvent(BaseModel):
     """Forward-looking ex-dividend date from a provider or prediction.
-    
+
     Stored in upcoming_dividend_events table — separate from historical
     dividend_history to prevent metrics pollution.
     """
@@ -317,6 +317,7 @@ class CompanyRefreshInfo(BaseModel):
     company_id: int
     ticker_symbol: str
     exchange: str | None = None
+    security_type: str | None = None
 
     first_financial_data_loaded_at: datetime | None = None
     last_financial_refresh_at: datetime | None = None

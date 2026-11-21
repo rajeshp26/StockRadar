@@ -29,7 +29,7 @@ class TestReconciliationPlan:
             mod = importlib.import_module(
                 "application.schedulers.reconciliation_scheduler"
             )
-            cls = getattr(mod, "ReconciliationScheduler")
+            cls = mod.ReconciliationScheduler
             return cls(financial_repo=repo, **kwargs)
 
     async def test_plan_with_no_candidates_returns_no_jobs(self):
@@ -44,6 +44,7 @@ class TestReconciliationPlan:
         repo.get_financial_candidates.return_value = [
             {
                 "company_id": 2,
+                "ticker_symbol": "TEST",  # I1d: required since commit d5733a71
                 "first_financial_data_loaded_at": "2026-04-07T10:00:00Z",
                 "data_completeness_status": "PARTIAL",
             },
@@ -72,6 +73,7 @@ class TestReconciliationPlan:
         repo.get_financial_candidates.return_value = [
             {
                 "company_id": 3,
+                "ticker_symbol": "TEST",  # I1d: required since commit d5733a71
                 "first_financial_data_loaded_at": "2026-01-15T10:00:00Z",
                 "data_completeness_status": "COMPLETE",
             },
@@ -91,6 +93,7 @@ class TestReconciliationPlan:
         repo.get_financial_candidates.return_value = [
             {
                 "company_id": 4,
+                "ticker_symbol": "TEST",  # I1d: required since commit d5733a71
                 "first_financial_data_loaded_at": "2026-04-07T10:00:00Z",
                 "data_completeness_status": "CURRENT",
             },

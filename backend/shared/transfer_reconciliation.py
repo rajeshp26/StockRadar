@@ -43,6 +43,7 @@ __all__ = [
     "UnpairedTransfer",
     "pair_key",
     "reconcile_transfers",
+    "transfer_leg_counts_by_date",
 ]
 
 TRANSFER_ACTIVITY_TYPE = "InternalSecurityTransfer"
@@ -242,3 +243,25 @@ def reconcile_transfers(
         paired_keys=frozenset(paired_keys),
         unpaired=tuple(unpaired),
     )
+
+
+def transfer_leg_counts_by_date(events: Iterable[Any]) -> dict[str, int]:
+    """Count ``InternalSecurityTransfer`` legs per transaction date.
+
+    Used to attribute real-data value spikes to a transfer round-trip so the
+    performance merge can explain a step instead of logging a vague "real
+    data" verdict. A transfer is genuine source data (USER-ASK A3); the point
+    is to name the cause, never to suppress the value. Events whose payload is
+    malformed or dated are ignored -- attribution is best-effort metadata.
+    """
+    counts: dict[str, int] = defaultdict(int)
+    for item in events:
+        payload = _payload_of(item)
+        if payload is None:
+            continue
+        if payload.get("activity_type") != TRANSFER_ACTIVITY_TYPE:
+            continue
+        tx_date = payload.get("transaction_date")
+        if tx_date:
+            counts[str(tx_date)] += 1
+    return dict(counts)

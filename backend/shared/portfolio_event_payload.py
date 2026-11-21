@@ -57,11 +57,14 @@ Fields deliberately NOT persisted
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 __all__ = [
     "CANONICAL_TRANSACTION_EVENT_FIELDS",
     "build_transaction_event_data",
+    "normalise_backfill_key",
+    "transaction_event_key",
 ]
 
 #: The exact key set every ``transaction_imported`` payload carries. Uniform
@@ -130,3 +133,43 @@ def build_transaction_event_data(
         "currency": currency,
         "notes": notes,
     }
+
+
+#: The legacy backfill key format: ``backfill_{account_id}_{tx_id}_{positional_index}``.
+_LEGACY_BACKFILL_KEY = re.compile(r"^(backfill_\d+_\d+)_\d+$")
+
+
+def transaction_event_key(account_id: int, transaction_id: int) -> str:
+    """Idempotency key for the event derived from a ``portfolio_transactions`` row.
+
+    Format: ``backfill_{account_id}_{transaction_id}``.
+
+    The key used to carry the row's positional index as well
+    (``backfill_{account_id}_{tx_id}_{idx}``). A positional index is not stable:
+    inserting one historical transaction shifts every later index, so the next
+    run could no longer recognise the events it had already written and appended
+    a second copy of every shifted row's history. Doubled history is not cosmetic
+    - replay then totals 200 shares against a 100-share position.
+
+    A row without a ``transaction_id`` cannot be keyed stably at all, so it is a
+    programming error rather than something to paper over with an index.
+    """
+    if transaction_id is None:
+        raise ValueError(
+            f"cannot build a stable backfill key for account {account_id}: "
+            "the transaction row carries no transaction_id"
+        )
+    return f"backfill_{account_id}_{transaction_id}"
+
+
+def normalise_backfill_key(key: str | None) -> str:
+    """Map a stored key to its stable form, tolerating the legacy index suffix.
+
+    Writers before this change stored ``backfill_{aid}_{tx_id}_{idx}``. Those rows
+    keep their keys; the suffix is stripped when comparing, so an account
+    backfilled by the old code is still recognised instead of being duplicated.
+    """
+    if not key:
+        return ""
+    match = _LEGACY_BACKFILL_KEY.match(key)
+    return match.group(1) if match else key

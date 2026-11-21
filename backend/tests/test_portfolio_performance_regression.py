@@ -626,7 +626,10 @@ async def test_case_9_snapshot_key_name_regression():
         }],
         cash_balance=Decimal("1000"),
         net_deposits=Decimal("0"),
-        prices_by_company={},
+        # I1d: a holding with no resolvable price is deliberately excluded from
+        # the snapshot totals (Tier 4 UNAVAILABLE), so cost_basis stays 0. Give
+        # it a price to assert the key-name regression with a priced holding.
+        prices_by_company={1: {"price": 50.0, "price_date": D1}},
         job_id="regression_test",
         account_currency="CAD",
     )

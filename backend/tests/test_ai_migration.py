@@ -310,16 +310,21 @@ class TestAiServiceIntegration:
 
     @pytest.fixture(autouse=True)
     def setup_cleanup(self):
-        from dependencies import get_cache_manager
-        try:
-            get_cache_manager().clear_all()
-        except Exception:
-            pass
-        yield
-        try:
-            get_cache_manager().clear_all()
-        except Exception:
-            pass
+        # I1d: ai_service caches AI responses by input hash in a module-level
+        # _cache_manager. In the full suite an earlier test configured it, so
+        # two tests with identical inputs returned the first test's mocked
+        # answer ("This is a suitability summary."). Disable that cache for
+        # these provider-call unit tests; they assert on the generated result,
+        # not on cache behaviour.
+        from contextlib import suppress
+
+        with patch("application.services.ai_service._cache_manager", None):
+            from dependencies import get_cache_manager
+            with suppress(Exception):
+                get_cache_manager().clear_all()
+            yield
+            with suppress(Exception):
+                get_cache_manager().clear_all()
 
     @patch("application.services.ai_service._get_or_create_provider")
     @patch("application.services.ai_service._build_company_context")

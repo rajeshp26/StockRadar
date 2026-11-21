@@ -9,6 +9,7 @@ Core runtime for the DB-backed job queue:
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
@@ -16,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from infrastructure.repositories.scheduler_repository import SchedulerRepository
+from shared import debug_trace
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,19 @@ class JobEngine:
     # ========================================================================
 
     async def execute_job(self, job: dict[str, Any]) -> None:
+        """Execute one job with a stable trace id bound to all its log records.
+
+        I28: five worker loops share one stderr stream, so interleaved lines
+        were unattributable without a per-job correlation id. ``bind_trace_id``
+        stores the id in a ContextVar: each async task keeps its own value across
+        awaits, and the previous value is restored when the job ends. Binding by
+        the DB job id makes the ``[job-<id>]`` field directly greppable against
+        the ``[ENGINE] Job <id>`` lifecycle lines.
+        """
+        with debug_trace.bind_trace_id(f"job-{job.get('id', 'unknown')}", prefix="job"):
+            await self._execute_job(job)
+
+    async def _execute_job(self, job: dict[str, Any]) -> None:
         """
         Execute a single claimed job through its lifecycle:
         claim → execute (with lease renewal) → complete/fail
@@ -143,8 +158,8 @@ class JobEngine:
                     raise ValueError(f"company_refresh with financials scope missing company_id or ticker_symbol: {payload}")
                 if "market_data" in scopes and (not payload.get("company_id") or not payload.get("ticker_symbol")):
                     raise ValueError(f"company_refresh with market_data scope missing company_id or ticker_symbol: {payload}")
-            
-            result = await handler(job)
+
+            await handler(job)
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
             self._repo.complete_job(job_id, self._worker_id, lease_token)
@@ -228,10 +243,8 @@ class JobEngine:
         finally:
             stop_renewal.set()
             renewal_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await renewal_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
     # ========================================================================
     # Worker Pool
@@ -243,43 +256,52 @@ class JobEngine:
 
         Runs until cancelled.  Designed to be launched as an asyncio task.
         """
-        logger.info(
-            "[WORKER_POOL] Starting with concurrency=%d, worker_id=%s",
-            concurrency, self._worker_id,
-        )
-        workers = [asyncio.create_task(self._worker_loop(i)) for i in range(concurrency)]
-        try:
-            await asyncio.gather(*workers)
-        except asyncio.CancelledError:
-            logger.info("[WORKER_POOL] Shutting down %d workers", concurrency)
-            for w in workers:
-                w.cancel()
-            await asyncio.gather(*workers, return_exceptions=True)
+        # I30: pool/loop lines live outside execute_job's job scope, so without
+        # this they carried the "-" correlation placeholder. Each task copies
+        # the current context at creation, so the worker loops inherit this id
+        # and then bind their own per-index id on top.
+        with debug_trace.bind_trace_id(f"pool-{self._worker_id}", prefix="pool"):
+            logger.info(
+                "[WORKER_POOL] Starting with concurrency=%d, worker_id=%s",
+                concurrency, self._worker_id,
+            )
+            workers = [asyncio.create_task(self._worker_loop(i)) for i in range(concurrency)]
+            try:
+                await asyncio.gather(*workers)
+            except asyncio.CancelledError:
+                logger.info("[WORKER_POOL] Shutting down %d workers", concurrency)
+                for w in workers:
+                    w.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
 
     async def _worker_loop(self, worker_index: int) -> None:
         """Individual worker: repeatedly claim and execute jobs."""
-        while True:
-            try:
-                job = self._repo.claim_job(
-                    worker_id=self._worker_id,
-                    lease_ttl_minutes=30,
-                )
-                if job:
-                    logger.debug(
-                        "[WORKER:%d] Claimed job %s (%s)",
-                        worker_index, job.get("id"), job.get("job_type"),
+        # I30: the loop's claim/error lines are outside execute_job's job scope.
+        # The index is the only per-worker discriminator (self._worker_id is
+        # shared by all five loops of one engine), so it is the correlation id.
+        with debug_trace.bind_trace_id(f"worker-{worker_index}", prefix="worker"):
+            while True:
+                try:
+                    job = self._repo.claim_job(
+                        worker_id=self._worker_id,
+                        lease_ttl_minutes=30,
                     )
-                    await self.execute_job(job)
-                else:
+                    if job:
+                        logger.debug(
+                            "[WORKER:%d] Claimed job %s (%s)",
+                            worker_index, job.get("id"), job.get("job_type"),
+                        )
+                        await self.execute_job(job)
+                    else:
+                        await asyncio.sleep(self._claim_poll_interval)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(
+                        "[WORKER:%d] Error in worker loop: %s",
+                        worker_index, e, exc_info=True,
+                    )
                     await asyncio.sleep(self._claim_poll_interval)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(
-                    "[WORKER:%d] Error in worker loop: %s",
-                    worker_index, e, exc_info=True,
-                )
-                await asyncio.sleep(self._claim_poll_interval)
 
     # ========================================================================
     # Lease Renewal
@@ -295,13 +317,11 @@ class JobEngine:
         """Renew the job lease periodically during execution."""
         try:
             while not stop_event.is_set():
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(
                         asyncio.sleep(self._lease_renewal_interval),
                         timeout=self._lease_renewal_interval + 5,
                     )
-                except TimeoutError:
-                    pass
                 if stop_event.is_set():
                     break
                 renewed = self._repo.renew_job_lease(

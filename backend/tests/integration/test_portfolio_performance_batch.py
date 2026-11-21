@@ -5,12 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-_fake_database = MagicMock()
-_fake_database.supabase = MagicMock()
-import sys
-
-sys.modules["database"] = _fake_database
-
+# I1d: removed module-level sys.modules["database"] = MagicMock(). It leaked
+# into every later-collected test (notably test_database.py) at collection
+# time even when this integration module was deselected. Real imports work.
 from api import portfolio as _portfolio_mod
 
 

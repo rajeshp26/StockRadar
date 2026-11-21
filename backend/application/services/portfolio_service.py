@@ -5,6 +5,7 @@ Portfolio Service — Business logic for portfolio management.
 
 import asyncio
 import hashlib
+import itertools
 import logging
 import time
 import uuid
@@ -12,13 +13,25 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from functools import cache
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
 from application.parsers.portfolio_parser import ParseResult, get_parser
+from application.services.benchmark_series_guard import (
+    BenchmarkSeriesGuard,
+    compute_series_fingerprint,
+    price_signature,
+)
+from application.services.portfolio_value_series_guard import (
+    PortfolioValueSeriesGuard,
+    compute_portfolio_series_fingerprint,
+)
 from config import settings
 from database import supabase
+from infrastructure.repositories.benchmark_series_repository import (
+    BenchmarkSeriesRepository,
+)
 from infrastructure.repositories.financial_repository import (
     SupabaseFinancialRepository as FinancialRepository,
 )
@@ -27,20 +40,10 @@ from infrastructure.repositories.portfolio_snapshots_repository import Portfolio
 from infrastructure.repositories.portfolio_value_series_repository import (
     PortfolioValueSeriesRepository,
 )
-from application.services.benchmark_series_guard import (
-    BenchmarkSeriesGuard,
-    compute_series_fingerprint,
-    price_signature,
-)
-from infrastructure.repositories.benchmark_series_repository import (
-    BenchmarkSeriesRepository,
-)
-from application.services.portfolio_value_series_guard import (
-    PortfolioValueSeriesGuard,
-    compute_portfolio_series_fingerprint,
-)
 from providers.base import StockDataProvider
 from providers.yfinance_provider import YFinanceProvider
+from shared.cdr_utils import CDR_RATIO, is_cdr_transaction
+from shared.fx_service import FXService
 from shared.portfolio_event_payload import build_transaction_event_data
 from shared.portfolio_stats import (
     annualize_return,
@@ -50,8 +53,6 @@ from shared.portfolio_stats import (
     compute_portfolio_mwr,
     compute_portfolio_twr,
 )
-from shared.cdr_utils import CDR_RATIO, is_cdr_transaction
-from shared.fx_service import FXService
 from shared.price_rows import sanitize_daily_price_rows
 from shared.snapshot_builder import (
     _classify_lot_action,
@@ -61,7 +62,10 @@ from shared.snapshot_builder import (
     resolve_price_forward_filled,
 )
 from shared.time_utils import now_utc, parse_db_timestamp
-from shared.transfer_reconciliation import reconcile_transfers
+from shared.transfer_reconciliation import (
+    reconcile_transfers,
+    transfer_leg_counts_by_date,
+)
 from shared.valuation import adjust_cdr_price
 
 logger = logging.getLogger(__name__)
@@ -113,7 +117,9 @@ class PortfolioService:
             from dependencies import get_defeat_beta_provider
             defeat_beta_provider = get_defeat_beta_provider()
         self.defeat_beta_provider = defeat_beta_provider
-
+        # Keep strong references to fire-and-forget tasks so they are not
+        # garbage-collected mid-run (ruff RUF006).
+        self._background_tasks: set[asyncio.Task] = set()
 
     # ========================================================================
     # DUPLICATE DETECTION
@@ -128,7 +134,7 @@ class PortfolioService:
     ) -> dict[str, Any] | None:
         """
         Check if this CSV has been imported before.
-        
+
         Returns:
             Previous import record if found, None otherwise
         """
@@ -161,7 +167,7 @@ class PortfolioService:
     ) -> dict[str, Any]:
         """
         Queue a CSV import for background processing.
-        
+
         Validates input, creates a pending job record, and kicks off
         async background processing. Returns immediately.
         """
@@ -232,7 +238,7 @@ class PortfolioService:
         )
 
         # 5. Start background processing
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._process_import_background(
                 import_batch_id=import_batch_id,
                 csv_hash=csv_hash,
@@ -243,6 +249,8 @@ class PortfolioService:
                 user_id=user_id,
             )
         )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
         return {
             "success": True,
@@ -468,11 +476,11 @@ class PortfolioService:
     ) -> tuple[dict[str, int], list[str]]:
         """
         Ensure companies exist and track which were created.
-        
+
         Args:
             symbols: Dict mapping ticker_symbol → optional exchange_override
                      (e.g., {"TSLA": "TOR", "AAPL": None})
-        
+
         Returns:
             (companies_map, created_symbols)
         """
@@ -893,7 +901,7 @@ class PortfolioService:
     async def _extract_dividends(self, account_ids: list[int]) -> int:
         """
         Extract dividend transactions and insert into portfolio_dividends table.
-        
+
         Returns number of dividend records created.
         """
         dividend_records = []
@@ -1351,7 +1359,7 @@ class PortfolioService:
     async def _create_company_from_symbol(self, symbol: str, exchange_override: str | None = None) -> int | None:
         """
         Fetch company details from YFinance and create database record.
-        
+
         Resilience features:
         1. Accept exchange_override (e.g., "TOR") to skip US primary-listing resolution
            and query the Canadian-listed version directly via .TO / .V suffix
@@ -1360,7 +1368,7 @@ class PortfolioService:
            calculations can proceed with a valid company_id)
         4. No crash on optional StockDetails fields (market_cap and full_time_employees
            are not part of the StockDetails model)
-        
+
         Returns:
             company_id if successful, None if failed
         """
@@ -1510,7 +1518,7 @@ class PortfolioService:
     # a year (measured on user 1: 1Y daily would be 165 pts / 19 KB, ALL daily
     # 1370 pts / 156 KB). Bucketed ranges emit ONE point per period; see
     # `_downsample_snapshots`.
-    _RESOLUTION_BY_PERIOD = {
+    _RESOLUTION_BY_PERIOD: ClassVar[dict[str, str]] = {
         "1D": "day",
         "1W": "day",
         "1M": "day",
@@ -1557,7 +1565,7 @@ class PortfolioService:
 
         first_key = bucket_key(snapshots[0]["date"])
         kept: list[dict[str, Any]] = [snapshots[0]]
-        for prev, snap in zip(snapshots, snapshots[1:]):
+        for prev, snap in itertools.pairwise(snapshots):
             if bucket_key(snap["date"]) != bucket_key(prev["date"]):
                 # The first period is already represented by snapshots[0];
                 # emitting its period-end close as well was the duplicate
@@ -1629,10 +1637,10 @@ class PortfolioService:
             total_cost = 0.0
             total_shares = 0
             for (_, sym), lot_list in lots.items():
-                qty_held = sum(l["quantity"] for l in lot_list)
+                qty_held = sum(lot["quantity"] for lot in lot_list)
                 if qty_held <= 0:
                     continue
-                avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in lot_list) / qty_held
+                avg_cost = sum(lot["quantity"] * lot["cost_per_share"] for lot in lot_list) / qty_held
                 total_cost += qty_held * avg_cost
                 total_shares += qty_held
 
@@ -1833,7 +1841,9 @@ class PortfolioService:
         cache_key = None
         if getattr(settings, "ENABLE_PORTFOLIO_RESPONSE_CACHE", True):
             from application.services.portfolio_response_cache import (
-                compute_cache_key, compute_snapshot_fingerprint, get_response_cache,
+                compute_cache_key,
+                compute_snapshot_fingerprint,
+                get_response_cache,
             )
             cache = get_response_cache()
             cache_key = compute_cache_key(
@@ -1940,6 +1950,22 @@ class PortfolioService:
         spike_detected = False
         spike_threshold = getattr(settings, "SNAPSHOT_SPIKE_THRESHOLD", 0.20)
         prev_merged: dict[str, Any] | None = None
+        # I5: transfer dates are loaded lazily, only if a real-data spike fires.
+        # Attribution is metadata; a failure here must never fail the response.
+        transfer_dates: dict[str, int] | None = None
+
+        def _transfer_dates() -> dict[str, int]:
+            nonlocal transfer_dates
+            if transfer_dates is None:
+                try:
+                    from infrastructure.repositories.event_store import EventStore
+
+                    legs = EventStore().get_transfer_legs(account_ids)
+                    transfer_dates = transfer_leg_counts_by_date(legs)
+                except Exception as exc:  # advisory; never block a valuation
+                    logger.debug("transfer spike attribution unavailable: %s", exc)
+                    transfer_dates = {}
+            return transfer_dates
 
         for d in all_dates:
             total_value = 0.0
@@ -2026,12 +2052,25 @@ class PortfolioService:
                         "net_deposits": prev_merged["net_deposits"],
                     }
                 elif spike:
-                    # Real, fully-converted snapshots (or the latest date) —
-                    # log it but do NOT suppress.
-                    logger.info(
-                        "LOCF merge: spike on %s not suppressed (real data): %s",
-                        d, spike["message"],
-                    )
+                    # A spike on a fully-real date is genuine source data: the
+                    # value stays in the curve (suppressing it would freeze a
+                    # wrong anchor and re-trigger every later check). Attribute
+                    # the step so the log explains *why* it is real instead of
+                    # asserting "real data" (I5 / USER-ASK A3).
+                    legs = _transfer_dates().get(d, 0)
+                    if legs:
+                        logger.info(
+                            "LOCF merge: spike on %s explained by "
+                            "InternalSecurityTransfer round-trip (%d legs); "
+                            "value retained: %s",
+                            d, legs, spike["message"],
+                        )
+                    else:
+                        logger.info(
+                            "LOCF merge: spike on %s retained "
+                            "(no LOCF/FX artifact marker): %s",
+                            d, spike["message"],
+                        )
 
             merged[d] = current_merged
             prev_merged = current_merged
@@ -2229,8 +2268,8 @@ class PortfolioService:
         if settings.ENABLE_FX_CONVERSION:
             try:
                 from database import supabase as _db
-                from shared.fx_service import FXService as _FX
-                _perf_fx_svc = _FX(_db)
+                from shared.fx_service import FXService as FXServiceCls
+                _perf_fx_svc = FXServiceCls(_db)
             except Exception:
                 _perf_fx_svc = None
 
@@ -2350,20 +2389,20 @@ class PortfolioService:
             cid_holdings_by_account: dict[int, dict[tuple[int, bool], dict]] = defaultdict(dict)
             for (aid, cid), lot_list in lots.items():
                 by_cdr: dict[bool, list] = defaultdict(list)
-                for l in lot_list:
-                    by_cdr[bool(l.get("is_cdr"))].append(l)
+                for lot in lot_list:
+                    by_cdr[bool(lot.get("is_cdr"))].append(lot)
                 for is_cdr, cdr_lots in by_cdr.items():
-                    qty_held = sum(l["quantity"] for l in cdr_lots)
+                    qty_held = sum(lot["quantity"] for lot in cdr_lots)
                     if qty_held <= 0.001:
                         continue
-                    avg_cost = sum(l["quantity"] * l["cost_per_share"] for l in cdr_lots) / qty_held
+                    avg_cost = sum(lot["quantity"] * lot["cost_per_share"] for lot in cdr_lots) / qty_held
                     total_cost_holding = qty_held * avg_cost
-                    earliest_lot_date = min((l["date"] for l in cdr_lots if l.get("date")), default=None)
+                    earliest_lot_date = min((lot["date"] for lot in cdr_lots if lot.get("date")), default=None)
                     lots_for_holding = [
-                        {"quantity": l["quantity"], "cost_per_share": l["cost_per_share"], "date": l.get("date")}
-                        for l in cdr_lots
+                        {"quantity": lot["quantity"], "cost_per_share": lot["cost_per_share"], "date": lot.get("date")}
+                        for lot in cdr_lots
                     ]
-                    symbol = next((l.get("symbol", "") for l in cdr_lots if l.get("symbol")), "")
+                    symbol = next((lot.get("symbol", "") for lot in cdr_lots if lot.get("symbol")), "")
                     cid_holdings_by_account[aid][(cid, is_cdr)] = {
                         "company_id": cid, "symbol": symbol,
                         "quantity": qty_held,
@@ -2575,7 +2614,7 @@ class PortfolioService:
         if len(snapshots) < 2:
             return None
         values = np.array([s["position_value"] for s in snapshots], dtype=np.float64)
-        dd_value, dd_pct, peak_idx, trough_idx = compute_max_drawdown(values)
+        _dd_value, dd_pct, peak_idx, trough_idx = compute_max_drawdown(values)
         is_ongoing = trough_idx == len(snapshots) - 1 and dd_pct < 0
         return {
             "dd_pct": round(dd_pct * 100, 2),
@@ -2918,7 +2957,7 @@ class PortfolioService:
         holdings = self.portfolio_repo.get_user_all_holdings(user_id)
         symbol_holdings = [h for h in holdings if h.get("symbol", "").upper() == symbol_up]
 
-        accounts = self.portfolio_repo.get_user_accounts(user_id)
+        self.portfolio_repo.get_user_accounts(user_id)
         enriched = await self._enrich_holdings(symbol_holdings)
 
         divs = self.portfolio_repo.get_dividends_for_symbol(user_id, symbol)
@@ -3419,7 +3458,7 @@ class PortfolioService:
                 "total_value": 0,
             }
 
-        SECURITY_TYPE_LABELS = {
+        security_type_labels = {
             "stock": "Stocks",
             "etf": "ETFs",
             "fund": "Funds",
@@ -3429,7 +3468,7 @@ class PortfolioService:
         }
 
         if group_by == "sector":
-            return self._group_allocation_by_type(holdings, SECURITY_TYPE_LABELS)
+            return self._group_allocation_by_type(holdings, security_type_labels)
         else:
             return self._group_allocation_flat(holdings, group_by)
 

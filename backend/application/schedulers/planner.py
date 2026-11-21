@@ -83,7 +83,10 @@ class SchedulerPlanner:
                 continue
 
             try:
-                state = self._repo.get_scheduler_state(name)
+                # SchedulerRepository uses the synchronous Supabase client. Run
+                # these control-plane calls in a worker thread so the planner
+                # tick cannot stall the event loop (I20).
+                state = await asyncio.to_thread(self._repo.get_scheduler_state, name)
                 next_due = None
                 if state and state.get("next_due_at"):
                     try:
@@ -105,11 +108,11 @@ class SchedulerPlanner:
 
                 enqueued = 0
                 for job in jobs:
-                    if self._repo.enqueue_job(**job):
+                    if await asyncio.to_thread(self._repo.enqueue_job, **job):
                         enqueued += 1
 
                 next_due_at = (now + timedelta(hours=config["interval_hours"])).isoformat()
-                self._repo.upsert_scheduler_state({
+                await asyncio.to_thread(self._repo.upsert_scheduler_state, {
                     "scheduler_name": name,
                     "last_planned_at": now.isoformat(),
                     "last_status": "succeeded",
@@ -119,7 +122,8 @@ class SchedulerPlanner:
                     "enabled": config["enabled"],
                 })
 
-                self._repo.record_planner_run(
+                await asyncio.to_thread(
+                    self._repo.record_planner_run,
                     scheduler_name=name,
                     jobs_enqueued=enqueued,
                     status="succeeded",
@@ -131,11 +135,12 @@ class SchedulerPlanner:
 
             except Exception as e:
                 logger.error("[PLANNER] Failed to plan scheduler '%s': %s", name, e, exc_info=True)
-                self._repo.update_scheduler_state(name, {
+                await asyncio.to_thread(self._repo.update_scheduler_state, name, {
                     "last_status": "failed",
                     "last_error": str(e)[:500],
                 })
-                self._repo.record_planner_run(
+                await asyncio.to_thread(
+                    self._repo.record_planner_run,
                     scheduler_name=name,
                     jobs_enqueued=0,
                     status="failed",

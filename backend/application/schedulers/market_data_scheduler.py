@@ -27,6 +27,8 @@ NEW
 - Dividend metrics computed unconditionally each cycle (exits early if no dividend history).
 """
 import asyncio
+import contextlib
+import itertools
 import logging
 import uuid
 from datetime import date, datetime, timedelta
@@ -35,8 +37,6 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from providers.defeat_beta_provider import DefeatBetaProvider
     from providers.yfinance_provider import YFinanceProvider
-
-from shared.price_rows import sanitize_daily_price_rows
 
 # Derived metrics jobs
 from application.jobs.derived_financial_metrics_job import (
@@ -49,6 +49,7 @@ from config import settings
 from database import supabase
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
 from shared.constants import get_effective_skipped_symbols
+from shared.price_rows import sanitize_daily_price_rows
 from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def estimate_next_ex_date(
         if len(sorted_dates) < 4:
             return None
 
-        gaps = [(b - a).days for a, b in zip(sorted_dates, sorted_dates[1:]) if (b - a).days > 0]
+        gaps = [(b - a).days for a, b in itertools.pairwise(sorted_dates) if (b - a).days > 0]
         if not gaps:
             return None
 
@@ -338,10 +339,8 @@ class MarketDataRefreshScheduler:
         self._is_running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("⏹️  Market Data Scheduler stopped")
 
     # -------------------------------------------------------------------------
@@ -672,12 +671,22 @@ class MarketDataRefreshScheduler:
                 ratios_result = await compute_and_upsert_derived_financial_metrics(
                     company_id=company_id
                 )
-                logger.info(
-                    "[RATIOS] %s: %d/%d rows written",
-                    symbol,
-                    ratios_result.get("rows_changed", 0),
-                    ratios_result.get("count", 0),
-                )
+                # `count` is fiscal years evaluated, `rows_changed` is rows
+                # actually written. A zero is the healthy version-gated no-op
+                # (sources unchanged), not a failed write -- say so explicitly.
+                rows_changed = ratios_result.get("rows_changed", 0)
+                row_count = ratios_result.get("count", 0)
+                if rows_changed == 0:
+                    logger.info(
+                        "[RATIOS] %s: 0/%d rows written — sources unchanged, "
+                        "version-gated no-op (expected)",
+                        symbol, row_count,
+                    )
+                else:
+                    logger.info(
+                        "[RATIOS] %s: %d/%d rows written (version-gated)",
+                        symbol, rows_changed, row_count,
+                    )
             except Exception as exc:
                 logger.error("[RATIOS] %s failed: %s", symbol, exc)
 

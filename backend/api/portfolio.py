@@ -261,7 +261,23 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
     all_holdings = repo.get_user_all_holdings(db_user_id)
 
     if not all_holdings:
-        return {"accounts": [], "holdings": [], "overview": {}, "data_quality_flag": "OK"}
+        # I1d: an empty overview made DashboardOverview(**{}) raise a 500 for
+        # users with no holdings. Cash dividends can still exist without an
+        # open position, so keep them in the zero-valued schema-valid overview.
+        accounts = repo.get_user_accounts(db_user_id, active_only=True)
+        account_ids = [a["account_id"] for a in accounts]
+        divs = (
+            repo.get_accounts_dividends_by_year(account_ids, now_utc().year)
+            if account_ids else []
+        )
+        ytd = sum(float(d.get("amount") or 0) for d in divs)
+        return {
+            "accounts": [],
+            "holdings": [],
+            "overview": _compute_overview_from_holdings([], accounts, db_user_id, ytd)
+                        | {"value_currency": "CAD"},
+            "data_quality_flag": "OK",
+        }
 
     cids = list(set(h["company_id"] for h in all_holdings if h.get("company_id")))
     price_details = {}
@@ -290,7 +306,14 @@ async def _get_dashboard_from_prices(db_user_id: int) -> dict:
     account_ids = [a["account_id"] for a in accounts]
 
     if not account_ids:
-        return {"accounts": [], "holdings": [], "overview": {}, "data_quality_flag": "OK"}
+        # I1d: same empty-account 500 as above — keep the response schema valid.
+        return {
+            "accounts": [],
+            "holdings": [],
+            "overview": _compute_overview_from_holdings([], [], db_user_id, 0.0)
+                        | {"value_currency": "CAD"},
+            "data_quality_flag": "OK",
+        }
 
     today = now_utc().date()
     fx_svc = FXService(supabase) if settings.ENABLE_FX_CONVERSION else None

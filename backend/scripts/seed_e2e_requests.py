@@ -1,9 +1,41 @@
-"""Seed e2e test data using direct HTTP requests to Supabase REST API."""
+"""Seed e2e test data using direct HTTP requests to Supabase REST API.
+
+The portfolio plan is NOT defined here: it comes from ``scripts/e2e_fixtures.py``,
+the same module ``seed_e2e_data.py`` writes from. This script exists as a fallback
+for a broken Python environment, and a fallback that seeds a *different* fixture is
+worse than no fallback - the copy that used to live here signed a Sell with a
+POSITIVE quantity, so the account's history totalled 110 shares against a
+100-share position and every snapshot logged "Replay lot split declined".
+
+``transaction_imported`` events are written here too. A transaction row with no
+event is invisible to replay, so the account looks history-less to
+``backfill_initial_holdings.py``, which then captures the projection into a
+``position_state_checkpoint`` and freezes the contradiction into the event log.
+"""
 import json
 import os
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 from random import Random
+
+_SCRIPTS = Path(__file__).resolve().parent
+_BACKEND = _SCRIPTS.parent
+for _p in (str(_SCRIPTS), str(_BACKEND)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import e2e_fixtures as fixtures  # noqa: E402
+
+from shared.portfolio_event_payload import (  # noqa: E402
+    build_transaction_event_data,
+    transaction_event_key,
+)
+
+# Only market data is relative to the wall clock. The broker record uses the
+# fixture's fixed AS_OF date so re-seeding on a different day does not create a
+# different fixture (see e2e_fixtures.AS_OF).
+TODAY = date.today()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -120,29 +152,24 @@ for b in brokerage_data:
 # ── 3. Accounts ──────────────────────────────────────────
 log("=== 3. Creating accounts ===")
 accounts = {}
-account_data = [
-    {"account_external_id": "EXT-TFSA-001", "account_name": "Main TFSA", "account_type": "TFSA", "brokerage_code": "QUESTRADE"},
-    {"account_external_id": "EXT-RRSP-001", "account_name": "Retirement RRSP", "account_type": "RRSP", "brokerage_code": "TD_DIRECT"},
-    {"account_external_id": "EXT-MRG-001", "account_name": "Margin Account", "account_type": "Margin", "brokerage_code": "QUESTRADE"},
-]
-for a in account_data:
-    existing = get("portfolio_accounts", f"?user_id=eq.{user_id}&account_external_id=eq.{a['account_external_id']}&select=account_id,account_name")
+for a in fixtures.ACCOUNTS:
+    existing = get("portfolio_accounts", f"?user_id=eq.{user_id}&account_external_id=eq.{a.external_id}&select=account_id,account_name")
     if existing and len(existing) > 0:
-        accounts[a["account_name"]] = existing[0]["account_id"]
-        log(f"  Account '{a['account_name']}' exists: id={existing[0]['account_id']}")
+        accounts[a.name] = existing[0]["account_id"]
+        log(f"  Account '{a.name}' exists: id={existing[0]['account_id']}")
     else:
         result = post("portfolio_accounts", {
             "user_id": user_id,
-            "brokerage_id": brokerages.get(a["brokerage_code"]),
-            "account_external_id": a["account_external_id"],
-            "account_name": a["account_name"],
-            "account_type": a["account_type"],
+            "brokerage_id": brokerages.get(a.brokerage_code),
+            "account_external_id": a.external_id,
+            "account_name": a.name,
+            "account_type": a.account_type,
             "currency": "CAD",
             "is_active": True,
         })
         if result and len(result) > 0:
-            accounts[a["account_name"]] = result[0]["account_id"]
-            log(f"  Created account '{a['account_name']}': id={result[0]['account_id']}")
+            accounts[a.name] = result[0]["account_id"]
+            log(f"  Created account '{a.name}': id={result[0]['account_id']}")
 
 # ── 4. Companies ─────────────────────────────────────────
 log("=== 4. Ensuring companies ===")
@@ -152,7 +179,11 @@ company_data = [
     {"ticker_symbol": "RY", "company_name": "Royal Bank of Canada", "sector": "Financial Services", "industry": "Banks", "exchange": "TSX", "currency": "CAD"},
     {"ticker_symbol": "TD", "company_name": "Toronto-Dominion Bank", "sector": "Financial Services", "industry": "Banks", "exchange": "TSX", "currency": "CAD"},
     {"ticker_symbol": "ENB", "company_name": "Enbridge Inc.", "sector": "Energy", "industry": "Oil & Gas Midstream", "exchange": "TSX", "currency": "CAD"},
-    {"ticker_symbol": "SHOP", "company_name": "Shopify Inc.", "sector": "Technology", "industry": "Software", "exchange": "NMS", "currency": "CAD"},
+    # SHOP lists on NYSE (NMS) and trades in USD; it was CAD here while
+    # seed_e2e_data.py had it right, so the two seeders disagreed about the
+    # fixture's own currency and the FX path saw a different portfolio
+    # depending on which one ran.
+    {"ticker_symbol": "SHOP", "company_name": "Shopify Inc.", "sector": "Technology", "industry": "Software", "exchange": "NMS", "currency": "USD"},
 ]
 for c in company_data:
     existing = get("companies", f"?ticker_symbol=eq.{c['ticker_symbol']}&select=company_id")
@@ -167,113 +198,116 @@ for c in company_data:
 
 # ── 5. Holdings ──────────────────────────────────────────
 log("=== 5. Creating holdings ===")
-holdings_plan = {
-    "Main TFSA": [("AAPL", 50, 145.00), ("RY", 100, 95.00), ("SHOP", 30, 68.00)],
-    "Retirement RRSP": [("TD", 200, 72.00), ("ENB", 150, 45.00), ("AAPL", 30, 148.00)],
-    "Margin Account": [("SHOP", 20, 70.00), ("ENB", 75, 44.50)],
-}
 holdings_created = 0
-for acct_name, holdings in holdings_plan.items():
-    acct_id = accounts.get(acct_name)
+for p in fixtures.POSITIONS:
+    acct_id = accounts.get(p.account)
     if not acct_id:
-        log(f"  ERROR: No account id for {acct_name}")
+        log(f"  ERROR: No account id for {p.account}")
         continue
-    for sym, qty, avg_cost in holdings:
-        company_id = companies.get(sym)
-        if not company_id:
-            continue
-        existing = get("portfolio_holdings", f"?account_id=eq.{acct_id}&company_id=eq.{company_id}&select=holding_id")
-        if existing and len(existing) > 0:
-            log(f"  Holding {sym} in {acct_name} exists: id={existing[0]['holding_id']}")
-            continue
-        result = post("portfolio_holdings", {
-            "account_id": acct_id,
-            "company_id": company_id,
-            "symbol": sym,
-            "quantity": qty,
-            "average_cost": avg_cost,
-            "total_cost": round(qty * avg_cost, 2),
-            "realized_gain_loss": 0,
-        })
-        if result:
-            holdings_created += 1
+    company_id = companies.get(p.symbol)
+    if not company_id:
+        continue
+    existing = get("portfolio_holdings", f"?account_id=eq.{acct_id}&company_id=eq.{company_id}&select=holding_id")
+    if existing and len(existing) > 0:
+        log(f"  Holding {p.symbol} in {p.account} exists: id={existing[0]['holding_id']}")
+        continue
+    result = post("portfolio_holdings", {
+        "account_id": acct_id,
+        "company_id": company_id,
+        "symbol": p.symbol,
+        "quantity": float(p.quantity),
+        "average_cost": float(p.average_cost),
+        "total_cost": float(p.total_cost),
+        "realized_gain_loss": float(fixtures.realized_gain_loss(p.account, p.symbol)),
+    })
+    if result:
+        holdings_created += 1
 log(f"  Created {holdings_created} new holdings")
 
 # ── 6. Transactions ──────────────────────────────────────
 log("=== 6. Creating transactions ===")
-tx_plan = {
-    "Main TFSA": [
-        ("AAPL", date.today() - timedelta(days=180), 50, 142.00, "Buy"),
-        ("RY", date.today() - timedelta(days=150), 100, 93.50, "Buy"),
-        ("SHOP", date.today() - timedelta(days=90), 30, 65.00, "Buy"),
-        ("RY", date.today() - timedelta(days=30), 10, 105.00, "Sell"),
-    ],
-    "Retirement RRSP": [
-        ("TD", date.today() - timedelta(days=200), 200, 70.00, "Buy"),
-        ("ENB", date.today() - timedelta(days=170), 150, 44.00, "Buy"),
-        ("AAPL", date.today() - timedelta(days=120), 30, 146.00, "Buy"),
-        ("TD", date.today() - timedelta(days=45), 10, 78.00, "Sell"),
-    ],
-    "Margin Account": [
-        ("SHOP", date.today() - timedelta(days=100), 20, 68.50, "Buy"),
-        ("ENB", date.today() - timedelta(days=80), 75, 44.00, "Buy"),
-    ],
-}
 tx_created = 0
-for acct_name, txs in tx_plan.items():
-    acct_id = accounts.get(acct_name)
+events_created = 0
+for t in fixtures.TRADES:
+    acct_id = accounts.get(t.account)
     if not acct_id:
         continue
-    for sym, tx_date, qty, price, direction in txs:
-        company_id = companies.get(sym)
-        net_cash = -round(qty * price, 2) if direction == "Buy" else round(qty * price, 2)
-        date_str = tx_date.isoformat()
-        existing = get("portfolio_transactions", f"?account_id=eq.{acct_id}&symbol=eq.{sym}&transaction_date=eq.{date_str}&quantity=eq.{qty}&select=transaction_id")
-        if existing and len(existing) > 0:
-            continue
+    company_id = companies.get(t.symbol)
+    tx_date = t.trade_date(fixtures.AS_OF)
+    date_str = tx_date.isoformat()
+    existing = get("portfolio_transactions", f"?account_id=eq.{acct_id}&symbol=eq.{t.symbol}&transaction_date=eq.{date_str}&quantity=eq.{float(t.quantity)}&select=transaction_id")
+    if existing and len(existing) > 0:
+        transaction_id = existing[0]["transaction_id"]
+    else:
         result = post("portfolio_transactions", {
             "account_id": acct_id,
             "company_id": company_id,
             "transaction_date": date_str,
             "activity_type": "Trade",
-            "activity_sub_type": direction,
-            "direction": direction,
-            "symbol": sym,
-            "quantity": qty,
-            "unit_price": price,
-            "net_cash_amount": net_cash,
+            "activity_sub_type": t.direction,
+            "direction": t.direction,
+            "symbol": t.symbol,
+            "quantity": float(t.quantity),
+            "unit_price": float(t.unit_price),
+            "net_cash_amount": float(t.net_cash_amount),
             "currency": "CAD",
         })
-        if result:
-            tx_created += 1
-log(f"  Created {tx_created} transactions")
+        if not result:
+            continue
+        tx_created += 1
+        transaction_id = result[0]["transaction_id"]
+
+    # A transaction with no event is invisible to replay; the account then looks
+    # history-less to backfill_initial_holdings.py and gets a checkpoint that
+    # contradicts the rows written above.
+    posted = post("portfolio_events", {
+        "event_type": "transaction_imported",
+        "event_version": 1,
+        "aggregate_id": f"account_{acct_id}",
+        "aggregate_type": "account",
+        "data": build_transaction_event_data(
+            account_id=acct_id,
+            company_id=company_id,
+            transaction_date=date_str,
+            activity_type="Trade",
+            activity_sub_type=t.direction,
+            direction=t.direction,
+            symbol=t.symbol,
+            quantity=float(t.quantity),
+            unit_price=float(t.unit_price),
+            net_cash_amount=float(t.net_cash_amount),
+            currency="CAD",
+        ),
+        "metadata": {
+            "backfill": True,
+            "entry_source": "seed_fixture",
+            "original_transaction_id": transaction_id,
+        },
+        "idempotency_key": transaction_event_key(acct_id, transaction_id),
+    })
+    if posted:
+        events_created += 1
+log(f"  Created {tx_created} transactions, {events_created} events")
 
 # ── 7. Dividends ────────────────────────────────────────
 log("=== 7. Creating dividends ===")
-dividends = [
-    ("Main TFSA", "RY", date.today() - timedelta(days=60), 42.00),
-    ("Main TFSA", "RY", date.today() - timedelta(days=150), 40.00),
-    ("Retirement RRSP", "TD", date.today() - timedelta(days=60), 76.00),
-    ("Retirement RRSP", "TD", date.today() - timedelta(days=150), 72.00),
-    ("Retirement RRSP", "ENB", date.today() - timedelta(days=60), 52.50),
-    ("Margin Account", "ENB", date.today() - timedelta(days=60), 26.25),
-]
 div_created = 0
-for acct_name, sym, pay_date, amount in dividends:
-    acct_id = accounts.get(acct_name)
-    company_id = companies.get(sym)
+for d in fixtures.DIVIDENDS:
+    acct_id = accounts.get(d.account)
+    company_id = companies.get(d.symbol)
     if not acct_id or not company_id:
         continue
+    pay_date = fixtures.AS_OF - timedelta(days=d.days_ago)
     date_str = pay_date.isoformat()
-    existing = get("portfolio_dividends", f"?account_id=eq.{acct_id}&symbol=eq.{sym}&payment_date=eq.{date_str}&select=dividend_id")
+    existing = get("portfolio_dividends", f"?account_id=eq.{acct_id}&symbol=eq.{d.symbol}&payment_date=eq.{date_str}&select=dividend_id")
     if existing and len(existing) > 0:
         continue
     result = post("portfolio_dividends", {
         "account_id": acct_id,
         "company_id": company_id,
-        "symbol": sym,
+        "symbol": d.symbol,
         "payment_date": date_str,
-        "amount": amount,
+        "amount": float(d.amount),
         "currency": "CAD",
         "fiscal_year": pay_date.year,
         "fiscal_month": pay_date.month,
@@ -283,28 +317,21 @@ for acct_name, sym, pay_date, amount in dividends:
 log(f"  Created {div_created} dividends")
 
 # ── 8. Performance ───────────────────────────────────────
-log("=== 8. Creating performance snapshots ===")
-perf_created = 0
-for acct_name, acct_id in accounts.items():
-    for i in range(12):
-        d = date.today().replace(day=1) - timedelta(days=i * 30)
-        d = d.replace(day=1)
-        date_str = d.isoformat()
-        existing = get("portfolio_performance", f"?account_id=eq.{acct_id}&snapshot_date=eq.{date_str}&select=snapshot_id")
-        if existing and len(existing) > 0:
-            continue
-        total_val = round(50000 - i * 500 + i * 200, 2)
-        cost_basis = round(48000 - i * 400, 2)
-        result = post("portfolio_performance", {
-            "account_id": acct_id,
-            "snapshot_date": date_str,
-            "total_value": total_val,
-            "cost_basis": cost_basis,
-            "net_deposits": 0,
-        })
-        if result:
-            perf_created += 1
-log(f"  Created {perf_created} performance snapshots")
+# Intentionally absent. This section used to POST twelve months of
+# ``portfolio_performance`` rows per account from a literal curve
+# (``50000 - i*500 + i*200``), identical for every account.
+#
+# The table is deprecated (``docs/PORTFOLIO_PERFORMANCE_REENGINEERING.md:2146``),
+# nothing reads it (``get_portfolio_performance`` reads ``portfolio_snapshots``;
+# ``get_account_performance_history`` has no callers), and the insert can never
+# succeed: ``total_cost`` is NOT NULL with no default and was never sent, so the
+# request returns 23502. This client swallowed that error into ``result is None``
+# and printed "Created 0 performance snapshots", which is why the failure was
+# invisible here and fatal in ``seed_e2e_data.py``.
+#
+# Measured: ``select count(*) from portfolio_performance`` -> 0. The rows this
+# section claimed to create have never existed. The real series is produced by the
+# snapshot job, not by a fixture.
 
 # ── 9. Market Data ───────────────────────────────────────
 log("=== 9. Updating current market data ===")

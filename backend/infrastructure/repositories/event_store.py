@@ -1,5 +1,5 @@
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 from database import supabase
@@ -78,7 +78,7 @@ class EventStore:
     ) -> dict:
         _assert_state_import_not_backdated(
             {"event_type": event_type, "data": data, "metadata": metadata or {}},
-            datetime.now(timezone.utc).date(),
+            datetime.now(UTC).date(),
         )
         row = {
             "event_type": event_type,
@@ -106,7 +106,7 @@ class EventStore:
     ) -> list[dict]:
         if not events:
             return []
-        captured_on = datetime.now(timezone.utc).date()
+        captured_on = datetime.now(UTC).date()
         for event in events:
             _assert_state_import_not_backdated(event, captured_on)
         try:
@@ -146,9 +146,12 @@ class EventStore:
         aggregate_id: str | None = None,
         event_type: str | None = None,
         since: datetime | None = None,
-        limit: int = 10000,
+        limit: int | None = 10000,
     ) -> list[dict]:
-        """Fetch all matching events with pagination handling for large datasets."""
+        """Fetch all matching events with pagination handling for large datasets.
+
+        ``limit=None`` pages until the result set is exhausted.
+        """
         page_size = 1000
         all_events = []
         offset = 0
@@ -207,6 +210,34 @@ class EventStore:
             )
 
         return all_events
+
+    def get_transfer_legs(self, account_ids: list[int]) -> list[dict[str, Any]]:
+        """Return ``InternalSecurityTransfer`` payloads for the given accounts.
+
+        I5: read-path spike attribution needs to know which dates carried a
+        transfer round-trip. Transfers are recorded as ``transaction_imported``
+        events whose ``data.activity_type`` is ``InternalSecurityTransfer``
+        (there is no separate event_type). Aggregates are named ``account_<id>``.
+
+        Advisory only: a failure here degrades to no attribution, never a failed
+        performance response.
+        """
+        if not account_ids:
+            return []
+        aggregate_ids = [f"account_{aid}" for aid in account_ids]
+        res = (
+            self.client.table(self.TABLE)
+            .select("data")
+            .eq("event_type", "transaction_imported")
+            .in_("aggregate_id", aggregate_ids)
+            .execute()
+        )
+        legs: list[dict[str, Any]] = []
+        for row in res.data or []:
+            payload = row.get("data")
+            if isinstance(payload, dict) and payload.get("activity_type") == "InternalSecurityTransfer":
+                legs.append(payload)
+        return legs
 
     def _count_matching(
         self,
@@ -336,21 +367,27 @@ class EventStore:
         aggregate_id: str | None = None,
         event_type: str | None = None,
         since: datetime | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[dict]:
-        query = self.client.table(self.TABLE).select("*").order("created_at").order("id")
+        """Fetch matching events, honouring ``limit``.
 
-        if aggregate_type:
-            query = query.eq("aggregate_type", aggregate_type)
-        if aggregate_id:
-            query = query.eq("aggregate_id", aggregate_id)
-        if event_type:
-            query = query.eq("event_type", event_type)
-        if since:
-            query = query.gte("created_at", since.isoformat())
+        Delegates to :meth:`get_all_events` so there is exactly one paginated
+        implementation. It used to be a second, hand-written query that accepted a
+        ``limit`` and never applied it: PostgREST capped the response at its own
+        ``db-max-rows`` (1000 by default), so ``get_events(limit=10000)`` silently
+        returned 1000 of 2724 rows. ``backfill_events_from_transactions`` used that
+        call to build its dedupe set, so every account outside the returned prefix
+        was considered event-less and got a second copy of its history on re-run.
 
-        res = query.execute()
-        return res.data or []
+        Pass ``limit=None`` for every matching event.
+        """
+        return self.get_all_events(
+            aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id,
+            event_type=event_type,
+            since=since,
+            limit=limit,
+        )
 
     def count_orphan_events(
         self,

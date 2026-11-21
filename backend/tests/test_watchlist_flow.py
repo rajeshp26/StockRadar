@@ -1,14 +1,16 @@
 
-import pytest
-from fastapi.testclient import TestClient
+import os
 
 # We need to adjust the python path to import the main app
 import sys
-import os
+
+import pytest
+from fastapi.testclient import TestClient
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from main import app 
 from dependencies import get_current_user_dep
+from main import app
 
 # Mock user ID for all tests
 TEST_USER_ID = "test-user-123"
@@ -24,11 +26,12 @@ def client():
     yield TestClient(app)
     app.dependency_overrides.clear()
 
+@pytest.mark.integration  # I1d: needs a live Supabase/PostgREST stack and provider network
 def test_add_stock_to_watchlist(client: TestClient):
     # 1. Create a new watchlist to get a valid ID
     watchlist_name = "Tech Stocks"
     response = client.post("/watchlists", json={"name": watchlist_name})
-    
+
     assert response.status_code == 201
     watchlist_data = response.json()
     assert watchlist_data["name"] == watchlist_name

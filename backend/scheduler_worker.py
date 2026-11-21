@@ -34,15 +34,19 @@ import sys
 from datetime import date
 from typing import Any
 
+from application.jobs.benchmark_series_refresh_job import handle_benchmark_series_refresh
+
 # v3 infrastructure
 from application.jobs.job_engine import JobEngine
 from application.jobs.portfolio_snapshot_job import handle_portfolio_snapshot
-from application.jobs.benchmark_series_refresh_job import handle_benchmark_series_refresh
 from application.jobs.price_ingestion_job import handle_price_ingestion
 from application.schedulers.aggregation_scheduler import AggregationScheduler
 from application.schedulers.benchmark_series_scheduler import BenchmarkSeriesRefreshScheduler
 from application.schedulers.earnings_scheduler import EarningsRefreshScheduler
-from application.schedulers.freshness_monitor_scheduler import FreshnessMonitorScheduler, SNAPSHOT_INTERVAL_HOURS
+from application.schedulers.freshness_monitor_scheduler import (
+    SNAPSHOT_INTERVAL_HOURS,
+    FreshnessMonitorScheduler,
+)
 from application.schedulers.market_data_scheduler import MarketDataRefreshScheduler
 from application.schedulers.planner import SchedulerPlanner
 from application.schedulers.portfolio_snapshot_scheduler import PortfolioSnapshotScheduler
@@ -50,7 +54,10 @@ from application.schedulers.price_ingestion_scheduler import PriceIngestionSched
 from application.schedulers.reconciliation_scheduler import ReconciliationScheduler
 
 # v2 scheduler classes (used for plan() + data logic)
-from application.schedulers.super_investors_scheduler import SuperInvestorsRefreshScheduler
+from application.schedulers.super_investors_scheduler import (
+    InvestorRefreshStatus,
+    SuperInvestorsRefreshScheduler,
+)
 from application.schedulers.valuation_computation_scheduler import ValuationComputationScheduler
 from application.services.super_investors_cache import invalidate_super_investors_cache
 
@@ -61,10 +68,18 @@ from infrastructure.repositories.scheduler_repository import SchedulerRepository
 # Providers & Repos
 # Event projection handler
 from services.event_projection_handler import EventProjectionHandler
+from shared.logging_setup import CONSOLE_FORMAT, install_correlation_stamping
 
+# I28: use the same timestamped, correlation-aware format as the API (main.py).
+# The old "%(name)s %(message)s" worker format carried no time, level or trace
+# id, so with concurrency=5 its interleaved lines could not be attributed to a
+# job. The stamping must be installed before basicConfig: it is a LogRecord
+# factory, and CONSOLE_FORMAT's %(correlation_id)s would otherwise raise
+# KeyError on the first record. The per-job id is bound in JobEngine.execute_job.
+install_correlation_stamping()
 logging.basicConfig(
     level=logging.INFO,
-    format="%(name)s %(message)s",
+    format=CONSOLE_FORMAT,
     stream=sys.stderr,
 )
 logger = logging.getLogger("stockerpro.worker")
@@ -170,10 +185,17 @@ async def handle_investor_refresh(job: dict[str, Any]) -> dict[str, Any]:
 
     scheduler = SuperInvestorsRefreshScheduler()
     info = {"name": name, "firm": payload.get("firm"), "tag": payload.get("tag")}
-    result = await scheduler._refresh_single_investor(cik, info)
-    if result:
+    outcome = await scheduler._refresh_single_investor(cik, info)
+
+    # I23: keep the four outcomes distinct. A genuine fetch ERROR is raised so
+    # the job engine marks the job failed (with backoff) instead of reporting a
+    # clean "completed"; an empty result is reported as "no_filings", not folded
+    # into the benign "skipped" (not due) case.
+    if outcome == InvestorRefreshStatus.ERROR:
+        raise RuntimeError(f"investor_refresh failed for {name} ({cik})")
+    if outcome == InvestorRefreshStatus.REFRESHED:
         invalidate_super_investors_cache()
-    return {"cik": cik, "status": "ok" if result else "skipped"}
+    return {"cik": cik, "status": outcome.value}
 
 
 async def handle_freshness_snapshot(job: dict[str, Any]) -> dict[str, Any]:

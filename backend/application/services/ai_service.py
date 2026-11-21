@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json as _json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from application.services.caching.cache_manager import CacheManager
 from application.services.prompts.company_snapshot import CompanySnapshotBuilder
 from application.services.prompts.overview import (
     _METHOD_LABELS,
@@ -15,7 +15,32 @@ from application.services.prompts.suitability import build_suitability_prompt
 from config import settings
 from providers.ai_provider import AIProvider, OpenRouterProvider
 
+if TYPE_CHECKING:
+    from application.services.caching.cache_manager import CacheManager
+
 logger = logging.getLogger(__name__)
+
+
+def _log_prompt(label: str, symbol: str, prompt: str) -> None:
+    """Log prompt metadata at INFO; the full body only at DEBUG (I27).
+
+    Prompt bodies carry company financial context and task instructions; dumping
+    them at INFO on every call is high-volume and puts that context into shared
+    worker logs. The short sha256 prefix is a stable, content-free handle for
+    correlating a run with a specific prompt (e.g. against a cache key) without
+    exposing what the prompt said. ``logger.debug`` does not format its args
+    unless DEBUG is enabled, so there is no cost on the normal INFO path.
+    """
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
+    logger.info(
+        "[AI] Sending %s for %s (%d chars, sha256=%s)",
+        label, symbol, len(prompt), digest,
+    )
+    logger.debug(
+        "[AI] %s body for %s:\n--- PROMPT START ---\n%s\n--- PROMPT END ---",
+        label, symbol, prompt,
+    )
+
 
 _provider: AIProvider | None = None
 _snapshot_builder: CompanySnapshotBuilder | None = None
@@ -115,10 +140,7 @@ async def generate_suitability_summary(
     logger.info("[AI] No company context for %s/%s — using task-only prompt", symbol, method)
     full_prompt = task_prompt
 
-    logger.info(
-        "[AI] Sending prompt for %s/%s (%d chars):\n--- PROMPT START ---\n%s\n--- PROMPT END ---",
-        symbol, method, len(full_prompt), full_prompt,
-    )
+    _log_prompt("prompt", f"{symbol}/{method}", full_prompt)
 
     result = await provider.generate_text(
         prompt=full_prompt,
@@ -190,10 +212,7 @@ async def generate_overview_summary(
         logger.info("[AI] No company context for overview/%s — using task-only prompt", symbol)
         full_prompt = task_prompt
 
-    logger.info(
-        "[AI] Sending overview prompt for %s (%d chars):\n--- PROMPT START ---\n%s\n--- PROMPT END ---",
-        symbol, len(full_prompt), full_prompt,
-    )
+    _log_prompt("overview prompt", symbol, full_prompt)
 
     raw = await provider.generate_text(
         prompt=full_prompt,

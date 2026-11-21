@@ -420,7 +420,8 @@ class TestChatEndpointUnit:
 
         from starlette.requests import Request
 
-        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
+        from api.chat import ChatRequest, chat_with_digital_twin
+        from application.services.prompts.chat_prompt import ChatMessage
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -457,7 +458,8 @@ class TestChatEndpointUnit:
 
         from starlette.requests import Request
 
-        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
+        from api.chat import ChatRequest, chat_with_digital_twin
+        from application.services.prompts.chat_prompt import ChatMessage
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -500,7 +502,8 @@ class TestChatEndpointUnit:
 
         from starlette.requests import Request
 
-        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
+        from api.chat import ChatRequest, chat_with_digital_twin
+        from application.services.prompts.chat_prompt import ChatMessage
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -549,7 +552,8 @@ class TestChatEndpointUnit:
 
         from starlette.requests import Request
 
-        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
+        from api.chat import ChatRequest, chat_with_digital_twin
+        from application.services.prompts.chat_prompt import ChatMessage
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -609,7 +613,8 @@ class TestChatEndpointUnit:
 
         from starlette.requests import Request
 
-        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
+        from api.chat import ChatRequest, chat_with_digital_twin
+        from application.services.prompts.chat_prompt import ChatMessage
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -665,7 +670,8 @@ class TestChatEndpointUnit:
 
         from starlette.requests import Request
 
-        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
+        from api.chat import ChatRequest, chat_with_digital_twin
+        from application.services.prompts.chat_prompt import ChatMessage
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",
@@ -720,7 +726,8 @@ class TestChatEndpointUnit:
 
         from starlette.requests import Request
 
-        from api.chat import ChatMessage, ChatRequest, chat_with_digital_twin
+        from api.chat import ChatRequest, chat_with_digital_twin
+        from application.services.prompts.chat_prompt import ChatMessage
         mock_request = Request(scope={
             "type": "http",
             "method": "POST",

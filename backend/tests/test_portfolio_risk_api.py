@@ -1,18 +1,11 @@
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-_fake_defeat = MagicMock()
-_fake_ticker = MagicMock()
-sys.modules["defeatbeta_api"] = _fake_defeat
-sys.modules["defeatbeta_api.data"] = _fake_defeat
-sys.modules["defeatbeta_api.data.ticker"] = _fake_ticker
-
-_fake_database = MagicMock()
-_fake_database.supabase = MagicMock()
-sys.modules["database"] = _fake_database
-
+# I1d: removed module-level sys.modules injection of fake `defeatbeta_api` and
+# `database`. Those hacks leaked into every later-collected test (notably
+# test_database.py, where `import database` returned a MagicMock) and are no
+# longer needed — the real imports work. Dependencies are patched per-test.
 from api import portfolio as _portfolio_mod
 
 

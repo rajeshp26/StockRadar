@@ -30,6 +30,7 @@ async def run_scenario(quarters_data, purchase_date_str):
     repo.get_quarterly_cash_flows = AsyncMock(return_value=[])
     repo.get_company_summary_history = AsyncMock(return_value=[])
     repo.get_latest_valuation_overview = AsyncMock(return_value=None)
+    repo.get_valuation_snapshots = AsyncMock(return_value={})
     repo.get_earnings_history = AsyncMock(return_value=[])
     repo.get_current_market_price = AsyncMock(return_value=100.0)
     repo.get_buy_anchor = AsyncMock(return_value={
@@ -129,6 +130,7 @@ class TestBuyQuarterIndexScenarios:
         repo.get_annual_cash_flows = AsyncMock(return_value=[])
         repo.get_company_summary_history = AsyncMock(return_value=[])
         repo.get_latest_valuation_overview = AsyncMock(return_value=None)
+        repo.get_valuation_snapshots = AsyncMock(return_value={})
         repo.get_earnings_history = AsyncMock(return_value=[])
         repo.get_current_market_price = AsyncMock(return_value=100.0)
         repo.get_buy_anchor = AsyncMock(return_value={
@@ -168,6 +170,7 @@ class TestBuyQuarterIndexScenarios:
         repo.get_annual_cash_flows = AsyncMock(return_value=[])
         repo.get_company_summary_history = AsyncMock(return_value=[])
         repo.get_latest_valuation_overview = AsyncMock(return_value=None)
+        repo.get_valuation_snapshots = AsyncMock(return_value={})
         repo.get_earnings_history = AsyncMock(return_value=[])
         repo.get_current_market_price = AsyncMock(return_value=100.0)
         repo.get_buy_anchor = AsyncMock(return_value={

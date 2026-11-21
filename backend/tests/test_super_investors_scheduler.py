@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application.schedulers.super_investors_scheduler import InvestorRefreshStatus
 from shared.time_utils import now_utc
 
 
@@ -66,7 +67,7 @@ class TestFetchNewFiling:
         filing = _make_filing(period=date(2026, 6, 30))
         with patch("edgar.get_filings", return_value=_FakeFilings([filing])):
             ok = await self.sched._fetch_new_filing("0001", INFO, None)
-        assert ok is True
+        assert ok == InvestorRefreshStatus.REFRESHED
         self.sched._save_holdings_to_db.assert_awaited_once()
         self.sched._update_investor_tracking.assert_awaited_once_with(
             "0001", "2026-06-30", "2026-08-14"
@@ -77,7 +78,7 @@ class TestFetchNewFiling:
         filing = _make_filing(period=date(2026, 6, 30))
         with patch("edgar.get_filings", return_value=_FakeFilings([filing])):
             ok = await self.sched._fetch_new_filing("0001", INFO, None)
-        assert ok is False
+        assert ok == InvestorRefreshStatus.NO_FILINGS
         self.sched._update_investor_tracking.assert_not_awaited()
 
     async def test_self_heals_when_tracked_period_has_no_rows(self):
@@ -85,7 +86,7 @@ class TestFetchNewFiling:
         filing = _make_filing(period=date(2026, 3, 31))
         with patch("edgar.get_filings", return_value=_FakeFilings([filing])):
             ok = await self.sched._fetch_new_filing("0001", INFO, "2026-03-31")
-        assert ok is True
+        assert ok == InvestorRefreshStatus.REFRESHED
         self.sched._save_holdings_to_db.assert_awaited_once()
         self.sched._update_investor_tracking.assert_awaited_once_with(
             "0001", "2026-03-31", "2026-08-14"
@@ -96,7 +97,7 @@ class TestFetchNewFiling:
         filing = _make_filing(period=date(2026, 3, 31))
         with patch("edgar.get_filings", return_value=_FakeFilings([filing])):
             ok = await self.sched._fetch_new_filing("0001", INFO, "2026-03-31")
-        assert ok is False
+        assert ok == InvestorRefreshStatus.SKIPPED_NOT_DUE
         self.sched._save_holdings_to_db.assert_not_awaited()
         self.sched._update_investor_tracking.assert_not_awaited()
 
@@ -109,14 +110,14 @@ class TestFetchNewFiling:
 
         with patch("edgar.get_filings", side_effect=_side_effect) as mock_get_filings:
             ok = await self.sched._fetch_new_filing("0001", INFO, None)
-        assert ok is True
+        assert ok == InvestorRefreshStatus.REFRESHED
         years = [c.kwargs.get("year") for c in mock_get_filings.call_args_list]
         assert years == [current_year, current_year - 1]
 
     async def test_no_filings_returns_false(self):
         with patch("edgar.get_filings", return_value=_FakeFilings([])):
             ok = await self.sched._fetch_new_filing("0001", INFO, None)
-        assert ok is False
+        assert ok == InvestorRefreshStatus.NO_FILINGS
         self.sched._update_investor_tracking.assert_not_awaited()
 
 
@@ -136,7 +137,7 @@ class TestFetchHistoricalData:
         self.sched._save_holdings_to_db = AsyncMock(side_effect=_save)
         with patch("edgar.get_filings", return_value=_FakeFilings([p3, p2, p1])):
             ok = await self.sched._fetch_historical_data("0001", INFO, 10)
-        assert ok is True
+        assert ok == InvestorRefreshStatus.REFRESHED
         self.sched._update_investor_tracking.assert_awaited_once_with(
             "0001", "2026-03-31", "2026-05-15"
         )
@@ -151,7 +152,7 @@ class TestFetchHistoricalData:
         self.sched._save_holdings_to_db = AsyncMock(side_effect=_save)
         with patch("edgar.get_filings", return_value=_FakeFilings([newer, older])):
             ok = await self.sched._fetch_historical_data("0001", INFO, 10)
-        assert ok is True
+        assert ok == InvestorRefreshStatus.REFRESHED
         self.sched._update_investor_tracking.assert_awaited_once_with(
             "0001", "2025-12-31", "2026-02-13"
         )
@@ -161,7 +162,7 @@ class TestFetchHistoricalData:
         filing = _make_filing(period=date(2026, 3, 31))
         with patch("edgar.get_filings", return_value=_FakeFilings([filing])):
             ok = await self.sched._fetch_historical_data("0001", INFO, 20)
-        assert ok is False
+        assert ok == InvestorRefreshStatus.NO_FILINGS
         self.sched._update_investor_tracking.assert_not_awaited()
 
 

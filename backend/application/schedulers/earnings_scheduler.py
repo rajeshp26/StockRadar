@@ -6,6 +6,7 @@ Adds per-company distributed locks for multi-replica safety.
 """
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from datetime import date, timedelta
@@ -212,20 +213,39 @@ class EarningsRefreshScheduler:
 
         batch = pending[:self.EARNINGS_SYNC_BATCH_SIZE]
 
-        async def _refresh(c: dict) -> bool:
+        async def _refresh(c: dict) -> tuple[bool, str | None]:
+            # Return (ok, failure_reason). The summary line needs the failing
+            # symbol + cause -- a bare False made "Synced 19/20" unactionable
+            # (I22). Catch fetch and update separately so the reason is precise.
+            symbol = c.get("ticker_symbol") or str(c.get("company_id"))
             try:
-                ed = await self.defeat_beta_provider.fetch_next_earnings_date(c["ticker_symbol"])
-                if ed is not None:
-                    await self.financial_repo.update_next_earnings_date(c["company_id"], ed)
-                    return True
-            except Exception:
-                pass
-            return False
+                ed = await self.defeat_beta_provider.fetch_next_earnings_date(symbol)
+            except Exception as e:
+                return False, f"{symbol}: fetch failed ({e})"
+            if ed is None:
+                return False, f"{symbol}: no earnings date available"
+            try:
+                await self.financial_repo.update_next_earnings_date(c["company_id"], ed)
+            except Exception as e:
+                return False, f"{symbol}: update failed ({e})"
+            return True, None
 
         results = await asyncio.gather(*[_refresh(c) for c in batch], return_exceptions=True)
-        count = sum(1 for r in results if r is True)
-        if count:
-            logger.info("[EARNINGS_CALENDAR] Synced %d/%d earnings dates", count, len(batch))
+        successes = sum(1 for r in results if isinstance(r, tuple) and r[0])
+        failures = [
+            r[1] for r in results
+            if isinstance(r, tuple) and not r[0] and r[1]
+        ]
+        failures.extend(str(r) for r in results if isinstance(r, BaseException))
+        if failures:
+            logger.warning(
+                "[EARNINGS_CALENDAR] Synced %d/%d earnings dates; failed: %s",
+                successes, len(batch), "; ".join(failures),
+            )
+        elif successes:
+            logger.info(
+                "[EARNINGS_CALENDAR] Synced %d/%d earnings dates", successes, len(batch)
+            )
 
     # ========================================================================
     # SCHEDULER CONTROL
@@ -245,10 +265,8 @@ class EarningsRefreshScheduler:
         self.is_running = False
         if self.task:
             self.task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.task
-            except asyncio.CancelledError:
-                pass
         logger.info("⏹️  Earnings Scheduler stopped")
 
     # ========================================================================
@@ -421,6 +439,29 @@ class EarningsRefreshScheduler:
             if not refresh_info:
                 raise CompanyNotFoundError(company_id, symbol)
 
+            # ETFs / indices / funds have no income statements, balance sheets
+            # or cash flows. `market_data_scheduler._process_company` skips these
+            # fundamentals (its `is_stock` guard, steps 3-7); this path had no
+            # equivalent guard and relied solely on the repository's
+            # `security_type eq stock OR null` query filter -- bypassed by the
+            # worker handler, immediate checks and reconciliation follow-ups.
+            # Read the authoritative value at execution time and skip only an
+            # explicitly non-stock type: `stock`, NULL and legacy/unknown values
+            # stay admitted, matching the repository filter.
+            security_type = getattr(refresh_info, "security_type", None)
+            if isinstance(security_type, str) and security_type.strip().lower() not in ("stock", ""):
+                logger.info(
+                    "[EARNINGS] %s security_type=%s — skipping fundamentals (ETF/index/fund)",
+                    symbol, security_type,
+                )
+                return {
+                    "skipped_non_stock": True,
+                    "security_type": security_type,
+                    "company_id": company_id,
+                    "symbol": symbol,
+                    "total_rows": 0,
+                }
+
             is_first_time_load = refresh_info.first_financial_data_loaded_at is None
 
             logger.debug(
@@ -575,11 +616,11 @@ class EarningsRefreshScheduler:
 
         except MaxRetriesExceededError as e:
             logger.error(f"Max retries exceeded for {symbol}: {e!s}")
-            raise SchedulerRefreshError(company_id, symbol, e)
+            raise SchedulerRefreshError(company_id, symbol, e) from e
 
         except Exception as e:
             logger.error(f"Failed to refresh {symbol}: {e!s}")
-            raise SchedulerRefreshError(company_id, symbol, e)
+            raise SchedulerRefreshError(company_id, symbol, e) from e
 
     # ========================================================================
     # MANUAL TRIGGER (for testing/admin)

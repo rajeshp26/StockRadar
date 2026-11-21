@@ -70,18 +70,21 @@ backend/*.log
 # Debug screenshots
 *.png
 
-# Ad-hoc scripts (not part of application)
-backend/scripts/smoke_*.py
-backend/scripts/check_*.py
-backend/scripts/verify_*.py
-backend/scripts/investigate_*.py
-backend/scripts/debug_*.py
+# Ad-hoc scripts live in a known PLACE, not under a known NAME.
+# These were previously matched as `smoke_*.py`, `check_*.py`, `verify_*.py`,
+# `investigate_*.py`, `debug_*.py` - which silently excluded the migration runner,
+# the migration verifier referenced eleven times in docs/, and every check written
+# to prove a fix. A check that is not version controlled cannot be reviewed, cannot
+# run in CI, and is gone by the next clone. Durable tooling and checks stay tracked;
+# one-off probes go in backend/scripts/scratch/ (see its README).
+backend/scripts/scratch/
 backend/scripts/start_backend.sh
 backend/scripts/start_worker.sh
 backend/scripts/stop_all.sh
-backend/scripts/backup_cloud.py
-backend/scripts/import_local.py
-backend/scripts/migrate_auth_users.py
+# Local-environment wrappers. I1c: import_local.py and migrate_auth_users.py were
+# once ignored here because they embedded a service key / user password. They now
+# read all credentials from the environment (like backup_cloud.py), so they are
+# tracked like other durable tooling. Secrets belong in the gitignored .env only.
 backend/scripts/rag_ingest_docs.py
 backend/restart_wsl.sh
 backend/start_both.sh
@@ -158,8 +161,13 @@ backend/scripts/_t02_*
 
 # IST/snapshot investigation tooling (one-off; superseded by
 # committed rebuild_account_snapshots.py / reconcile_snapshots.py)
+#
+# `apply_sql_migration.py` and `run_snapshot_traced.py` were removed from this
+# list: neither is a one-off and neither is superseded. The first is the runner the
+# migration procedure documents, the second is the artefact .planning/USER-ASK.md
+# cites as the evidence for A2. A block written for investigations had swept up two
+# durable tools, which is how a documented command becomes unreviewable.
 backend/scripts/adjudicate_blk026_claims.py
-backend/scripts/apply_sql_migration.py
 backend/scripts/diff_holding_provenance_keys.py
 backend/scripts/fix_cdr_holdings.py
 backend/scripts/introspect_provenance_columns.py
@@ -168,7 +176,6 @@ backend/scripts/reconcile_split_events.py
 backend/scripts/report_price_history_coverage.py
 backend/scripts/report_snapshot_spikes.py
 backend/scripts/repro_merge_tail.py
-backend/scripts/run_snapshot_traced.py
 
 # Diagnostic outputs and scratch state
 backend/scripts/_*.out

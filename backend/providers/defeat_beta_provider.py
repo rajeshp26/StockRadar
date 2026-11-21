@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import json
 import logging
@@ -8,21 +9,9 @@ import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
-
-if TYPE_CHECKING:
-    from providers.base import StockDetails, TickerInfo
-    from providers.edgar_provider import EdgarToolsProvider
-    from providers.stockdex_provider import StockdexMacrotrendsProvider
-    from providers.yfinance_provider import YFinanceProvider
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import pandas as pd
-
-# Defeat Beta SDK — import via the console-safe shim (SDK prints an emoji banner
-# at import time which UnicodeEncodeErrors on cp1252 Windows consoles; RC9).
-from providers.defeatbeta_runtime import import_ticker
-
-Ticker = import_ticker()
 
 from application.normalizers.statement_normalizer import (
     normalize_balance_row,
@@ -56,6 +45,20 @@ from domain.model_types import (
 )
 from providers.base import StockDataProvider
 from shared.time_utils import now_utc
+
+if TYPE_CHECKING:
+    from providers.base import StockDetails, TickerInfo
+    from providers.edgar_provider import EdgarToolsProvider
+    from providers.stockdex_provider import StockdexMacrotrendsProvider
+    from providers.yfinance_provider import YFinanceProvider
+
+# Defeat Beta SDK — import via the console-safe shim (SDK prints an emoji banner
+# at import time which UnicodeEncodeErrors on cp1252 Windows consoles; RC9).
+# The shim is invoked here, after the pure-Python imports above, but before the
+# class body below first references ``Ticker`` in a type annotation.
+from providers.defeatbeta_runtime import import_ticker
+
+Ticker = import_ticker()
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +156,7 @@ class DefeatBetaProvider(StockDataProvider):
     # ---------------------------------------------------------------------
 
     # Income Statement aliases
-    DB_INCOME_ALIASES: dict[str, list[str]] = {
+    DB_INCOME_ALIASES: ClassVar[dict[str, list[str]]] = {
         # Core P&L
         'revenue': ['Total Revenue', 'Operating Revenue'],
         # --- Phase 3 additions ---
@@ -218,7 +221,7 @@ class DefeatBetaProvider(StockDataProvider):
     }
 
     # Balance Sheet aliases
-    DB_BALANCE_ALIASES: dict[str, list[str]] = {
+    DB_BALANCE_ALIASES: ClassVar[dict[str, list[str]]] = {
         # Assets
         'total_assets': ['Total Assets'],
         # Phase 5 — Tier 2 additions
@@ -267,7 +270,7 @@ class DefeatBetaProvider(StockDataProvider):
     }
 
     # Cash Flow aliases
-    DB_CASHFLOW_ALIASES = {
+    DB_CASHFLOW_ALIASES: ClassVar[dict[str, list[str]]] = {
         # Operating
         'cash_from_operating_activities': ['Operating Cash Flow', 'Cash Flow from Continuing Operating Activities'],
          # Phase 5 — Tier 2 additions
@@ -316,13 +319,13 @@ class DefeatBetaProvider(StockDataProvider):
         rules = PROVIDER_EXCHANGE_RULES.get(provider_name)
         if rules is None:
             return True
-        if exchange and "exchanges" in rules:
-            if exchange.upper() not in rules["exchanges"]:
-                return False
-        if security_type and "security_types" in rules:
-            if security_type.lower() not in rules["security_types"]:
-                return False
-        return True
+        if exchange and "exchanges" in rules and exchange.upper() not in rules["exchanges"]:
+            return False
+        return not (
+            security_type
+            and "security_types" in rules
+            and security_type.lower() not in rules["security_types"]
+        )
 
     @staticmethod
     async def warm_cache() -> None:
@@ -336,18 +339,6 @@ class DefeatBetaProvider(StockDataProvider):
             logger.info("DuckDB cache pre-warmed")
         except Exception as e:
             logger.warning(f"DuckDB cache pre-warm failed: {e}")
-
-    @staticmethod
-    def _clear_duckdb_cache() -> None:
-        """Clear DuckDB httpfs on-disk cache."""
-        try:
-            from providers.defeatbeta_runtime import import_get_duckdb_client
-            get_duckdb_client = import_get_duckdb_client()
-            client = get_duckdb_client()
-            client._clear_cache()
-            logger.info("DuckDB httpfs cache cleared")
-        except Exception as e:
-            logger.warning(f"Failed to clear DuckDB cache: {e}")
 
     def __init__(
         self,
@@ -422,16 +413,33 @@ class DefeatBetaProvider(StockDataProvider):
 
             except (TimeoutError, DefeatBetaException) as e:
                 last_error = e
+                if isinstance(e, NoDataError):
+                    # NoDataError is a deterministic "this provider has no
+                    # coverage for the symbol" verdict, not a transient fault.
+                    # Retrying it with backoff and a shared DuckDB cache clear
+                    # cannot change the result and races the other workers (I9).
+                    # Canadian `.TO` tickers are the live case: DefeatBeta is a
+                    # US dataset. The job layer already treats NO_DATA as
+                    # terminal; go straight to the fallback instead.
+                    logger.info(
+                        "DefeatBeta has no data for %s (%s); skipping retries, "
+                        "using fallback",
+                        symbol, e.error_code,
+                    )
+                    break
                 if attempt < self.settings.RETRY_MAX_ATTEMPTS - 1:
                     backoff = self.settings.RETRY_BACKOFF_SECONDS[attempt]
                     logger.warning(
                         f"Attempt {attempt + 1}/{self.settings.RETRY_MAX_ATTEMPTS} failed for {symbol}: "
                         f"retrying in {backoff}s. Error: {e!s}"
                     )
-                    # Clear DuckDB cache on penultimate retry (transient corruption recovery)
-                    if attempt == self.settings.RETRY_MAX_ATTEMPTS - 2:
-                        logger.info(f"Clearing DuckDB cache before final retry for {symbol}")
-                        self._clear_duckdb_cache()
+                    # Deliberately no cache clear here. `get_duckdb_client()` is a
+                    # process-wide singleton and `_clear_cache()` wipes the shared
+                    # on-disk httpfs cache, so one symbol's transient retry evicted
+                    # every other worker's downloads (and raced their file locks)
+                    # under concurrency. The SDK validates cache freshness at client
+                    # init, and a failed fetch still falls back to yfinance, so the
+                    # global clear bought nothing and cost everyone (I9).
                     await asyncio.sleep(backoff)
 
         # total failure → fallback to yfinance
@@ -480,9 +488,7 @@ class DefeatBetaProvider(StockDataProvider):
             return False
         # Bounded request: accept when the earliest row reaches the start bound
         # (or near it), i.e. the window was actually covered rather than clipped.
-        if start_date is not None and dates[0] > start_date + timedelta(days=7):
-            return False
-        return True
+        return not (start_date is not None and dates[0] > start_date + timedelta(days=7))
 
     async def get_price_history_optimized(
         self,
@@ -677,7 +683,7 @@ class DefeatBetaProvider(StockDataProvider):
                 message=f"Failed to fetch financials for {symbol}: {e!s}",
                 error_code="DEFEAT_BETA_FETCH_ERROR",
                 details={"symbol": symbol, "original_error": str(e)},
-            )
+            ) from e
 
     async def _fetch_income_statements(self, ticker: Ticker, symbol: str, company_id: int) -> tuple[IncomeStatementRows, set[GapKey]]:
         logger.debug("[DBETA][%s] enter _fetch_income_statements", symbol)
@@ -978,9 +984,8 @@ class DefeatBetaProvider(StockDataProvider):
             fin.cash_flows = CashFlowRows(rows=fb.cf_rows)
         if need_earn:
             fin.earnings = EarningsRows(rows=fb.earn_rows)
-        if need_div:
-            if fb.div_rows:
-                fin.dividends = DividendRows(rows=fb.div_rows)
+        if need_div and fb.div_rows:
+            fin.dividends = DividendRows(rows=fb.div_rows)
         if need_next_earn:
             fin.next_earnings_date = fb.next_earnings_date
 
@@ -1050,7 +1055,7 @@ class DefeatBetaProvider(StockDataProvider):
             # Attempt 2: yfinance info.sharesOutstanding (snapshot, applies to all years)
             snapshot_shares: int | None = None
             try:
-                details = await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
+                await asyncio.to_thread(self.yfinance_provider.get_stock_details, symbol)
                 # get_stock_details caches yf.Ticker.info; sharesOutstanding lives there
                 # Access the raw yfinance ticker to get sharesOutstanding directly
                 import yfinance as yf
@@ -1312,7 +1317,7 @@ class DefeatBetaProvider(StockDataProvider):
         if s is None:
             return ""
         s = html.unescape(str(s)).strip()
-        s = s.replace('’', "'")
+        s = s.replace('\u2019', "'")
         s = re.sub(r'^[+\s]+', '', s)
         s = re.sub(r'\s+', ' ', s)
         s = s.replace(' and ', ' & ')
@@ -1522,16 +1527,12 @@ class DefeatBetaProvider(StockDataProvider):
             }
 
             if fv['total_debt'] is None and fv['short_term_debt'] is not None and fv['long_term_debt'] is not None:
-                try:
+                with contextlib.suppress(InvalidOperation):
                     fv['total_debt'] = Decimal(str(fv['short_term_debt'])) + Decimal(str(fv['long_term_debt']))
-                except InvalidOperation:
-                    pass
 
             if fv['total_liabilities_and_equity'] is None and fv['total_liabilities'] is not None and fv['shareholders_equity'] is not None:
-                try:
+                with contextlib.suppress(InvalidOperation):
                     fv['total_liabilities_and_equity'] = Decimal(str(fv['total_liabilities'])) + Decimal(str(fv['shareholders_equity'])) + (Decimal(str(fv['minority_interest'])) if fv['minority_interest'] is not None else Decimal('0'))
-                except InvalidOperation:
-                    pass
 
             row = BalanceSheetRow(
                 company_id=company_id,
@@ -1709,7 +1710,7 @@ class DefeatBetaProvider(StockDataProvider):
             if only_after and not self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1]):
                 continue
 
-            def gv(keys: list[str]) -> Any:
+            def gv(keys: list[str], col=col) -> Any:
                 for k in keys:
                     if k in df.index:
                         v = df.loc[k, col]
@@ -1778,7 +1779,7 @@ class DefeatBetaProvider(StockDataProvider):
             if only_after and not self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1]):
                 continue
 
-            def gv(keys: list[str]) -> Any:
+            def gv(keys: list[str], col=col) -> Any:
                 for k in keys:
                     if k in df.index:
                         v = df.loc[k, col]
@@ -1847,7 +1848,7 @@ class DefeatBetaProvider(StockDataProvider):
             if only_after and not self._is_new_fiscal_period(fy, fq, only_after[0], only_after[1]):
                 continue
 
-            def gv(keys: list[str]) -> Any:
+            def gv(keys: list[str], col=col) -> Any:
                 for k in keys:
                     if k in df.index:
                         v = df.loc[k, col]
@@ -1980,12 +1981,12 @@ class DefeatBetaProvider(StockDataProvider):
                 asyncio.to_thread(func),
                 timeout=self.settings.DEFEAT_BETA_TIMEOUT_SECONDS
             )
-        except TimeoutError:
+        except TimeoutError as e:
             logger.warning(f"Timeout fetching {description}")
             symbol = description.split(" for ")[-1] if " for " in description else "unknown"
             raise FinancialsFetchTimeoutError(
                 symbol, description, self.settings.DEFEAT_BETA_TIMEOUT_SECONDS
-            )
+            ) from e
 
     def _filter_to_new_data(
         self,

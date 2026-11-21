@@ -18,7 +18,7 @@ v3 Planner integration:
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from application.services.valuation_service import ValuationService
@@ -36,7 +36,7 @@ VALUATION_METHODS = [
 
 
 class ValuationComputationScheduler:
-    _in_flight: set[str] = set()
+    _in_flight: ClassVar[set[str]] = set()
 
     def __init__(self):
         self.is_running = False
@@ -69,12 +69,29 @@ class ValuationComputationScheduler:
             priority: 20 (background pre-compute, below market data @30 / price @40)
         """
         from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+        from shared.constants import get_effective_skipped_symbols
         try:
             financial_repo = SupabaseFinancialRepository()
             companies = await financial_repo.get_active_companies_for_market_data()
         except Exception as e:
             logger.error("plan() failed to enumerate active companies: %s", e)
             companies = []
+
+        # I24: apply the same shared delisted/renamed-symbol filter the
+        # market-data planner and the price-ingestion job use. Previously this
+        # planner was the one consumer missing from that single source of truth,
+        # so it enqueued jobs for dead tickers (the 172-vs-166 market_data gap).
+        before = len(companies or [])
+        skipped = get_effective_skipped_symbols()
+        companies = [
+            c for c in (companies or [])
+            if (c.get("ticker_symbol") or "").upper() not in skipped
+        ]
+        if len(companies) < before:
+            logger.debug(
+                "[VALUATION] plan skipped %d delisted/renamed symbol(s)",
+                before - len(companies),
+            )
 
         jobs = []
         for c in companies or []:

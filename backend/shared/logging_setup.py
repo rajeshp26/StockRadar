@@ -60,6 +60,44 @@ def _correlation_record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
     return record
 
 
+class VendorLoggerNamespaceFilter(logging.Filter):
+    """Namespace a vendor logger's bare class name in emitted records.
+
+    Some SDKs create loggers with ``logging.getLogger(self.__class__.__name__)``,
+    producing bare names such as ``DuckDBClient`` instead of a hierarchy. A
+    *logger* filter runs in ``Logger.handle()`` for records created by that
+    logger, so rewriting ``record.name`` here happens before any formatter
+    (``CONSOLE_FORMAT``, ``JsonLineFormatter``) sees it. Hierarchical names are
+    left alone, which makes it safe to attach defensively.
+    """
+
+    MARKER = "_i29_vendor_namespace"
+
+    def __init__(self, prefix: str) -> None:
+        super().__init__()
+        self._prefix = prefix.rstrip(".")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if "." not in record.name:
+            record.name = f"{self._prefix}.{record.name}"
+        return True
+
+
+def namespace_vendor_loggers(*names: str, prefix: str) -> None:
+    """Attach the namespacing filter to each named bare logger, once.
+
+    The prefix is supplied by the caller (an app-level module), keeping this
+    generic module free of product names.
+    """
+    for name in names:
+        logger = logging.getLogger(name)
+        if any(getattr(f, VendorLoggerNamespaceFilter.MARKER, False) for f in logger.filters):
+            continue
+        filt = VendorLoggerNamespaceFilter(prefix)
+        setattr(filt, VendorLoggerNamespaceFilter.MARKER, True)
+        logger.addFilter(filt)
+
+
 def install_correlation_stamping() -> None:
     """Stamp ``record.correlation_id`` on every record. Safe to call repeatedly."""
     global _CORRELATION_INSTALLED, _previous_record_factory

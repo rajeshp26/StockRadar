@@ -1,7 +1,8 @@
 """Tests for auth.get_current_user — Supabase JWT local verification."""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi import HTTPException
 
 
@@ -113,8 +114,12 @@ class TestVerifyJwt:
             assert kwargs["algorithms"] == ["RS256"]
 
     def test_unsupported_algorithm_returns_401(self):
-        """Should raise 401 for unsupported JWT algorithm."""
-        with patch("auth.get_unverified_header", return_value={"alg": "ES256"}):
+        """Should raise 401 for a genuinely unsupported JWT algorithm.
+
+        ES256 became supported in commit 3be122eb (alongside HS256/RS256),
+        so it no longer exercises this branch — use PS256 instead.
+        """
+        with patch("auth.get_unverified_header", return_value={"alg": "PS256"}):
             from auth import verify_jwt
             with pytest.raises(HTTPException) as exc:
                 verify_jwt("bad-alg.token")

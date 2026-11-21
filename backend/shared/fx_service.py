@@ -11,9 +11,10 @@ Caching strategy:
 """
 
 import logging
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
 
 from shared.time_utils import now_utc
 
@@ -83,7 +84,7 @@ def convert_cash_map(
         amount = Decimal(str(amount))
         if amount == 0:
             continue
-        if code == target or code == UNSTAMPED_CURRENCY:
+        if code in (target, UNSTAMPED_CURRENCY):
             total += amount
             continue
         if fx_service is None:
@@ -107,6 +108,16 @@ class FXService:
     def __init__(self, supabase_client):
         self._client = supabase_client
         self._cache: dict[tuple[str, str, str], tuple[Decimal | None, datetime]] = {}
+        # I4: at most one gap-heal fetch per pair per service instance. An
+        # FXService is created per request/snapshot rebuild, so a rebuild that
+        # resolves hundreds of dates never turns this into hundreds of fetches.
+        self._healed_pairs: set[tuple[str, str]] = set()
+        # I31: the stale-rate condition is identified by the close being
+        # forward-filled, not by the query date. A rebuild resolves hundreds of
+        # as_of dates against the same stale close; warn once for that close.
+        # A different close (ingestion landed a new rate) warns again.
+        self._warned_stale_closes: set[tuple[str, str, date]] = set()
+        self.stale_warning_suppressed: int = 0
 
     def _cache_get(self, key: tuple[str, str, str]) -> Decimal | None:
         if key not in self._cache:
@@ -142,8 +153,22 @@ class FXService:
         if cache_key in self._cache:
             return None
 
-        rate = self._query_cached_rate(base.upper(), target.upper(), as_of)
-        if rate is not None:
+        # I4: forward-fill is the valuation policy, but it must not be a trap.
+        # A rate older than MAX_STALE_DAYS used to be returned here immediately,
+        # which short-circuited every gap-healing path below: once ingestion
+        # stopped, the same stale close was reused forever (57 days locally).
+        # Try one bounded refresh over the missing range first, then fall back
+        # to the stale rate with the usual warning if the fetch is unavailable.
+        b, t = base.upper(), target.upper()
+        record = self._query_cached_rate_record(b, t, as_of)
+        if record is not None:
+            rate, rate_date = record
+            if (as_of - rate_date).days > self.MAX_STALE_DAYS:
+                healed = self._heal_stale_rate(b, t, as_of, rate_date)
+                if healed is not None:
+                    rate = healed
+                else:
+                    self._warn_stale_rate(b, t, as_of, rate_date)
             self._cache_set(cache_key, rate)
             return rate
 
@@ -209,17 +234,10 @@ class FXService:
         )
         return (amount, False)
 
-    def _query_cached_rate(
+    def _query_cached_rate_record(
         self, base: str, target: str, as_of: date
-    ) -> Decimal | None:
-        """Check exchange_rates table for nearest-past rate (any age).
-
-        Forward-fill semantics: the last close on or before as_of is the
-        effective rate regardless of age. Rates older than MAX_STALE_DAYS log
-        a warning (freshness signal) but are still used - dropping them is what
-        produced unconverted values and the Jul->Aug spike. Returns None only
-        when no past rate exists at all.
-        """
+    ) -> tuple[Decimal, date] | None:
+        """The nearest-past rate and its close date, or None. Forward-fill raw material."""
         res = (
             self._client.table("exchange_rates")
             .select("rate, rate_date")
@@ -232,16 +250,87 @@ class FXService:
         )
         if res.data:
             row = res.data[0]
-            rate_date = date.fromisoformat(row["rate_date"])
-            days_stale = (as_of - rate_date).days
-            if days_stale > self.MAX_STALE_DAYS:
-                logger.warning(
-                    "FX rate %s->%s is %d days old (beyond %d-day freshness "
-                    "window); forward-filling it rather than dropping the conversion",
-                    base, target, days_stale, self.MAX_STALE_DAYS,
-                )
-            return Decimal(str(row["rate"]))
+            return Decimal(str(row["rate"])), date.fromisoformat(row["rate_date"])
         return None
+
+    def _warn_stale_rate(
+        self, base: str, target: str, as_of: date, rate_date: date
+    ) -> None:
+        """Freshness signal: a stale rate is still used, but never silently (I4).
+
+        I31: emitted once per (pair, stale close) per service instance. The
+        message text is unchanged so a single occurrence still reads exactly
+        as I4's contract asserts.
+        """
+        days_stale = (as_of - rate_date).days
+        if days_stale > self.MAX_STALE_DAYS:
+            key = (base, target, rate_date)
+            if key in self._warned_stale_closes:
+                self.stale_warning_suppressed += 1
+                return
+            self._warned_stale_closes.add(key)
+            logger.warning(
+                "FX rate %s->%s is %d days old (beyond %d-day freshness "
+                "window); forward-filling it rather than dropping the conversion",
+                base, target, days_stale, self.MAX_STALE_DAYS,
+            )
+
+    def _heal_stale_rate(
+        self, base: str, target: str, as_of: date, rate_date: date
+    ) -> Decimal | None:
+        """Try one bounded fetch over the gap; return a fresher rate if one landed.
+
+        I4: a stopped ingestion job used to leave every CAD holding valued at a
+        54-day-old close. The refresh is deliberately conservative:
+
+        * at most one fetch per pair per service instance (a rebuild resolves
+          hundreds of dates; it must not become hundreds of network calls);
+        * only for as_of dates inside the existing LIVE_FETCH_WINDOW_DAYS, so
+          historical rebuilds stay offline;
+        * failure is non-fatal -- the caller falls back to the stale rate and
+          warns, preserving the "never drop the conversion" policy.
+        """
+        pair = (base, target)
+        if pair in self._healed_pairs:
+            return None
+        self._healed_pairs.add(pair)
+
+        today = now_utc().date()
+        if as_of > today or (today - as_of).days > LIVE_FETCH_WINDOW_DAYS:
+            return None
+        if rate_date >= today:
+            return None
+
+        try:
+            self._fetch_and_persist_history(
+                base, target, rate_date + timedelta(days=1), today
+            )
+        except Exception as exc:  # provider/network failure is a fallback, not a crash
+            logger.warning("FX gap refresh failed for %s->%s: %s", base, target, exc)
+            return None
+
+        record = self._query_cached_rate_record(base, target, as_of)
+        if record is None or record[1] <= rate_date:
+            return None
+        return record[0]
+
+    def _query_cached_rate(
+        self, base: str, target: str, as_of: date
+    ) -> Decimal | None:
+        """Check exchange_rates table for nearest-past rate (any age).
+
+        Forward-fill semantics: the last close on or before as_of is the
+        effective rate regardless of age. Rates older than MAX_STALE_DAYS log
+        a warning (freshness signal) but are still used - dropping them is what
+        produced unconverted values and the Jul->Aug spike. Returns None only
+        when no past rate exists at all.
+        """
+        record = self._query_cached_rate_record(base, target, as_of)
+        if record is None:
+            return None
+        rate, rate_date = record
+        self._warn_stale_rate(base, target, as_of, rate_date)
+        return rate
 
     def _query_future_rate(
         self, base: str, target: str, as_of: date

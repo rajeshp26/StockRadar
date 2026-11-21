@@ -1,14 +1,9 @@
 """Unit tests for _compute_overview_from_holdings helper."""
 
-import sys
-from unittest import mock
-
-# Mock broken import chain BEFORE importing api.portfolio.
-# These are pre-existing project-wide issues (unused/dead imports in
-# portfolio_service.py and broken class name references).
-sys.modules["domain.model_types"] = mock.MagicMock()
-
-# Now import — the chain (api.portfolio -> portfolio_service -> ...) is clean
+# I1d: this module used to inject a MagicMock into sys.modules["domain.model_types"]
+# before importing api.portfolio, leaving domain.model_types poisoned for every
+# later-collected test (notably test_statement_normalizer.py, whose CashFlowRow
+# became a MagicMock). The import chain is clean now, so import normally.
 from api.portfolio import _compute_overview_from_holdings
 
 

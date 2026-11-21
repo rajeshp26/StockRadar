@@ -10,14 +10,15 @@ Additions in this version:
   - Restored helper: company_exists(company_id) -> bool
 """
 
+import asyncio
+import contextlib
+import hashlib
 import logging
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from itertools import islice
-import hashlib
 from typing import Any
-
-from collections import defaultdict
 
 from application.validators.financial_data_validator import (
     verify_database_write,
@@ -60,7 +61,7 @@ class DatabaseSerializer:
         for key, value in data.items():
             if value is None:
                 result[key] = None
-            elif isinstance(value, datetime) or isinstance(value, date):
+            elif isinstance(value, (datetime, date)):
                 result[key] = value.isoformat()
             elif isinstance(value, Decimal):
                 if value == value.to_integral_value():
@@ -533,7 +534,7 @@ class SupabaseFinancialRepository:
     # ========================================================================
 
     # PRICE PLAUSIBILITY GATE (root-cause guard): rejects closes above the
-    # company's verified anchor × MAX_PRICE_UP_RATIO. Anchor precedence: executed
+    # company's verified anchor x MAX_PRICE_UP_RATIO. Anchor precedence: executed
     # transaction price (immutable ground truth) → provider current quote →
     # last verified close. Historical closes never raise a transaction-based
     # anchor — a poisoned history would otherwise legitimise more poison.
@@ -883,17 +884,17 @@ class SupabaseFinancialRepository:
             )
 
         # Defensive clamp: numeric(16,4) limit is 999,999,999,999.9999
-        _PRICE_MAX = 999_999_999_999.9999
-        _PRICE_FIELDS = ("open_price", "close_price", "high_price", "low_price", "adj_close")
+        price_max = 999_999_999_999.9999
+        price_fields = ("open_price", "close_price", "high_price", "low_price", "adj_close")
         clamped = 0
         for r in rows:
-            for f in _PRICE_FIELDS:
+            for f in price_fields:
                 val = r.get(f)
                 if val is not None:
                     try:
                         fval = float(val)
-                        if abs(fval) >= _PRICE_MAX:
-                            r[f] = round(_PRICE_MAX if fval > 0 else -_PRICE_MAX, 4)
+                        if abs(fval) >= price_max:
+                            r[f] = round(price_max if fval > 0 else -price_max, 4)
                             clamped += 1
                     except (TypeError, ValueError):
                         pass
@@ -1391,12 +1392,20 @@ class SupabaseFinancialRepository:
             raise
 
     async def update_next_earnings_date(self, company_id: int, earnings_date: date) -> None:
-        """Lightweight update of next_earnings_date only (no fiscal year/quarter churn)."""
-        try:
+        """Lightweight update of next_earnings_date only (no fiscal year/quarter churn).
+
+        The Supabase client is synchronous; run its HTTP call in a worker thread
+        so a batch of these from the earnings planner cannot block the event loop
+        (I20). Same ``asyncio.to_thread`` pattern as valuation_repository.
+        """
+        def _update() -> None:
             self.client.table("companies").update({
                 "next_earnings_date": earnings_date.isoformat(),
                 "data_completeness_status": "CURRENT",
             }).eq("company_id", company_id).execute()
+
+        try:
+            await asyncio.to_thread(_update)
         except Exception as e:
             logger.warning("Failed to update next_earnings_date for company %d: %s", company_id, e)
 
@@ -1406,20 +1415,25 @@ class SupabaseFinancialRepository:
         end_date: date,
     ) -> list[dict[str, Any]]:
         try:
-            response = self.client.table('companies').select(
-                'company_id, ticker_symbol, next_earnings_date, '
-                'last_refreshed_fiscal_year, last_refreshed_fiscal_quarter, '
-                'data_completeness_status, first_financial_data_loaded_at'
-            ).gte(
-                'next_earnings_date', start_date.isoformat()
-            ).lte(
-                'next_earnings_date', end_date.isoformat()
-            ).in_(
-                'data_completeness_status',
-                ['INITIAL', 'PARTIAL', 'COMPLETE', 'CURRENT']
-            ).or_(
-                'security_type.eq.stock,security_type.is.null'
-            ).execute()
+            # Sync Supabase HTTP on a worker thread: the earnings planner awaits
+            # this from its tick (I20).
+            def _query() -> Any:
+                return self.client.table('companies').select(
+                    'company_id, ticker_symbol, next_earnings_date, '
+                    'last_refreshed_fiscal_year, last_refreshed_fiscal_quarter, '
+                    'data_completeness_status, first_financial_data_loaded_at'
+                ).gte(
+                    'next_earnings_date', start_date.isoformat()
+                ).lte(
+                    'next_earnings_date', end_date.isoformat()
+                ).in_(
+                    'data_completeness_status',
+                    ['INITIAL', 'PARTIAL', 'COMPLETE', 'CURRENT']
+                ).or_(
+                    'security_type.eq.stock,security_type.is.null'
+                ).execute()
+
+            response = await asyncio.to_thread(_query)
 
             count = len(response.data or [])
             logger.info(
@@ -1459,21 +1473,25 @@ class SupabaseFinancialRepository:
              come first, then oldest refresh, capped at `limit`.
         """
         try:
-            # Step 1: candidates with financial data loaded
-            resp = (
-                self.client.table("companies")
-                .select(
-                    "company_id, ticker_symbol, data_completeness_status, "
-                    "first_financial_data_loaded_at, last_financial_refresh_at"
+            # Step 1: candidates with financial data loaded. Sync Supabase HTTP
+            # on a worker thread so the planner tick is not stalled (I20).
+            def _candidates() -> Any:
+                return (
+                    self.client.table("companies")
+                    .select(
+                        "company_id, ticker_symbol, data_completeness_status, "
+                        "first_financial_data_loaded_at, last_financial_refresh_at"
+                    )
+                    .in_(
+                        "data_completeness_status",
+                        ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"],
+                    )
+                    .not_.is_("first_financial_data_loaded_at", "null")
+                    .or_("security_type.eq.stock,security_type.is.null")
+                    .execute()
                 )
-                .in_(
-                    "data_completeness_status",
-                    ["INITIAL", "PARTIAL", "COMPLETE", "CURRENT"],
-                )
-                .not_.is_("first_financial_data_loaded_at", "null")
-                .or_("security_type.eq.stock,security_type.is.null")
-                .execute()
-            )
+
+            resp = await asyncio.to_thread(_candidates)
             candidates = resp.data or []
             if not candidates:
                 return []
@@ -1483,13 +1501,16 @@ class SupabaseFinancialRepository:
             page_size = 1000
             offset = 0
             while True:
-                page = (
-                    self.client.table("income_statements")
-                    .select("company_id")
-                    .gte("period_end_date", fresh_cutoff.isoformat())
-                    .range(offset, offset + page_size - 1)
-                    .execute()
-                )
+                def _page(start: int = offset) -> Any:
+                    return (
+                        self.client.table("income_statements")
+                        .select("company_id")
+                        .gte("period_end_date", fresh_cutoff.isoformat())
+                        .range(start, start + page_size - 1)
+                        .execute()
+                    )
+
+                page = await asyncio.to_thread(_page)
                 rows = page.data or []
                 for r in rows:
                     cid = r.get("company_id")
@@ -1682,12 +1703,18 @@ class SupabaseFinancialRepository:
             page_size = 1000
             offset = 0
             while True:
-                page = (
-                    self.client.table("income_statements")
-                    .select("company_id")
-                    .range(offset, offset + page_size - 1)
-                    .execute()
-                )
+                # Sync Supabase HTTP on a worker thread: the earnings planner
+                # awaits this from its tick, so a blocking call here stalls every
+                # other coroutine in the worker (I20).
+                def _page(start: int = offset) -> Any:
+                    return (
+                        self.client.table("income_statements")
+                        .select("company_id")
+                        .range(start, start + page_size - 1)
+                        .execute()
+                    )
+
+                page = await asyncio.to_thread(_page)
                 rows = page.data or []
                 for r in rows:
                     cid = r.get("company_id")
@@ -1700,15 +1727,18 @@ class SupabaseFinancialRepository:
             if not ids:
                 return []
 
-            resp = (
-                self.client.table("companies")
-                .select(
-                    "company_id, ticker_symbol, data_completeness_status, "
-                    "security_type, next_earnings_date, exchange"
+            def _companies() -> Any:
+                return (
+                    self.client.table("companies")
+                    .select(
+                        "company_id, ticker_symbol, data_completeness_status, "
+                        "security_type, next_earnings_date, exchange"
+                    )
+                    .in_("company_id", list(ids))
+                    .execute()
                 )
-                .in_("company_id", list(ids))
-                .execute()
-            )
+
+            resp = await asyncio.to_thread(_companies)
             return resp.data or []
 
         except Exception as e:
@@ -1721,7 +1751,7 @@ class SupabaseFinancialRepository:
         """Get company's refresh metadata for smart filtering."""
         try:
             response = self.client.table('companies').select(
-                'company_id, ticker_symbol, exchange, '
+                'company_id, ticker_symbol, exchange, security_type, '
                 'first_financial_data_loaded_at, last_financial_refresh_at, '
                 'last_refreshed_fiscal_year, last_refreshed_fiscal_quarter, '
                 'data_completeness_status, next_earnings_date, '
@@ -1737,6 +1767,7 @@ class SupabaseFinancialRepository:
                 company_id=data['company_id'],
                 ticker_symbol=data['ticker_symbol'],
                 exchange=data.get('exchange'),
+                security_type=data.get('security_type'),
                 first_financial_data_loaded_at=(
                     parse_db_timestamp(data['first_financial_data_loaded_at'])
                     if data.get('first_financial_data_loaded_at')
@@ -1780,21 +1811,17 @@ class SupabaseFinancialRepository:
             logger.error(f"Failed to update price refresh marker for {company_id}: {e!s}")
 
     async def update_price_attempt_marker(self, company_id: int) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.client.table('companies').update({
                 'last_price_attempt_at': now_utc().isoformat(),
             }).eq('company_id', company_id).execute()
-        except Exception:
-            pass
 
     async def update_price_success_marker(self, company_id: int) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.client.table('companies').update({
                 'last_price_success_at': now_utc().isoformat(),
                 'consecutive_price_failures': 0,
             }).eq('company_id', company_id).execute()
-        except Exception:
-            pass
 
     async def increment_price_failures(self, company_id: int) -> None:
         """Increment the consecutive price-failure counter (root fix).
@@ -2055,7 +2082,7 @@ class SupabaseFinancialRepository:
         status: str = "predicted",
     ) -> None:
         """Upsert a forward-looking ex-dividend date into upcoming_dividend_events.
-        
+
         UNIQUE(company_id, data_source) ensures each source has exactly one
         opinion per company.  When a provider updates its prediction, the
         old row is replaced atomically — no delete needed.
@@ -2092,7 +2119,7 @@ class SupabaseFinancialRepository:
 
     async def cleanup_stale_events(self, company_id: int) -> None:
         """Remove past-due upcoming events with a 14-day grace period.
-        
+
         The grace period prevents gaps when a provider hasn't refreshed yet.
         Only affects upcoming_dividend_events — never touches dividend_history.
         """

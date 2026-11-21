@@ -2,6 +2,7 @@
 Tests for scheduler_worker.py — worker process lifecycle.
 """
 import asyncio
+import contextlib
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,7 +32,7 @@ class TestGracefulShutdown:
     def test_registers_signal_handlers(self):
         with patch("signal.signal") as mock_signal:
             from scheduler_worker import GracefulShutdown
-            gs = GracefulShutdown()
+            GracefulShutdown()
             assert mock_signal.call_count == 2
             signals_used = [call[0][0] for call in mock_signal.call_args_list]
             assert signal.SIGTERM in signals_used
@@ -90,7 +91,7 @@ class TestWorkerMain:
 
         settings_patchers = []
         if enable_all_schedulers:
-            for flag in ["ENABLE_SUPER_INVESTORS_SCHEDULER"]:
+            for _flag in ["ENABLE_SUPER_INVESTORS_SCHEDULER"]:
                 p = patch("config.settings.ENABLE_SUPER_INVESTORS_SCHEDULER", True)
                 p.start()
                 settings_patchers.append(p)
@@ -157,11 +158,14 @@ class TestWorkerMain:
         handler_types = [
             call[0][0] for call in mocks["engine"].register_handler.call_args_list
         ]
-        assert len(handler_types) == 7
+        # 8 handlers: benchmark_series_refresh was added in commit 1c65e486
+        # (materialise benchmark and portfolio value series with response cache).
+        assert len(handler_types) == 8
         assert "company_refresh" in handler_types
         assert "investor_refresh" in handler_types
         assert "aggregation_refresh" in handler_types
         assert "portfolio_snapshot" in handler_types
+        assert "benchmark_series_refresh" in handler_types
         assert "price_ingestion" in handler_types
         assert "valuation_computation" in handler_types
         assert "freshness_snapshot" in handler_types
@@ -259,11 +263,14 @@ class TestHandlerFunctions:
             })
 
     async def test_handle_investor_refresh(self, mock_db_env):
+        from application.schedulers.super_investors_scheduler import InvestorRefreshStatus
         from scheduler_worker import handle_investor_refresh
 
         with patch("scheduler_worker.SuperInvestorsRefreshScheduler") as mock_si:
             mock_instance = AsyncMock()
-            mock_instance._refresh_single_investor = AsyncMock(return_value=True)
+            mock_instance._refresh_single_investor = AsyncMock(
+                return_value=InvestorRefreshStatus.REFRESHED
+            )
             mock_si.return_value = mock_instance
 
             result = await handle_investor_refresh({
@@ -275,7 +282,7 @@ class TestHandlerFunctions:
                 }
             })
 
-            assert result["status"] == "ok"
+            assert result["status"] == "refreshed"
             assert result["cik"] == "0000320193"
 
     async def test_handle_investor_refresh_missing_cik_raises(self, mock_db_env):
@@ -285,11 +292,14 @@ class TestHandlerFunctions:
             await handle_investor_refresh({"payload": {}})
 
     async def test_handle_investor_refresh_skipped(self, mock_db_env):
+        from application.schedulers.super_investors_scheduler import InvestorRefreshStatus
         from scheduler_worker import handle_investor_refresh
 
         with patch("scheduler_worker.SuperInvestorsRefreshScheduler") as mock_si:
             mock_instance = AsyncMock()
-            mock_instance._refresh_single_investor = AsyncMock(return_value=False)
+            mock_instance._refresh_single_investor = AsyncMock(
+                return_value=InvestorRefreshStatus.SKIPPED_NOT_DUE
+            )
             mock_si.return_value = mock_instance
 
             result = await handle_investor_refresh({
@@ -299,7 +309,7 @@ class TestHandlerFunctions:
                 }
             })
 
-            assert result["status"] == "skipped"
+            assert result["status"] == "skipped_not_due"
 
     async def test_handle_aggregation_refresh(self, mock_db_env):
         import application.jobs.aggregation_jobs as agg
@@ -374,13 +384,12 @@ class TestHeartbeatLoop:
                 await asyncio.sleep(0.15)
                 mock_shutdown.shutdown_requested = True
 
-            asyncio.create_task(shutdown_after_delay())
+            _shutdown_task = asyncio.create_task(shutdown_after_delay())
 
-            try:
+            with contextlib.suppress(TimeoutError, Exception):
                 await asyncio.wait_for(sw.main(), timeout=5.0)
-            except (TimeoutError, Exception):
-                pass
 
+            await _shutdown_task
             assert mock_repo.record_heartbeat.call_count >= 1
         finally:
             for p in patchers:

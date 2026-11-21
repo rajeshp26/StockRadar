@@ -1,6 +1,6 @@
 """Tests for the event-replay engine."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
 
@@ -278,11 +278,15 @@ class TestReplayBuildSnapshot:
             "cash_balance": 0.0,
             "cost_basis": 0.0,
         }
+        # I1d: default account_currency is CAD; the transaction/cash here is USD.
+        # Without an explicit target, FX conversion attempts a live rate lookup
+        # (network) even though this is a unit test. Match the passing test above.
         result = engine.compare_with_snapshot(
             account_id=1,
             snapshot_date=now.date(),
             stored_snapshot=stored,
             prices_by_company=prices,
+            account_currency="USD",
         )
         assert result.match is False
         assert len(result.differences) > 0
@@ -1086,37 +1090,43 @@ class TestIstInteractions:
         store = EventStore(client=mock_client)
         return ReplayEngine(store)
 
-    def _buy_event(self, account_id, company_id, qty, price, symbol="AAPL"):
+    def _buy_event(self, account_id, company_id, qty, price, symbol="AAPL", on=None):
+        data = {
+            "account_id": account_id, "company_id": company_id,
+            "activity_type": "Trade", "symbol": symbol,
+            "quantity": qty, "unit_price": float(price),
+            "commission": 0, "net_cash_amount": float(-(qty * price)),
+            "currency": "USD",
+        }
+        if on is not None:
+            data["transaction_date"] = on
         return {
             "event_type": "transaction_imported",
             "aggregate_id": f"account_{account_id}",
             "aggregate_type": "account",
-            "data": {
-                "account_id": account_id, "company_id": company_id,
-                "activity_type": "Trade", "symbol": symbol,
-                "quantity": qty, "unit_price": float(price),
-                "commission": 0, "net_cash_amount": float(-(qty * price)),
-                "currency": "USD",
-            },
+            "data": data,
             "created_at": datetime.now(UTC).isoformat(),
         }
 
-    def _ist_event(self, account_id, company_id, qty, net_cash_amount, symbol="AAPL"):
+    def _ist_event(self, account_id, company_id, qty, net_cash_amount, symbol="AAPL", on=None):
+        data = {
+            "account_id": account_id, "company_id": company_id,
+            "activity_type": "InternalSecurityTransfer", "symbol": symbol,
+            "quantity": qty, "unit_price": None,
+            "commission": None, "net_cash_amount": float(net_cash_amount) if net_cash_amount is not None else None,
+            "currency": "USD",
+        }
+        if on is not None:
+            data["transaction_date"] = on
         return {
             "event_type": "transaction_imported",
             "aggregate_id": f"account_{account_id}",
             "aggregate_type": "account",
-            "data": {
-                "account_id": account_id, "company_id": company_id,
-                "activity_type": "InternalSecurityTransfer", "symbol": symbol,
-                "quantity": qty, "unit_price": None,
-                "commission": None, "net_cash_amount": float(net_cash_amount) if net_cash_amount is not None else None,
-                "currency": "USD",
-            },
+            "data": data,
             "created_at": datetime.now(UTC).isoformat(),
         }
 
-    def _split_event(self, account_id, company_id, factor):
+    def _split_event(self, account_id, company_id, factor, on=None):
         return {
             "event_type": "split",
             "aggregate_id": f"account_{account_id}",
@@ -1124,36 +1134,47 @@ class TestIstInteractions:
             "data": {
                 "account_id": account_id, "company_id": company_id,
                 "split_factor": float(factor),
-                "effective_date": datetime.now(UTC).date().isoformat(),
+                "effective_date": on or datetime.now(UTC).date().isoformat(),
             },
             "created_at": datetime.now(UTC).isoformat(),
         }
 
-    def _roc_event(self, account_id, company_id, amount):
+    def _roc_event(self, account_id, company_id, amount, on=None):
+        data = {
+            "account_id": account_id, "company_id": company_id,
+            "activity_type": "ReturnOfCapital", "symbol": "AAPL",
+            "quantity": 0, "unit_price": 0,
+            "commission": 0, "net_cash_amount": float(amount),
+            "currency": "USD",
+        }
+        if on is not None:
+            data["transaction_date"] = on
         return {
             "event_type": "transaction_imported",
             "aggregate_id": f"account_{account_id}",
             "aggregate_type": "account",
-            "data": {
-                "account_id": account_id, "company_id": company_id,
-                "activity_type": "ReturnOfCapital", "symbol": "AAPL",
-                "quantity": 0, "unit_price": 0,
-                "commission": 0, "net_cash_amount": float(amount),
-                "currency": "USD",
-            },
+            "data": data,
             "created_at": datetime.now(UTC).isoformat(),
         }
 
     def test_ist_then_split(self, mock_supabase_client):
-        """IST inbound then split: lots adjust correctly."""
+        """IST inbound then split: lots adjust correctly.
+
+        The two events are dated a day apart because a split rescales at the start of
+        its effective date: its own day's movements are already post-split and must not
+        be multiplied again (see ReplayEngine._replay_sort_key). Same-day fixtures here
+        would describe a different, wrong scenario.
+        """
         engine = self._make_engine(mock_supabase_client)
+        today = datetime.now(UTC).date()
+        yesterday = (today - timedelta(days=1)).isoformat()
         events = [
-            self._ist_event(1, 10, 10, 1000.00),  # cost_per_share = 100
-            self._split_event(1, 10, 2),            # 2:1 split
+            self._ist_event(1, 10, 10, 1000.00, on=yesterday),  # cost_per_share = 100
+            self._split_event(1, 10, 2),                         # 2:1 split
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(UTC).date())
+        state = engine.replay_to_date(1, today)
 
         h = state.holdings[10]
         # After split: qty=20, avg_cost=50, lot: {qty:20, cost_per_share:50}
@@ -1167,14 +1188,16 @@ class TestIstInteractions:
     def test_buy_then_ist_then_split(self, mock_supabase_client):
         """Buy + IST inbound + split: all lots adjust correctly."""
         engine = self._make_engine(mock_supabase_client)
+        today = datetime.now(UTC).date()
+        yesterday = (today - timedelta(days=1)).isoformat()
         events = [
-            self._buy_event(1, 10, 10, 100),        # lot1: {qty:10, cost:100}
-            self._ist_event(1, 10, 5, 500.00),      # lot2: {qty:5, cost:100}
-            self._split_event(1, 10, 3),             # 3:1 split
+            self._buy_event(1, 10, 10, 100, on=yesterday),        # lot1: {qty:10, cost:100}
+            self._ist_event(1, 10, 5, 500.00, on=yesterday),      # lot2: {qty:5, cost:100}
+            self._split_event(1, 10, 3),                           # 3:1 split
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(UTC).date())
+        state = engine.replay_to_date(1, today)
 
         h = state.holdings[10]
         assert h.quantity == Decimal("45")  # (10+5)*3
@@ -1248,19 +1271,26 @@ class TestIstInteractions:
         assert h.average_cost == Decimal("118.75")
 
     def test_ist_full_lifecycle(self, mock_supabase_client):
-        """Full IST lifecycle: inbound → split → ROC → sell."""
+        """Full IST lifecycle: inbound → split → ROC → sell.
+
+        Each step is dated a day later than the previous one. The sequence is the
+        subject of the test, and replay ordering is by effective date, so collapsing
+        five steps onto one day would be specifying same-day ordering instead.
+        """
         engine = self._make_engine(mock_supabase_client)
+        today = datetime.now(UTC).date()
+        day = lambda n: (today - timedelta(days=n)).isoformat()  # noqa: E731
         events = [
-            self._ist_event(1, 10, 10, 1000.00),  # inbound: 10@100
-            self._split_event(1, 10, 2),            # split 2:1: 20@50
-            self._roc_event(1, 10, 200),            # ROC $200: total_cost=800, avg=40
-            self._buy_event(1, 10, 5, 80),          # buy 5@80: adds lot
+            self._ist_event(1, 10, 10, 1000.00, on=day(5)),  # inbound: 10@100
+            self._split_event(1, 10, 2, on=day(4)),           # split 2:1: 20@50
+            self._roc_event(1, 10, 200, on=day(4)),           # ROC $200: total_cost=800, avg=40
+            self._buy_event(1, 10, 5, 80, on=day(3)),         # buy 5@80: adds lot
             # Now: qty=25, lots=[{20, $40}, {5, $80}], total_cost=800+400=1200
-            self._ist_event(1, 10, -8, -800.00),   # outbound IST: FIFO removes 8 from first lot
+            self._ist_event(1, 10, -8, -800.00, on=day(2)),  # outbound IST: FIFO removes 8
         ]
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value = MagicMock(data=events)
 
-        state = engine.replay_to_date(1, datetime.now(UTC).date())
+        state = engine.replay_to_date(1, today)
 
         h = state.holdings[10]
         # After outbound IST -8: FIFO removes 8 from lot1 (20@40)

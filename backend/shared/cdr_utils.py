@@ -22,8 +22,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from decimal import Decimal
+from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
+
+from shared.split_utils import split_adjustment_factor, split_schedule_from_rows
 
 logger = logging.getLogger("stockerpro.cdr")
 
@@ -41,6 +44,11 @@ EXCHANGE_OVERRIDE_TOR = "TOR"
 
 # Structural CDR ratio: 1 CDR = 1/10 of an underlying US share.
 CDR_RATIO = 10.0
+# I3: the trace compares this ratio against the value that reached pricing.
+# Comparing the two as floats is an exact-equality test on binary noise: a ratio
+# that drifted to 9.999999999999999 cannot be classified deterministically.
+# str() preserves the intended decimal instead of the binary expansion.
+CDR_RATIO_DECIMAL = Decimal(str(CDR_RATIO))
 
 
 def matches_cdr_name(name: str | None) -> bool:
@@ -92,8 +100,7 @@ def iter_transactions(client, select_cols: list[str], account_id: int | None = N
         q = q.order("transaction_id").range(start, start + step - 1)
         batch = q.execute()
         rows = batch.data or []
-        for r in rows:
-            yield r
+        yield from rows
         if len(rows) < step:
             break
         start += step
@@ -139,16 +146,76 @@ def derive_cdr_companies_by_account(client) -> dict[int, set[int]]:
     return out
 
 
-def _accumulate_lots(rows, as_of: str) -> dict[int, dict[str, Decimal]]:
+# Activity types that move SHARES. This set is the one the replay engine applies to
+# holdings, deliberately shared rather than re-declared: `quantity` in a Wealthsimple
+# export carries a CASH amount for every other activity type (dividend, interest, fee,
+# withholding tax, return of capital, non-cash distribution), so summing it as a share
+# movement corrupts the position. Live evidence: account 7 / ETHY (company 3157) holds
+# 80 shares, while summing every non-Dividend row yields 90.616 because its
+# ReturnOfCapital and NonCashDistribution rows were counted as shares.
+SHARE_MOVEMENT_ACTIVITY_TYPES = frozenset({"Trade", "InternalSecurityTransfer"})
+
+
+def load_split_schedule(client) -> dict[int, list[tuple[date, Decimal]]]:
+    """The whole `splits` table as ``{company_id: [(date, multiplier)]}``.
+
+    One paginated read. Imported lazily because split_sync owns split reconciliation
+    and this module is imported by everything that needs a lot total.
+    """
+    from shared.split_sync import fetch_all_splits
+
+    return split_schedule_from_rows(fetch_all_splits(client))
+
+
+def _as_of_date(as_of: str) -> date | None:
+    try:
+        return date.fromisoformat(str(as_of)[:10])
+    except (TypeError, ValueError):
+        logger.warning(
+            "lot replay: as_of %r is not an ISO date; split adjustment skipped", as_of
+        )
+        return None
+
+
+def _movement_date(raw: Any) -> date | None:
+    if isinstance(raw, date):
+        return raw
+    if raw is None:
+        return None
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _accumulate_lots(
+    rows,
+    as_of: str,
+    splits_by_company: dict[int, list[tuple[date, Decimal]]] | None = None,
+) -> dict[int, dict[str, Decimal]]:
     """Shared lot arithmetic. `rows` is an iterable of transaction dicts.
 
     Signed share movements are accumulated per (company, lot kind) up to `as_of`.
     Quantities are already signed (sales and transfer-outs are negative), so the
     running total IS the position held on that date -- no separate lot ledger.
 
-    Dividend rows are excluded deliberately: their quantity is a cash figure, not a
-    share movement (BLK-028), so accumulating it would corrupt the position.
+    Two rules make this agree with the stored position, and both were missing:
+
+    1. Only SHARE_MOVEMENT_ACTIVITY_TYPES move shares. Every other activity type puts a
+       cash amount in `quantity`; counting it (the old rule was "anything except
+       Dividend") inflated positions by the sum of their dividends, fees, return of
+       capital and non-cash distributions.
+    2. Movements are restated into `as_of` units using the split schedule
+       (split_utils.split_adjustment_factor). The stored position is split-adjusted
+       because the replay engine applies `split` events; raw transaction quantities are
+       not. Comparing the two without adjusting is what made every split company
+       disagree -- SPCE 30 vs 1.5, NFLX 73 vs 730, NYCB 30 vs 9.9999.
+
+    `splits_by_company` is required for a split-adjusted answer; the callers pass it
+    from one batched read, and passing None keeps the old raw semantics (used only by
+    tests that assert on unadjusted arithmetic).
     """
+    as_of_date = _as_of_date(as_of)
     totals: dict[int, dict[str, Decimal]] = {}
     for row in rows:
         cid = row.get("company_id")
@@ -156,19 +223,37 @@ def _accumulate_lots(rows, as_of: str) -> dict[int, dict[str, Decimal]]:
             continue
         if str(row.get("transaction_date") or "")[:10] > as_of:
             continue
-        if str(row.get("activity_type")) == "Dividend":
+        if str(row.get("activity_type") or "") not in SHARE_MOVEMENT_ACTIVITY_TYPES:
             continue
         try:
             qty = Decimal(str(row["quantity"]))
         except (TypeError, ValueError, ArithmeticError):
             continue
+        factor = Decimal(1)
+        if as_of_date is not None and splits_by_company:
+            factor = split_adjustment_factor(
+                splits_by_company.get(int(cid)),
+                _movement_date(row.get("transaction_date")),
+                as_of_date,
+            )
+            if factor <= 0:
+                # A non-positive multiplier cannot come from a real split (it would
+                # erase the holding), so treat it as absence of evidence rather than
+                # as a position change: the movement is kept unadjusted and visible.
+                logger.warning(
+                    "lot replay: company %s has a non-positive split multiplier %s; "
+                    "leaving its movements unadjusted",
+                    cid,
+                    factor,
+                )
+                factor = Decimal(1)
         bucket = (
             "cdr"
             if is_cdr_transaction(row.get("raw_data"), row.get("security_name"))
             else "direct"
         )
         lots = totals.setdefault(int(cid), {"cdr": Decimal(0), "direct": Decimal(0)})
-        lots[bucket] += qty
+        lots[bucket] += qty * factor
     return {
         cid: {kind: qty for kind, qty in lots.items() if qty != 0}
         for cid, lots in totals.items()
@@ -201,14 +286,18 @@ def derive_account_cdr_lots_as_of(
     (sales and transfer-outs are negative), so accumulating up to a date yields the
     position held on that date without maintaining a separate lot ledger.
 
-    Dividend rows are excluded deliberately: their quantity is a cash figure rather
-    than a share movement (BLK-028), so accumulating it would corrupt the position.
+    Only share movements are summed (SHARE_MOVEMENT_ACTIVITY_TYPES) and every
+    movement is restated into `as_of` units through the split schedule, so the
+    result is directly comparable with the split-adjusted stored holding. Both
+    rules live in _accumulate_lots().
 
     Returns company_id -> {"cdr": Decimal, "direct": Decimal}, omitting any company
     or bucket that nets to zero.
     """
     return _accumulate_lots(
-        iter_transactions(client, _LOT_COLUMNS, account_id=account_id), as_of
+        iter_transactions(client, _LOT_COLUMNS, account_id=account_id),
+        as_of,
+        load_split_schedule(client),
     )
 
 
@@ -224,13 +313,14 @@ def derive_cdr_lots_by_account_as_of(
     of accounts in one pass must use this form.
     """
     grouped: dict[int, list[dict]] = {}
-    for row in iter_transactions(client, ["account_id"] + _LOT_COLUMNS):
+    for row in iter_transactions(client, ["account_id", *_LOT_COLUMNS]):
         aid = row.get("account_id")
         if aid is None:
             continue
         grouped.setdefault(int(aid), []).append(row)
+    splits = load_split_schedule(client)
     return {
-        aid: _accumulate_lots(rows, as_of) for aid, rows in grouped.items()
+        aid: _accumulate_lots(rows, as_of, splits) for aid, rows in grouped.items()
     }
 
 
@@ -255,19 +345,21 @@ def derive_cdr_lots_by_account_at_dates(
         return {}
 
     grouped: dict[int, list[dict]] = {}
-    for row in iter_transactions(client, ["account_id"] + _LOT_COLUMNS):
+    for row in iter_transactions(client, ["account_id", *_LOT_COLUMNS]):
         aid = row.get("account_id")
         if aid is None:
             continue
         grouped.setdefault(int(aid), []).append(row)
+    splits = load_split_schedule(client)
 
     out: dict[str, dict[int, dict[int, dict[str, Decimal]]]] = {d: {} for d in wanted}
     for aid, rows in grouped.items():
         for as_of in wanted:
-            lots = _accumulate_lots(rows, as_of)
+            lots = _accumulate_lots(rows, as_of, splits)
             if lots:
                 out[as_of][aid] = lots
     return out
+
 
 
 # A replayed lot total and the stored holding quantity are two independent
@@ -290,6 +382,16 @@ def _lot_override(kind: str, cached_override: Any) -> str | None:
     if kind == "cdr":
         return EXCHANGE_OVERRIDE_TOR
     return None if cached_override == EXCHANGE_OVERRIDE_TOR else cached_override
+
+
+def _decimal_quantity(value: Any) -> Decimal:
+    """Quantity/cost as its intended decimal, never its binary float expansion (I3)."""
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"not a decimal quantity: {value!r}") from exc
 
 
 def classify_lot_legs(
@@ -324,6 +426,15 @@ def classify_lot_legs(
     """
     company_kind = "cdr" if company_is_cdr else "direct"
 
+    # I3: both production callers supply Decimal, but this is the point where the
+    # tolerance is applied, so enforce the type at the boundary. A float reaching
+    # here would carry binary noise (1/3 -> 0.3333333333333333) and make the
+    # tolerance unfalsifiable. str() keeps the intended decimal, not the binary
+    # expansion Decimal(float) would preserve.
+    quantity = _decimal_quantity(quantity)
+    total_cost = _decimal_quantity(total_cost)
+    lots = {kind: _decimal_quantity(q) for kind, q in lots.items()} if lots else lots
+
     if not lots:
         return [(company_kind, quantity, total_cost)], []
 
@@ -352,6 +463,27 @@ def classify_lot_legs(
         allocated += leg_cost
         legs.append((kind, leg_qty, leg_cost))
     return legs, []
+
+
+def _leg_row(
+    row: dict,
+    cached_override: Any,
+    kind: str | None,
+    leg_qty: Decimal,
+    leg_cost: Decimal,
+) -> dict:
+    """One holding row restated as a single CDR/direct leg.
+
+    Takes the source row as a parameter rather than closing over it: a closure
+    defined inside the caller's loop would capture the loop variable, so every leg
+    built after the loop advanced would be a copy of the wrong holding.
+    """
+    leg = dict(row)
+    leg["quantity"] = leg_qty
+    leg["total_cost"] = leg_cost
+    if kind is not None:
+        leg["exchange_override"] = _lot_override(kind, cached_override)
+    return leg
 
 
 def split_holdings_by_cdr_lot(
@@ -413,14 +545,6 @@ def split_holdings_by_cdr_lot(
         cached = h.get("exchange_override")
         company_is_cdr = bool(cid is not None and cid in derived_cdr_companies)
 
-        def one(kind: str | None, leg_qty: Decimal, leg_cost: Decimal) -> dict:
-            leg = dict(h)
-            leg["quantity"] = leg_qty
-            leg["total_cost"] = leg_cost
-            if kind is not None:
-                leg["exchange_override"] = _lot_override(kind, cached)
-            return leg
-
         lots = lots_by_company.get(int(cid)) if cid is not None else None
         legs, leg_notes = classify_lot_legs(
             quantity=qty,
@@ -431,9 +555,19 @@ def split_holdings_by_cdr_lot(
         )
         notes.extend(leg_notes)
         for kind, leg_qty, leg_cost in legs:
-            out.append(one(kind, leg_qty, leg_cost))
+            out.append(_leg_row(h, cached, kind, leg_qty, leg_cost))
 
     return out, notes
+
+
+def _decimal_ratio(ratio: Any) -> Decimal:
+    """Ratio as the decimal it was meant to be, never its binary expansion (I3)."""
+    try:
+        return Decimal(str(ratio))
+    except (InvalidOperation, ValueError, TypeError):
+        # An unparseable ratio is certainly not the structural constant; the
+        # caller's WARNING is the correct, deterministic verdict.
+        return Decimal("-1")
 
 
 def trace_division(
@@ -459,7 +593,7 @@ def trace_division(
     """
     level = (
         logging.WARNING
-        if float(ratio) != float(CDR_RATIO)
+        if _decimal_ratio(ratio) != CDR_RATIO_DECIMAL
         else logging.DEBUG
     )
     logger.log(

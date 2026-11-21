@@ -5,9 +5,11 @@ Smart fetching: 20 quarters on first run, then only new filings when due.
 """
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from datetime import date, timedelta
+from enum import StrEnum
 from typing import Any
 
 from application.services.super_investors_service import SUPER_INVESTORS, SuperInvestorsService
@@ -15,6 +17,20 @@ from config import settings
 from shared.time_utils import now_utc, parse_db_timestamp
 
 logger = logging.getLogger(__name__)
+
+
+class InvestorRefreshStatus(StrEnum):
+    """Outcome of a single investor refresh (I23).
+
+    Keeping these distinct stops an empty EDGAR result or a fetch failure from
+    being folded into the benign "skipped (not due)" case and reported as a
+    clean ``completed`` job.
+    """
+
+    REFRESHED = "refreshed"
+    SKIPPED_NOT_DUE = "skipped_not_due"
+    NO_FILINGS = "no_filings"
+    ERROR = "error"
 
 
 class SuperInvestorsRefreshScheduler:
@@ -126,10 +142,8 @@ class SuperInvestorsRefreshScheduler:
         self.is_running = False
         if self.task:
             self.task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.task
-            except asyncio.CancelledError:
-                pass
         logger.info("⏹️  Super Investors Scheduler stopped")
 
     # ========================================================================
@@ -160,17 +174,24 @@ class SuperInvestorsRefreshScheduler:
             "investors_found": len(SUPER_INVESTORS),
             "refreshed": 0,
             "skipped": 0,
+            "no_filings": 0,
             "errors": 0,
             "all_failed": False,
         }
 
         for cik, info in SUPER_INVESTORS.items():
             try:
-                refreshed = await self._refresh_single_investor(cik, info)
-                if refreshed:
+                outcome = await self._refresh_single_investor(cik, info)
+                if outcome == InvestorRefreshStatus.REFRESHED:
                     results["refreshed"] += 1
-                else:
+                elif outcome == InvestorRefreshStatus.SKIPPED_NOT_DUE:
                     results["skipped"] += 1
+                elif outcome == InvestorRefreshStatus.NO_FILINGS:
+                    # An empty result is neither a successful refresh nor a
+                    # benign skip -- surface it distinctly (I23).
+                    results["no_filings"] += 1
+                else:
+                    results["errors"] += 1
             except Exception as e:
                 logger.error(f"Error refreshing {info['name']}: {e}")
                 results["errors"] += 1
@@ -189,11 +210,13 @@ class SuperInvestorsRefreshScheduler:
         logger.info(f"Cycle complete: {results}")
         return results
 
-    async def _refresh_single_investor(self, cik: str, info: dict) -> bool:
+    async def _refresh_single_investor(self, cik: str, info: dict) -> InvestorRefreshStatus:
         """
-        Refresh single investor's holdings.
+        Refresh a single investor's holdings.
 
-        Returns True if new data was fetched, False if skipped (not due yet).
+        Returns an explicit outcome (I23) so a genuine empty result
+        (``NO_FILINGS``) or a failure (``ERROR``) is never reported as the benign
+        ``SKIPPED_NOT_DUE`` case / a clean "completed" job.
         """
         investor_name = info["name"]
 
@@ -205,11 +228,9 @@ class SuperInvestorsRefreshScheduler:
         if not result.data or not result.data[0].get("investor_id"):
             # First run - create investor record and fetch historical data
             await self._create_investor_record(cik, info)
-            fetched = await self._fetch_historical_data(cik, info, self.initial_quarters)
-            return fetched
+            return await self._fetch_historical_data(cik, info, self.initial_quarters)
 
         last_period = result.data[0].get("last_filed_period")
-        last_date = result.data[0].get("last_filed_date")
 
         # Check if new filing is due
         if last_period:
@@ -218,11 +239,10 @@ class SuperInvestorsRefreshScheduler:
                 logger.debug(
                     f"Skipping {investor_name}: not due until {next_due}"
                 )
-                return False
+                return InvestorRefreshStatus.SKIPPED_NOT_DUE
 
         # Fetch new filing
-        fetched = await self._fetch_new_filing(cik, info, last_period)
-        return fetched
+        return await self._fetch_new_filing(cik, info, last_period)
 
     async def _create_investor_record(self, cik: str, info: dict) -> None:
         """Create new investor record in DB."""
@@ -242,7 +262,7 @@ class SuperInvestorsRefreshScheduler:
 
     async def _fetch_historical_data(
         self, cik: str, info: dict, quarters: int
-    ) -> bool:
+    ) -> InvestorRefreshStatus:
         """Fetch historical data (20 quarters on first run)."""
         self._ensure_edgar_identity()
         from edgar import get_filings
@@ -253,20 +273,32 @@ class SuperInvestorsRefreshScheduler:
         try:
             # Fetch filings by year (SEC API requires year filter for historical data)
             all_filings = []
+            last_error: Exception | None = None
+            any_success = False
             current_year = now_utc().year
             years_to_fetch = list(range(current_year - 5, current_year + 1))
 
             for year in years_to_fetch:
                 try:
                     filings = get_filings(year=year, form="13F-HR").filter(cik=cik)
+                    any_success = True
                     if filings:
                         all_filings.extend(list(filings))
-                except Exception:
+                except Exception as e:
+                    # Remember the real cause: a fetch failure is not an empty
+                    # result (I23). Never collapse it into "No filings found".
+                    last_error = e
                     continue
 
             if not all_filings:
-                logger.warning(f"No filings found for {investor_name}")
-                return False
+                if not any_success and last_error is not None:
+                    logger.error(
+                        "[EDGAR][%s] historical filing query failed: %s",
+                        investor_name, last_error,
+                    )
+                    return InvestorRefreshStatus.ERROR
+                logger.warning("No filings found for %s", investor_name)
+                return InvestorRefreshStatus.NO_FILINGS
 
             # Sort by filing date descending and take required number
             all_filings.sort(key=lambda x: x.filing_date, reverse=True)
@@ -320,17 +352,17 @@ class SuperInvestorsRefreshScheduler:
 
             if not any_saved:
                 logger.warning(f"No holdings saved for {investor_name} historical fetch")
-                return False
+                return InvestorRefreshStatus.NO_FILINGS
 
-            return True
+            return InvestorRefreshStatus.REFRESHED
 
         except Exception as e:
             logger.error(f"Error fetching historical data for {investor_name}: {e}")
-            return False
+            return InvestorRefreshStatus.ERROR
 
     async def _fetch_new_filing(
         self, cik: str, info: dict, last_period: date | None
-    ) -> bool:
+    ) -> InvestorRefreshStatus:
         """Fetch single new filing (only if newer than last_period)."""
         self._ensure_edgar_identity()
         from edgar import get_filings
@@ -342,25 +374,38 @@ class SuperInvestorsRefreshScheduler:
             # fall back to the previous year (e.g. before the first Q1 filing
             # of a year has been submitted).
             filings = None
+            last_error: Exception | None = None
+            any_success = False
             current_year = now_utc().year
             for year in (current_year, current_year - 1):
                 try:
-                    filings = get_filings(year=year, form="13F-HR").filter(cik=cik)
-                except Exception:
-                    filings = None
+                    candidate = get_filings(year=year, form="13F-HR").filter(cik=cik)
+                    any_success = True
+                except Exception as e:
+                    # Remember the real cause: a failed query is not the same as
+                    # an empty result (I23).
+                    last_error = e
+                    continue
+                filings = candidate
                 if filings and len(filings) > 0:
                     break
 
+            if not any_success and last_error is not None:
+                logger.error(
+                    "[EDGAR][%s] filing query failed: %s", investor_name, last_error
+                )
+                return InvestorRefreshStatus.ERROR
+
             if not filings or len(filings) == 0:
-                logger.warning(f"No filings found for {investor_name}")
-                return False
+                logger.warning("No filings found for %s", investor_name)
+                return InvestorRefreshStatus.NO_FILINGS
 
             # Get latest filing
             filing = filings[0]
             thirteenf = filing.obj()
 
             if not thirteenf:
-                return False
+                return InvestorRefreshStatus.NO_FILINGS
 
             period = self._normalize_period(thirteenf.report_period)
             filing_date = str(filing.filing_date)
@@ -381,7 +426,7 @@ class SuperInvestorsRefreshScheduler:
                     logger.debug(
                         f"No new filing for {investor_name}: period {period} <= last {last_period_norm}"
                     )
-                    return False
+                    return InvestorRefreshStatus.SKIPPED_NOT_DUE
 
             logger.info(f"New filing for {investor_name}: {period}")
 
@@ -399,16 +444,16 @@ class SuperInvestorsRefreshScheduler:
                 logger.warning(
                     f"No holdings saved for {investor_name} filing {period}; not advancing tracking"
                 )
-                return False
+                return InvestorRefreshStatus.NO_FILINGS
 
             # Update tracking
             await self._update_investor_tracking(cik, period, filing_date)
 
-            return True
+            return InvestorRefreshStatus.REFRESHED
 
         except Exception as e:
             logger.error(f"Error fetching new filing for {investor_name}: {e}")
-            return False
+            return InvestorRefreshStatus.ERROR
 
     async def _holdings_exist_for_period(self, cik: str, period: str) -> bool:
         """Return True if any institutional_holdings row exists for investor+period."""
@@ -455,7 +500,7 @@ class SuperInvestorsRefreshScheduler:
         holdings_df,
         period: str,
         filing_date: str,
-        total_value_dollars: float = None,
+        total_value_dollars: float | None = None,
     ) -> int:
         """Save holdings to institutional_holdings table; returns rows saved."""
         from database import supabase

@@ -12,7 +12,11 @@ from typing import Any
 
 from infrastructure.repositories.event_store import EventStore
 from infrastructure.repositories.portfolio_repository import PortfolioRepository
-from shared.portfolio_event_payload import build_transaction_event_data
+from shared.portfolio_event_payload import (
+    build_transaction_event_data,
+    normalise_backfill_key,
+    transaction_event_key,
+)
 
 logger = logging.getLogger("stockerpro.scripts.backfill_events")
 
@@ -38,7 +42,7 @@ def get_transactions_for_backfill(
     return all_txns
 
 
-def build_event_from_transaction(tx: dict, idx: int) -> dict[str, Any]:
+def build_event_from_transaction(tx: dict) -> dict[str, Any]:
     """Convert a portfolio_transaction row to a portfolio_event."""
     account_id = tx.get("account_id")
     return {
@@ -68,7 +72,7 @@ def build_event_from_transaction(tx: dict, idx: int) -> dict[str, Any]:
             "backfill": True,
             "original_transaction_id": tx.get("transaction_id"),
         },
-        "idempotency_key": f"backfill_{account_id}_{tx.get('transaction_id', idx)}_{idx}",
+        "idempotency_key": transaction_event_key(account_id, tx.get("transaction_id")),
     }
 
 
@@ -81,31 +85,43 @@ def backfill_events(
     transactions = get_transactions_for_backfill(account_id)
     logger.info(f"Found {len(transactions)} transactions to backfill")
 
-    # Check for existing backfill events to skip
-    existing_events = event_store.get_events(event_type="transaction_imported", limit=10000)
-    existing_keys = set()
-    for ev in existing_events:
-        meta = ev.get("metadata", {}) or {}
-        if meta.get("backfill"):
-            key = ev.get("idempotency_key", "")
+    # Check for existing backfill events to skip.
+    #
+    # Scoped per account, not a global scan. The global scan asked for
+    # `get_events(event_type="transaction_imported", limit=10000)`, which returned
+    # a 1000-row prefix of a 2724-row log, so accounts outside that prefix looked
+    # event-less and a re-run appended a second copy of their history. An account's
+    # own events are a bounded set and paginate completely.
+    account_ids = sorted(
+        {t.get("account_id") for t in transactions if t.get("account_id") is not None}
+    )
+    existing_keys: set[str] = set()
+    for aid in account_ids:
+        for ev in event_store.get_all_events(
+            aggregate_id=f"account_{aid}", event_type="transaction_imported"
+        ):
+            meta = ev.get("metadata", {}) or {}
+            if not meta.get("backfill"):
+                continue
+            key = normalise_backfill_key(ev.get("idempotency_key"))
             if key:
                 existing_keys.add(key)
 
-    logger.info(f"Found {len(existing_keys)} existing backfill events, will skip duplicates")
+    logger.info(
+        f"Found {len(existing_keys)} existing backfill events across "
+        f"{len(account_ids)} account(s), will skip duplicates"
+    )
 
     events_to_write = []
     skipped = 0
     for tx in transactions:
-        aid = tx.get("account_id")
-        tx_id = tx.get("transaction_id")
-        idx = transactions.index(tx)
-        key = f"backfill_{aid}_{tx_id}_{idx}" if tx_id else f"backfill_{aid}_{idx}"
+        key = transaction_event_key(tx.get("account_id"), tx.get("transaction_id"))
 
         if key in existing_keys:
             skipped += 1
             continue
 
-        events_to_write.append(build_event_from_transaction(tx, idx))
+        events_to_write.append(build_event_from_transaction(tx))
 
         if len(events_to_write) >= batch_size:
             if not dry_run:
@@ -126,8 +142,11 @@ def backfill_events(
     return {
         "total_transactions": len(transactions),
         "existing_events": len(existing_keys),
+        # `skipped` is a subset of `total_transactions`, so subtracting the whole
+        # existing-key set (which includes other accounts' events) under-reported
+        # writes and could go negative.
         "skipped_duplicates": skipped,
-        "events_written": len(transactions) - skipped - (len(existing_keys) if not dry_run else 0),
+        "events_written": len(transactions) - skipped,
         "dry_run": dry_run,
     }
 

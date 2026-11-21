@@ -1,0 +1,18 @@
+# Known pre-existing test failures (I1d) -- quarantine, not a pass.
+#
+# Policy: the main `tasks.py test` gate must fail only on NEW breakage. These
+# node ids were captured from a full run on 2026-11-19 (92 failed, 2450 passed,
+# 56 skipped, 14 deselected) and were all present before this remediation work
+# began. Each is a real defect or a stale test; quarantine makes the gate useful
+# again while the list is burned down. THIS IS NOT A PASS: removing an entry
+# without fixing it re-breaks the gate by design.
+#
+# Burn-down: ALL 92 entries have been fixed or retired as of 2026-11-20. The
+# list is intentionally empty so `tasks.py test` runs the full suite with no
+# deselected node ids. See backend/docs/log-remediation-2026-11-14.md (I1d)
+# for the per-cluster evidence. Never re-add an entry for a test that started
+# failing recently.
+#
+# Originally verified pre-existing at pristine HEAD; the remainder were stale
+# tests against changed APIs (removed methods / renamed models), suites needing
+# a live stack, or collection-time sys.modules pollution from other test files.

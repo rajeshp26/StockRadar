@@ -19,6 +19,10 @@ from pathlib import Path
 
 import pytest
 
+# I1d: connects to the real production database and measures query latency.
+# Not a unit test — only run in an explicitly selected integration run.
+pytestmark = pytest.mark.integration
+
 # Read real Supabase credentials directly from .env (bypass conftest mocks)
 _env_file = Path(__file__).resolve().parent.parent / ".env"
 _SUPABASE_URL = os.environ.get("SUPABASE_URL", "")

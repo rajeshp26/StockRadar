@@ -8,7 +8,11 @@ from typing import Any, ClassVar
 
 from infrastructure.repositories.event_store import EventStore
 from shared import debug_trace
-from shared.cdr_utils import EXCHANGE_OVERRIDE_TOR, classify_lot_legs
+from shared.cdr_utils import (
+    EXCHANGE_OVERRIDE_TOR,
+    SHARE_MOVEMENT_ACTIVITY_TYPES,
+    classify_lot_legs,
+)
 from shared.fx_service import UNSTAMPED_CURRENCY, convert_cash_map, normalize_currency
 from shared.snapshot_builder import (
     TIER_QUALITY_MAP,
@@ -216,7 +220,13 @@ class ReplayEngine:
 
     COST_REDUCTION_ACTIVITY_TYPES: ClassVar[set[str]] = {"ReturnOfCapital"}
 
-    HOLDING_ACTIVITY_TYPES: ClassVar[set[str]] = {"Trade", "InternalSecurityTransfer"}
+    # Deliberately the same set cdr_utils sums for lot replay: one definition, imported
+    # rather than re-declared, so the two derivations of "shares held" cannot drift.
+    HOLDING_ACTIVITY_TYPES: ClassVar[set[str]] = set(SHARE_MOVEMENT_ACTIVITY_TYPES)
+
+    # Events that rescale a position rather than move it. On its effective date a split
+    # is applied BEFORE any share movement of that day (see _replay_sort_key).
+    CORPORATE_ACTION_EVENT_TYPES: ClassVar[set[str]] = {"split"}
 
     def __init__(self, event_store: EventStore):
         self.event_store = event_store
@@ -566,6 +576,31 @@ class ReplayEngine:
         """
         return extract_event_date(event)
 
+    def _replay_sort_key(self, event: dict) -> tuple[date, int]:
+        """Order events: by effective date, corporate actions first within a date.
+
+        The second element is what makes replay deterministic. Sorting by date alone
+        (the previous rule) left same-date ordering to whatever get_all_events()
+        returned -- created_at, then id -- so whether a split applied to a movement on
+        its own effective date depended on insertion order. Split events are always
+        written after the transactions they adjust (split_sync emits them on a later
+        run), so the effective rule was "splits last", i.e. every same-day movement was
+        treated as pre-split.
+
+        A split rescales the position at the start of its effective date, so a movement
+        on that date is already post-split and must not be multiplied. Applying the
+        split first produces that, and the live data confirms it: account 9 / IVR sells
+        0.3 shares on 2022-06-06, the day of its 1:10 reverse split, at unit_price
+        21.42491904 (the post-split price of 193/10 = 19.3 shares). See
+        split_utils.split_adjustment_factor for the arithmetic both paths share.
+
+        Python's sort is stable, so events that tie on (date, corporate-or-not) keep
+        their (created_at, id) order.
+        """
+        event_date = self._get_event_date(event) or date.min
+        is_corporate_action = event.get("event_type") in self.CORPORATE_ACTION_EVENT_TYPES
+        return (event_date, 0 if is_corporate_action else 1)
+
     def replay_to_date(
         self,
         account_id: int,
@@ -586,7 +621,7 @@ class ReplayEngine:
             if ev_date is not None and ev_date <= target_date:
                 account_events.append(ev)
 
-        account_events.sort(key=lambda e: self._get_event_date(e) or date.min)
+        account_events.sort(key=self._replay_sort_key)
 
         state = AccountState(account_id=account_id)
         # Pairing sees the account's COMPLETE log, not just what happened by the
@@ -784,13 +819,13 @@ class ReplayEngine:
                 "lots": lots_out,
             })
 
-        cash_total, cash_fx_applied = convert_cash_map(
+        cash_total, _cash_fx_applied = convert_cash_map(
             _cash_view(state.cash_by_currency, state.cash_balance),
             account_currency,
             target_date,
             fx_svc,
         )
-        deposits_total, _ = convert_cash_map(
+        _deposits_total, _ = convert_cash_map(
             _cash_view(state.net_deposits_by_currency, state.net_deposits),
             account_currency,
             target_date,

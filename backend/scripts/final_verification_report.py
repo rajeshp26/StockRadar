@@ -18,12 +18,12 @@ def dates_with_snapshots(s_data):
     return set(d["snapshot_date"] for d in s_data)
 
 def dates_with_events(aid, engine):
-    evts = engine.event_store.get_events(aggregate_type="account")
+    # Scoped to the account. This used to fetch global account events with the
+    # default limit and filter client-side, so it derived dates from a truncated
+    # prefix of the log and under-reported every account's history.
+    evts = engine.event_store.get_events(aggregate_id=f"account_{aid}", limit=None)
     dates = set()
     for e in evts:
-        from shared.replay_engine import _parse_account_id
-        if _parse_account_id(e.get("aggregate_id","")) != aid:
-            continue
         d = engine._get_event_date(e)
         if d:
             dates.add(d.isoformat())
@@ -38,7 +38,7 @@ price_repo = PriceRepository()
 price_details = price_repo.get_prices_for_holdings(pairs)
 
 prices_by_company = {}
-for (cid, exch), px in price_details.items():
+for (cid, _exch), px in price_details.items():
     if cid not in prices_by_company:
         prices_by_company[cid] = {"price": px}
 
@@ -86,7 +86,9 @@ print("=" * 90)
 # For each account, show values at all available snapshot dates
 for aid in [7, 8, 9]:
     s = supabase.table("portfolio_snapshots").select("snapshot_date, total_value, cost_basis").eq("account_id", aid).order("snapshot_date").execute()
-    dates_with_snapshots = set(d["snapshot_date"] for d in (s.data or []))
+    # Named for the set, not the function: the function below is still needed at the
+    # print site, and rebinding it to a set made that call raise TypeError.
+    snapshot_dates_present = set(d["snapshot_date"] for d in (s.data or []))
 
     label = ["Non-registered", "RRSP", "TFSA"][aid - 7]
     print(f"\n--- Account {aid} ({label}) — Full History ---")
@@ -111,5 +113,5 @@ for aid in [7, 8, 9]:
             dt_str = dt_str.isoformat()
 
         snap = engine.build_snapshot_from_replay(aid, date.fromisoformat(dt_str[:10]), prices_by_company)
-        has_snap = "YES" if dt_str[:10] in dates_with_snapshots(s.data) else "NO"
+        has_snap = "YES" if dt_str[:10] in snapshot_dates_present else "NO"
         print(f"  {dt_str[:10]:<14} ${snap['total_value']:>11,.2f} ${snap['cost_basis']:>11,.2f} {has_snap:<8}")

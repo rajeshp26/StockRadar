@@ -25,16 +25,122 @@ write is never correct.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from database import supabase
-from supabase import Client
+
+if TYPE_CHECKING:  # Client is only ever an annotation; importing it eagerly is dead weight
+    from supabase import Client
 
 logger = logging.getLogger(__name__)
 
+#: Every column the read and write paths depend on - one list, consumed by both
+#: the select projection and ``scripts/verify_portfolio_value_series_shape.py``.
+#:
+#: This exists because the shape verifier used to keep its own copy of the column
+#: list and was not updated when ``locf_filled``/``spike_suppressed`` were added.
+#: It therefore reported "shape correct" against a table missing both columns,
+#: while every write was rejected with PGRST204 and discarded. Duplicated schema
+#: knowledge drifts; a verifier that imports the code's own list cannot.
+REQUIRED_COLUMNS: tuple[str, ...] = (
+    "account_key",
+    "series_date",
+    "total_value",
+    "holdings_market_value",
+    "cost_basis",
+    "cash_balance",
+    "net_deposits",
+    "fx_unconverted_count",
+    "points_used",
+    "locf_filled",
+    "spike_suppressed",
+    "fingerprint",
+    "computed_at",
+    "last_mark_date",
+)
+
+_SELECT_LIST = ", ".join(REQUIRED_COLUMNS)
+
 _BATCH = 500
+
+#: Database codes that mean the live table no longer matches this code: a column
+#: or table is absent, the PostgREST schema cache disagrees, or the role lacks the
+#: grant. Retrying cannot repair any of them - the migration must be (re-)applied.
+_SCHEMA_ERROR_CODES = frozenset({"PGRST204", "PGRST205", "42P01", "42703", "42501"})
+
+#: Signatures already reported by this process. A schema error fails on every
+#: chunk of every account set, so an un-deduplicated ERROR would emit thousands of
+#: identical records per request and bury the one that matters.
+_reported_schema_errors: set[str] = set()
+
+
+def reset_reported_errors() -> None:
+    """Forget which schema errors were reported (tests only)."""
+    _reported_schema_errors.clear()
+
+
+def _error_code(exc: BaseException) -> str | None:
+    """Best-effort PostgREST/Postgres error code from a supabase-py exception.
+
+    The code attribute is authoritative when present; the stringified form is
+    parsed as a fallback because the failure this guards against is invisible -
+    the exception is swallowed here - so it must not depend on one library
+    version's exception shape.
+    """
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code
+    match = re.search(r"""['"]?code['"]?\s*:\s*['"]([A-Za-z0-9]+)['"]""", str(exc))
+    return match.group(1) if match else None
+
+
+def _is_schema_error(exc: BaseException) -> bool:
+    if _error_code(exc) in _SCHEMA_ERROR_CODES:
+        return True
+    text = str(exc).lower()
+    return "schema cache" in text or "does not exist" in text
+
+
+#: What to do about each rejection, keyed by code. The remedy is per-cause on
+#: purpose: a missing column and a missing GRANT produce the same "writes are
+#: silently discarded" symptom, and a message that names only one of them sends
+#: the next reader down the wrong path.
+_SCHEMA_ERROR_REMEDIES: dict[str, str] = {
+    "PGRST204": "PostgREST's schema cache has no such column on the live table. Re-run "
+                "backend/supabase/migrations/017_create_portfolio_value_series.sql (idempotent).",
+    "42703": "The live table is missing a column this code uses. Re-run "
+             "backend/supabase/migrations/017_create_portfolio_value_series.sql (idempotent).",
+    "PGRST205": "The live database has no such table. Apply migration 017.",
+    "42P01": "The live database has no such table. Apply migration 017.",
+    "42501": "The service_role lacks table privileges. RLS policies are not GRANTs and "
+             "both are required. Apply "
+             "backend/supabase/migrations/019_grant_portfolio_value_series_privileges.sql.",
+}
+
+_DEFAULT_REMEDY = "Unclassified schema rejection: read the message above for the cause."
+
+
+def _report_schema_error(action: str, account_key: str, exc: BaseException) -> None:
+    """Log a schema mismatch as an ERROR, once per signature per process."""
+    code = _error_code(exc) or "SCHEMA"
+    signature = f"{action}:{code}"
+    if signature in _reported_schema_errors:
+        logger.debug("portfolio_value_series %s still failing (%s) - already reported",
+                     action, code)
+        return
+    _reported_schema_errors.add(signature)
+    logger.error(
+        "portfolio_value_series %s REJECTED by the database (%s): %s\n"
+        "  Consequence: writes are discarded and reads fall back to live computation, "
+        "so the API keeps answering and the job still reports success - this ERROR is "
+        "the only signal.\n"
+        "  Cause: %s\n"
+        "  account_key=%s",
+        action, code, exc, _SCHEMA_ERROR_REMEDIES.get(code, _DEFAULT_REMEDY), account_key,
+    )
 
 
 @dataclass
@@ -74,10 +180,7 @@ class PortfolioValueSeriesRepository:
             while True:
                 q = (
                     self.client.table("portfolio_value_series")
-                    .select("series_date, total_value, holdings_market_value, cost_basis, "
-                            "cash_balance, net_deposits, fx_unconverted_count, points_used, "
-                            "locf_filled, spike_suppressed, "
-                            "fingerprint, computed_at, last_mark_date")
+                    .select(_SELECT_LIST)
                     .eq("account_key", account_key)
                 )
                 if start_date is not None:
@@ -95,11 +198,17 @@ class PortfolioValueSeriesRepository:
                     break
                 offset += _BATCH
         except Exception as e:
-            logger.info(
-                "portfolio_value_series read unavailable for %s (%s) - "
-                "falling back to live computation",
-                account_key, e,
-            )
+            if _is_schema_error(e):
+                # Serving live data is correct, but silently degrading forever is
+                # not: the stored series is the read model, and this is the only
+                # place that knows why it is empty.
+                _report_schema_error("read", account_key, e)
+            else:
+                logger.info(
+                    "portfolio_value_series read unavailable for %s (%s) - "
+                    "falling back to live computation",
+                    account_key, e,
+                )
             return StoredPortfolioSeries()
 
         if not rows:
@@ -190,10 +299,13 @@ class PortfolioValueSeriesRepository:
                 )
                 written += len(res.data or chunk)
             except Exception as e:
-                logger.warning(
-                    "portfolio_value_series upsert failed for %s chunk %d: %s",
-                    account_key, i, e,
-                )
+                if _is_schema_error(e):
+                    _report_schema_error("write", account_key, e)
+                else:
+                    logger.warning(
+                        "portfolio_value_series upsert failed for %s chunk %d: %s",
+                        account_key, i, e,
+                    )
         return written
 
     def delete_account_key(self, account_key: str) -> int:

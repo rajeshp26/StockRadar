@@ -21,6 +21,10 @@ import httpx
 import jwt as pyjwt
 import pytest
 
+# I1d: hits a live backend over HTTP with per-endpoint latency budgets. It is
+# not a unit test and must only run in an explicitly selected integration run.
+pytestmark = pytest.mark.integration
+
 # Load real env vars before conftest.py overrides them
 _env_file = Path(__file__).resolve().parent.parent / ".env"
 _SUPABASE_URL = os.environ.get("SUPABASE_URL", "")

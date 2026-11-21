@@ -1,10 +1,12 @@
-import pytest
 import asyncio
-from unittest.mock import MagicMock
 
 # Import the functions to test - they use module-level state
 # so we need to import and manipulate directly
 import sys
+from unittest.mock import MagicMock
+
+import pytest
+
 sys.path.insert(0, 'C:/Project/StockerPro/StockerPro/backend')
 
 from collections import defaultdict
@@ -74,7 +76,7 @@ class TestSSEHelpers:
     @pytest.mark.asyncio
     async def test_unsubscribe_symbol_removes_user(self, clean_state):
         """Test that unsubscribe_symbol removes user from symbol_subscribers."""
-        from api.watchlists import subscribe_symbol, unsubscribe_symbol, symbol_subscribers
+        from api.watchlists import subscribe_symbol, symbol_subscribers, unsubscribe_symbol
 
         # Arrange
         await subscribe_symbol("AAPL", "user_123")
@@ -89,7 +91,7 @@ class TestSSEHelpers:
     @pytest.mark.asyncio
     async def test_unsubscribe_symbol_keeps_others(self, clean_state):
         """Test that unsubscribing one user keeps others."""
-        from api.watchlists import subscribe_symbol, unsubscribe_symbol, symbol_subscribers
+        from api.watchlists import subscribe_symbol, symbol_subscribers, unsubscribe_symbol
 
         # Arrange
         await subscribe_symbol("AAPL", "user_1")
@@ -105,7 +107,7 @@ class TestSSEHelpers:
     @pytest.mark.asyncio
     async def test_unsubscribe_symbol_idempotent(self, clean_state):
         """Test that unsubscribing non-existent subscription is safe."""
-        from api.watchlists import unsubscribe_symbol, symbol_subscribers
+        from api.watchlists import symbol_subscribers, unsubscribe_symbol
 
         # Act - should not raise
         result = await unsubscribe_symbol("AAPL", "user_123")
@@ -117,7 +119,7 @@ class TestSSEHelpers:
     @pytest.mark.asyncio
     async def test_broadcast_with_retry_success(self, clean_state):
         """Test that broadcast_with_retry succeeds on first try."""
-        from api.watchlists import subscribe_symbol, broadcast_with_retry, user_queues
+        from api.watchlists import broadcast_with_retry, subscribe_symbol, user_queues
 
         # Arrange
         await subscribe_symbol("AAPL", "user_123")
@@ -204,7 +206,10 @@ class TestRepositoryMethods:
 
         # Arrange
         repo = SupabaseWatchlistRepository(client=mock_client)
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[{"watchlist_item_id": 1}])
+        # I1d: user_has_symbol first resolves watchlist ids via find_by_user_id(),
+        # then queries watchlist_items with .in_(...). Mock both real call steps.
+        repo.find_by_user_id = MagicMock(return_value=[{"id": 1}])
+        mock_client.table.return_value.select.return_value.in_.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[{"watchlist_item_id": 1}])
 
         # Act
         result = repo.user_has_symbol(1, "AAPL")
@@ -218,7 +223,8 @@ class TestRepositoryMethods:
 
         # Arrange
         repo = SupabaseWatchlistRepository(client=mock_client)
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+        repo.find_by_user_id = MagicMock(return_value=[{"id": 1}])
+        mock_client.table.return_value.select.return_value.in_.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
 
         # Act
         result = repo.user_has_symbol(1, "AAPL")
@@ -232,7 +238,9 @@ class TestRepositoryMethods:
 
         # Arrange
         repo = SupabaseWatchlistRepository(client=mock_client)
-        mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[
+        # I1d: get_user_symbols resolves watchlist ids first, then uses .in_().
+        repo.find_by_user_id = MagicMock(return_value=[{"id": 1}])
+        mock_client.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(data=[
             {"companies": {"ticker_symbol": "AAPL"}},
             {"companies": {"ticker_symbol": "MSFT"}},
             {"companies": None},

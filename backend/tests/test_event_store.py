@@ -330,6 +330,65 @@ class TestGetAllEventsDeterministicOrdering:
         assert [c.args[0] for c in table.order.call_args_list] == ["created_at", "id"]
 
 
+class TestGetEventsHonoursItsLimit:
+    """`get_events` accepted a `limit` and never applied it.
+
+    The second, hand-written query returned whatever PostgREST allowed
+    (`db-max-rows`, 1000 by default), so `get_events(limit=10000)` returned 1000
+    of 2724 rows. `backfill_events_from_transactions` built its dedupe set from
+    that call, which meant every account outside the returned prefix looked
+    event-less and got a second copy of its history on the next run.
+    """
+
+    def _table(self, mock_supabase_client):
+        return mock_supabase_client.table.return_value
+
+    def test_limit_is_applied(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.side_effect = [
+            MagicMock(data=[{"id": f"e{i}"} for i in range(1000)]),
+            MagicMock(data=[{"id": f"e{i}"} for i in range(1000, 2000)]),
+        ]
+        events = store.get_events(event_type="transaction_imported", limit=1500)
+        assert len(events) == 1500
+        assert [c.args for c in table.range.call_args_list] == [(0, 999), (1000, 1999)]
+
+    def test_default_limit_is_applied(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.return_value = MagicMock(data=[{"id": f"e{i}"} for i in range(1000)])
+        events = store.get_events(aggregate_type="account")
+        assert len(events) == 100
+
+    def test_limit_none_pages_the_whole_log(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.side_effect = [
+            MagicMock(data=[{"id": f"e{i}"} for i in range(1000)]),
+            MagicMock(data=[{"id": f"e{i}"} for i in range(1000, 2000)]),
+            MagicMock(data=[{"id": f"e{i}"} for i in range(2000, 2724)]),
+        ]
+        events = store.get_events(event_type="transaction_imported", limit=None)
+        assert len(events) == 2724
+        assert [c.args for c in table.range.call_args_list] == [
+            (0, 999),
+            (1000, 1999),
+            (2000, 2999),
+        ]
+
+    def test_pages_until_the_matching_set_is_exhausted(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = self._table(mock_supabase_client)
+        table.execute.side_effect = [
+            MagicMock(data=[{"id": f"e{i}"} for i in range(1000)]),
+            MagicMock(data=[]),
+        ]
+        events = store.get_events(aggregate_id="account_10", limit=10000)
+        assert len(events) == 1000
+        assert [c.args for c in table.range.call_args_list] == [(0, 999), (1000, 1999)]
+
+
 class TestStateImportBackdatingGuard:
     def test_rejects_projection_import_dated_before_capture(self, mock_supabase_client):
         store = EventStore(client=mock_supabase_client)
