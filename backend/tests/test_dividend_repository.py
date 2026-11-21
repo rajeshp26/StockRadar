@@ -23,6 +23,7 @@ import pytest
 from infrastructure.repositories.financial_repository import (
     SupabaseFinancialRepository,
 )
+from shared.time_utils import now_utc
 
 
 @pytest.fixture
@@ -47,7 +48,7 @@ class TestUpsertTrustScores:
 
     def test_upsert_tracks_correct_table(self, repo):
         """Verify upsert targets upcoming_dividend_events."""
-        r, mock_table = repo
+        r, _mock_table = repo
         mock_client = r.client
         asyncio.run(r.upsert_upcoming_dividend(
             company_id=1, ex_dividend_date=date(2026, 7, 15), data_source="yfinance",
@@ -123,7 +124,7 @@ class TestUpsertTrustScores:
 
     def test_upsert_only_affects_upcoming_table(self, repo):
         """Table name is upcoming_dividend_events, not dividend_history."""
-        r, mock_table = repo
+        r, _mock_table = repo
         mock_client = r.client
         asyncio.run(r.upsert_upcoming_dividend(
             company_id=1, ex_dividend_date=date(2026, 7, 15), data_source="yfinance",
@@ -137,7 +138,7 @@ class TestStaleCleanup:
 
     def test_cleanup_targets_upcoming_table(self, repo):
         """Cleanup uses upcoming_dividend_events."""
-        r, mock_table = repo
+        r, _mock_table = repo
         mock_client = r.client
         asyncio.run(r.cleanup_stale_events(company_id=1))
         table_name = mock_client.table.call_args[0][0]
@@ -154,13 +155,13 @@ class TestStaleCleanup:
         asyncio.run(r.cleanup_stale_events(company_id=1))
 
         mock_delete_chain.eq.assert_called_once_with("company_id", 1)
-        # lt should be called with a cutoff of today - 14 days
-        expected_cutoff = (date.today() - timedelta(days=14)).isoformat()
+        # lt should be called with a cutoff of UTC today - 14 days
+        expected_cutoff = (now_utc().date() - timedelta(days=14)).isoformat()
         mock_delete_chain.lt.assert_called_once_with("ex_dividend_date", expected_cutoff)
 
     def test_cleanup_only_upcoming_not_dividend_history(self, repo):
         """Table is upcoming_dividend_events, never dividend_history."""
-        r, mock_table = repo
+        r, _mock_table = repo
         mock_client = r.client
         asyncio.run(r.cleanup_stale_events(company_id=1))
         table_name = mock_client.table.call_args[0][0]

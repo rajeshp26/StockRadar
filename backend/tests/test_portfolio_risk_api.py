@@ -24,7 +24,7 @@ def _disable_rate_limiter():
 @pytest.fixture(autouse=True)
 def _mock_supabase_deps():
     with (
-        patch("api.portfolio.supabase") as mock_supabase,
+        patch("api.portfolio.supabase"),
         patch("api.portfolio.SupabaseUserRepository") as mock_repo_cls,
     ):
         mock_repo = MagicMock()

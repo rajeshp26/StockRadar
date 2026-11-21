@@ -2,6 +2,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from application.services.prompts.chat_prompt import (
     ChatMessage,
@@ -67,7 +68,7 @@ class TestChatModels:
         assert msg.content == "What is the P/E ratio?"
 
     def test_chat_message_invalid_role(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ChatMessage(role="admin", content="test")
 
     def test_chat_message_empty_content_allowed(self):
@@ -83,7 +84,7 @@ class TestChatModels:
         assert req.messages[1].content == ""
 
     def test_chat_request_empty_messages(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ChatRequest(messages=[])
 
 
@@ -576,7 +577,7 @@ class TestChatEndpointUnit:
             )
 
         chunks = [c async for c in result.body_iterator]
-        lines = [l for l in "".join(chunks).strip().split("\n") if l]
+        lines = [line for line in "".join(chunks).strip().split("\n") if line]
 
         # First line should be "data: {"token":"Test"}"
         assert lines[0].startswith("data: ")
@@ -637,7 +638,7 @@ class TestChatEndpointUnit:
             )
 
         chunks = [c async for c in result.body_iterator]
-        lines = [l for l in "".join(chunks).strip().split("\n") if l]
+        lines = [line for line in "".join(chunks).strip().split("\n") if line]
 
         assert lines[0].startswith("data: ")
         parsed = json.loads(lines[0][6:])
@@ -694,7 +695,7 @@ class TestChatEndpointUnit:
             )
 
         chunks = [c async for c in result.body_iterator]
-        lines = [l for l in "".join(chunks).strip().split("\n") if l]
+        lines = [line for line in "".join(chunks).strip().split("\n") if line]
         # Should produce exactly one event: the done signal
         assert len(lines) == 1
         parsed = json.loads(lines[0][6:])

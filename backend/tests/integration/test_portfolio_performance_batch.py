@@ -26,7 +26,7 @@ def _disable_rate_limiter():
 @pytest.fixture(autouse=True)
 def _mock_supabase_deps():
     with (
-        patch("api.portfolio.supabase") as mock_supabase,
+        patch("api.portfolio.supabase"),
         patch("api.portfolio.SupabaseUserRepository") as mock_repo_cls,
     ):
         mock_repo = MagicMock()
@@ -126,7 +126,7 @@ class TestPerformanceBatchEndpoint:
         assert data["results"]["1Y"] is not None
         assert data["results"]["1M"] is None
 
-    def test_batch_default_period_is_1Y(self, client):
+    def test_batch_default_period_is_1y(self, client):
         mock_svc = MagicMock()
         mock_svc.get_portfolio_performance = AsyncMock(
             return_value=_make_perf_result(success=True, period="1Y")

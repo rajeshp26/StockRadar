@@ -270,6 +270,31 @@ would be red forever and ignored, so `tasks.py lint` scopes ruff to files change
 `HEAD` (including untracked): new code must be clean, existing debt is reported by
 `lint-all` and never fixed opportunistically inside unrelated work.
 
+**Follow-up (explicit user request, after the remediation commit `e13e008e`):** all lint findings
+in the files touched by this work were burned down, so the whole remediation is lint-clean rather
+than merely ratcheted. Starting state across the 94 changed Python files: 155 findings
+(`B904` 44, `B008` 40, `W293` 13, `F841` 9, `E402` 6, `B007` 5, `N806` 5, `E701` 4, `E741` 3,
+`B905` 2, `B017` 2, `N802` 1). Fixes were behaviour-preserving:
+- `api/portfolio.py`: `raise ... from e` added only to raises genuinely inside `except ... as`
+  blocks (a first pass over-applied and was corrected after `F821` surfaced 6 validation raises);
+  module-level imports hoisted; 4 unused `db_user_id` bindings replaced with a bare validating
+  call (the `_resolve_db_user_id()` 403 side effect is retained); trailing whitespace removed.
+- `backend/pyproject.toml`: per-file-ignore for `B008` under `api/**/*.py` — `Depends()` in
+  parameter defaults is FastAPI's documented DI pattern, not a real bug.
+- Test files: identifier renames (`l`→`line`, `MockRepo`→`mock_repo_cls`, unused loop/unpack
+  targets → `_`), combined parenthesised `with`/`if` statements, `zip(..., strict=False)`,
+  `contextlib.suppress`, one-line `if` expansion, and dead no-op expressions removed.
+  Each removed assignment was verified unused (the mocked call itself still executes).
+
+Also fixed a timezone-dependent flake exposed by the final run crossing UTC midnight
+(local `2026-11-20`, UTC `2026-11-21`): three dividend assertions used `date.today()` while
+production (`financial_repository.cleanup_stale_events`, `market_data_scheduler`) uses
+`now_utc().date()`. The tests now use the production clock. No production behaviour changed.
+
+Final gates: `python tasks.py lint` → `All checks passed!` (15 changed files, exit 0);
+`python tasks.py test` → `2474 passed, 56 skipped, 62 deselected, 143 warnings` (exit 0);
+`python tasks.py check` → `check: PASS`.
+
 ### I2 · Split-adjusted holdings vs unadjusted lot replay · **FIXED**
 
 `shared/replay_engine` declined the split for 18+ companies and silently kept a
@@ -1736,15 +1761,16 @@ carry `pool-<worker_id>` / `worker-<index>` ids with job ids nested — 5 new te
 per condition instead of 8+; suppressed count tracked — 5 new tests, 2 RED; 22 regression passed).
 
 **I1c** (credentials scrubbed to env, scripts un-ignored and tracked, password redacted from this
-ledger — 5 new tests RED→GREEN; no secret in git history or working tree), **I1d** (92 pre-existing
-failures quarantined in `tests/known_failures.txt` with reasons + burn-down policy — gate green:
-2450 passed, 106 deselected, exit 0).
+ledger — 5 new tests RED→GREEN; no secret in git history or working tree), **I1d** (all 92
+pre-existing failures resolved 92→0; `tests/known_failures.txt` intentionally empty — gate green:
+2474 passed, 56 skipped, 62 deselected, exit 0), **I1e** (all lint findings in changed files fixed
+— `tasks.py lint` 15 changed files clean; `tasks.py check` → `PASS`).
 
 Next: none. All work in this ledger is done — 30 in-scope issues (I1–I31 minus I6) plus the two
-alongside items (I1c, I1d). I14/I15/I16 are resolved/INFO (I15 decision: keep
-`PRICE_PREFLIGHT_FATAL` unset — critical deps already fail fast, CI enforces exact lock sync).
-I6 (OpenRouter 402) remains out of scope by user direction. Ongoing, not blocking: burn down the
-92 quarantined tests in `known_failures.txt` by fixing in grouped batches, removing one entry per
-fix and updating the I1d count.
+alongside items (I1c, I1d) and the I1e lint follow-up. I14/I15/I16 are resolved/INFO (I15 decision:
+keep `PRICE_PREFLIGHT_FATAL` unset — critical deps already fail fast, CI enforces exact lock sync).
+I6 (OpenRouter 402) remains out of scope by user direction. The 62 deselected tests are the
+live-stack `@pytest.mark.integration` suites; they are not quarantined and require
+`RUN_INTEGRATION_TESTS=1` plus `BACKEND_ORIGIN` via `python tasks.py db-check`.
 
 I1 → I1b ✔ → I2 ✔ → I2b ✔ → I3 ✔ → I4 ✔ → I5 ✔ → I7 ✔ → I8 ✔ → I9 ✔ → I10 ✔ → I11 ✔ → I12 ✔ → I13 ✔ → I15 ✔ → I17 ✔ → I18 ✔ → I19 ✔ → I20 ✔ → I22 ✔ → I21 ✔ → I26 ✔ → I23 ✔ → I24 ✔ → I25 ✔ → I27 ✔ → I28 ✔ → I29 ✔ → I30 ✔ → I31 ✔ → I1c ✔ → I1d ✔

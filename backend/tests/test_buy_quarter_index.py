@@ -83,7 +83,7 @@ class TestBuyQuarterIndexScenarios:
         # 16 quarters: (2022,1) through (2025,4)
         quarters = quarters[:13]  # trim to Q1'25
 
-        held, idx, period = await run_scenario(quarters, "2024-10-15")
+        held, idx, _period = await run_scenario(quarters, "2024-10-15")
 
         assert held is True
         # (2022,1)=0, (2022,2)=1, ..., (2024,3)=10, (2024,4)=11, (2025,1)=12
@@ -99,7 +99,7 @@ class TestBuyQuarterIndexScenarios:
         Expected: index = 0 (the purchase quarter is the first quarter)
         """
         quarters = [(2022, 1), (2022, 2), (2022, 3), (2022, 4)]
-        held, idx, period = await run_scenario(quarters, "2022-02-15")
+        held, idx, _period = await run_scenario(quarters, "2022-02-15")
 
         assert held is True
         assert idx == 0, (

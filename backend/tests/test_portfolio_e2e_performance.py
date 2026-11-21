@@ -51,10 +51,14 @@ USER_ID = 1
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _grade(ms: float) -> str:
-    if ms < 20: return "PASS"
-    if ms < 100: return "OK"
-    if ms < 500: return "SLOW"
-    if ms < 2000: return "CRITICAL"
+    if ms < 20:
+        return "PASS"
+    if ms < 100:
+        return "OK"
+    if ms < 500:
+        return "SLOW"
+    if ms < 2000:
+        return "CRITICAL"
     return "FAIL"
 
 
@@ -462,7 +466,7 @@ class TestTabSwitchSimulation:
 
         # Q8: users (preferred_currency)
         start = time.perf_counter()
-        user_res = db.table("users").select("preferred_currency").eq("id", USER_ID).execute()
+        db.table("users").select("preferred_currency").eq("id", USER_ID).execute()
         t = (time.perf_counter() - start) * 1000
         results.append({"label": "[D8] users.preferred_currency", "elapsed_ms": t})
 
@@ -529,7 +533,6 @@ class TestTabSwitchSimulation:
         print(f"    => TOTAL PAGE LOAD:      {est_total:.0f}ms ({est_total/1000:.1f}s)")
 
         # If Performance tab auto-fetches on mount
-        est_with_perf = total_db + est_network + est_render
         if perf_db > 0:
             print(f"    (Performance tab costs {perf_db:.0f}ms in DB queries alone)")
 
@@ -604,7 +607,7 @@ class TestCacheEffectiveness:
     async def test_cold_vs_warm_market_data(self, db):
         """Measure first call (cold) vs subsequent calls (warm) to current_market_data."""
         times = []
-        for i in range(5):
+        for _ in range(5):
             start = time.perf_counter()
             db.table("current_market_data").select("company_id, current_price").execute()
             t = (time.perf_counter() - start) * 1000

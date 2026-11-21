@@ -149,16 +149,18 @@ class TestVerifyJwt:
 
     def test_rs256_unknown_kid_returns_401(self):
         """Should raise 401 when JWKS has no matching kid for RS256."""
-        with patch.multiple(
-            "auth",
-            get_unverified_header=MagicMock(return_value={"alg": "RS256", "kid": "unknown-kid"}),
+        with (
+            patch.multiple(
+                "auth",
+                get_unverified_header=MagicMock(return_value={"alg": "RS256", "kid": "unknown-kid"}),
+            ),
+            patch("auth._get_public_key") as mock_key,
         ):
-            with patch("auth._get_public_key") as mock_key:
-                mock_key.side_effect = HTTPException(status_code=401, detail="Invalid token: unknown key ID")
-                from auth import verify_jwt
-                with pytest.raises(HTTPException) as exc:
-                    verify_jwt("unknown-kid.token")
-                assert exc.value.status_code == 401
+            mock_key.side_effect = HTTPException(status_code=401, detail="Invalid token: unknown key ID")
+            from auth import verify_jwt
+            with pytest.raises(HTTPException) as exc:
+                verify_jwt("unknown-kid.token")
+            assert exc.value.status_code == 401
 
 
 class TestGetPublicKey:

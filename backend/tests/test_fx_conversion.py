@@ -73,7 +73,7 @@ class TestFXProvider:
         from providers.fx_provider import fetch_fx_rate
 
         arrays = [["Close"], ["CADUSD=X"]]
-        tuples = list(zip(*arrays))
+        tuples = list(zip(*arrays, strict=False))
         multi_index = pd.MultiIndex.from_tuples(tuples)
         mock_df = pd.DataFrame([[1.3645]], columns=multi_index,
                                index=pd.DatetimeIndex(["2026-06-20"]))
@@ -588,15 +588,18 @@ class TestE2EFXConversion:
         tree = ast.parse(content)
         for node in ast.walk(tree):
             if isinstance(node, ast.Dict):
-                for key, val in zip(node.keys, node.values):
-                    if isinstance(key, ast.Constant) and key.value == "currency":
-                        if isinstance(val, ast.JoinedStr):
-                            val_str = "".join(
-                                v.value if isinstance(v, ast.Constant) else "{}"
-                                for v in val.values
-                            )
-                            assert "SHOP" in val_str or "AAPL" in val_str
-                            assert "(\"AAPL\", \"SHOP\")" in content or "\"SHOP\"" in content
+                for key, val in zip(node.keys, node.values, strict=False):
+                    if (
+                        isinstance(key, ast.Constant)
+                        and key.value == "currency"
+                        and isinstance(val, ast.JoinedStr)
+                    ):
+                        val_str = "".join(
+                            v.value if isinstance(v, ast.Constant) else "{}"
+                            for v in val.values
+                        )
+                        assert "SHOP" in val_str or "AAPL" in val_str
+                        assert "(\"AAPL\", \"SHOP\")" in content or "\"SHOP\"" in content
 
         # Simpler assertion: grep for SHOP in the currency line
         assert '"SHOP"' in content

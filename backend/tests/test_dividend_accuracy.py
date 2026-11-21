@@ -34,6 +34,7 @@ from fixtures_dividend_pipeline import (
 
 from application.schedulers.market_data_scheduler import estimate_next_ex_date
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from shared.time_utils import now_utc
 
 
 class TestStructuralSafety:
@@ -94,7 +95,7 @@ class TestHistoricalIntegrity:
         estimate_next_ex_date(1, MagicMock())
 
         query_chain = mock_supabase.table.return_value.select.return_value.eq.return_value.not_.is_.return_value.lte
-        today_str = date.today().isoformat()
+        today_str = now_utc().date().isoformat()
         query_chain.assert_called_once_with("ex_dividend_date", today_str)
 
 
@@ -162,7 +163,7 @@ class TestExpectedResultsMatrix:
         repo = SupabaseFinancialRepository(client=mock_client)
         asyncio.run(repo.cleanup_stale_events(company_id=1))
 
-        expected_cutoff = (date.today() - timedelta(days=14)).isoformat()
+        expected_cutoff = (now_utc().date() - timedelta(days=14)).isoformat()
         lt_call = mock_client.table.return_value.delete.return_value.eq.return_value.lt
         lt_call.assert_called_once_with("ex_dividend_date", expected_cutoff)
 

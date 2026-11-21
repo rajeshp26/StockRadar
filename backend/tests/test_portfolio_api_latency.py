@@ -11,6 +11,7 @@ Usage:
 WARNING: Requires backend at BACKEND_ORIGIN to be running.
 """
 
+import contextlib
 import os
 import sys
 import time
@@ -132,20 +133,15 @@ class TestPortfolioApiLatency:
     @pytest.fixture(autouse=True)
     def _warmup(self, client):
         """One warmup call to prime Supabase connection pool + query cache."""
-        try:
+        with contextlib.suppress(Exception):
             client.get("/portfolio/brokerages")
-        except Exception:
-            pass
         yield
 
     def _time_request(self, client, method: str, path: str, label: str) -> dict:
         url = path
         start = time.perf_counter()
         try:
-            if method == "GET":
-                resp = client.get(url)
-            else:
-                resp = client.post(url, json={})
+            resp = client.get(url) if method == "GET" else client.post(url, json={})
             elapsed = (time.perf_counter() - start) * 1000
             return {
                 "label": label,
@@ -252,7 +248,7 @@ class TestPortfolioWaterfallReport:
 
     def test_waterfall_report(self, client):
         results = []
-        for method, path, label in ENDPOINTS:
+        for _method, path, label in ENDPOINTS:
             url = path
             start = time.perf_counter()
             try:

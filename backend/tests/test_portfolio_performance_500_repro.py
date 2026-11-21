@@ -17,23 +17,21 @@ To run:
     pytest tests/test_portfolio_performance_500_repro.py -v -s
 """
 import logging
+import os
+import sys
 from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-logging.basicConfig(level=logging.DEBUG)
-
-import os
-import sys
-
+# Keep the backend root importable when this file is run directly.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from application.services.portfolio_service import PortfolioService
-from shared.snapshot_builder import (
-    build_snapshot_row,
-)
+from shared.snapshot_builder import build_snapshot_row
+
+logging.basicConfig(level=logging.DEBUG)
 
 
 @pytest.fixture(autouse=True)
@@ -360,19 +358,21 @@ async def test_2_compute_performance_fallback_bugs():
     mock_financial_repo = MagicMock()
     mock_financial_repo.get_latest_prices = AsyncMock(return_value={})
 
-    with patch.object(PortfolioService, '_period_to_date_range', return_value=(start_date, end_date)):
-        with patch('config.settings') as mock_settings:
-            mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = False
-            mock_settings.ENABLE_FX_CONVERSION = False
+    with (
+        patch.object(PortfolioService, '_period_to_date_range', return_value=(start_date, end_date)),
+        patch('config.settings') as mock_settings,
+    ):
+        mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = False
+        mock_settings.ENABLE_FX_CONVERSION = False
 
-            service = PortfolioService(mock_portfolio_repo, mock_financial_repo)
+        service = PortfolioService(mock_portfolio_repo, mock_financial_repo)
 
-            try:
-                result = await service._get_portfolio_performance_legacy(1, "1Y", account_ids)
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                pytest.fail(f"Performance computation raised {type(e).__name__}: {e}")
+        try:
+            result = await service._get_portfolio_performance_legacy(1, "1Y", account_ids)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            pytest.fail(f"Performance computation raised {type(e).__name__}: {e}")
 
     # --- VERIFY BUGS ARE FIXED ---
     snapshots = result.get("snapshots", [])
@@ -500,21 +500,23 @@ async def test_3_get_portfolio_performance_via_snapshot_path():
     mock_snapshots_repo.get_first_snapshot_date.return_value = None
     mock_snapshots_repo.get_portfolio_snapshots_series.return_value = []
 
-    with patch.object(PortfolioService, '_period_to_date_range', return_value=(start_date, end_date)):
-        with patch('config.settings') as mock_settings:
-            mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = True
-            mock_settings.ENABLE_FX_CONVERSION = False
-            mock_settings.ENABLE_PERFORMANCE_LOCF = True
+    with (
+        patch.object(PortfolioService, '_period_to_date_range', return_value=(start_date, end_date)),
+        patch('config.settings') as mock_settings,
+    ):
+        mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = True
+        mock_settings.ENABLE_FX_CONVERSION = False
+        mock_settings.ENABLE_PERFORMANCE_LOCF = True
 
-            service = PortfolioService(mock_portfolio_repo, mock_financial_repo)
+        service = PortfolioService(mock_portfolio_repo, mock_financial_repo)
 
-            with patch('application.services.portfolio_service.PortfolioSnapshotsRepository', return_value=mock_snapshots_repo):
-                try:
-                    result = await service.get_portfolio_performance(1, "1Y", account_ids)
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    pytest.fail(f"get_portfolio_performance raised {type(e).__name__}: {e}")
+        with patch('application.services.portfolio_service.PortfolioSnapshotsRepository', return_value=mock_snapshots_repo):
+            try:
+                result = await service.get_portfolio_performance(1, "1Y", account_ids)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                pytest.fail(f"get_portfolio_performance raised {type(e).__name__}: {e}")
 
     print(f"\n  Result success: {result.get('success')}")
     print(f"  Snapshots: {len(result.get('snapshots', []))}")
@@ -659,23 +661,25 @@ async def test_5_end_to_end_no_crash():
         else:
             start = today - timedelta(days=400)
 
-        with patch.object(PortfolioService, '_period_to_date_range', return_value=(start, today)):
-            with patch('config.settings') as mock_settings:
-                mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = False
-                mock_settings.ENABLE_FX_CONVERSION = False
+        with (
+            patch.object(PortfolioService, '_period_to_date_range', return_value=(start, today)),
+            patch('config.settings') as mock_settings,
+        ):
+            mock_settings.ENABLE_PORTFOLIO_SNAPSHOT_READ_PATH = False
+            mock_settings.ENABLE_FX_CONVERSION = False
 
-                service = PortfolioService(mock_portfolio_repo, mock_financial_repo)
+            service = PortfolioService(mock_portfolio_repo, mock_financial_repo)
 
-                try:
-                    result = await service.get_portfolio_performance(1, period, account_ids)
-                    assert result.get("success"), f"Period {period} failed: {result}"
-                    n_snapshots = len(result.get("snapshots", []))
-                    print(f"  Period {period}: {n_snapshots} snapshots, "
-                          f"success={result['success']}")
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    pytest.fail(f"Period {period} raised {type(e).__name__}: {e}")
+            try:
+                result = await service.get_portfolio_performance(1, period, account_ids)
+                assert result.get("success"), f"Period {period} failed: {result}"
+                n_snapshots = len(result.get("snapshots", []))
+                print(f"  Period {period}: {n_snapshots} snapshots, "
+                      f"success={result['success']}")
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                pytest.fail(f"Period {period} raised {type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

@@ -80,11 +80,11 @@ def _independent_portfolio_value(
     """
     portfolio: dict[date, float] = {}
     all_dates: set = set()
-    for aid, snapshots in account_snapshots.items():
+    for _aid, snapshots in account_snapshots.items():
         all_dates.update(snapshots.keys())
     for d in sorted(all_dates):
         total = 0.0
-        for aid, snapshots in account_snapshots.items():
+        for _aid, snapshots in account_snapshots.items():
             total += snapshots.get(d, {}).get("total_value", 0.0)
         portfolio[d] = round(total, 2)
     return portfolio
@@ -559,8 +559,6 @@ def test_case_8_all_periods_merge_integrity():
 
     # Verify data quality: count how many dates have the $0 bug
     zero_contrib_dates = []
-    for d in sorted(account_snapshots[2].keys()):
-        pass  # B has data on these dates
     for d in sorted(account_snapshots[1].keys()):
         if d not in account_snapshots[2]:
             zero_contrib_dates.append(d)

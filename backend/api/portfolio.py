@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from application.services.dividend_dashboard_service import DividendDashboardService
 from application.services.portfolio_service import PortfolioService
 from config import settings
 from database import supabase
@@ -56,10 +57,14 @@ from schemas_portfolio import (
     PerformanceResponse,
     PortfolioAllocationResponse,
     PortfolioDashboardResponse,
+    PortfolioDividendHolding,
+    PortfolioDividendHoldingDetail,
+    PortfolioDividendSummary,
     PortfolioOverviewResponse,
     RiskContributionResponse,
     RiskMetricsResponse,
     RollingSharpeResponse,
+    UpcomingExDate,
 )
 from shared.exceptions.base import AppException
 from shared.fx_service import FXService
@@ -501,7 +506,7 @@ async def list_brokerages(
 ) -> ListBrokeragesResponse:
     """
     List supported brokerages.
-    
+
     Returns all active brokerages that users can import transactions from.
     """
     try:
@@ -515,7 +520,7 @@ async def list_brokerages(
         raise HTTPException(
             status_code=500,
             detail="Failed to list brokerages",
-        )
+        ) from e
 
 
 # ============================================================================
@@ -621,7 +626,7 @@ async def list_accounts(
         raise
     except Exception as e:
         logger.error(f"List accounts failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/portfolio/dashboard", tags=["Portfolio"], status_code=200)
@@ -651,7 +656,7 @@ async def get_portfolio_dashboard(
         raise HTTPException(
             status_code=500,
             detail="Failed to load portfolio dashboard",
-        )
+        ) from e
 
 
 @router.delete("/portfolio/accounts/{account_id}", tags=["Portfolio"], status_code=204)
@@ -663,13 +668,13 @@ async def delete_account(
 ):
     """
     Delete a portfolio account and all associated data.
-    
+
     Cascade deletes:
     - All transactions for this account
     - All holdings for this account
     - All performance snapshots for this account
     - All dividend records for this account
-    
+
     Security: Ownership verified via account.user_id.
     """
     try:
@@ -704,7 +709,7 @@ async def delete_account(
         raise HTTPException(
             status_code=500,
             detail="Failed to delete account",
-        )
+        ) from e
 
 
 # ============================================================================
@@ -720,7 +725,7 @@ async def queue_import(
 ) -> ImportTransactionsResponse:
     """
     Queue a CSV import for background processing.
-    
+
     Returns immediately with import_batch_id and status='pending'.
     Frontend polls GET /portfolio/import/{import_batch_id}/status for progress.
     """
@@ -736,7 +741,7 @@ async def queue_import(
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid CSV encoding: {e!s}",
-            )
+            ) from e
 
         # Queue import for background processing
         service = _get_portfolio_service()
@@ -763,13 +768,13 @@ async def queue_import(
     except HTTPException:
         raise
     except AppException as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"Queue import failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Queue import failed: {e!s}",
-        )
+        ) from e
 
 
 @router.get("/portfolio/import/{import_batch_id}/status", tags=["Portfolio"], status_code=200)
@@ -781,7 +786,7 @@ async def get_import_status(
 ) -> ImportStatusResponse:
     """
     Poll import job status and progress.
-    
+
     Status values:
     - pending:   Queued, waiting to start
     - processing: Actively importing
@@ -832,7 +837,7 @@ async def get_import_status(
         raise HTTPException(
             status_code=500,
             detail="Failed to get import status",
-        )
+        ) from e
 
 
 # ============================================================================
@@ -926,7 +931,7 @@ async def get_account_holdings(
         raise HTTPException(
             status_code=500,
             detail="Failed to get holdings",
-        )
+        ) from e
 
 
 @router.get("/portfolio/holdings", tags=["Portfolio"], status_code=200)
@@ -1012,7 +1017,7 @@ async def get_all_holdings(
         raise HTTPException(
             status_code=500,
             detail="Failed to get holdings",
-        )
+        ) from e
 
 
 # ============================================================================
@@ -1073,13 +1078,13 @@ async def get_portfolio_overview(
     except HTTPException:
         raise
     except AppException as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"Get portfolio overview failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Failed to get portfolio overview",
-        )
+        ) from e
 
 
 # ============================================================================
@@ -1096,7 +1101,7 @@ async def get_account_transactions(
 ) -> AccountTransactionsResponse:
     """
     Get transaction history for an account.
-    
+
     Query params:
     - limit: Max transactions to return (default 100, max 1000)
     """
@@ -1136,7 +1141,7 @@ async def get_account_transactions(
         raise HTTPException(
             status_code=500,
             detail="Failed to get transactions",
-        )
+        ) from e
 
 
 @router.get("/portfolio/transactions", tags=["Portfolio"], status_code=200)
@@ -1195,7 +1200,7 @@ async def get_all_transactions(
         raise HTTPException(
             status_code=500,
             detail="Failed to get transactions",
-        )
+        ) from e
 
 
 # ============================================================================
@@ -1211,7 +1216,7 @@ async def get_account_dividends(
 ) -> AccountDividendsResponse:
     """
     Get dividend summary for an account.
-    
+
     Returns:
     - Current year total dividends
     - Monthly breakdown for last 12 months
@@ -1254,7 +1259,7 @@ async def get_account_dividends(
         raise HTTPException(
             status_code=500,
             detail="Failed to get dividends",
-        )
+        ) from e
 
 
 @router.get("/portfolio/dividends", tags=["Portfolio"], status_code=200)
@@ -1304,7 +1309,7 @@ async def get_all_dividends(
         raise HTTPException(
             status_code=500,
             detail="Failed to get dividends",
-        )
+        ) from e
 
 
 @router.get("/portfolio/accounts/{account_id}/dividend-history", tags=["Portfolio"], status_code=200)
@@ -1350,13 +1355,13 @@ async def get_account_dividend_history(
     except HTTPException:
         raise
     except AppException as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"Get dividend history failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="Failed to get dividend history",
-        )
+        ) from e
 
 
 @router.post("/portfolio/transactions/manual", tags=["Portfolio"], status_code=201)
@@ -1368,17 +1373,17 @@ async def add_manual_transaction(
 ) -> ManualTransactionResponse:
     """
     Manually add a single transaction.
-    
+
     Use cases:
     - User wants to backfill historical trades not in CSV
     - User wants to enter trades without uploading CSV
     - User wants to record transactions from multiple sources
-    
+
     Validates:
     - Account ownership
     - Required fields based on activity type
     - Stock symbol exists (creates if needed)
-    
+
     Auto-triggers:
     - Holdings recalculation for affected account
     - Dividend extraction if type is DIVIDEND
@@ -1411,13 +1416,13 @@ async def add_manual_transaction(
     except HTTPException:
         raise
     except AppException as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
     except Exception as e:
         logger.error(f"Manual transaction failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create transaction: {e!s}",
-        )
+        ) from e
 
 
 @router.get("/portfolio/import-history", tags=["Portfolio"], status_code=200)
@@ -1429,7 +1434,7 @@ async def get_import_history(
 ):
     """
     Get CSV import history for the user.
-    
+
     Shows:
     - When CSVs were imported
     - How many transactions per import
@@ -1452,7 +1457,7 @@ async def get_import_history(
         raise HTTPException(
             status_code=500,
             detail="Failed to get import history",
-        )
+        ) from e
 
 @router.get("/companies/search", tags=["Companies"], status_code=200)
 @limiter.limit("60/minute")
@@ -1463,11 +1468,11 @@ async def check_company_exists(
 ):
     """
     Check if a company exists in the database.
-    
+
     Used by manual trade form for real-time validation:
     - Shows "Company exists: Tesla Inc" (green)
     - Shows "New company will be created" (amber)
-    
+
     This helps users understand what will happen when they submit.
     """
     try:
@@ -1507,14 +1512,6 @@ async def check_company_exists(
 # DIVIDEND DASHBOARD ENDPOINTS
 # ============================================================================
 
-from application.services.dividend_dashboard_service import DividendDashboardService
-from schemas_portfolio import (
-    PortfolioDividendHolding,
-    PortfolioDividendHoldingDetail,
-    PortfolioDividendSummary,
-    UpcomingExDate,
-)
-
 
 def _get_dividend_dashboard_service() -> DividendDashboardService:
     """Factory for DividendDashboardService."""
@@ -1542,7 +1539,7 @@ async def get_dividend_dashboard_summary(
     """
     try:
         auth_id = user["sub"]
-        db_user_id = _resolve_db_user_id(auth_id)
+        _resolve_db_user_id(auth_id)  # validates the user (raises 403); id unused here
 
         parsed_ids = _parse_account_ids(account_ids)
         service = _get_dividend_dashboard_service()
@@ -1553,7 +1550,7 @@ async def get_dividend_dashboard_summary(
         raise
     except Exception as e:
         logger.error(f"Dividend dashboard summary failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get dividend summary")
+        raise HTTPException(status_code=500, detail="Failed to get dividend summary") from e
 
 
 @router.get("/portfolio/dividends/upcoming", tags=["Portfolio"], status_code=200)
@@ -1570,12 +1567,12 @@ async def get_dividend_dashboard_upcoming(
     - Symbol, company name
     - Ex-dividend date
     - Amount per share
-    - Estimated income (shares × DPS)
+    - Estimated income (shares * DPS)
     - Confidence: high (announced) or low (inferred from pattern)
     """
     try:
         auth_id = user["sub"]
-        db_user_id = _resolve_db_user_id(auth_id)
+        _resolve_db_user_id(auth_id)  # validates the user (raises 403); id unused here
 
         parsed_ids = _parse_account_ids(account_ids)
         service = _get_dividend_dashboard_service()
@@ -1586,7 +1583,7 @@ async def get_dividend_dashboard_upcoming(
         raise
     except Exception as e:
         logger.error(f"Dividend dashboard upcoming failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get upcoming ex-dates")
+        raise HTTPException(status_code=500, detail="Failed to get upcoming ex-dates") from e
 
 
 @router.get("/portfolio/dividends/holdings", tags=["Portfolio"], status_code=200)
@@ -1609,7 +1606,7 @@ async def get_dividend_dashboard_holdings(
     """
     try:
         auth_id = user["sub"]
-        db_user_id = _resolve_db_user_id(auth_id)
+        _resolve_db_user_id(auth_id)  # validates the user (raises 403); id unused here
 
         parsed_ids = _parse_account_ids(account_ids)
         service = _get_dividend_dashboard_service()
@@ -1620,7 +1617,7 @@ async def get_dividend_dashboard_holdings(
         raise
     except Exception as e:
         logger.error(f"Dividend dashboard holdings failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get dividend holdings")
+        raise HTTPException(status_code=500, detail="Failed to get dividend holdings") from e
 
 
 @router.get("/portfolio/dividends/holdings/{symbol}", tags=["Portfolio"], status_code=200)
@@ -1642,7 +1639,7 @@ async def get_dividend_dashboard_holding_detail(
     """
     try:
         auth_id = user["sub"]
-        db_user_id = _resolve_db_user_id(auth_id)
+        _resolve_db_user_id(auth_id)  # validates the user (raises 403); id unused here
 
         parsed_ids = _parse_account_ids(account_ids)
         service = _get_dividend_dashboard_service()
@@ -1653,7 +1650,7 @@ async def get_dividend_dashboard_holding_detail(
         raise
     except Exception as e:
         logger.error(f"Dividend dashboard detail failed for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get holding dividend detail")
+        raise HTTPException(status_code=500, detail="Failed to get holding dividend detail") from e
 
 
 # ============================================================================
@@ -1678,7 +1675,7 @@ async def check_holding_exists(
         raise
     except Exception as e:
         logger.error(f"Check holding exists failed for {symbol}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to check holding exists")
+        raise HTTPException(status_code=500, detail="Failed to check holding exists") from e
 
 
 @router.get("/portfolio/holdings/{symbol}/performance", tags=["Portfolio"], status_code=200)
@@ -1715,7 +1712,7 @@ async def get_holding_performance(
         raise
     except Exception as e:
         logger.error(f"Get holding performance failed for {symbol}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get holding performance")
+        raise HTTPException(status_code=500, detail="Failed to get holding performance") from e
 
 
 @router.get("/portfolio/holdings/{symbol}/dividends", tags=["Portfolio"], status_code=200)
@@ -1736,7 +1733,7 @@ async def get_holding_dividends(
         raise
     except Exception as e:
         logger.error(f"Get holding dividends failed for {symbol}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get holding dividends")
+        raise HTTPException(status_code=500, detail="Failed to get holding dividends") from e
 
 
 @router.get("/portfolio/holdings/{symbol}/transactions", tags=["Portfolio"], status_code=200)
@@ -1757,7 +1754,7 @@ async def get_holding_transactions(
         raise
     except Exception as e:
         logger.error(f"Get holding transactions failed for {symbol}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get holding transactions")
+        raise HTTPException(status_code=500, detail="Failed to get holding transactions") from e
 
 
 @router.get("/portfolio/holdings/{symbol}/accounts", tags=["Portfolio"], status_code=200)
@@ -1778,7 +1775,7 @@ async def get_holding_accounts(
         raise
     except Exception as e:
         logger.error(f"Get holding accounts failed for {symbol}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get holding accounts")
+        raise HTTPException(status_code=500, detail="Failed to get holding accounts") from e
 
 
 @router.get("/portfolio/holdings/{symbol}/performance/compare", tags=["Portfolio"], status_code=200)
@@ -1809,7 +1806,7 @@ async def get_holding_performance_compare(
         raise
     except Exception as e:
         logger.error(f"Get holding performance compare failed for {symbol}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to compare holding performance")
+        raise HTTPException(status_code=500, detail="Failed to compare holding performance") from e
 
 
 # ============================================================================
@@ -1869,7 +1866,7 @@ async def get_portfolio_performance(
         raise HTTPException(
             status_code=500,
             detail="Failed to get portfolio performance",
-        )
+        ) from e
 
 
 @router.get("/portfolio/performance/compare", tags=["Portfolio"], status_code=200)
@@ -1914,7 +1911,7 @@ async def get_performance_compare(
         raise HTTPException(
             status_code=500,
             detail="Failed to compare performance",
-        )
+        ) from e
 
 
 @router.post("/portfolio/performance/batch", tags=["Portfolio"], status_code=200)
@@ -1962,7 +1959,7 @@ async def get_portfolio_performance_batch(
         raise HTTPException(
             status_code=500,
             detail="Failed to fetch batch performance",
-        )
+        ) from e
 
 
 @router.get("/portfolio/allocation", tags=["Portfolio"], status_code=200)
@@ -2003,7 +2000,7 @@ async def get_portfolio_allocation(
         raise HTTPException(
             status_code=500,
             detail="Failed to get allocation",
-        )
+        ) from e
 
 
 @router.get("/benchmarks", tags=["Portfolio"], status_code=200)
@@ -2034,7 +2031,7 @@ async def list_benchmarks(
         raise HTTPException(
             status_code=500,
             detail="Failed to list benchmarks",
-        )
+        ) from e
 
 
 # ============================================================================
@@ -2059,7 +2056,7 @@ async def get_risk_metrics(
         raise
     except Exception as e:
         logger.error(f"Risk metrics failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute risk metrics")
+        raise HTTPException(status_code=500, detail="Failed to compute risk metrics") from e
 
 
 @router.get("/portfolio/drawdown", tags=["Portfolio"], status_code=200)
@@ -2080,7 +2077,7 @@ async def get_drawdown(
         raise
     except Exception as e:
         logger.error(f"Drawdown failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute drawdown")
+        raise HTTPException(status_code=500, detail="Failed to compute drawdown") from e
 
 
 @router.get("/portfolio/covariance", tags=["Portfolio"], status_code=200)
@@ -2101,7 +2098,7 @@ async def get_covariance(
         raise
     except Exception as e:
         logger.error(f"Covariance failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute covariance")
+        raise HTTPException(status_code=500, detail="Failed to compute covariance") from e
 
 
 @router.get("/portfolio/efficient-frontier", tags=["Portfolio"], status_code=200)
@@ -2122,7 +2119,7 @@ async def get_efficient_frontier(
         raise
     except Exception as e:
         logger.error(f"Efficient frontier failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute efficient frontier")
+        raise HTTPException(status_code=500, detail="Failed to compute efficient frontier") from e
 
 
 @router.get("/portfolio/rolling-sharpe", tags=["Portfolio"], status_code=200)
@@ -2143,7 +2140,7 @@ async def get_rolling_sharpe(
         raise
     except Exception as e:
         logger.error(f"Rolling sharpe failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute rolling sharpe")
+        raise HTTPException(status_code=500, detail="Failed to compute rolling sharpe") from e
 
 
 @router.get("/portfolio/risk-contribution", tags=["Portfolio"], status_code=200)
@@ -2163,7 +2160,7 @@ async def get_risk_contribution(
         raise
     except Exception as e:
         logger.error(f"Risk contribution failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute risk contribution")
+        raise HTTPException(status_code=500, detail="Failed to compute risk contribution") from e
 
 
 @router.get("/portfolio/market-exposure", tags=["Portfolio"], status_code=200)
@@ -2183,7 +2180,7 @@ async def get_market_exposure(
         raise
     except Exception as e:
         logger.error(f"Market exposure failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute market exposure")
+        raise HTTPException(status_code=500, detail="Failed to compute market exposure") from e
 
 
 @router.get("/portfolio/dividends/resolution", tags=["Portfolio"], status_code=200)
@@ -2202,4 +2199,4 @@ async def get_dividend_resolution(
         raise
     except Exception as exc:
         logger.error(f"Failed to get dividend resolution: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get dividend resolution")
+        raise HTTPException(status_code=500, detail="Failed to get dividend resolution") from exc

@@ -181,7 +181,7 @@ class TestRepositoryMethods:
         mock_client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[{"id": 1}])
 
         # Act
-        result = repo.update_item_targets(123, target_buy=150.0, target_sell=200.0)
+        repo.update_item_targets(123, target_buy=150.0, target_sell=200.0)
 
         # Assert
         mock_client.table.return_value.update.assert_called_with({"target_buy": 150.0, "target_sell": 200.0})
