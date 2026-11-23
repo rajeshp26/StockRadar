@@ -1,7 +1,0 @@
-{
-  "framework": {
-    "distribution": "agentic-lifecycle"
-  },
-  "app_root": ".",
-  "state_folder": ".planning"
-}
