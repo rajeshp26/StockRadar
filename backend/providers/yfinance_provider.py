@@ -1,6 +1,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -8,6 +9,7 @@ import pandas as pd
 import yfinance as yf
 
 from domain.interfaces.stock_provider import StockProvider
+from domain.provider_resilience import get_provider_pacer
 from shared.time_utils import now_utc, parse_db_timestamp
 
 from .base import StockDataProvider, StockDetails, TickerInfo
@@ -63,6 +65,11 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             return self._cache[ticker_upper]
 
         try:
+            # Share one throttle with the price monitor: Yahoo limits the egress,
+            # not the caller, so every yfinance entry point must use one clock.
+            wait = get_provider_pacer().acquire()
+            if wait > 0:
+                time.sleep(wait)
             tkr = yf.Ticker(ticker_upper)
             info = tkr.info or {}
 

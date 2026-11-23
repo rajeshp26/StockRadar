@@ -261,6 +261,20 @@ class Settings(BaseSettings):
         description="How often background price monitor updates in seconds"
     )
 
+    # Provider resilience (shared by every yfinance caller)
+    YF_PROVIDER_COOLDOWN_SECONDS: float = Field(
+        default=60.0,
+        ge=1.0,
+        le=3600.0,
+        description="Provider-wide pause after a Yahoo 429; one gate for all listings",
+    )
+    YF_MIN_REQUEST_INTERVAL_SECONDS: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=5.0,
+        description="Minimum spacing between Yahoo HTTP calls across all callers",
+    )
+
     # Batch Operations
     MAX_BATCH_SIZE: int = Field(
         default=100,

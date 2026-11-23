@@ -1,27 +1,25 @@
-# StockerPro
+# StockRadar
 
-This repository holds exactly two projects.
+StockRadar is a stock portfolio tracking and research app. It consists of a FastAPI
+backend, a Next.js web front end, and a Flutter mobile client, backed by Supabase.
 
-| Project | Path | What it is |
-|---|---|---|
-| **StockerPro** | `backend/`, `web/`, `mobile/` | The product: FastAPI backend, Next.js web app, Flutter mobile app. |
-| **Agentic Lifecycle Framework** | `framework/` | The agentic engineering lifecycle: agents, skills, gates, adapters, and the agent-immutable enforcement plane. |
+## Repository layout
 
-Nothing else lives at the repository root except the files both projects share:
-`.gitignore`, `.gitattributes`, `.github/`, `.devcontainer/`, `.idx/`, and the packaging
-inputs (`pyproject.toml`, `MANIFEST.in`, `requirements-framework.txt`).
+| Path | What it is |
+| --- | --- |
+| `backend/` | FastAPI service: data ingestion, Supabase orchestration, domain logic, schedulers and background workers. |
+| `web/` | Next.js 15 front end (App Router, shadcn/ui, Tailwind). |
+| `mobile/` | Flutter 3.22 app. |
 
-## StockerPro
-
-- `backend/` — FastAPI service, data ingestion, Supabase orchestration, domain logic.
-- `web/` — Next.js 15 front end (App Router, shadcn/ui, Tailwind).
-- `mobile/` — Flutter 3.22 app.
+The remaining top-level entries are development tooling: `.devcontainer/` and `.idx/`
+for cloud/container development, `.github/workflows/` for CI, and `tasks.py`, a small
+runner for the backend checks and migrations.
 
 Documentation lives with its owner: `backend/docs/`, `web/docs/`, `mobile/docs/`.
+`backend/tests/README.md` describes the backend test layers, and the Playwright browser
+specs live in `web/e2e/`.
 
-The black-box system suite the framework verifier authors and freezes (DID-017) lives in
-`backend/tests/system/`; the Playwright browser specs live in `web/e2e/`. `backend/tests/README.md`
-describes every test layer and how to run it.
+## Backend
 
 The backend runs inside its Nix environment:
 
@@ -29,24 +27,33 @@ The backend runs inside its Nix environment:
 nix-shell backend/shell.nix --run 'bash backend/start.sh'
 ```
 
-## Agentic Lifecycle Framework
+Common checks from the repository root:
 
-- `framework/` — framework source: gates, adapters, contracts, skills, verifier, plan and
-  testing harnesses.
-- `framework/docs/` — framework documentation.
-- `framework/design/skills/` — advisory design-skill corpus read by the `ui-designer` agent.
-- `framework/reference-app/` — the framework-owned reference application that
-  `framework/standalone_check.py` builds against (the only proof an installed wheel binds to a
-  consumer app).
+```bash
+python tasks.py                          # lint changed files, then the unit suite
+python tasks.py lint                     # ruff on Python files changed vs HEAD
+python tasks.py test                     # unit suite (no live stack required)
+python tasks.py db-check                 # integration tests against a live stack
+python tasks.py migrate <file.sql>       # apply one SQL migration, idempotently
+```
 
-The framework binding for this repository is `AGENTS.md`, `opencode.json`, and
-`framework.config.json`; together with `framework/opencode/**` they form the enforcement
-plane, which is immutable to agents and changes only through a human-applied patch.
-`.lifecycle/` holds the lifecycle charters that `framework init` materialises into an
-application repository, so it also stays at the root.
+## Web
 
-## Packaging
+From `web/`:
 
-`pyproject.toml`, `MANIFEST.in`, and `requirements-framework.txt` build the
-`agentic-lifecycle` distribution. Install the framework with `pip install .`; run its CLI
-with `framework`.
+```bash
+npm install
+npm run dev                              # http://localhost:3000
+npm run check                            # lint, format check, typecheck and unit tests
+npm run build                            # production build
+npm run test:e2e                         # Playwright browser specs
+```
+
+## Mobile
+
+From `mobile/`:
+
+```bash
+flutter pub get
+flutter run
+```
