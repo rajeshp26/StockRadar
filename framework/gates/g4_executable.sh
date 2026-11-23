@@ -209,20 +209,25 @@ if [ -n "$APP_MANIFEST" ] && [ -f "$APP_MANIFEST" ]; then
     # real problems still fails the gate through `run` (rc=1) exactly as before.
     if [ -d "$APP_DIR/node_modules" ]; then
       if grep -q '"lint"' "$APP_MANIFEST"; then
-        LINT_CMD=$(sed -n 's/.*"lint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$APP_MANIFEST" | head -1)
-        LINT_BIN=""
-        [ -n "$LINT_CMD" ] && LINT_BIN="${LINT_CMD%% *}"
-        if [ -n "$LINT_BIN" ] && { [ -x "$APP_DIR/node_modules/.bin/$LINT_BIN" ] || have "$LINT_BIN"; }; then
-          run_in "$APP_DIR" lint npm run lint --silent
+        # Static analysis is a ratchet, not a sweep. The app carries pre-existing
+        # ESLint errors recorded in framework/quality/baseline.eslint.json; raw
+        # `npm run lint` (deprecated `next lint`, removed in Next 16) would fail the
+        # gate on that debt forever. Run the ESLint CLI through lint_budget instead:
+        # budgeted findings are reported, NEW findings fail. The direct CLI is also
+        # the supported replacement for next lint and emits JSON the ratchet judges.
+        ESLINT_BIN=""
+        if [ -f "$APP_DIR/node_modules/.bin/eslint.cmd" ]; then
+          ESLINT_BIN="$APP_DIR/node_modules/.bin/eslint.cmd"
+        elif [ -f "$APP_DIR/node_modules/.bin/eslint" ]; then
+          ESLINT_BIN="$APP_DIR/node_modules/.bin/eslint"
+        fi
+        if [ -n "$ESLINT_BIN" ] && [ -f framework/tools/lint_budget.py ]; then
+          run lint python3 framework/tools/lint_budget.py check --tool eslint \
+            --tool-bin "$ESLINT_BIN" --tool-cwd "$APP_DIR" \
+            --budget framework/quality/baseline.eslint.json
           mark_static javascript
-        elif [ -n "$LINT_BIN" ]; then
-          note_missing "lint-binary('$LINT_BIN' declared in $APP_MANIFEST but not installed; run 'npm i -D $LINT_BIN')"
         else
-          # Script declared but its command line could not be parsed by the sed above
-          # (multi-line, interpolated, or an unusual form). Run it for real and claim
-          # static coverage only if it actually came back green -- never assume.
-          run_in "$APP_DIR" lint npm run lint --silent
-          [ "$LAST_RUN_RC" -eq 0 ] && mark_static javascript
+          note_missing "eslint-ratchet($APP_DIR: ESLint CLI or framework/tools/lint_budget.py not found)"
         fi
       fi
       # test/build genuinely executed whenever npm ran them: coverage is credited for
@@ -412,12 +417,25 @@ if [ -n "$PY_FILES" ]; then
   else
     note_missing ruff
   fi
-  if have mypy;   then run types mypy $SCOPE_TARGETS;          mark_static python; else note_missing mypy; fi
+  # Static analysis runs through the same ratchet as ruff. mypy/bandit previously ran
+  # raw, so any pre-existing finding failed the gate forever; the committed budgets
+  # record existing debt and fail only on NEW findings.
+  if have mypy; then
+    run types python3 framework/tools/lint_budget.py check --tool mypy --budget framework/quality/baseline.mypy.json
+    mark_static python
+  else
+    note_missing mypy
+  fi
   # bandit overlaps with ruff's S rules but is kept as a second, independent pass:
   # they don't agree on every finding (measured: ruff's S105 caught a hardcoded
   # password bandit's B105 profile missed on the same file), and this is a
   # security-adjacent check where a second opinion is worth the runtime.
-  if have bandit; then run security bandit -q -r $SCOPE_TARGETS -x '*/node_modules/*,*/.venv/*'; mark_static python; else note_missing bandit; fi
+  if have bandit; then
+    run security python3 framework/tools/lint_budget.py check --tool bandit --budget framework/quality/baseline.bandit.json
+    mark_static python
+  else
+    note_missing bandit
+  fi
 
   if have pytest; then
     # ── Test execution: one pytest run per pytest project ───────────────────────
@@ -470,7 +488,12 @@ if [ -n "$PY_FILES" ]; then
       # when the root config's own `testpaths` names backend/tests explicitly (2429 tests
       # still collected), while --ignore-glob='backend/*' reduced the root run to its own
       # 50. The glob is what actually splits the two projects.
-      PYTEST_ARGS=(-q)
+      # A framework test copies the whole tree into pytest's temp dir. With the
+      # platform default temp path, browser-run artifact filenames push that copy
+      # past Windows MAX_PATH (WinError 3) and 8 plan-lint tests ERROR although the
+      # code under test is fine. A short fixed basetemp keeps the copy within the
+      # limit without skipping or weakening any test.
+      PYTEST_ARGS=(-q --basetemp=/tmp/g4-pytest-basetemp)
       if [ "$proj" = "." ]; then
         for sub in $PYTEST_SUBPROJECTS; do PYTEST_ARGS+=("--ignore-glob=$sub/*"); done
         # The root run targets the paths this gate OWNS, not the root config's testpaths.

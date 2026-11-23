@@ -8,16 +8,19 @@ import {
 } from '@/components/ui/dialog';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { PlusCircle, Save, DollarSign, Search, X } from 'lucide-react';
-import { watchlistService, type StockSearchResult } from '@/features/watchlists/services/watchlist.service';
+import { watchlistService, type StockSearchResult, type ListingIdentity } from '@/features/watchlists/services/watchlist.service';
+
+export type AddStockSelection = {
+  symbol:     string;
+  targetBuy:  number | null;
+  targetSell: number | null;
+  listing?:   ListingIdentity;
+};
 
 type StockTargetDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (data: {
-    symbol:     string;
-    targetBuy:  number | null;
-    targetSell: number | null;
-  }) => void;
+  onSave: (data: AddStockSelection) => void;
   mode?: 'add' | 'edit';
   initialData?: {
     symbol:     string;
@@ -46,6 +49,7 @@ export function StockTargetDialog({
   const [symbol,     setSymbol]     = useState(initialData?.symbol           || '');
   const [targetBuy,  setTargetBuy]  = useState(initialData?.targetBuy?.toString()  || '');
   const [targetSell, setTargetSell] = useState(initialData?.targetSell?.toString() || '');
+  const [selected,   setSelected]   = useState<ListingIdentity | null>(null);
 
   /* ── Typeahead state ───────────────────────────────────── */
   const [suggestions,   setSuggestions]   = useState<StockSearchResult[]>([]);
@@ -62,6 +66,7 @@ export function StockTargetDialog({
       setSymbol(    initialData?.symbol              || '');
       setTargetBuy( initialData?.targetBuy?.toString()  || '');
       setTargetSell(initialData?.targetSell?.toString() || '');
+      setSelected(null);
       setSuggestions([]);
       setShowDropdown(false);
       setActiveIndex(-1);
@@ -92,6 +97,7 @@ export function StockTargetDialog({
   const handleSymbolChange = (raw: string) => {
     const val = raw.toUpperCase();
     setSymbol(val);
+    setSelected(null);   // any manual edit invalidates a previously selected listing
     setActiveIndex(-1);
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -106,6 +112,14 @@ export function StockTargetDialog({
   /* ── Select a suggestion ───────────────────────────────── */
   const selectSuggestion = (s: StockSearchResult) => {
     setSymbol(s.symbol);
+    setSelected({
+      security_id:     s.security_id,
+      symbol:          s.symbol,
+      exchange:        s.exchange,
+      kind:            s.kind,
+      currency:        s.currency,
+      provider_symbol: s.provider_symbol,
+    });
     setSuggestions([]);
     setShowDropdown(false);
     setActiveIndex(-1);
@@ -137,9 +151,11 @@ export function StockTargetDialog({
       symbol:     symbol.toUpperCase(),
       targetBuy:  targetBuy  ? parseFloat(targetBuy)  : null,
       targetSell: targetSell ? parseFloat(targetSell) : null,
+      listing:    selected ?? undefined,
     });
     if (mode === 'add') {
       setSymbol(''); setTargetBuy(''); setTargetSell('');
+      setSelected(null);
       setSuggestions([]); setShowDropdown(false);
     }
     onOpenChange(false);
@@ -163,11 +179,7 @@ export function StockTargetDialog({
       >
         {/* ── Top gradient stripe ──────────────────────── */}
         <div
-          className="h-px w-full rounded-t-3xl"
-          style={{
-            background:
-              'linear-gradient(90deg, transparent, rgba(99,102,241,0.6) 40%, rgba(139,92,246,0.4) 70%, transparent)',
-          }}
+          className="h-px w-full rounded-t-3xl bg-[linear-gradient(90deg,transparent,rgba(99,102,241,0.6)_40%,rgba(139,92,246,0.4)_70%,transparent)]"
           aria-hidden="true"
         />
 
@@ -213,6 +225,19 @@ export function StockTargetDialog({
                 }
               </div>
 
+              {selected && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
+                  <span className="text-[10px] font-mono text-indigo-300 bg-indigo-500/15 border border-indigo-500/30 px-1.5 py-0.5 rounded">
+                    {selected.exchange}
+                  </span>
+                  {selected.kind === 'CDR' && (
+                    <span className="text-[9px] font-black uppercase text-amber-300 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded">
+                      CDR
+                    </span>
+                  )}
+                </div>
+              )}
+
               <input
                 ref={inputRef}
                 id="dialog-symbol"
@@ -231,7 +256,8 @@ export function StockTargetDialog({
                 autoComplete="off"
                 autoCapitalize="characters"
                 className={[
-                  'w-full pl-10 pr-4 py-3 rounded-xl text-sm font-bold',
+                  'w-full pl-10 py-3 rounded-xl text-sm font-bold',
+                  selected ? 'pr-28' : 'pr-4',
                   'bg-white/5 border border-white/8 text-white',
                   'placeholder:text-white/20 placeholder:font-normal',
                   'focus:outline-none focus:border-indigo-500/60 focus:ring-2 focus:ring-indigo-500/15',
@@ -254,8 +280,13 @@ export function StockTargetDialog({
                 >
                   {suggestions.map((s, i) => (
                     <button
-                      key={s.symbol}
+                      key={s.security_id}
                       type="button"
+                      data-testid="listing-suggestion"
+                      data-security-id={s.security_id}
+                      data-symbol={s.symbol}
+                      data-exchange={s.exchange}
+                      data-kind={s.kind}
                       onMouseDown={() => selectSuggestion(s)}   // mousedown fires before blur
                       className={[
                         'w-full flex items-center justify-between px-4 py-2.5 text-left',

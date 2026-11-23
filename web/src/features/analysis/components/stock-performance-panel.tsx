@@ -32,6 +32,19 @@ interface StockPerformancePanelProps {
   symbol: string;
 }
 
+// Tooltip series colours come from the fixed palette used by the chart series below.
+// Map the hex value to a static Tailwind class so the tooltip never needs an inline
+// style (G5 no_inline_style) while keeping the exact same visible colour.
+const SERIES_TEXT_CLASS: Record<string, string> = {
+  '#818cf8': 'text-indigo-400',
+  '#34d399': 'text-emerald-400',
+  '#f59e0b': 'text-amber-500',
+  '#a78bfa': 'text-violet-400',
+  '#f472b6': 'text-pink-400',
+  '#06b6d4': 'text-cyan-500',
+  '#fb7185': 'text-rose-400',
+};
+
 export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
   const [period, setPeriod] = useState<TimePeriod>('1Y');
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([]);
@@ -79,7 +92,7 @@ export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
   const dateAxis = getDateAxis(period, chartData.map((d) => String(d.date)), { widthPx: chartWidth });
   const hasChartData = chartData.length > 1 && chartData.some((d) => (d.position_value as number) > 0);
   const firstNonZeroSnapshot = perf.snapshots.find((s) => s.position_value > 0);
-  const hasPrePurchaseData = firstNonZeroSnapshot && chartData.some((d) => d.date < firstNonZeroSnapshot.date);
+  const hasPrePurchaseData = firstNonZeroSnapshot && chartData.some((d) => String(d.date) < firstNonZeroSnapshot.date);
 
   return (
     <div className="space-y-6">
@@ -144,7 +157,7 @@ export function StockPerformancePanel({ symbol }: StockPerformancePanelProps) {
                       <div className="bg-[rgba(12,15,28,0.95)] border border-white/10 rounded-xl backdrop-blur-xl px-4 py-3 text-xs">
                         <p className="text-white/60 mb-1.5">{label}</p>
                         {payload.map((entry, idx) => (
-                          <p key={idx} style={{ color: entry.color }} className="font-medium">
+                          <p key={idx} className={`font-medium ${SERIES_TEXT_CLASS[String(entry.color)] ?? 'text-white'}`}>
                             {entry.name}: {typeof entry.value === 'number' ? entry.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : entry.value}
                           </p>
                         ))}

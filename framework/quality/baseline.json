@@ -118,9 +118,6 @@
       "E402": 1,
       "E741": 2
     },
-    "framework/testing/run_system_tests.py": {
-      "E702": 1
-    },
     "framework/testing/scenario_matrix.py": {
       "E741": 1
     },
@@ -151,9 +148,9 @@
       "E402": 1
     }
   },
-  "generated_at": "2026-11-03T04:00:55Z",
+  "generated_at": "2026-11-22T20:38:03Z",
   "schema": 1,
   "tool": "ruff",
-  "tool_version": "ruff 0.15.18",
-  "total": 119
+  "tool_version": "ruff 0.17.1",
+  "total": 118
 }

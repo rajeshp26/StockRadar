@@ -17,11 +17,12 @@ from database import supabase
 from domain.entities.watchlist import StockPriceInfo, WatchlistWithStocks
 from domain.interfaces.repository import UserRepository, WatchlistRepository
 from domain.interfaces.stock_provider import StockProvider
+from domain.listing_identity import provider_symbol_for
 from infrastructure.repositories.financial_repository import SupabaseFinancialRepository
+from infrastructure.repositories.security_repository import SecurityRepository
 from shared.exceptions.base import ExternalServiceError, NotFoundError
 from shared.price_rows import sanitize_daily_price_rows
 from shared.price_utils import build_price_snapshot
-from shared.valuation import adjust_cdr_price
 
 if TYPE_CHECKING:
     from providers.defeat_beta_provider import DefeatBetaProvider
@@ -132,29 +133,27 @@ class WatchlistService:
             if market_data_res.data:
                 market_data_map = {item['company_id']: item for item in market_data_res.data}
 
-        # Fetch CDR ratios and exchange overrides for CDR pricing
-        cdr_ratios = {}
-        exchange_overrides = {}
-        if company_ids:
+        # Price every watched row from its own listing. A watchlist item carries a
+        # `security_id`; its quote in the `quotes` table is already listing-level
+        # (the price monitor applied CDR/FX via the valuation kernel). Reading a
+        # company-level `exchange_override` here was the original symbol-keyed
+        # defect: it cannot distinguish META/NMS from META/NEO.
+        security_ids = [
+            item['security_id'] for item in raw_watchlist_items
+            if item.get('security_id')
+        ]
+        security_meta: dict[int, dict] = {}
+        listing_quotes: dict[int, dict] = {}
+        if security_ids:
+            sec_rows = (
+                supabase.table('securities').select('*')
+                .in_('security_id', security_ids).execute()
+            ).data or []
+            security_meta = {int(r['security_id']): r for r in sec_rows}
             try:
-                comp_res = supabase.table('companies').select('company_id, cdr_ratio, exchange').in_('company_id', company_ids).execute()
-                for row in (comp_res.data or []):
-                    cid = row['company_id']
-                    ratio = row.get('cdr_ratio')
-                    if ratio is not None:
-                        cdr_ratios[cid] = float(ratio)
+                listing_quotes = SecurityRepository().get_quotes(security_ids)
             except Exception:
-                pass
-            # Check portfolio_holdings for exchange_override
-            try:
-                holdings_res = supabase.table('portfolio_holdings').select('company_id, exchange_override').in_('company_id', company_ids).execute()
-                for row in (holdings_res.data or []):
-                    cid = row['company_id']
-                    exch = row.get('exchange_override')
-                    if exch:
-                        exchange_overrides[cid] = exch
-            except Exception:
-                pass
+                listing_quotes = {}
 
         # 4. Combine data
         stocks_list = []
@@ -166,40 +165,48 @@ class WatchlistService:
             ticker_symbol = company['ticker_symbol']
             ticker_data = all_tickers_data.get(ticker_symbol)
             cid = company['company_id']
+            sid = item.get('security_id')
 
             current_price = None
             previous_close = None
             last_updated = None
+            priced = False
 
-            if ticker_data:
-                current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
-                previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
+            # Preferred path: the listing's own quote, already keyed by security_id.
+            security = security_meta.get(sid) if sid else None
+            quote = listing_quotes.get(sid) if sid else None
+            if quote and quote.get('current_price') is not None:
+                from domain.valuation import price_for_listing
+                try:
+                    effective, _ = price_for_listing(security or {}, quote['current_price'])
+                    prev_raw = quote.get('close_price')
+                    previous_close, _ = (
+                        price_for_listing(security or {}, prev_raw)
+                        if prev_raw is not None else (None, None)
+                    )
+                    current_price = float(effective)
+                    previous_close = float(previous_close) if previous_close is not None else current_price
+                    last_updated = quote.get('last_updated')
+                    priced = True
+                except Exception:
+                    priced = False
 
-            db_market_data = market_data_map.get(cid)
-            if db_market_data:
-                last_updated = db_market_data.get('last_updated')
-                if current_price is None or previous_close is None:
-                    current_price = float(db_market_data.get('current_price', 0))
-                    previous_close = float(db_market_data.get('close_price')) if db_market_data.get('close_price') else current_price
+            # Fallback for legacy items that carry no security_id: use the
+            # symbol-keyed provider/DB price with NO company-level CDR fudge.
+            if not priced:
+                if ticker_data:
+                    current_price = ticker_data.info.get('currentPrice') or ticker_data.info.get('regularMarketPrice')
+                    previous_close = ticker_data.info.get('previousClose') or ticker_data.info.get('regularMarketPreviousClose')
+
+                db_market_data = market_data_map.get(cid)
+                if db_market_data:
+                    last_updated = db_market_data.get('last_updated')
+                    if current_price is None or previous_close is None:
+                        current_price = float(db_market_data.get('current_price', 0))
+                        previous_close = float(db_market_data.get('close_price')) if db_market_data.get('close_price') else current_price
 
             if current_price is None or previous_close is None:
                 continue
-
-            # Apply CDR adjustment if this is a CDR holding
-            if exchange_overrides.get(cid) == "TOR":
-                adjusted = adjust_cdr_price(
-                    current_price, is_cdr=True,
-                    cdr_ratio=cdr_ratios.get(cid), price_source="watchlist",
-                )
-                current_price = float(adjusted.price)
-                if adjusted.cdr_ratio_applied and previous_close is not None:
-                    previous_close = float(
-                        adjust_cdr_price(
-                            previous_close, is_cdr=True,
-                            cdr_ratio=adjusted.cdr_ratio_applied,
-                            price_source="watchlist",
-                        ).price
-                    )
 
             change = current_price - previous_close
             change_percent = (change / previous_close) * 100 if previous_close else 0
@@ -266,6 +273,7 @@ class WatchlistService:
                 {
                     "id": item["watchlist_item_id"],
                     "companyId": company["company_id"],
+                    "securityId": item.get("security_id"),
                     "symbol": company["ticker_symbol"],
                     "name": company["company_name"],
                     "sector": company.get("sector"),
@@ -280,20 +288,45 @@ class WatchlistService:
                 }
             )
 
-        # 3) Enrich with prices from current_market_data (batch, sub-50ms)
-        if stocks:
-            company_ids = [s["companyId"] for s in stocks]
-            snapshots = build_price_snapshot(supabase, company_ids, source="db_cached")
+        # 3) Enrich with listing-level quotes keyed by security_id.
+        security_ids = [s["securityId"] for s in stocks if s.get("securityId")]
+        security_meta: dict[int, dict[str, Any]] = {}
+        quote_rows: dict[int, dict[str, Any]] = {}
+        if security_ids:
+            sec_rows = (
+                supabase.table("securities").select("*")
+                .in_("security_id", security_ids).execute()
+            ).data or []
+            security_meta = {int(r["security_id"]): r for r in sec_rows}
+            quote_rows = SecurityRepository().get_quotes(security_ids)
 
-            for s in stocks:
-                snap = snapshots.get(s["companyId"])
-                if not snap:
-                    continue
-                s["price"] = snap["price"]
-                s["change"] = snap["change"]
-                s["changePercent"] = snap["changePercent"]
-                s["isStale"] = snap["isStale"]
-                s["lastUpdated"] = snap["lastUpdated"]
+        for s in stocks:
+            sid = s.get("securityId")
+            security = security_meta.get(sid)
+            if security:
+                s["exchange"] = security.get("exchange")
+                s["kind"] = security.get("kind")
+                s["currency"] = security.get("currency")
+                s["providerSymbol"] = security.get("provider_symbol")
+            quote = quote_rows.get(sid)
+            if not quote or quote.get("current_price") is None:
+                continue  # find-or-create never leaves a listing without a quote
+            from domain.valuation import price_for_listing
+            try:
+                effective, _ = price_for_listing(security or {}, quote["current_price"])
+                prev, _ = price_for_listing(security or {}, quote.get("close_price")) \
+                    if quote.get("close_price") is not None else (None, None)
+            except Exception:
+                continue
+            change = change_percent = None
+            if prev is not None:
+                change = float(effective - prev)
+                change_percent = (change / float(prev)) * 100 if prev else 0.0
+            s["price"] = float(effective)
+            s["change"] = change
+            s["changePercent"] = change_percent
+            s["isStale"] = bool(quote.get("is_stale", True))
+            s["lastUpdated"] = quote.get("last_updated")
 
         return {
             "watchlist_id": watchlist_id,
@@ -324,8 +357,11 @@ class WatchlistService:
             company = item.get("companies")
             if not company:
                 continue
+            sid = item.get("security_id")
             stocks.append({
                 "id": item["watchlist_item_id"],
+                "companyId": company["company_id"],
+                "securityId": sid,
                 "symbol": company["ticker_symbol"],
                 "name": company["company_name"],
                 "sector": company.get("sector"),
@@ -335,8 +371,45 @@ class WatchlistService:
                 "price": None,
                 "change": None,
                 "changePercent": None,
+                "isStale": False,
                 "lastUpdated": None,
             })
+
+        security_ids = [s["securityId"] for s in stocks if s.get("securityId")]
+        if security_ids:
+            sec_rows = (
+                supabase.table("securities").select("*")
+                .in_("security_id", security_ids).execute()
+            ).data or []
+            security_meta = {int(r["security_id"]): r for r in sec_rows}
+            quote_rows = SecurityRepository().get_quotes(security_ids)
+            from domain.valuation import price_for_listing
+            for s in stocks:
+                sid = s.get("securityId")
+                security = security_meta.get(sid)
+                if security:
+                    s["exchange"] = security.get("exchange")
+                    s["kind"] = security.get("kind")
+                    s["currency"] = security.get("currency")
+                    s["providerSymbol"] = security.get("provider_symbol")
+                quote = quote_rows.get(sid)
+                if not quote or quote.get("current_price") is None:
+                    continue
+                try:
+                    effective, _ = price_for_listing(security or {}, quote["current_price"])
+                    prev, _ = price_for_listing(security or {}, quote.get("close_price")) \
+                        if quote.get("close_price") is not None else (None, None)
+                except Exception:
+                    continue
+                change = change_percent = None
+                if prev is not None:
+                    change = float(effective - prev)
+                    change_percent = (change / float(prev)) * 100 if prev else 0.0
+                s["price"] = float(effective)
+                s["change"] = change
+                s["changePercent"] = change_percent
+                s["isStale"] = bool(quote.get("is_stale", True))
+                s["lastUpdated"] = quote.get("last_updated")
 
         return {
             "watchlist_id": watchlist_id,
@@ -357,6 +430,7 @@ class WatchlistService:
         watchlist_id: int,
         target_buy: float | None = None,
         target_sell: float | None = None,
+        security: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Add a stock to the given watchlist with fast path + background fundamentals.
@@ -389,27 +463,45 @@ class WatchlistService:
         logger.info(f"Adding {symbol} to watchlist {watchlist_id} for user {user_id}")
 
         try:
-            # 1) Get or create the company
+            # 0) Resolve the exact listing identity. A bare-ticker (legacy) caller gets
+            #    the default non-CDR listing; the selected exchange is never inferred
+            #    from a company row here.
+            catalog = SecurityRepository()
+            security = security or catalog.get_default_listing_for_symbol(symbol)
+            security_id = security["security_id"] if security else None
+            provider_symbol = (
+                security["provider_symbol"] if security else provider_symbol_for(symbol, "NMS")
+            )
+            if security:
+                logger.debug(
+                    "Listing %s: security_id=%s provider_symbol=%s exchange=%s",
+                    symbol, security_id, provider_symbol, security.get("exchange"),
+                )
+
+            # 1) Get or create the company (issuer) for fundamentals
             company = await self._get_or_create_company(symbol)
             company_id = company["company_id"]
             logger.debug("Company %s: ID=%s", symbol, company_id)
 
-            # 2) YF -> current price (fast)
+            # 2) YF -> current price (fast), keyed by the listing's provider symbol
             current_price: float | None = None
+            sd = None
             try:
-                sd = self.stock_provider.get_stock_details(symbol)
+                sd = self.stock_provider.get_stock_details(provider_symbol)
                 current_price = sd.price if sd and (sd.price is not None) else None
             except Exception as e:
-                logger.warning("Failed to fetch current price for %s: %s", symbol, str(e))
+                logger.warning("Failed to fetch current price for %s: %s", provider_symbol, str(e))
                 current_price = None
 
-            # 3) Upsert current_market_data from YF (leave timestamp to DB default)
+            # 3) Upsert the listing-level quote (and legacy current_market_data)
             if current_price is not None:
-                await self._update_market_data(company_id, symbol, current_price)
+                await self._update_market_data(
+                    company_id, provider_symbol, current_price, security_id
+                )
 
-            # 4) Insert into watchlist_items
+            # 4) Insert into watchlist_items with the exact listing
             watchlist_item = await self._add_watchlist_item(
-                watchlist_id, company_id, target_buy, target_sell
+                watchlist_id, company_id, target_buy, target_sell, security_id
             )
 
             # 5) Check refresh info to determine "new company" (first-time fundamentals)
@@ -434,23 +526,45 @@ class WatchlistService:
             )
             logger.debug("[WATCHLIST][%s] Background valuation computation scheduled", symbol)
 
-            # 7) Calculate change data from price info
+            # 7) Normalise the raw provider quote through the SAME kernel every
+            #    read path uses. The quotes row above intentionally keeps the raw
+            #    price (structure, /prices and the background SSE monitor apply
+            #    price_for_listing on read). This add-time payload is the one path
+            #    that previously skipped it, so a CDR literal flipped by exactly
+            #    cdr_ratio the moment the page was reloaded. See AC-5 regression.
+            from domain.valuation import ValuationError, price_for_listing
             prev_close = getattr(sd, 'previous_close', None) if sd else None
-            if current_price and prev_close:
-                change = float(current_price) - float(prev_close)
-                pct = (float(change) / float(prev_close)) * 100
+            effective_price: float | None = None
+            effective_prev: float | None = None
+            try:
+                if current_price is not None:
+                    effective_price = float(price_for_listing(security or {}, current_price)[0])
+                if prev_close is not None:
+                    effective_prev = float(price_for_listing(security or {}, prev_close)[0])
+            except ValuationError as exc:
+                logger.warning("[AddStock] %s (%s): %s", symbol, provider_symbol, exc.message)
+                effective_price = effective_prev = None
+
+            # 8) Calculate change data from the effective prices, matching the
+            #    structure endpoint's change computation.
+            if effective_price is not None and effective_prev is not None:
+                change = effective_price - effective_prev
+                pct = (change / effective_prev) * 100 if effective_prev else 0.0
             else:
                 change = 0.0
                 pct = 0.0
 
-            # 8) Return payload with complete data for API
+            # 9) Return payload with complete data for API. current_price is the
+            #    effective (display) price; raw stays only in the quotes row.
             return {
                 "watchlist_item_id": watchlist_item["watchlist_item_id"],
                 "company_id": company_id,
+                "security_id": security_id,
+                "security": security,
                 "symbol": symbol,
                 "company_name": company.get("company_name"),
-                "current_price": current_price,
-                "previous_close": prev_close,
+                "current_price": effective_price,
+                "previous_close": effective_prev,
                 "change": change,
                 "change_percent": pct,
                 "financials_loading": True,
@@ -654,14 +768,18 @@ class WatchlistService:
             raise
 
     async def _update_market_data(
-        self, company_id: int, symbol: str, current_price: float
+        self, company_id: int, provider_symbol: str, current_price: float,
+        security_id: int | None = None,
     ) -> None:
-        """Update or insert current market data."""
-        try:
-            stock_details = self.stock_provider.get_stock_details(symbol)
+        """Write a listing-level quote and keep legacy current_market_data in sync.
 
-            market_data = {
-                'company_id': company_id,
+        The quotes table is keyed by security_id so META/NMS and META/NEO cannot
+        overwrite each other. current_market_data remains for legacy readers only.
+        """
+        try:
+            stock_details = self.stock_provider.get_stock_details(provider_symbol)
+
+            quote_fields = {
                 'current_price': current_price,
                 'open_price': stock_details.open_price if stock_details else None,
                 'high_price': stock_details.high_price if stock_details else None,
@@ -671,33 +789,43 @@ class WatchlistService:
                 'market_state': stock_details.market_state if stock_details else None,
             }
 
+            if security_id is not None:
+                supabase.table('quotes').upsert(
+                    {'security_id': security_id, **quote_fields,
+                     'source': 'yfinance', 'is_stale': False},
+                    on_conflict='security_id',
+                ).execute()
+                logger.debug("Updated quote for security %s (%s): $%s",
+                             security_id, provider_symbol, current_price)
+
             supabase.table('current_market_data').upsert(
-                market_data,
+                {'company_id': company_id, **quote_fields},
                 on_conflict='company_id'
             ).execute()
 
-            logger.debug(f"Updated market data for {symbol}: ${current_price}")
+            logger.debug(f"Updated market data for {provider_symbol}: ${current_price}")
 
         except Exception as e:
-            logger.warning(f"Failed to update market data for {symbol}: {e!s}")
+            logger.warning(f"Failed to update market data for {provider_symbol}: {e!s}")
 
     async def _add_watchlist_item(
         self, watchlist_id: int, company_id: int, target_buy: float | None,
-        target_sell: float | None,
+        target_sell: float | None, security_id: int | None = None,
     ) -> dict[str, Any]:
         """
         Insert into watchlist_items with default position=0.
         """
         try:
-            res = supabase.table("watchlist_items").insert(
-                {
-                    "watchlist_id": watchlist_id,
-                    "company_id": company_id,
-                    "position": 0,
-                    "target_buy": target_buy,
-                    "target_sell": target_sell
-                }
-            ).execute()
+            insert_payload = {
+                "watchlist_id": watchlist_id,
+                "company_id": company_id,
+                "position": 0,
+                "target_buy": target_buy,
+                "target_sell": target_sell,
+            }
+            if security_id is not None:
+                insert_payload["security_id"] = security_id
+            res = supabase.table("watchlist_items").insert(insert_payload).execute()
             if not res.data:
                 # Second-chance: detect duplicate gracefully for better error messaging
                 dup = (

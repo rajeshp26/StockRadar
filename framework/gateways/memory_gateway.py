@@ -19,7 +19,9 @@ def _embed(text: str, dims: int = 64) -> list[float]:
     model, good enough to exercise retrieval semantics offline."""
     vec = [0.0] * dims
     for tok in re.findall(r"[a-z0-9]+", text.lower()):
-        h = int(hashlib.md5(tok.encode()).hexdigest(), 16)
+        # Non-crypto hashing embedder: declare that explicitly so the call is not
+        # flagged as a weak cryptographic digest (bandit B324). The digest is unchanged.
+        h = int(hashlib.md5(tok.encode(), usedforsecurity=False).hexdigest(), 16)
         vec[h % dims] += 1.0
     norm = math.sqrt(sum(v * v for v in vec)) or 1.0
     return [v / norm for v in vec]

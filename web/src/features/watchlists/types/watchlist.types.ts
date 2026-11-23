@@ -9,7 +9,12 @@ export const WATCHLIST_LIMITS = {
 // ── Existing types (unchanged) ──────────────────────────────────────────────
 export interface StockPriceInfo {
   id:            number;
+  securityId?:   number | null;
   symbol:        string;
+  // Persisted listing identity (returned by /watchlists/{id}/structure).
+  exchange?:     string | null;
+  kind?:         string | null;
+  providerSymbol?: string | null;
   name:          string;
   sector:        string | null;
   industry:      string | null;

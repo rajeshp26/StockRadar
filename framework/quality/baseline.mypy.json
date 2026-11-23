@@ -1,0 +1,247 @@
+{
+  "counts": {
+    "framework/adapters/control.py": {
+      "import-not-found": 1,
+      "import-untyped": 1
+    },
+    "framework/adapters/execute.py": {
+      "arg-type": 1,
+      "assignment": 1,
+      "import-not-found": 1
+    },
+    "framework/adapters/failure_injection.py": {
+      "import-not-found": 1,
+      "var-annotated": 1
+    },
+    "framework/adapters/gsd_state.py": {
+      "arg-type": 2,
+      "assignment": 2,
+      "attr-defined": 4,
+      "import-not-found": 3,
+      "import-untyped": 1
+    },
+    "framework/adapters/hosts/opencode.py": {
+      "var-annotated": 1
+    },
+    "framework/adapters/intake.py": {
+      "assignment": 1,
+      "import-not-found": 1
+    },
+    "framework/adapters/opencode_detect.py": {
+      "import-not-found": 2
+    },
+    "framework/adapters/sandbox.py": {
+      "attr-defined": 1
+    },
+    "framework/adapters/skill_adapter.py": {
+      "import-not-found": 1
+    },
+    "framework/adapters/test_atomic_write.py": {
+      "import-not-found": 1
+    },
+    "framework/architecture/checklist_check.py": {
+      "import-untyped": 1
+    },
+    "framework/claims/ledger.py": {
+      "operator": 2,
+      "var-annotated": 3
+    },
+    "framework/context.py": {
+      "import-not-found": 1
+    },
+    "framework/contracts/gen_types.py": {
+      "import-untyped": 1
+    },
+    "framework/contracts/test_validator_types.py": {
+      "var-annotated": 1
+    },
+    "framework/contracts/validate_schema.py": {
+      "import-untyped": 1
+    },
+    "framework/contracts/validator.py": {
+      "import-untyped": 2
+    },
+    "framework/execution_context.py": {
+      "import-not-found": 2,
+      "import-untyped": 1,
+      "return-value": 1
+    },
+    "framework/frontend/stack_check.py": {
+      "import-not-found": 1,
+      "import-untyped": 1,
+      "misc": 2,
+      "var-annotated": 3
+    },
+    "framework/gateways/human_gateway.py": {
+      "import-not-found": 1
+    },
+    "framework/gateways/model_gateway.py": {
+      "import-not-found": 2
+    },
+    "framework/gateways/tool_gateway.py": {
+      "import-not-found": 1
+    },
+    "framework/llm.py": {
+      "misc": 1
+    },
+    "framework/locate.py": {
+      "import-untyped": 1
+    },
+    "framework/loops/meta_loop.py": {
+      "import-not-found": 1
+    },
+    "framework/models/resolve.py": {
+      "arg-type": 9,
+      "attr-defined": 2,
+      "index": 8
+    },
+    "framework/opencode/skills/instinct/scripts/instinct-cli.py": {
+      "arg-type": 1,
+      "assignment": 2,
+      "misc": 1,
+      "union-attr": 2,
+      "var-annotated": 5
+    },
+    "framework/patterns/chaining.py": {
+      "import-not-found": 1
+    },
+    "framework/patterns/parallel.py": {
+      "import-not-found": 1
+    },
+    "framework/patterns/planning.py": {
+      "import-not-found": 1
+    },
+    "framework/patterns/react.py": {
+      "has-type": 2,
+      "import-not-found": 3
+    },
+    "framework/patterns/reflection.py": {
+      "import-not-found": 1
+    },
+    "framework/patterns/routing.py": {
+      "import-not-found": 1
+    },
+    "framework/plan/test_plan_lint.py": {
+      "arg-type": 1,
+      "union-attr": 2
+    },
+    "framework/providers/healthcheck.py": {
+      "import-not-found": 1
+    },
+    "framework/reference-app/tests/contract/test_api_004.py": {
+      "import-not-found": 1
+    },
+    "framework/retro/escape_path.py": {
+      "assignment": 1,
+      "import-untyped": 1,
+      "var-annotated": 2
+    },
+    "framework/retro/smoke_check.py": {
+      "import-untyped": 1,
+      "var-annotated": 1
+    },
+    "framework/security/check_enforcement_plane.py": {
+      "import-untyped": 1
+    },
+    "framework/security/sync_enforcement_plane.py": {
+      "import-untyped": 1
+    },
+    "framework/telemetry/report.py": {
+      "import-untyped": 1
+    },
+    "framework/telemetry/test_report_telemetry.py": {
+      "import-not-found": 1
+    },
+    "framework/test_standalone_check.py": {
+      "import-not-found": 1
+    },
+    "framework/tools/emit_change_acceptance_patch.py": {
+      "attr-defined": 1,
+      "index": 1
+    },
+    "framework/tools/emit_design_skills_integration_patch.py": {
+      "attr-defined": 1,
+      "index": 2
+    },
+    "framework/tools/emit_istqb_testing_patch.py": {
+      "attr-defined": 1,
+      "index": 2
+    },
+    "framework/tools/emit_opencode_telemetry_bridge.py": {
+      "import-not-found": 1
+    },
+    "framework/tools/emit_remaining_plane_patches.py": {
+      "import-not-found": 2
+    },
+    "framework/tools/emit_skill_sensor_patch.py": {
+      "import-not-found": 1
+    },
+    "framework/tools/emit_ui_designer_model_patch.py": {
+      "attr-defined": 1
+    },
+    "framework/tools/emit_ui_designer_routing_patch.py": {
+      "attr-defined": 1,
+      "index": 1
+    },
+    "framework/tools/gate_scope.py": {
+      "misc": 1,
+      "valid-type": 1
+    },
+    "framework/tools/lint_budget.py": {
+      "arg-type": 1,
+      "import-not-found": 1,
+      "misc": 1,
+      "operator": 2,
+      "valid-type": 1
+    },
+    "framework/tools/normalise_surface_includes.py": {
+      "union-attr": 2
+    },
+    "framework/tools/skill_use.py": {
+      "import-not-found": 1
+    },
+    "framework/tools/sync_to_agentic.py": {
+      "assignment": 1
+    },
+    "framework/validate.py": {
+      "arg-type": 2,
+      "assignment": 9,
+      "attr-defined": 2,
+      "call-overload": 1,
+      "import-not-found": 1,
+      "import-untyped": 1,
+      "operator": 16,
+      "union-attr": 5,
+      "var-annotated": 2
+    },
+    "framework/verification/recovery.py": {
+      "import-not-found": 1
+    },
+    "framework/verification/review_loop.py": {
+      "arg-type": 1,
+      "assignment": 1,
+      "import-not-found": 1
+    },
+    "framework/verification/suspicion_log.py": {
+      "assignment": 2,
+      "import-not-found": 1
+    },
+    "framework/verification/test_state_concurrency.py": {
+      "import-not-found": 4
+    },
+    "framework/verifier/evidence.py": {
+      "import-untyped": 1
+    },
+    "framework/verifier/matrix.py": {
+      "import-not-found": 3
+    },
+    "framework/verifier/route.py": {
+      "import-untyped": 1
+    }
+  },
+  "generated_at": "2026-11-22T22:13:03Z",
+  "schema": 1,
+  "tool": "mypy",
+  "tool_version": "mypy 2.4.0 (compiled: yes)",
+  "total": 195
+}

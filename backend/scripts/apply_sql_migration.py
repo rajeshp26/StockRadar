@@ -47,11 +47,31 @@ def snapshot(conn) -> dict:
         cur.execute("SELECT count(*), max(created_at)::text FROM portfolio_events")
         events = cur.fetchone()
 
+        cur.execute(
+            "SELECT to_regclass('public.securities') IS NOT NULL AND "
+            "to_regclass('public.quotes') IS NOT NULL AND "
+            "to_regclass('public.portfolio_holding_lots') IS NOT NULL"
+        )
+        security_state = None
+        if cur.fetchone()[0]:
+            cur.execute("""
+                SELECT
+                    (SELECT count(*) FROM public.securities),
+                    (SELECT count(*) FROM public.quotes),
+                    (SELECT count(*) FROM public.portfolio_holding_lots),
+                    (SELECT count(*) FROM public.watchlist_items WHERE security_id IS NULL),
+                    (SELECT count(*) FROM public.portfolio_holding_lots l
+                       JOIN public.securities s ON s.security_id = l.security_id
+                      WHERE s.company_id = 145)
+            """)
+            security_state = cur.fetchone()
+
     return {
         "ratios": sorted(ratios),
         "tor_holdings": tor,
         "ddl": ddl,
         "events": (events[0], events[1]),
+        "security_master": security_state,
     }
 
 
@@ -82,6 +102,7 @@ def main() -> int:
     print(f"  TOR holdings           : {before['tor_holdings']}")
     print(f"  triggers installed     : {len(before['ddl'])}")
     print(f"  portfolio_events       : {before['events'][0]} rows, latest {before['events'][1]}")
+    print(f"  security master        : {before['security_master']}")
 
     sql = path.read_text(encoding="utf-8")
     print(f"\n=== APPLYING {name} ===")
@@ -97,12 +118,13 @@ def main() -> int:
     print(f"  TOR holdings           : {after['tor_holdings']}")
     print(f"  triggers installed     : {len(after['ddl'])}")
     print(f"  portfolio_events       : {after['events'][0]} rows, latest {after['events'][1]}")
+    print(f"  security master        : {after['security_master']}")
 
     if before == after:
         print("\nRESULT: no change (idempotent no-op)")
     else:
         print("\nRESULT: state changed (this run was the applying run)")
-        for key in ("ratios", "tor_holdings", "ddl", "events"):
+        for key in ("ratios", "tor_holdings", "ddl", "events", "security_master"):
             if before[key] != after[key]:
                 print(f"  - {key} changed")
     conn.close()

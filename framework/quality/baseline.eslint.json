@@ -1,0 +1,225 @@
+{
+  "counts": {
+    "web/e2e/_probe_timeframe_latency.spec.ts": {
+      "@typescript-eslint/no-explicit-any": 3
+    },
+    "web/e2e/capture-auth.mjs": {
+      "no-undef": 8
+    },
+    "web/e2e/diag-apis.mjs": {
+      "no-undef": 8
+    },
+    "web/e2e/diag-compare.mjs": {
+      "no-undef": 5
+    },
+    "web/e2e/diag-root.mjs": {
+      "no-undef": 13
+    },
+    "web/e2e/diag-snapshots.mjs": {
+      "no-undef": 2
+    },
+    "web/e2e/diag-trace.mjs": {
+      "no-undef": 8
+    },
+    "web/e2e/diag-yaxis.mjs": {
+      "no-undef": 5
+    },
+    "web/e2e/portfolio-benchmark-axis-repro.spec.ts": {
+      "@typescript-eslint/no-explicit-any": 5
+    },
+    "web/e2e/rc-verify.mjs": {
+      "no-undef": 19
+    },
+    "web/e2e/uvv-comprehensive.spec.ts": {
+      "@typescript-eslint/no-explicit-any": 18
+    },
+    "web/e2e/verify-real-browser.mjs": {
+      "no-undef": 16
+    },
+    "web/next-env.d.ts": {
+      "@typescript-eslint/triple-slash-reference": 1
+    },
+    "web/next.config.js": {
+      "@typescript-eslint/no-require-imports": 1,
+      "no-undef": 3
+    },
+    "web/src/__tests__/AllocationTab.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 2,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/DividendComponents.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 2,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/DividendPanel.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 6,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/DividendsTab.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 5
+    },
+    "web/src/__tests__/FundamentalsPanel.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 9,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/HoldingsTab.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 7,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/ImportTransactionsModal.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 17,
+      "@typescript-eslint/no-require-imports": 18
+    },
+    "web/src/__tests__/ManualTradeForm.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 15,
+      "@typescript-eslint/no-require-imports": 16
+    },
+    "web/src/__tests__/MoatPanel.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 8,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/OverviewTab.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 8,
+      "@typescript-eslint/no-require-imports": 3
+    },
+    "web/src/__tests__/PerformanceTab.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 7,
+      "@typescript-eslint/no-require-imports": 3
+    },
+    "web/src/__tests__/PortfolioE2E.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 7,
+      "@typescript-eslint/no-require-imports": 3
+    },
+    "web/src/__tests__/PortfolioTabs.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 32,
+      "@typescript-eslint/no-require-imports": 15
+    },
+    "web/src/__tests__/RiskPanel.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 4,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/TransactionsTab.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 3,
+      "@typescript-eslint/no-require-imports": 1
+    },
+    "web/src/__tests__/chart-axis-components.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 21,
+      "@typescript-eslint/no-require-imports": 3
+    },
+    "web/src/__tests__/setup.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/__tests__/stock-card.link.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 5
+    },
+    "web/src/__tests__/stock-performance-panel.test.tsx": {
+      "@typescript-eslint/no-explicit-any": 11,
+      "@typescript-eslint/no-require-imports": 3
+    },
+    "web/src/__tests__/useFundamentals.test.ts": {
+      "@typescript-eslint/no-explicit-any": 2
+    },
+    "web/src/__tests__/useRiskAssessment.test.ts": {
+      "@typescript-eslint/no-explicit-any": 4
+    },
+    "web/src/app/api/proxy/[...path]/route.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/app/auth/callback/route.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/components/auth/login-form.tsx": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/components/auth/step-create-account.tsx": {
+      "@typescript-eslint/no-explicit-any": 2
+    },
+    "web/src/components/auth/step-verify-email.tsx": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/components/dashboard/stock-card.tsx": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/analytics/analysis.analytics.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/components/SuperInvestorPositionChart.tsx": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/components/dcf-method.tsx": {
+      "@typescript-eslint/no-unused-expressions": 1
+    },
+    "web/src/features/analysis/components/ddm-panel.tsx": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/components/fundamentals-panel.tsx": {
+      "react-hooks/rules-of-hooks": 7
+    },
+    "web/src/features/analysis/components/moat-panel.tsx": {
+      "@typescript-eslint/no-explicit-any": 2
+    },
+    "web/src/features/analysis/components/risk-panel.tsx": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/components/stock-vs-index-panel.tsx": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/hooks/useAnalysis.ts": {
+      "@typescript-eslint/no-explicit-any": 2
+    },
+    "web/src/features/analysis/hooks/useDdmAnalysis.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/hooks/useDdmHistory.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/hooks/useOwnerEarningsAnalysis.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/hooks/useResidualIncomeAnalysis.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/analysis/services/analysis.service.ts": {
+      "@typescript-eslint/no-explicit-any": 26
+    },
+    "web/src/features/analysis/services/moat.service.ts": {
+      "@typescript-eslint/no-explicit-any": 5
+    },
+    "web/src/features/portfolio/components/HoldingsTab.tsx": {
+      "@typescript-eslint/no-explicit-any": 5
+    },
+    "web/src/features/portfolio/components/ManualTradeForm.tsx": {
+      "@typescript-eslint/no-explicit-any": 3
+    },
+    "web/src/features/portfolio/components/RiskPanel.tsx": {
+      "@typescript-eslint/no-explicit-any": 2
+    },
+    "web/src/features/super-investors/services/super-investors-page.service.ts": {
+      "@typescript-eslint/no-explicit-any": 1
+    },
+    "web/src/features/watchlists/hooks/useWatchlist.ts": {
+      "@typescript-eslint/no-explicit-any": 4
+    },
+    "web/src/hooks/useWatchlist.ts": {
+      "@typescript-eslint/no-explicit-any": 2
+    },
+    "web/src/lib/api.ts": {
+      "@typescript-eslint/no-explicit-any": 5
+    },
+    "web/src/providers/auth-provider.tsx": {
+      "@typescript-eslint/no-explicit-any": 3,
+      "no-empty": 3
+    },
+    "web/src/services/watchlist.service.ts": {
+      "@typescript-eslint/no-explicit-any": 4
+    },
+    "web/tailwind.config.ts": {
+      "@typescript-eslint/no-require-imports": 1
+    }
+  },
+  "generated_at": "2026-11-22T22:36:46Z",
+  "schema": 1,
+  "tool": "eslint",
+  "tool_version": "v9.39.5",
+  "total": 455
+}

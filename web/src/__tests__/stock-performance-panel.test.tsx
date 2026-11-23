@@ -35,7 +35,7 @@ vi.mock("@/features/analysis/hooks/useLivePrice", () => ({
 vi.mock("lucide-react", () => {
     const React = require("react");
     const mkIcon = () => () => React.createElement("svg", { "data-testid": "icon" });
-    return { TrendingUp: mkIcon(), TrendingDown: mkIcon(), DollarSign: mkIcon(), Wallet: mkIcon(), ChevronDown: mkIcon(), Check: mkIcon(), PiggyBank: mkIcon(), Receipt: mkIcon(), Calendar: mkIcon(), Activity: mkIcon(), ArrowUpRight: mkIcon(), CalendarDays: mkIcon(), BarChart3: mkIcon(), DollarSign: mkIcon(), PiggyBank: mkIcon() };
+    return { TrendingUp: mkIcon(), TrendingDown: mkIcon(), DollarSign: mkIcon(), Wallet: mkIcon(), ChevronDown: mkIcon(), Check: mkIcon(), PiggyBank: mkIcon(), Receipt: mkIcon(), Calendar: mkIcon(), Activity: mkIcon(), ArrowUpRight: mkIcon(), CalendarDays: mkIcon(), BarChart3: mkIcon() };
 });
 
 vi.mock("recharts", () => {

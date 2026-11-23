@@ -37,6 +37,16 @@ namespaces = false
 framework = ["**/*.json", "**/*.yaml", "**/*.yml", "**/*.sh", "**/*.md", "**/*.txt", "**/*.ts", "**/*.tsx", "**/*.css", "**/*.html", "**/*.py", "**/*.mjs", "**/*.js", "**/*.cjs", "**/Dockerfile"]
 "framework.opencode" = ["**/*"]
 
+# Pin the exact rule set the framework lint baseline was built against. Without this,
+# ruff's default `select` changes between releases: ruff 0.15.18 reported E4/E7/E9/F
+# (119 findings) while 0.17.1 reported 1185 findings across a much broader default set,
+# so the version guard in framework/tools/lint_budget.py could not compare budgets and a
+# refresh would have silently changed what the ratchet enforces. Declaring the selection
+# makes the budget portable across ruff versions; the baseline records only the tool
+# version from here on.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 # Canonical suites: framework contract tests + consolidated backend tests.
 # The framework-owned reference app lives under framework/reference-app/ and is exercised by

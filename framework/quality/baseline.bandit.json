@@ -1,0 +1,298 @@
+{
+  "counts": {
+    "framework/adapters/code_intel.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/adapters/control.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/adapters/gsd_state.py": {
+      "B112": 1,
+      "B404": 1,
+      "B603": 3,
+      "B607": 1
+    },
+    "framework/adapters/hosts/dsh.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/adapters/hosts/opencode.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/adapters/intake.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/adapters/sandbox.py": {
+      "B108": 3,
+      "B110": 1,
+      "B112": 1,
+      "B404": 1,
+      "B603": 2
+    },
+    "framework/adapters/test_control.py": {
+      "B101": 71,
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/adapters/test_execute.py": {
+      "B101": 80,
+      "B404": 1,
+      "B603": 2
+    },
+    "framework/adapters/test_intake.py": {
+      "B101": 36,
+      "B404": 1,
+      "B603": 2
+    },
+    "framework/adapters/test_json_file.py": {
+      "B101": 8,
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/claims/test_ledger_rules.py": {
+      "B101": 46
+    },
+    "framework/cli.py": {
+      "B110": 1,
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/cli/integrations.py": {
+      "B110": 1
+    },
+    "framework/contracts/test_validator_types.py": {
+      "B101": 4
+    },
+    "framework/contracts/validate_schema.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/execution_context.py": {
+      "B404": 1,
+      "B603": 2,
+      "B607": 2
+    },
+    "framework/frontend/stack_check.py": {
+      "B110": 1,
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/gates/gate_record.py": {
+      "B105": 1
+    },
+    "framework/gates/test_regex_conformance.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/init.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/integrations/daemon/service.py": {
+      "B404": 1
+    },
+    "framework/integrations/opencode/__init__.py": {
+      "B404": 1,
+      "B603": 3
+    },
+    "framework/integrations/opencode/strategy.py": {
+      "B404": 1,
+      "B603": 3
+    },
+    "framework/models/resolve.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/opencode/skills/instinct/scripts/instinct-cli.py": {
+      "B110": 1,
+      "B310": 1,
+      "B404": 1,
+      "B603": 3,
+      "B607": 2
+    },
+    "framework/plan/test_g_entry_lint.py": {
+      "B101": 10,
+      "B404": 1,
+      "B603": 3,
+      "B607": 3
+    },
+    "framework/plan/test_plan_lint.py": {
+      "B101": 16,
+      "B404": 1,
+      "B603": 3
+    },
+    "framework/providers/healthcheck.py": {
+      "B105": 1,
+      "B110": 1
+    },
+    "framework/reference-app/src/backend/auth_service.py": {
+      "B105": 1
+    },
+    "framework/reference-app/tests/contract/test_api_004.py": {
+      "B101": 8,
+      "B105": 1
+    },
+    "framework/retro/shortcut_debt.py": {
+      "B404": 1,
+      "B603": 2,
+      "B607": 2
+    },
+    "framework/retro/smoke_check.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/retro/test_shortcut_debt.py": {
+      "B101": 29,
+      "B404": 1,
+      "B603": 3,
+      "B607": 1
+    },
+    "framework/standalone_check.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/telemetry/report.py": {
+      "B110": 1,
+      "B112": 3
+    },
+    "framework/telemetry/test_report_telemetry.py": {
+      "B101": 57
+    },
+    "framework/testing/run_system_tests.py": {
+      "B310": 1,
+      "B314": 1,
+      "B404": 1,
+      "B405": 1,
+      "B603": 3
+    },
+    "framework/testing/test_system_testing.py": {
+      "B101": 38,
+      "B404": 1,
+      "B603": 3,
+      "B607": 1
+    },
+    "framework/tools/_patch_util.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/tools/append_claim.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/tools/emit_change_acceptance_patch.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/tools/emit_design_skills_integration_patch.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/tools/emit_designer_agent_patch.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/tools/emit_istqb_testing_patch.py": {
+      "B404": 1,
+      "B603": 3,
+      "B607": 1
+    },
+    "framework/tools/emit_opencode_telemetry_bridge.py": {
+      "B404": 1,
+      "B603": 2,
+      "B607": 2
+    },
+    "framework/tools/emit_skill_sensor_patch.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/tools/emit_t05_state.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/tools/emit_t07_state.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/tools/emit_telemetry_bridge_template.py": {
+      "B404": 1,
+      "B603": 2,
+      "B607": 2
+    },
+    "framework/tools/emit_telemetry_v2_patch.py": {
+      "B404": 1,
+      "B603": 3,
+      "B607": 3
+    },
+    "framework/tools/emit_ui_designer_model_patch.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/tools/emit_ui_designer_routing_patch.py": {
+      "B404": 1,
+      "B603": 1,
+      "B607": 1
+    },
+    "framework/tools/gate_scope.py": {
+      "B101": 19
+    },
+    "framework/tools/lint_budget.py": {
+      "B101": 22,
+      "B404": 1,
+      "B603": 7
+    },
+    "framework/tools/opencode_ttl_refresh.py": {
+      "B404": 1,
+      "B603": 3
+    },
+    "framework/tools/surface_paths.py": {
+      "B105": 1
+    },
+    "framework/tools/sync_to_agentic.py": {
+      "B404": 1,
+      "B603": 3,
+      "B607": 2
+    },
+    "framework/tools/task_event.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/tools/write_summary.py": {
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/validate.py": {
+      "B110": 2,
+      "B404": 1,
+      "B603": 13,
+      "B607": 3
+    },
+    "framework/verifier/matrix.py": {
+      "B105": 1,
+      "B110": 1,
+      "B404": 1,
+      "B603": 1
+    },
+    "framework/verify_integration.py": {
+      "B404": 1,
+      "B603": 1
+    }
+  },
+  "generated_at": "2026-11-22T22:53:43Z",
+  "schema": 1,
+  "tool": "bandit",
+  "tool_version": "bandit.EXE 1.9.4\n  python version = 3.13.15 (tags/v3.13.15:4061bc4, Aug  5 2026, 13:05:39) [MSC v.1944 64 bit (AMD64)]",
+  "total": 661
+}

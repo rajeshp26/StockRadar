@@ -662,6 +662,19 @@ def _find_prior_year_row(lookup_rows: list[dict], fy: int, q: int) -> dict | Non
     return None
 
 
+def health_score_summary(changed: int, total: int) -> str:
+    """Explicit changed-vs-total summary for the tag-based dedupe upsert.
+
+    The old `Upserted %d/%d` phrasing read as a partial failure: the unchanged
+    rows are deliberately skipped, not failed writes.
+    """
+    unchanged = total - changed
+    return (
+        f"Upserted {changed} changed health-score rows "
+        f"({unchanged} unchanged skipped of {total} evaluated)"
+    )
+
+
 async def compute_and_upsert_quarterly_health_scores(company_id: int) -> dict[str, Any]:
     """Compute and upsert quarterly Piotroski F-Score + Altman Z-Score for a company.
 
@@ -950,8 +963,9 @@ async def compute_and_upsert_quarterly_health_scores(company_id: int) -> dict[st
     ).execute()
 
     logger.info(
-        "[HLTH] Upserted %d/%d health-score rows for company_id=%s",
-        len(changed_rows), len(all_quarterly_ratios), company_id,
+        "[HLTH] %s for company_id=%s",
+        health_score_summary(len(changed_rows), len(all_quarterly_ratios)),
+        company_id,
     )
     return {"count": len(all_quarterly_ratios), "rows_changed": len(changed_rows), "upserted": True}
 

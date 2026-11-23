@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -63,10 +64,36 @@ class OpenRouterProvider(AIProvider):
     _BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
     _credits_exhausted = False
     _credits_warned = False
+    # A 402 opens the breaker for a bounded window only. A top-up must be picked
+    # up without a process restart; the old flag was latched True forever.
+    _CREDITS_COOLDOWN_SECONDS = 300.0
+    _credits_exhausted_at: float | None = None
 
     def __init__(self) -> None:
         self._api_key = settings.OPEN_ROUTER_KEY or ""
         self._model = settings.OPEN_ROUTER_MODEL
+
+    @classmethod
+    def _open_credits_breaker(cls) -> None:
+        cls._credits_exhausted = True
+        cls._credits_warned = True
+        cls._credits_exhausted_at = time.monotonic()
+
+    @classmethod
+    def _credits_breaker_open(cls) -> bool:
+        """True while the 402 breaker is active; auto half-opens after cooldown."""
+        if not cls._credits_exhausted:
+            return False
+        opened_at = cls._credits_exhausted_at
+        if opened_at is None:
+            # Flag set externally (legacy callers/tests): stay latched.
+            return True
+        if time.monotonic() - opened_at >= cls._CREDITS_COOLDOWN_SECONDS:
+            cls._credits_exhausted = False
+            cls._credits_exhausted_at = None
+            cls._credits_warned = False
+            return False
+        return True
 
     async def generate_text(
         self,
@@ -76,7 +103,7 @@ class OpenRouterProvider(AIProvider):
         temperature: float = 0.1,
         timeout: float = 10.0,
     ) -> str | None:
-        if OpenRouterProvider._credits_exhausted:
+        if OpenRouterProvider._credits_breaker_open():
             logger.warning("[AI] OpenRouter credits exhausted — skipping text generation")
             return None
         if not self._api_key:
@@ -107,9 +134,9 @@ class OpenRouterProvider(AIProvider):
                 )
                 if not resp.is_success:
                     if resp.status_code == 402 or "Insufficient credits" in resp.text:
-                        OpenRouterProvider._credits_exhausted = True
-                        OpenRouterProvider._credits_warned = True
-                        logger.warning("[AI] OpenRouter credits exhausted (402) — opening breaker")
+                        OpenRouterProvider._open_credits_breaker()
+                        logger.warning("[AI] OpenRouter credits exhausted (402) — opening breaker (%.0fs)",
+                                       OpenRouterProvider._CREDITS_COOLDOWN_SECONDS)
                     logger.warning(
                         "[AI] OpenRouter %s | body: %s",
                         resp.status_code, resp.text[:500],
@@ -182,7 +209,7 @@ class OpenRouterProvider(AIProvider):
         temperature: float = 0.1,
         timeout: float = 15.0,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        if OpenRouterProvider._credits_exhausted:
+        if OpenRouterProvider._credits_breaker_open():
             logger.warning("[AI] OpenRouter credits exhausted — skipping stream generation")
             return
         if not self._api_key:
@@ -215,9 +242,9 @@ class OpenRouterProvider(AIProvider):
                 ) as resp:
                     if not resp.is_success:
                         if resp.status_code == 402 or "Insufficient credits" in resp.text:
-                            OpenRouterProvider._credits_exhausted = True
-                            OpenRouterProvider._credits_warned = True
-                            logger.warning("[AI] OpenRouter credits exhausted (402) — opening breaker")
+                            OpenRouterProvider._open_credits_breaker()
+                            logger.warning("[AI] OpenRouter credits exhausted (402) — opening breaker (%.0fs)",
+                                           OpenRouterProvider._CREDITS_COOLDOWN_SECONDS)
                         logger.warning(
                             "[AI] OpenRouter stream %s | body: %s",
                             resp.status_code, resp.text[:500],

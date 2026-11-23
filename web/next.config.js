@@ -3,6 +3,10 @@ const path = require("path");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Static analysis is a separate, ratcheted gate step (framework/tools/lint_budget.py
+  // --tool eslint). Re-running the same lint inside next build would fail the build on
+  // previously recorded debt and give that debt a second, unratched veto.
+  eslint: { ignoreDuringBuilds: true },
   images: {
     remotePatterns: [
       {

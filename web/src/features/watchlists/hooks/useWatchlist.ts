@@ -167,6 +167,7 @@ export function useWatchlist(options?: UseWatchlistOptions) {
     symbol:     string,
     targetBuy:  number | null,
     targetSell: number | null,
+    listing?:   import('../services/watchlist.service').ListingIdentity,
   ) => {
     if (!watchlistId) return;
     if (isWatchlistFull) {
@@ -181,6 +182,11 @@ export function useWatchlist(options?: UseWatchlistOptions) {
       await watchlistService.addStock({
         watchlist_id: watchlistId,
         symbol,
+        security_id:     listing?.security_id,
+        exchange:        listing?.exchange,
+        kind:            listing?.kind,
+        currency:        listing?.currency,
+        provider_symbol: listing?.provider_symbol,
         target_buy:   targetBuy,
         target_sell:  targetSell,
       });

@@ -75,6 +75,22 @@ def _as_datetime_from_date(d: Any) -> datetime | None:
     return datetime.combine(base, time(0, 0, 0))
 
 
+def _freshness_from_date(d: Any, *, now: datetime | None = None) -> datetime | None:
+    """Convert a date used as a *freshness* signal, clamping future dates to now.
+
+    Forecast tables store the forecast period end in `report_date` (e.g.
+    2027-12-31), which is years ahead of the moment the row was written. Treating
+    it raw as a dependency timestamp produced `dep_ts` in the future and made the
+    recompute guard compare against an instant that can never arrive. A freshness
+    signal is never in the future.
+    """
+    base = _as_datetime_from_date(d)
+    if base is None:
+        return None
+    reference = (now or now_utc()).replace(tzinfo=None)
+    return min(base, reference)
+
+
 def _max_dt(*vals: datetime | None) -> datetime | None:
     present = [v for v in vals if v is not None]
     return max(present) if present else None
@@ -219,7 +235,7 @@ class ValuationRepository:
                 .limit(1)
                 .execute()
             )
-            cs_dt = _as_datetime_from_date((_first(cs.data) or {}).get("snapshot_date"))
+            cs_dt = _freshness_from_date((_first(cs.data) or {}).get("snapshot_date"))
             ef = (
                 supabase.table("earnings_forecast")
                 .select("report_date")
@@ -228,7 +244,7 @@ class ValuationRepository:
                 .limit(1)
                 .execute()
             )
-            ef_dt = _as_datetime_from_date((_first(ef.data) or {}).get("report_date"))
+            ef_dt = _freshness_from_date((_first(ef.data) or {}).get("report_date"))
             er = (
                 supabase.table("earnings")
                 .select("updated_at")
@@ -264,7 +280,7 @@ class ValuationRepository:
                 .limit(1)
                 .execute()
             )
-            sp_dt = _as_datetime_from_date((_first(sp.data) or {}).get("report_date"))
+            sp_dt = _freshness_from_date((_first(sp.data) or {}).get("report_date"))
             im_dt: datetime | None = None
             if sector and industry:
                 im = (
@@ -276,7 +292,7 @@ class ValuationRepository:
                     .limit(1)
                     .execute()
                 )
-                im_dt = _as_datetime_from_date((_first(im.data) or {}).get("calculation_date"))
+                im_dt = _freshness_from_date((_first(im.data) or {}).get("calculation_date"))
             md = (
                 supabase.table("valuation_method_defaults")
                 .select("updated_at")
@@ -309,7 +325,7 @@ class ValuationRepository:
                 .limit(1)
                 .execute()
             )
-            cs_dt = _as_datetime_from_date((_first(cs.data) or {}).get("snapshot_date"))
+            cs_dt = _freshness_from_date((_first(cs.data) or {}).get("snapshot_date"))
             dh = (
                 supabase.table("dividend_history")
                 .select("updated_at")
@@ -405,7 +421,7 @@ class ValuationRepository:
                 .limit(1)
                 .execute()
             )
-            rf_dt = _as_datetime_from_date((_first(rf.data) or {}).get("report_date"))
+            rf_dt = _freshness_from_date((_first(rf.data) or {}).get("report_date"))
             md = (
                 supabase.table("valuation_method_defaults")
                 .select("updated_at")
@@ -516,7 +532,7 @@ class ValuationRepository:
                 .limit(1)
                 .execute()
             )
-            cs_dt = _as_datetime_from_date((_first(cs.data) or {}).get("snapshot_date"))
+            cs_dt = _freshness_from_date((_first(cs.data) or {}).get("snapshot_date"))
             fr = (
                 supabase.table("financial_ratios")
                 .select("computed_at")

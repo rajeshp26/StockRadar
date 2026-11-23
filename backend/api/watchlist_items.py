@@ -8,7 +8,9 @@ import re
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from application.services.security_catalog_service import SecurityCatalogService
 from application.services.watchlist_service import WatchlistService
+from domain.listing_identity import ListingIdentityError
 from dependencies import (
     get_current_user_dep,
     get_watchlist_repository,
@@ -42,6 +44,12 @@ class WatchlistItemData(BaseModel):
     watchlist_item_id: int
     watchlist_id: int
     company_id: int
+    security_id: int | None = None
+    symbol: str | None = None
+    exchange: str | None = None
+    kind: str | None = None
+    currency: str | None = None
+    provider_symbol: str | None = None
     target_buy: float | None
     target_sell: float | None
 
@@ -71,8 +79,15 @@ class AddStockResponse(BaseModel):
 
 
 class WatchlistItemIn(BaseModel):
+    """Add request. Listing identity fields are optional for legacy callers, but when
+    present they must describe exactly one catalog security (API-001)."""
     watchlist_id: int
-    symbol: str = Field(..., min_length=1, max_length=10)
+    symbol: str = Field(..., min_length=1, max_length=20)
+    security_id: int | None = None
+    exchange: str | None = None
+    kind: str | None = None
+    currency: str | None = None
+    provider_symbol: str | None = None
     target_buy: float | None = Field(None, ge=0)
     target_sell: float | None = Field(None, ge=0)
 
@@ -82,6 +97,12 @@ class WatchlistItemIn(BaseModel):
         if not re.match(r"^[A-Z0-9.-]+$", v.upper()):
             raise ValueError("Invalid ticker symbol format")
         return v.upper()
+
+    def has_listing_identity(self) -> bool:
+        return all(
+            value is not None
+            for value in (self.security_id, self.exchange, self.kind, self.currency, self.provider_symbol)
+        )
 
 
 class WatchlistItemUpdate(BaseModel):
@@ -114,7 +135,7 @@ async def search_stocks(
         import yfinance as yf
         search = yf.Search(q, max_results=8, enable_fuzzy_query=False)
         quotes = search.quotes or []
-        results = [
+        raw_results = [
             {
                 "symbol":   r.get("symbol", ""),
                 "name":     r.get("shortname") or r.get("longname") or r.get("symbol", ""),
@@ -124,6 +145,11 @@ async def search_stocks(
             for r in quotes
             if r.get("symbol")
         ]
+        # Resolve each hit to a catalog security so the selected exchange is a
+        # persisted identity, not a decorative badge. Also surface exact-symbol
+        # catalog listings the provider omits (e.g. META/NEO CDR), so every
+        # tradable listing of a ticker remains selectable. Unresolvable hits drop.
+        results = SecurityCatalogService().search_all(raw_results, q.upper())
         return {"results": results}
     except Exception as e:
         logger.warning(f"Stock search failed for query '{q}': {e}")
@@ -165,13 +191,31 @@ async def add_item_to_watchlist(
 
         symbol = item.symbol.upper()
 
+        # ── 0. Resolve the exact listing (API-001) ──────────────────────────
+        # Legacy callers that still post only a symbol fall through to the
+        # service's symbol→default-listing resolution, so this change is additive.
+        security: dict | None = None
+        if item.has_listing_identity():
+            payload, security = SecurityCatalogService().resolve_add({
+                "watchlist_id": item.watchlist_id,
+                "security_id": item.security_id,
+                "symbol": symbol,
+                "exchange": item.exchange,
+                "kind": item.kind,
+                "currency": item.currency,
+                "provider_symbol": item.provider_symbol,
+                "target_buy": item.target_buy,
+                "target_sell": item.target_sell,
+            })
+
         # ── 1. Business logic ──────────────────────────────────────────────
         svc_result = await service.add_stock_to_watchlist(
             user_id=db_user_id,
-            symbol=symbol,
+            symbol=security["symbol"] if security else symbol,
             watchlist_id=item.watchlist_id,
             target_buy=item.target_buy,
             target_sell=item.target_sell,
+            security=security,
         )
 
         # ── 2. Subscribe to SSE ──────────────────────────────────────────────
@@ -179,22 +223,31 @@ async def add_item_to_watchlist(
         subscribed = await subscribe_symbol(svc_result["symbol"], auth_id)
 
         # ── 3. Broadcast with retry ─────────────────────────────────────────
-        # Uses service data — NO re-fetch needed
+        # The event carries the selected listing identity, so duplicate tickers on
+        # different exchanges remain distinguishable on the client.
         if subscribed and svc_result.get("current_price"):
             await broadcast_with_retry(
                 svc_result["symbol"],
                 svc_result["current_price"],
                 svc_result.get("change", 0.0),
-                svc_result.get("change_percent", 0.0)
+                svc_result.get("change_percent", 0.0),
+                identity=svc_result.get("security"),
             )
 
         # ── 4. Return response ─────────────────────────────────────────────
         # Uses service data — NO re-fetch needed
+        security_view = svc_result.get("security") or {}
         return AddStockResponse(
             watchlist_item=WatchlistItemData(
                 watchlist_item_id=svc_result["watchlist_item_id"],
                 watchlist_id=item.watchlist_id,
                 company_id=svc_result["company_id"],
+                security_id=svc_result.get("security_id"),
+                symbol=svc_result["symbol"],
+                exchange=security_view.get("exchange"),
+                kind=security_view.get("kind"),
+                currency=security_view.get("currency"),
+                provider_symbol=security_view.get("provider_symbol"),
                 target_buy=item.target_buy,
                 target_sell=item.target_sell,
             ),
@@ -213,6 +266,8 @@ async def add_item_to_watchlist(
 
     except HTTPException:
         raise
+    except ListingIdentityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_payload())
     except Exception as e:
         logger.error(f"[ERROR] add_item_to_watchlist: {e}")
         raise HTTPException(status_code=500, detail="An internal server error occurred.")

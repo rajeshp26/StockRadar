@@ -1,0 +1,43 @@
+{
+  "note": "Structural profile of listing identity in the real local database. Contains no holdings, account balances, or personal data — only catalog identity and public quote values needed to state independent expected values.",
+  "captured_at": "2026-11-22T17:15:00Z",
+  "source": "read-only Supabase REST profile of public.securities, public.quotes and public.watchlists on the real local stack",
+  "listings": [
+    {
+      "security_id": 2833,
+      "symbol": "META",
+      "exchange": "NMS",
+      "kind": "COMMON",
+      "currency": "USD",
+      "provider_symbol": "META",
+      "cdr_ratio": null,
+      "quote_current_price": 560.84,
+      "quote_close_price": 596.22
+    },
+    {
+      "security_id": 3128,
+      "symbol": "META",
+      "exchange": "NEO",
+      "kind": "CDR",
+      "currency": "CAD",
+      "provider_symbol": "META.NE",
+      "cdr_ratio": 10.0,
+      "underlying_security_id": 2833,
+      "quote_current_price": 29.64,
+      "quote_close_price": 31.54
+    }
+  ],
+  "shapes": [
+    "duplicate_ticker_two_listings",
+    "cdr_with_ratio",
+    "common_no_ratio"
+  ],
+  "watchlists": [
+    {"id": 3, "name": "My First Watchlist", "is_default": true, "item_count": 50, "null_security_id_count": 0},
+    {"id": 5, "name": "WealthBluePrint", "is_default": false, "item_count": 17, "null_security_id_count": 0},
+    {"id": 6, "name": "Watchlist 2", "is_default": false, "item_count": 6, "null_security_id_count": 0}
+  ],
+  "limits": {
+    "max_stocks_per_watchlist": 50
+  }
+}

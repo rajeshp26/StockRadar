@@ -25,9 +25,6 @@ from shared.logging_setup import (
     setup_debug_logging,
 )
 
-# Canadian exchange suffixes for yfinance (matches yfinance_provider.EXCHANGE_SUFFIX_MAP)
-_YF_SUFFIXES = [".TO", ".V", ".NE"]
-
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
@@ -57,145 +54,127 @@ setup_debug_logging()
 # -----------------------------------------------------------------------------
 # Background: real-time price monitor (existing)
 # -----------------------------------------------------------------------------
-async def background_price_monitor():
-    """
-    Background task to monitor and broadcast real-time stock prices.
-    Uses yfinance every N seconds based on settings.SSE_UPDATE_INTERVAL_SECONDS.
-    CDR adjustment is batch-fetched via shared utility (2 queries, not 2N).
-    """
-    from shared.price_utils import apply_cdr_adjustment, get_cdr_maps_for_companies
+class _YFinanceQuoteAdapter:
+    """Adapts yfinance to the one-listing-at-a-time QuoteProvider protocol.
 
+    No `.TO/.V/.NE` fan-out: the security already carries its exact provider
+    symbol. A rate-limit response is translated into RateLimitHit so the
+    per-security breaker can back off only that listing.
+    """
+
+    def get_quote(self, provider_symbol: str) -> dict:
+        try:
+            info = yf.Ticker(provider_symbol).info or {}
+        except Exception as exc:
+            text = str(exc)
+            if (
+                "RateLimit" in type(exc).__name__
+                or "429" in text
+                or "Too Many Requests" in text
+            ):
+                from domain.provider_resilience import RateLimitHit
+                raise RateLimitHit(retry_after=60.0, message=text) from exc
+            raise
+        return {
+            "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+            "previous_close": info.get("regularMarketPreviousClose"),
+        }
+
+
+# One breaker for the whole monitor, keyed by security_id so a throttled CDR
+# never silences its sibling listing or any other symbol.
+_price_monitor_breaker = None  # initialised on first cycle (imports stay local)
+
+
+async def background_price_monitor():
+    """Monitor and broadcast quotes keyed by *listing* identity.
+
+    Exactly one provider request is issued per active listing, using its own
+    provider_symbol. There is no N×3 suffix fan-out and no company-wide CDR
+    adjustment: each security carries its own kind/ratio, and the SSE event carries
+    the full identity so META/NMS and META/NEO stay distinguishable. A rate limit
+    backs off only the throttled security_id, and resets after its retry window.
+    """
+    global _price_monitor_breaker
+    from api.watchlists import broadcast_stock_update, symbol_subscribers
+    from domain.provider_resilience import (
+        ListingRateLimitBreaker,
+        refresh_listing,
+    )
+    from domain.valuation import ValuationError, price_for_listing
+    from infrastructure.repositories.security_repository import SecurityRepository
+
+    if _price_monitor_breaker is None:
+        _price_monitor_breaker = ListingRateLimitBreaker(cooldown_seconds=60.0)
+    breaker = _price_monitor_breaker
+    adapter = _YFinanceQuoteAdapter()
     interval = max(1, int(getattr(settings, "SSE_UPDATE_INTERVAL_SECONDS", 10)))
+    catalog = SecurityRepository()
     while True:
         try:
-            from api.watchlists import broadcast_stock_update, symbol_subscribers
             active_symbols = list(symbol_subscribers.keys())
             if not active_symbols:
-                logger.debug("[PRICE-MONITOR-DIAG] No active symbol subscribers — sleeping 5s")
                 await asyncio.sleep(min(5, interval))
                 continue
 
-            logger.debug(f"[PRICE-MONITOR-DIAG] Fetching prices for {len(active_symbols)} symbols: {active_symbols}")
-            # Resolve Canadian suffixes: try raw symbol first, fall back to .TO / .V
-            resolved_symbols = []
-            symbol_suffix_map: dict[str, str] = {}
-            for sym in active_symbols:
-                resolved_symbols.append(sym)
-                symbol_suffix_map[sym] = ""
-                for sfx in _YF_SUFFIXES:
-                    resolved_symbols.append(sym + sfx)
-                    symbol_suffix_map[sym + sfx] = sfx
+            # A ticker can have several listings. Resolve all of them; never guess a
+            # single listing from the company row.
+            securities: list[dict] = []
+            for sym in set(active_symbols):
+                securities.extend(catalog.list_securities_for_symbol(sym))
+            if not securities:
+                await asyncio.sleep(interval)
+                continue
 
-            all_tickers = yf.Tickers(resolved_symbols)
-
-            # Batch-fetch CDR maps once per cycle (2 queries regardless of symbol count)
-            from database import supabase as _sb
-            comp_res = (
-                _sb.table("companies")
-                .select("company_id, ticker_symbol, cdr_ratio")
-                .in_("ticker_symbol", active_symbols)
-                .execute()
-            )
-            sym_to_cid: dict[str, int] = {}
-            cid_ratios: dict[int, float] = {}
-            for row in (comp_res.data or []):
-                sym_to_cid[row["ticker_symbol"]] = row["company_id"]
-                if row.get("cdr_ratio") is not None:
-                    cid_ratios[row["company_id"]] = float(row["cdr_ratio"])
-
-            company_ids = list(sym_to_cid.values())
-            _, tor_cids = get_cdr_maps_for_companies(_sb, company_ids) if company_ids else ({}, set())
-
-            updated_count = 0
-            skipped_count = 0
-            for symbol in active_symbols:
-                ticker = all_tickers.tickers.get(symbol)
-                info = {}
-                if ticker:
-                    info = getattr(ticker, "info", {}) or {}
-                if not info:
-                    for sfx in _YF_SUFFIXES:
-                        alt = all_tickers.tickers.get(symbol + sfx)
-                        if alt:
-                            alt_info = getattr(alt, "info", {}) or {}
-                            if alt_info:
-                                info = alt_info
-                                break
-                if not info:
-                    logger.debug(f"[PRICE-MONITOR-DIAG] {symbol}: no data (tried raw and {_YF_SUFFIXES})")
-                    skipped_count += 1
+            updated = skipped = 0
+            for security in securities:
+                sid = int(security["security_id"])
+                psym = security["provider_symbol"]
+                # One provider request for this listing, guarded by its own breaker.
+                result = refresh_listing(adapter, security, breaker)
+                if result.skipped:
+                    skipped += 1
+                    if result.reason == "rate_limited":
+                        logger.warning(
+                            "[PriceMonitor] %s (security %s): rate limited, "
+                            "backing off this listing only", psym, sid,
+                        )
+                    continue
+                breaker.reset(sid)  # successful probe closes this listing's breaker
+                current = result.price
+                prev = result.raw.get("previous_close")
+                if current is None or prev is None:
+                    skipped += 1
+                    continue
+                try:
+                    effective, _ = price_for_listing(security, current)
+                    effective_prev, _ = price_for_listing(security, prev)
+                except ValuationError as exc:
+                    logger.warning("[PriceMonitor] %s: %s", psym, exc.message)
+                    skipped += 1
                     continue
 
-                current_price = info.get("currentPrice") or info.get("regularMarketPrice")
-                prev_close = info.get("regularMarketPreviousClose")
+                last_updated = datetime.now(UTC).isoformat()
+                try:
+                    catalog.upsert_quote(security["security_id"], {
+                        "current_price": float(current),
+                        "close_price": float(prev),
+                        "last_updated": last_updated,
+                        "source": "yfinance",
+                        "is_stale": False,
+                    })
+                except Exception as exc:
+                    logger.debug("[PriceMonitor] %s quote write failed: %s", psym, exc)
 
-                if current_price is not None:
-                    current_price = float(current_price)
-                if prev_close is not None:
-                    prev_close = float(prev_close)
+                change = float(effective - effective_prev)
+                change_percent = (change / float(effective_prev)) * 100 if effective_prev else 0.0
+                await broadcast_stock_update(
+                    security["symbol"], float(effective), change, change_percent,
+                    identity=security,
+                )
+                updated += 1
 
-                # Save raw yfinance prices BEFORE CDR adjustment.
-                # current_market_data stores raw prices — build_price_snapshot()
-                # applies CDR adjustment when reading (price_utils.py:101).
-                raw_current_price = current_price
-                raw_prev_close = prev_close
-
-                # Apply CDR adjustment using batch-fetched maps (0 extra queries)
-                cid = sym_to_cid.get(symbol)
-                if cid is not None and current_price is not None:
-                    current_price, prev_close = apply_cdr_adjustment(
-                        current_price, prev_close, cid, cid_ratios, tor_cids,
-                    )
-
-                if not (current_price and prev_close):
-                    # yfinance didn't return both values — try current_market_data as fallback
-                    cid = sym_to_cid.get(symbol)
-                    if cid is not None:
-                        try:
-                            from database import supabase as _sb
-                            md = _sb.table("current_market_data") \
-                                .select("current_price, close_price, last_updated") \
-                                .eq("company_id", cid) \
-                                .execute()
-                            row = (md.data or [{}])[0]
-                            fb_price = row.get("current_price")
-                            fb_close = row.get("close_price")
-                            if fb_price and fb_close:
-                                current_price = float(fb_price)
-                                prev_close = float(fb_close)
-                                logger.debug(
-                                    "[PRICE-MONITOR] %s: yfinance unavailable, used DB fallback price=%s",
-                                    symbol, current_price,
-                                )
-                        except Exception as e:
-                            logger.debug("[PRICE-MONITOR] %s: DB fallback failed: %s", symbol, e)
-
-                if current_price and prev_close:
-                    change = current_price - prev_close
-                    change_percent = (change / prev_close) * 100
-                    await broadcast_stock_update(symbol, current_price, change, change_percent)
-                    updated_count += 1
-
-                    # Write RAW prices to current_market_data so REST endpoint
-                    # serves fresh data on initial page load (no stale flash).
-                    # build_price_snapshot() reads raw + applies CDR adjustment.
-                    if raw_current_price is not None and cid is not None:
-                        try:
-                            _sb.table("current_market_data").upsert(
-                                {
-                                    "company_id":   cid,
-                                    "current_price": raw_current_price,
-                                    "close_price":  raw_prev_close,
-                                    "last_updated": datetime.now(UTC).isoformat(),
-                                },
-                                on_conflict="company_id",
-                            ).execute()
-                        except Exception as e:
-                            logger.debug("[PRICE-MONITOR] %s: DB write failed: %s", symbol, e)
-                else:
-                    skipped_count += 1
-
-            logger.debug(f"[PRICE-MONITOR-DIAG] Cycle complete: {updated_count} updated, {skipped_count} skipped")
+            logger.debug("[PRICE-MONITOR] cycle: %s updated, %s skipped", updated, skipped)
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             break

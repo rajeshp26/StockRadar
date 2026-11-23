@@ -40,8 +40,14 @@ export const QK = {
   valuationSummary: (symbol: string) =>
     ["valuation", "summary", symbol.toUpperCase()] as const,
   // ── Live price ───────────────────────────────────────────────────────────
-  price: (symbol: string) =>
-    ["price", symbol.toUpperCase()] as const,
+  // A symbol is not an instrument: META/NMS and META/NEO are two listings with
+  // two prices. When a listing identity is supplied the cache key includes it,
+  // so SSE updates for one listing cannot overwrite its sibling. Symbol-only
+  // callers (analysis pages) keep the original key for backward compatibility.
+  price: (symbol: string, securityId?: number | null) =>
+    securityId != null
+      ? ["price", symbol.toUpperCase(), securityId] as const
+      : ["price", symbol.toUpperCase()] as const,
   // ── Watchlist structure (stocks + targets for one list) ──────────────────
   watchlist: (id: number | "default") =>
     ["watchlist", id] as const,
@@ -125,7 +131,7 @@ export const QK = {
     accountIds
       ? ["portfolio", "allocation", groupBy, accountIds] as const
       : ["portfolio", "allocation", groupBy] as const,
-  portfolioDividendHistory: (accountId: number) =>
+  portfolioDividendHistory: (accountId: number | string) =>
     ["portfolio", "account", accountId, "dividend-history"] as const,
   // Dividend Dashboard
   dividendDashboardSummary: (ids: string) =>

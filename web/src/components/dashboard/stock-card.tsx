@@ -91,6 +91,17 @@ export const StockCard = React.memo(function StockCard({ stock, onRemove, onEdit
             <span className="text-base font-black text-white tracking-tight">
               {stock.symbol}
             </span>
+            {/* Persisted listing identity — the exchange is part of the instrument,
+                not decoration. Two META listings (NMS / NEO·CDR) stay distinct. */}
+            {stock.exchange && (
+              <span
+                data-testid="listing-exchange-badge"
+                data-security-id={stock.securityId ?? undefined}
+                className="text-[10px] text-white/45 font-mono px-1.5 py-0.5 rounded-md border border-white/10 whitespace-nowrap"
+              >
+                {stock.exchange}{stock.kind === 'CDR' ? ' · CDR' : ''}
+              </span>
+            )}
             {/* Alert badges */}
             {buyVariance?.isTargetHit && (
               <span className="glass-badge-buy">

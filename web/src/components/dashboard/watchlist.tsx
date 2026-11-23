@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { useQueries } from "@tanstack/react-query";
 import { useWatchlist } from "@/features/watchlists/hooks/useWatchlist";
 import type { WatchlistWithStocks, StockPriceInfo } from "@/features/watchlists/types/watchlist.types";
@@ -162,7 +163,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
   // This block gives the PARENT access to prices for alert counts + sorting.
   const priceQueries = useQueries({
     queries: wl.stocks.map((s) => ({
-      queryKey:        QK.price(s.symbol),
+      queryKey:        QK.price(s.symbol, s.securityId),
       queryFn:         () => Promise.resolve(null as CachedPrice | null),
       enabled:         false,
       staleTime:       Infinity,
@@ -192,6 +193,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
     const stabilized = next.map((stock, i) => {
       const p = prev[i];
       if (p && p.symbol === stock.symbol &&
+          p.securityId === stock.securityId &&
           p.price === stock.price &&
           p.change === stock.change &&
           p.changePercent === stock.changePercent) {
@@ -338,9 +340,9 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
           <h3 className="text-base font-black text-white">Failed to load watchlist</h3>
           <p className="text-sm text-white/35 mt-1">Something went wrong. Please try again.</p>
         </div>
-        <button onClick={() => wl.refresh()} className="glass-btn inline-flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest">
+        <Button variant="ghost" size="sm" onClick={() => wl.refresh()} className="glass-btn gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest">
           <RefreshCw className="h-3 w-3" /> Try Again
-        </button>
+        </Button>
       </div>
     );
   }
@@ -461,9 +463,9 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
         <div className="glass-panel p-12 flex flex-col items-center text-center space-y-4">
           <p className="text-base font-black text-white">No stocks match your filters</p>
           <p className="text-sm text-white/30">Try a different symbol or clear your filters.</p>
-          <button onClick={clearFilters} className="glass-btn px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest">
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="glass-btn px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest">
             Clear Filters
-          </button>
+          </Button>
         </div>
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -520,7 +522,7 @@ export function Watchlist({ initialWatchlist }: WatchlistProps) {
       <StockTargetDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        onSave={(data) => wl.addStock(data.symbol, data.targetBuy, data.targetSell)}
+        onSave={(data) => wl.addStock(data.symbol, data.targetBuy, data.targetSell, data.listing)}
         mode="add"
       />
 

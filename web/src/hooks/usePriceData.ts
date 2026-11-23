@@ -26,14 +26,16 @@ import type { CachedPrice } from "@/providers/GlobalSSEProvider";
  * Reactively reads the most recent price snapshot for a symbol from the
  * shared React Query cache.
  *
- * @param symbol  Ticker symbol (case-insensitive).
- * @returns       CachedPrice when the cache has data, null otherwise.
+ * @param symbol       Ticker symbol (case-insensitive).
+ * @param securityId   Exact listing identity; when present the cache is scoped
+ *                     to that security so sibling listings cannot collide.
+ * @returns            CachedPrice when the cache has data, null otherwise.
  */
-export function usePriceData(symbol: string): CachedPrice | null {
+export function usePriceData(symbol: string, securityId?: number | null): CachedPrice | null {
   const upper = (symbol ?? "").toUpperCase().trim();
 
   const { data } = useQuery<CachedPrice | null>({
-    queryKey: QK.price(upper),
+    queryKey: QK.price(upper, securityId),
     // queryFn is never called — enabled: false prevents all auto-fetching.
     // We keep a no-op fn to satisfy TypeScript; React Query never invokes it.
     queryFn:  () => Promise.resolve(null),
@@ -67,11 +69,14 @@ export function useWatchlistPrices(watchlistId: number | null) {
       if (!res.ok) throw new Error(`Failed to fetch prices: ${res.status}`);
       const data = await res.json();
 
-      // Seed individual price caches so usePriceData works immediately
+      // Seed individual price caches so usePriceData works immediately.
+      // When the row carries a listing identity, seed that scoped key too.
       const prices: Record<string, CachedPrice> = {};
       for (const p of data.prices ?? []) {
+        const securityId = typeof p.securityId === "number" ? p.securityId : null;
         const cached: CachedPrice = {
           symbol:        p.symbol,
+          securityId,
           price:         p.price,
           change:        p.change,
           changePercent: p.changePercent,
@@ -79,8 +84,15 @@ export function useWatchlistPrices(watchlistId: number | null) {
           source:        p.source,
           isStale:       p.isStale,
         };
-        prices[p.symbol] = cached;
-        queryClient.setQueryData<CachedPrice>(QK.price(p.symbol), cached);
+        // Key by listing identity so two listings sharing a symbol stay separate.
+        const key = securityId != null
+          ? `${p.symbol}#${securityId}`
+          : p.symbol;
+        prices[key] = cached;
+        queryClient.setQueryData<CachedPrice>(QK.price(p.symbol, securityId), cached);
+        if (securityId != null) {
+          queryClient.setQueryData<CachedPrice>(QK.price(p.symbol), cached);
+        }
       }
       return prices;
     },

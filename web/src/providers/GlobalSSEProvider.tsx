@@ -30,12 +30,13 @@ import type { DdmVariant } from "@/features/analysis/types/analysis.types";
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Shape written into QK.price(symbol).
+ * Shape written into QK.price(symbol, securityId?).
  * Identical fields to useLivePrice's Quote type — intentional so both hooks
  * share one cache entry without any transformation.
  */
 export interface CachedPrice {
   symbol:        string;
+  securityId?:   number | null;
   price:         number | null;
   change:        number | null;
   changePercent: number | null;
@@ -151,17 +152,17 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
             return;
           }
 
-          // Writing to QK.price(symbol) does two things at once:
-          //   a) resets the stale timer → refetchInterval in useLivePrice
-          //      finds the data fresh and silently skips its HTTP GET.
-          //   b) notifies all useQuery(QK.price) subscribers (StockCard,
-          //      useLivePrice) → instant re-render with new price.
-          const current = queryClient.getQueryData<CachedPrice>(QK.price(symbol));
-          if (data.lastUpdated && current?.lastUpdated && data.lastUpdated < current.lastUpdated) {
-            return; // Drop stale update — cache is fresher
-          }
-          queryClient.setQueryData<CachedPrice>(QK.price(symbol), {
+          // A listing identity (security_id) makes each cached price specific to
+          // the exact tradable row. META/NMS and META/NEO share a symbol but are
+          // two instruments — keying only by symbol made them overwrite each
+          // other. Identity-bearing events go to the listing cache; we also
+          // mirror to the symbol-only key for legacy analysis subscribers.
+          const securityId = typeof data.security_id === "number"
+            ? data.security_id
+            : null;
+          const payload: CachedPrice = {
             symbol,
+            securityId,
             price:         typeof data.price         === "number" ? data.price         : null,
             change:        typeof data.change        === "number" ? data.change        : null,
             changePercent: typeof data.changePercent === "number" ? data.changePercent : null,
@@ -169,7 +170,16 @@ export function GlobalSSEProvider({ children }: { children: React.ReactNode }) {
             currency:      typeof data.currency      === "string" ? data.currency      : null,
             source:        typeof data.source        === "string" ? data.source        : null,
             isStale:       typeof data.isStale       === "boolean" ? data.isStale      : null,
-          });
+          };
+          const listingKey = QK.price(symbol, securityId);
+          const current = queryClient.getQueryData<CachedPrice>(listingKey);
+          if (data.lastUpdated && current?.lastUpdated && data.lastUpdated < current.lastUpdated) {
+            return; // Drop stale update — cache is fresher
+          }
+          queryClient.setQueryData<CachedPrice>(listingKey, payload);
+          if (securityId != null) {
+            queryClient.setQueryData<CachedPrice>(QK.price(symbol), payload);
+          }
           return;
         }
 

@@ -46,14 +46,14 @@ import { LivePriceHeader } from "@/components/analysis/live-price-header";
 describe("Analysis Page — Client Rendering", () => {
   it("P3-UT-01: renders price header with live data", async () => {
     const { container } = render(
-      LivePriceHeader({ symbol: "AAPL", initialPrice: 150.25, initialChange: 2.5, initialChangePercent: 1.68, initialLastUpdated: new Date().toISOString() }),
+      <LivePriceHeader symbol="AAPL" initialPrice={150.25} initialChange={2.5} initialChangePercent={1.68} initialLastUpdated={new Date().toISOString()} />,
     );
     expect(container.textContent).toContain("AAPL");
   });
 
   it("P3-UT-02: shows symbol initial in the icon", () => {
     const { container } = render(
-      LivePriceHeader({ symbol: "AAPL", initialPrice: null, initialChange: null, initialChangePercent: null, initialLastUpdated: null }),
+      <LivePriceHeader symbol="AAPL" initialPrice={null} initialChange={null} initialChangePercent={null} initialLastUpdated={null} />,
     );
     const icons = container.querySelectorAll('[class*="rounded-2xl"]');
     expect(icons.length).toBeGreaterThanOrEqual(1);

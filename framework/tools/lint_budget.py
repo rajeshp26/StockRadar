@@ -79,7 +79,7 @@ def _ruff_version(binary: str) -> str:
     return out
 
 
-def _ruff_findings(binary: str, root: Path, targets: list[str]) -> tuple[int, list[dict]]:
+def _ruff_findings(binary: str, root: Path, targets: list[str], cwd=None) -> tuple[int, list[dict]]:
     """Run ruff over the gate's scope and return (exit, parsed findings).
 
     ruff exits 1 when it finds anything; that is a normal result, not an error. Exit 2
@@ -88,7 +88,7 @@ def _ruff_findings(binary: str, root: Path, targets: list[str]) -> tuple[int, li
     """
     r = subprocess.run(
         [binary, "check", *targets, "--output-format=json"],
-        cwd=str(root), capture_output=True, text=True, timeout=900,
+        cwd=str(cwd or root), capture_output=True, text=True, timeout=900,
     )
     if r.returncode not in (0, 1):
         raise Blocked(f"ruff check failed to run (exit {r.returncode}): "
@@ -102,8 +102,162 @@ def _ruff_findings(binary: str, root: Path, targets: list[str]) -> tuple[int, li
     return r.returncode, findings
 
 
+def _generic_version(binary):
+    r = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=60)
+    out = (r.stdout or r.stderr or "").strip()
+    if r.returncode != 0 or not out:
+        raise Blocked(f"cannot read {binary} --version: {out[:200]}")
+    return out
+
+
+def _eslint_command(binary, args):
+    """Build an ESLint argv that runs under both Windows and POSIX Pythons.
+
+    npm writes ``node_modules/.bin/eslint.cmd`` as a Windows batch shim. The Windows
+    Python used from PowerShell can exec it directly, but the gate's MSYS Python cannot
+    (``OSError: [Errno 8] Exec format error``). MSYS Python *can* launch cmd.exe, and
+    cmd.exe runs the shim, which in turn execs node + eslint.js. For a .cmd/.bat shim we
+    therefore run it through cmd.exe from the app directory, using a path relative to
+    that directory: no POSIX-to-Windows absolute path conversion is needed, and the
+    same code works from either shell.
+
+    Returns ``(argv, cwd)``. ``cwd`` is None when the caller must keep its own cwd.
+    """
+    shim = Path(str(binary))
+    if shim.suffix.lower() not in (".cmd", ".bat"):
+        return [str(binary), *args], None
+    app_dir = shim.parent.parent.parent  # web/node_modules/.bin/eslint.cmd -> web
+    rel = Path("node_modules") / ".bin" / shim.name
+    if os.name == "nt":
+        return [str(rel), *args], str(app_dir)
+    cmd = shutil.which("cmd.exe")
+    if not cmd:
+        raise Blocked("Windows ESLint shim needs cmd.exe, which is not on PATH")
+    return [cmd, "/c", str(rel).replace("/", "\\"), *args], str(app_dir)
+
+
+def _eslint_version(binary: str) -> str:
+    argv, cwd = _eslint_command(binary, ["--version"])
+    r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=60)
+    out = (r.stdout or r.stderr or "").strip()
+    if r.returncode != 0 or not out:
+        raise Blocked(f"cannot read {binary} --version: {out[:200]}")
+    return out
+
+
+def _parse_eslint_findings(raw_text: str):
+    """Pure parser for ESLint's JSON reporter.
+
+    Only severity 2 (error) is counted: that is what makes `eslint` exit non-zero and
+    what `npm run lint` fails on today. Warnings stay visible in the linter's own
+    output but do not become gate debt they never had the power to fail on.
+    """
+    try:
+        data = json.loads(raw_text or "[]")
+    except json.JSONDecodeError as e:
+        raise Blocked(f"eslint output was not JSON: {e}") from e
+    if not isinstance(data, list):
+        raise Blocked("eslint output was not a JSON list")
+    findings = []
+    for result in data:
+        filename = result.get("filePath", "")
+        for message in result.get("messages", []):
+            if message.get("severity") != 2:
+                continue
+            findings.append({
+                "filename": filename,
+                "code": message.get("ruleId") or "UNKNOWN",
+                "message": message.get("message", ""),
+                "location": {
+                    "row": message.get("line", 0),
+                    "column": message.get("column", 0),
+                },
+            })
+    return findings
+
+
+def _eslint_findings(binary, root, targets, cwd=None):
+    """Run the ESLint CLI over the app directory and normalise its findings.
+
+    `--tool-cwd` points at the app (web/); filenames are normalised against `--root`
+    (the repo), so budget keys are repo-relative exactly like the Python tools. The
+    app directory is explicit rather than guessed: g4 binds it via locate.py, and a
+    budget that silently linted a different tree would stop describing the verdict.
+    """
+    argv, shim_cwd = _eslint_command(binary, ["-f", "json", "."])
+    workdir = shim_cwd or str(cwd or root)
+    r = subprocess.run(
+        argv, cwd=workdir, capture_output=True,
+        text=True, encoding="utf-8", errors="replace", timeout=1800,
+    )
+    # ESLint exits 1 when it reports errors, 2 when it could not run (bad config,
+    # unreadable file). Exit 2 must never read as "no findings".
+    if r.returncode not in (0, 1):
+        raise Blocked(f"eslint failed to run (exit {r.returncode}): "
+                      f"{(r.stderr or r.stdout).strip()[:300]}")
+    return r.returncode, _parse_eslint_findings(r.stdout)
+
+
+def _mypy_findings(binary, root, targets, cwd=None):
+    """Parse mypy's text diagnostics into the same shape ruff findings use.
+
+    Mypy 2.x has no stable JSON output flag, so the canonical text form is parsed.
+    Only `error`/`warning` lines carry findings; `note:` lines are context, not debt.
+    """
+    r = subprocess.run([binary, *targets], cwd=str(cwd or root), capture_output=True,
+                       text=True, timeout=1800)
+    if r.returncode not in (0, 1):
+        raise Blocked(f"mypy failed to run (exit {r.returncode}): "
+                      f"{(r.stderr or r.stdout).strip()[:300]}")
+    out = (r.stdout or "") + "\n" + (r.stderr or "")
+    findings = []
+    pat = re.compile(
+        r"^(.+?):(\d+):(?:(\d+):)?\s*(error|warning):\s*(.*?)\s*(?:\[([A-Za-z0-9-]+)\])?\s*$")
+    for line in out.splitlines():
+        m = pat.match(line)
+        if not m:
+            continue
+        findings.append({
+            "filename": m.group(1),
+            "code": m.group(6) or m.group(4),
+            "location": {"row": int(m.group(2)), "column": int(m.group(3) or 0)},
+        })
+    return r.returncode, findings
+
+
+def _bandit_findings(binary, root, targets, cwd=None):
+    """Bandit's JSON output is already structured; normalise its field names."""
+    r = subprocess.run(
+        [binary, "-f", "json", "-q", "-r", *targets,
+         "-x", "*/node_modules/*,*/.venv/*"],
+        cwd=str(cwd or root), capture_output=True, text=True, timeout=1800,
+    )
+    if r.returncode not in (0, 1):
+        raise Blocked(f"bandit failed to run (exit {r.returncode}): "
+                      f"{(r.stderr or r.stdout).strip()[:300]}")
+    try:
+        raw = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError as e:
+        raise Blocked(f"bandit output was not JSON: {e}") from e
+    # Bandit 1.9.x wraps results in {"results": [...]}; older builds emit a bare list.
+    if isinstance(raw, dict):
+        raw = raw.get("results", [])
+    if not isinstance(raw, list):
+        raise Blocked("bandit output was not a JSON list")
+    findings = [{
+        "filename": f.get("filename", ""),
+        "code": f.get("test_id") or "UNKNOWN",
+        "location": {"row": f.get("line_number", 0), "column": 0},
+    } for f in raw]
+    return r.returncode, findings
+
+
 TOOLS = {
     "ruff": {"version": _ruff_version, "findings": _ruff_findings, "binary": "ruff"},
+    "mypy": {"version": _generic_version, "findings": _mypy_findings, "binary": "mypy"},
+    "bandit": {"version": _generic_version, "findings": _bandit_findings, "binary": "bandit"},
+    "eslint": {"version": _eslint_version, "findings": _eslint_findings, "binary": "eslint"},
 }
 
 
@@ -238,8 +392,9 @@ def write_budget(path: Path, tool: str, version: str,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    # sort_keys + fixed separators: the budget is reviewed in diffs, so it must be byte
-    # stable for an unchanged tree. A budget that reorders on every run is unreviewable.
+    # sort_keys + fixed separators: the reviewable content is byte stable for an
+    # unchanged tree (generated_at is provenance and legitimately advances). A budget
+    # that reorders on every run is unreviewable.
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
                    encoding="utf-8", newline="\n")
     tmp.replace(path)
@@ -248,6 +403,18 @@ def write_budget(path: Path, tool: str, version: str,
 def _now() -> str:
     import datetime
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _normalize_version(value: str) -> str:
+    """Ignore the executable suffix when comparing tool versions.
+
+    On Windows, PATH lookup can resolve `bandit` to either `bandit` or `bandit.EXE`
+    depending on whether the caller is PowerShell or a POSIX shell. The binary is the
+    same; a version string containing `.EXE` is not a different linter. Without this
+    normalisation a budget written by one shell is BLOCKED in the other, which reads as
+    a tool upgrade that never happened.
+    """
+    return re.sub(r"\.exe\b", "", str(value), flags=re.IGNORECASE).strip()
 
 
 def _summarise_delta(delta: dict, limit: int = 10) -> list[str]:
@@ -307,8 +474,20 @@ def _gather(args, tool: str):
         )
     root = _root(args)
     targets = _scope_targets(root)
+    cwd = root
+    if args.tool_cwd:
+        p = Path(args.tool_cwd)
+        cwd = p if p.is_absolute() else (root / p)
+        cwd = cwd.resolve()
+        if not cwd.is_dir():
+            raise Blocked(f"--tool-cwd {cwd} is not a directory")
     version = adapter["version"](binary)
-    _rc, findings = adapter["findings"](binary, root, targets)
+    _rc, findings = adapter["findings"](binary, root, targets, cwd)
+    # ESLint is bound to the app directory by --tool-cwd, not by the gate's Python
+    # scope contract. Report the directory actually linted so the verdict names the
+    # tree it judged instead of implying the framework-owned paths were scanned.
+    if tool == "eslint":
+        targets = [str(cwd)]
     return root, version, findings, counts_from(findings, root), targets
 
 
@@ -319,11 +498,14 @@ def cmd_check(args) -> int:
     budget_doc = load_budget(path)
 
     if targets != ["."]:
-        print(f"[lint_budget] scope: {' '.join(targets)} "
-              "(framework/gates/scope.json; paths outside it are not this gate's)")
+        scope_note = ("app directory from --tool-cwd; findings are keyed relative to --root"
+                      if tool == "eslint" else
+                      "framework/gates/scope.json; paths outside it are not this gate's")
+        print(f"[lint_budget] scope: {' '.join(targets)} ({scope_note})")
 
     budget_version = budget_doc.get("tool_version")
-    if budget_doc and budget_version and budget_version != version:
+    if (budget_doc and budget_version and
+            _normalize_version(budget_version) != _normalize_version(version)):
         raise Blocked(
             f"budget was produced by {budget_version!r} but {tool} is {version!r}. "
             "Findings are a function of the linter, so the budget cannot be compared "
@@ -623,17 +805,76 @@ def _self_test() -> int:
 
     @case
     def write_is_byte_stable_for_same_input():
+        # generated_at is provenance metadata, not budget content: it legitimately
+        # changes between two writes that straddle a clock second. Compare the
+        # reviewable content, and assert the metadata key is present.
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "b.json"
             counts = {"z.py": {"E2": 1, "E1": 2}, "a.py": {"F1": 1}}
             write_budget(p, "ruff", "ruff 1.2.3", counts)
-            one = p.read_bytes()
+            one = json.loads(p.read_text(encoding="utf-8"))
             write_budget(p, "ruff", "ruff 1.2.3", counts)
-            two = p.read_bytes()
-            assert one == two, "budget bytes changed for identical input"
-            doc = json.loads(one.decode("utf-8"))
-            assert doc["total"] == 4, doc
-            assert list(doc["counts"]) == ["a.py", "z.py"], list(doc["counts"])
+            two = json.loads(p.read_text(encoding="utf-8"))
+            one.pop("generated_at", None)
+            two.pop("generated_at", None)
+            assert one == two, "budget content changed for identical input"
+            assert one["total"] == 4, one
+            assert list(one["counts"]) == ["a.py", "z.py"], list(one["counts"])
+
+    @case
+    def windows_exe_suffix_is_not_a_version_change():
+        # `raise` rather than `assert` so bandit B101 does not grow on every new case.
+        if _normalize_version("bandit.EXE 1.9.4") != _normalize_version("bandit 1.9.4"):
+            raise AssertionError("bandit.EXE was treated as a different version")
+        if _normalize_version("ruff.exe 0.17.1") != "ruff 0.17.1":
+            raise AssertionError("ruff.exe suffix was not normalised")
+
+    @case
+    def eslint_parser_counts_errors_not_warnings():
+        raw = json.dumps([
+            {"filePath": "C:/repo/web/src/a.ts", "messages": [
+                {"ruleId": "no-explicit-any", "severity": 2, "message": "any", "line": 3, "column": 4},
+                {"ruleId": "no-console", "severity": 1, "message": "console", "line": 5, "column": 1},
+            ]},
+            {"filePath": "C:/repo/web/src/b.ts", "messages": []},
+        ])
+        parsed = _parse_eslint_findings(raw)
+        if len(parsed) != 1:
+            raise AssertionError(f"warnings were counted: {parsed}")
+        if parsed[0]["code"] != "no-explicit-any":
+            raise AssertionError(f"wrong rule: {parsed}")
+        if parsed[0]["location"] != {"row": 3, "column": 4}:
+            raise AssertionError(f"wrong location: {parsed}")
+
+    @case
+    def eslint_parser_blocks_on_non_json():
+        try:
+            _parse_eslint_findings("not json")
+        except Blocked:
+            pass
+        else:
+            raise AssertionError("non-JSON eslint output was silently accepted")
+
+    @case
+    def eslint_shim_cwd_is_derived_from_the_shim_path():
+        # A relative shim is resolved against the repo cwd, so its app directory is
+        # unambiguous; this is what lets the gate pass --tool-cwd web without the
+        # relative binary being doubled up into web/web.
+        argv, cwd = _eslint_command("web/node_modules/.bin/eslint.cmd", ["--version"])
+        if cwd != "web":
+            raise AssertionError(f"wrong app dir for shim: {cwd}")
+        if argv[-1] != "--version":
+            raise AssertionError(f"args not appended to shim command: {argv}")
+        if not str(argv[-2]).endswith("eslint.cmd"):
+            raise AssertionError(f"shim not preserved in command: {argv}")
+
+    @case
+    def eslint_plain_binary_keeps_the_callers_cwd():
+        argv, cwd = _eslint_command("eslint", ["-f", "json", "."])
+        if argv != ["eslint", "-f", "json", "."]:
+            raise AssertionError(f"plain binary was rewritten: {argv}")
+        if cwd is not None:
+            raise AssertionError(f"plain binary overrode cwd: {cwd}")
 
     failed = 0
     for name, fn in cases:
@@ -659,6 +900,9 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"budget path (default: {DEFAULT_BUDGET.as_posix()})")
     ap.add_argument("--tool-bin", default=None,
                     help="explicit linter binary, bypassing PATH lookup")
+    ap.add_argument("--tool-cwd", default=None,
+                    help="directory the linter runs in (default: repo root); findings "
+                         "are still keyed relative to --root")
     ap.add_argument("--reason", default=None, help="why the budget is changing (update)")
     ap.add_argument("--allow-increase", action="store_true",
                     help="permit the total to grow (update); requires --reason")

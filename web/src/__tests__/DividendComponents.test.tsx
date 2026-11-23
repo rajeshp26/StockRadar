@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
 vi.mock('@/components/ui/skeleton', () => ({
@@ -114,7 +114,7 @@ describe('DividendTrendChart', () => {
 
     it('shows empty state text', () => {
         render(<DividendTrendChart data={[]} />);
-        expect(screen.getByText('No dividend data yet')).toBeInTheDocument();
+        expect(screen.getByText('No dividend data for selected period')).toBeInTheDocument();
     });
 
     it('shows loading state', () => {

@@ -19,10 +19,15 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+// StockCard reads price from the stock prop (the live hook was removed); supply
+// the price fields the component actually renders so the mock matches its API.
 const mockStock = {
   id: 1,
   symbol: "AAPL",
   name: "Apple Inc.",
+  price: 150.25,
+  change: 2.5,
+  changePercent: 1.68,
   targetBuy: 140,
   targetSell: 200,
 };

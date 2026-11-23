@@ -19,6 +19,7 @@ Exit codes:
   1  one or more smoke checks fail
 """
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,9 +42,13 @@ def check(name, ok, detail=""):
 
 
 def sh(cmd, timeout=60):
+    # Every caller passes a fixed, shell-free command string. Split it into an
+    # argv and run without a shell: same behaviour, no shell-injection surface
+    # (bandit B602). A command that genuinely needs shell syntax must be rewritten
+    # with an explicit interpreter, not by restoring shell=True here.
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                           timeout=timeout, cwd=str(ROOT))
+        r = subprocess.run(shlex.split(cmd), shell=False, capture_output=True,
+                           text=True, timeout=timeout, cwd=str(ROOT))
         return r.returncode, (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
         return 124, "timeout"

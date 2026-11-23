@@ -161,23 +161,24 @@ _SH_SEQ = itertools.count()
 def sh(cmd, timeout=120):
     # On Windows, shell=True means cmd.exe, which can neither execute ./gate.sh
     # nor honour heredocs - and the WSL bash.exe launcher mangles multi-line -c
-    # payloads. Write the script to a file and hand bash the file path; POSIX
-    # hosts keep shell=True semantics unchanged.
+    # payloads. Write the script to a file and hand bash the file path. On POSIX,
+    # pass the command to sh -c explicitly: that is exactly what shell=True did,
+    # but with shell=False there is no implicit shell and no injection surface
+    # (bandit B602). Callers keep supplying the same command strings.
     path = None
     if os.name == "nt":
         path = Path(tempfile.gettempdir()) / "opencode-sh" / f"cmd_{os.getpid()}_{next(_SH_SEQ)}.sh"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_win_py_shim() + cmd + "\n", encoding="utf-8", newline="\n")
         argv = ["bash", _wsl_path(str(path))]
-        shell_kw = False
     else:
-        argv, shell_kw = cmd, True
+        argv = ["sh", "-c", cmd]
     try:
         # Decode as UTF-8 with replacement, not as the host locale. A gate that prints one
         # non-cp1252 byte (a box-drawing character, a curly quote in a product name) kills the
         # reader thread with UnicodeDecodeError, and the caller then sees `r.stdout is None`
         # and crashes on `None + None` -- a decode problem reported as a validator defect.
-        r = subprocess.run(argv, shell=shell_kw, capture_output=True, text=True,
+        r = subprocess.run(argv, shell=False, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         # A slow gate is evidence "blocked", never a crashed suite. 124 mirrors

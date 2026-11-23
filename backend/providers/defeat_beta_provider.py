@@ -21,6 +21,7 @@ from application.normalizers.statement_normalizer import (
 from application.validators.financial_data_validator import (
     FinancialDataValidator,
     log_validation_result,
+    quarantine_critical_fields,
 )
 
 # Domain exceptions and models
@@ -1401,6 +1402,20 @@ class DefeatBetaProvider(StockDataProvider):
                 return v
         return None
 
+    @staticmethod
+    def _quarantine_row(normalized_row, validation_result) -> None:
+        """Null only CRITICAL-flagged fields on a parsed row, in place.
+
+        Keeps the period and every valid field so the gap-filler cannot replace
+        mostly-good source data with synthetic LOCF values.
+        """
+        cleaned = quarantine_critical_fields(
+            normalized_row.model_dump(), validation_result
+        )
+        for field, value in cleaned.items():
+            if value is None and getattr(normalized_row, field, None) is not None:
+                setattr(normalized_row, field, None)
+
     # ---- Income Statement parser (DBeta) ----
     def _parse_income_statement(self, raw_df: pd.DataFrame, company_id: int, is_quarterly: bool, symbol: str) -> tuple[list[IncomeStatementRow], set[GapKey]]:
         rows: list[IncomeStatementRow] = []
@@ -1463,11 +1478,10 @@ class DefeatBetaProvider(StockDataProvider):
             )
             log_validation_result(validation_result)
 
-            # Only add if no critical issues; track dropped periods as gaps
-            if not validation_result.has_critical_issues():
-                rows.append(normalized_row)
-            else:
-                gaps.add((fy, fq, period_end))
+            # Field-level quarantine: keep the period and every valid value;
+            # null only the fields that actually failed validation.
+            self._quarantine_row(normalized_row, validation_result)
+            rows.append(normalized_row)
 
         return rows, gaps
 
@@ -1556,11 +1570,10 @@ class DefeatBetaProvider(StockDataProvider):
             )
             log_validation_result(validation_result)
 
-            # Only add if no critical issues; track dropped periods as gaps
-            if not validation_result.has_critical_issues():
-                rows.append(normalized_row)
-            else:
-                gaps.add((fy, fq, period_end))
+            # Field-level quarantine: keep the period and every valid value;
+            # null only the fields that actually failed validation.
+            self._quarantine_row(normalized_row, validation_result)
+            rows.append(normalized_row)
         return rows, gaps
 
     # ---- Cash Flow parser (DBeta) ----
@@ -1621,11 +1634,10 @@ class DefeatBetaProvider(StockDataProvider):
             )
             log_validation_result(validation_result)
 
-            # Only add if no critical issues; track dropped periods as gaps
-            if not validation_result.has_critical_issues():
-                rows.append(normalized_row)
-            else:
-                gaps.add((fy, fq, period_end))
+            # Field-level quarantine: keep the period and every valid value;
+            # null only the fields that actually failed validation.
+            self._quarantine_row(normalized_row, validation_result)
+            rows.append(normalized_row)
         return rows, gaps
 
     # ---- Dividends parser (DBeta & YF) ----

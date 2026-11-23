@@ -542,6 +542,33 @@ def verify_database_write(
 # LOGGING HELPERS
 # ============================================================================
 
+# Identity/structure fields must never be nulled by field-level quarantine.
+_PROTECTED_FIELDS = frozenset(
+    {"company_id", "fiscal_year", "fiscal_quarter", "period_end_date", "currency"}
+)
+
+
+def quarantine_critical_fields(
+    row: dict[str, Any], result: ValidationResult
+) -> dict[str, Any]:
+    """Null only CRITICAL-flagged fields; preserve every other real value.
+
+    Whole-row rejection caused `[DQ] Quality Score 0/100` rows to be discarded
+    and their periods recorded as gaps; the gap-filler then replaced mostly-good
+    source data with LOCF synthetic values. Only the specific fields that failed
+    validation are invalid. The caller keeps the row (so it is not gap-filled).
+    """
+    cleaned = dict(row)
+    for issue in result.issues:
+        if issue.severity == Severity.CRITICAL and issue.field in _PROTECTED_FIELDS:
+            # An invalid identity field cannot be repaired by nulling it; keep
+            # the row intact and let the caller decide.
+            continue
+        if issue.severity == Severity.CRITICAL and issue.field in cleaned:
+            cleaned[issue.field] = None
+    return cleaned
+
+
 def log_validation_result(result: ValidationResult) -> None:
     """Log validation result with severity-based formatting and provider attribution."""
     if not result.issues:

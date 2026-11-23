@@ -8,18 +8,31 @@ import type {
   RenameWatchlistInput,
 } from "../types/watchlist.types";
 
-// Add near top with other interfaces
-export interface StockSearchResult {
-  symbol:   string;
-  name:     string;
-  exchange: string;
-  type:     string;
+// A tradable listing: symbol alone is not an instrument. Exchange, kind, currency
+// and provider_symbol identify the exact row the user selected in search.
+export interface ListingIdentity {
+  security_id:     number;
+  symbol:          string;
+  exchange:        string;
+  kind:            string;
+  currency:        string;
+  provider_symbol: string;
 }
 
-// ── Existing input types (unchanged) ───────────────────────────────────────
+export interface StockSearchResult extends ListingIdentity {
+  name: string;
+  type?: string;
+}
+
+// ── Existing input types (identity optional for legacy callers) ────────────
 export interface AddStockInput {
   watchlist_id: number;
   symbol:       string;
+  security_id?:     number;
+  exchange?:        string;
+  kind?:            string;
+  currency?:        string;
+  provider_symbol?: string;
   target_buy:   number | null;
   target_sell:  number | null;
 }

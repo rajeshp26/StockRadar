@@ -9,6 +9,15 @@
       "sha256": "be2b2082ffd28ceff14ad73bab4e89b873426e0bcf91d722077775ca30693932",
       "rows": 24,
       "shapes": ["multi_account", "long_history", "monthly_snapshots"]
+    },
+    {
+      "id": "listing-identity-2026-11-22",
+      "source": "read-only Supabase REST profile of security listing identity, quotes and watchlist counts on the real local stack (http://127.0.0.1:8000)",
+      "captured_at": "2026-11-22T17:15:00Z",
+      "file": "listing-identity.profile.json",
+      "sha256": "5cf237aada2425a063d9939aa729640fd472b17d3b9a2b1798002fefb6f0aed7",
+      "rows": 2,
+      "shapes": ["duplicate_ticker_two_listings", "cdr_with_ratio", "common_no_ratio"]
     }
   ]
 }

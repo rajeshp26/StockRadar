@@ -63,7 +63,18 @@ export const StockListRow = React.memo(function StockListRow({ stock, onEdit, on
 
       {/* Symbol + Name */}
       <div className="w-32 flex-shrink-0 min-w-0">
-        <p className="text-sm font-black text-white truncate">{stock.symbol}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm font-black text-white truncate">{stock.symbol}</p>
+          {stock.exchange && (
+            <span
+              data-testid="listing-exchange-badge"
+              data-security-id={stock.securityId ?? undefined}
+              className="text-[9px] text-white/45 font-mono px-1 rounded border border-white/10 whitespace-nowrap"
+            >
+              {stock.exchange}{stock.kind === 'CDR' ? '·CDR' : ''}
+            </span>
+          )}
+        </div>
         <p className="text-[10px] text-white/30 truncate">{stock.name}</p>
       </div>
 

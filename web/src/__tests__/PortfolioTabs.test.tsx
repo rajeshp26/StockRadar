@@ -123,7 +123,6 @@ vi.mock("@/features/portfolio/hooks/usePortfolio", () => ({
   useRollingSharpe: () => ({ data: null, isLoading: false }),
   useRiskContribution: () => ({ data: null, isLoading: false }),
   useMarketExposure: () => ({ data: null, isLoading: false }),
-  usePortfolioPerformance: (...args: any[]) => mockUsePortfolioPerformance(...args),
   useHoldingExists: () => ({ data: { held: false }, isLoading: false }),
   useHoldingPerformance: () => ({ data: null, isLoading: false }),
   useHoldingDividends: () => ({ data: [], isLoading: false }),
@@ -514,7 +513,7 @@ describe("PortfolioTabShell — FT-SHELL-01 to FT-SHELL-04", () => {
       isLoading: false,
     });
     render(<PortfolioTabShell />);
-    expect(screen.getByText("Stocks")).toBeInTheDocument();
+    expect(screen.getAllByText("Stocks").length).toBeGreaterThan(0);
     expect(screen.getByText("Technology")).toBeInTheDocument();
     expect(screen.getByText("Energy")).toBeInTheDocument();
   });

@@ -541,30 +541,49 @@ class Settings(BaseSettings):
         extra="forbid",
     )
 
+def config_summary_lines(s) -> list[str]:
+    """Build the ASCII-only startup summary.
+
+    Kept as a pure function so the exact bytes written to the console are
+    testable. Non-ASCII glyphs (e.g. `±`) render as `?` on cp1252/cp437 Windows
+    consoles, which turned `Earnings Buffer: ±10 days` into `?10 days`.
+    """
+    key_type = "JWT" if s.SUPABASE_SERVICE_ROLE_KEY.startswith("eyJ") else "Legacy"
+    lines = [
+        "=" * 60,
+        "[OK] STOCKERPRO CONFIGURATION LOADED",
+        "=" * 60,
+        f"Environment  : {s.ENVIRONMENT}",
+        f"API Endpoint : {s.API_HOST}:{s.API_PORT}",
+        f"Supabase URL : {s.SUPABASE_URL}",
+        f"Supabase Key : {key_type} format detected",
+        "Auth Provider: Supabase JWT (local JWKS verification)",
+        f"AI Provider  : {'OpenRouter Enabled *' if s.OPEN_ROUTER_KEY else 'AI Disabled'}",
+        f"Defeat Beta  : {'Enabled *' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}",
+        f"Market Data  : {'Enabled *' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}",
+    ]
+    if s.ENABLE_MARKET_DATA_SCHEDULER:
+        lines.append(
+            f"  - Scheduler Interval: {getattr(s, 'MARKET_DATA_REFRESH_INTERVAL_HOURS', 24)}h"
+        )
+    lines.extend(
+        [
+            f"  - Scheduler Interval: {s.EARNINGS_REFRESH_CHECK_INTERVAL_HOURS}h",
+            f"  - Earnings Buffer: +/-{s.EARNINGS_REFRESH_BUFFER_DAYS} days",
+            f"  - Retry Attempts: {s.RETRY_MAX_ATTEMPTS} with backoff {s.RETRY_BACKOFF_SECONDS}",
+            f"  - YFinance Fallback: {'Enabled' if s.ENABLE_YFINANCE_FALLBACK else 'Disabled'}",
+            f"  - Deduplication: {'Enabled (97.5% optimization)' if s.ENABLE_DEDUPLICATION_OPTIMIZATION else 'Disabled'}",
+            "=" * 60,
+        ]
+    )
+    return lines
+
+
 def validate_config():
     """Validates settings and prints a summary on startup."""
     try:
         s = Settings()
-        key_type = "JWT" if s.SUPABASE_SERVICE_ROLE_KEY.startswith("eyJ") else "Legacy"
-        print("\n" + "="*60)
-        print("[OK] STOCKERPRO CONFIGURATION LOADED")
-        print("="*60)
-        print(f"Environment  : {s.ENVIRONMENT}")
-        print(f"API Endpoint : {s.API_HOST}:{s.API_PORT}")
-        print(f"Supabase URL : {s.SUPABASE_URL}")
-        print(f"Supabase Key : {key_type} format detected")
-        print("Auth Provider: Supabase JWT (local JWKS verification)")
-        print(f"AI Provider  : {'OpenRouter Enabled *' if s.OPEN_ROUTER_KEY else 'AI Disabled'}")
-        print(f"Defeat Beta  : {'Enabled *' if s.ENABLE_EARNINGS_SCHEDULER else 'Disabled'}")
-        print(f"Market Data  : {'Enabled *' if s.ENABLE_MARKET_DATA_SCHEDULER else 'Disabled'}")
-        if s.ENABLE_MARKET_DATA_SCHEDULER:
-            print(f"  - Scheduler Interval: {getattr(s, 'MARKET_DATA_REFRESH_INTERVAL_HOURS', 24)}h")
-        print(f"  - Scheduler Interval: {s.EARNINGS_REFRESH_CHECK_INTERVAL_HOURS}h")
-        print(f"  - Earnings Buffer: ±{s.EARNINGS_REFRESH_BUFFER_DAYS} days")
-        print(f"  - Retry Attempts: {s.RETRY_MAX_ATTEMPTS} with backoff {s.RETRY_BACKOFF_SECONDS}")
-        print(f"  - YFinance Fallback: {'Enabled' if s.ENABLE_YFINANCE_FALLBACK else 'Disabled'}")
-        print(f"  - Deduplication: {'Enabled (97.5% optimization)' if s.ENABLE_DEDUPLICATION_OPTIMIZATION else 'Disabled'}")
-        print("="*60 + "\n")
+        print("\n" + "\n".join(config_summary_lines(s)) + "\n")
         return s
     except Exception as e:
         print("\n" + "!"*60)

@@ -116,18 +116,27 @@ class StockdexMacrotrendsProvider:
         return symbol in self._blocked_403_symbols
 
     def _register_symbol_failure(self, symbol: str) -> None:
-        now = time.monotonic()
         c = self._symbol_403_counts.get(symbol, 0) + 1
         self._symbol_403_counts[symbol] = c
         if c >= 3:
-            self._blocked_403_symbols.add(symbol)
-            self._symbol_403_until[symbol] = now + 300
-            self._symbol_403_counts.pop(symbol, None)
+            self._block_symbol(symbol)
 
     def _handle_fetch_error(self, symbol: str, err: Exception) -> None:
         estr = str(err)
+        # `/TBD/` is stockdex's unresolved-slug placeholder. The URL is identical
+        # on every retry, so waiting for three failures only guarantees three
+        # 403s. Block the symbol immediately and let other providers handle it.
+        if "/TBD/" in estr:
+            self._block_symbol(symbol)
+            return
         if "403" in estr or "Forbidden" in estr or "forbidden" in estr:
             self._register_symbol_failure(symbol)
+
+    def _block_symbol(self, symbol: str) -> None:
+        """Block a symbol for one cooldown window (permanent-slug failure)."""
+        self._blocked_403_symbols.add(symbol)
+        self._symbol_403_until[symbol] = time.monotonic() + 300
+        self._symbol_403_counts.pop(symbol, None)
 
 
     # ------------------------------------------------------------------

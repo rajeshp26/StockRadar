@@ -33,6 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
+from domain.valuation import ValuationError, price_for_listing
 from shared.cdr_utils import CDR_RATIO, EXCHANGE_OVERRIDE_TOR, trace_division
 
 #: Sources whose raw price is already the CDR's own account-currency (CAD) quote.
@@ -134,11 +135,29 @@ def adjust_cdr_price(
     if price is None:
         return AdjustedPrice(price=Decimal("0"), is_cdr=is_cdr)
 
-    if not is_cdr:
-        return AdjustedPrice(price=price, is_cdr=False)
+    # All ratio arithmetic now lives in domain.valuation.price_for_listing. This
+    # compatibility adapter keeps the historical AdjustedPrice return shape while
+    # removing the last independent CDR implementation.
+    security = {
+        "security_id": company_id or 0,
+        "kind": "CDR" if is_cdr else "COMMON",
+        "cdr_ratio": cdr_ratio if is_cdr else None,
+    }
+    try:
+        effective, applied_ratio = price_for_listing(security, price)
+    except ValuationError as exc:
+        if exc.code == "MISSING_CDR_RATIO":
+            effective, applied_ratio = price_for_listing(
+                {**security, "cdr_ratio": CDR_RATIO}, price
+            )
+        else:
+            raise
 
-    ratio = resolve_cdr_ratio(cdr_ratio)
-    adjusted = price / ratio
+    if not is_cdr:
+        return AdjustedPrice(price=effective, is_cdr=False)
+
+    ratio = applied_ratio or resolve_cdr_ratio(cdr_ratio)
+    adjusted = effective
     fx_applied: Decimal | None = None
 
     if not is_cad_native_source(price_source, price_currency, account_currency):

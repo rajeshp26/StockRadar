@@ -94,7 +94,12 @@ async function getUpstashChecker(tier: TierConfig): Promise<UpstashChecker | nul
     }
 
     try {
+        // Upstash is an optional runtime dependency: next.config.js resolves both
+        // modules to false and the env guard above skips this path when they are
+        // absent, so the unresolved types here are expected, not a missing install.
+        // @ts-expect-error optional dependency intentionally not installed
         const { Ratelimit } = await import("@upstash/ratelimit");
+        // @ts-expect-error optional dependency intentionally not installed
         const { Redis } = await import("@upstash/redis");
 
         const rl = new Ratelimit({

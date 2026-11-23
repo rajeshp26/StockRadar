@@ -84,7 +84,7 @@ function makeDividendData(overrides: Record<string, any> = {}) {
                 growth_trend: "growing",
                 cut_history: "Major cut (2023)",
                 has_cut: true,
-                cut_year: 2023,
+                cut_year: 2023 as number | null,
                 retention_rate: null,
             },
             strengths: [

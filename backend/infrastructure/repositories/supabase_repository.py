@@ -112,7 +112,7 @@ class SupabaseWatchlistRepository(WatchlistRepository):
 
     def get_items_by_watchlist_id(self, watchlist_id: int) -> list[dict[str, Any]]:
         res = self.client.table('watchlist_items').select(
-            'watchlist_item_id, target_buy, target_sell, '
+            'watchlist_item_id, target_buy, target_sell, security_id, '
             'companies(company_id, ticker_symbol, company_name, sector, industry)'
         ).eq('watchlist_id', watchlist_id).execute()
         return res.data or []
