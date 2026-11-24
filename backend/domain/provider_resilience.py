@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from domain.listing_identity import normalize_provider_symbol
+
 
 class RateLimitScope(StrEnum):
     """Which breaker a rate-limit response belongs to."""
@@ -269,7 +271,10 @@ def refresh_listing(
     `security_id`. Sibling listings remain fetchable in the latter case.
     """
     security_id = int(security["security_id"])
-    provider_symbol = str(security["provider_symbol"])
+    # The catalog can still serve rows written by migration 020 with a doubled
+    # exchange suffix. Never let that stale value reach the provider or the SSE
+    # identity; the repair is idempotent for already-canonical symbols.
+    provider_symbol = normalize_provider_symbol(security["provider_symbol"])
 
     if provider_breaker is not None and not provider_breaker.allows(now=now):
         return ListingRefresh(

@@ -18,6 +18,7 @@ from auth import get_current_user
 from config import settings
 from database import supabase
 from dependencies import get_current_user_dep, limiter
+from domain.listing_identity import normalize_provider_symbol
 from shared.api_tracing import RequestTracingMiddleware
 from shared.logging_setup import (
     CONSOLE_FORMAT,
@@ -65,7 +66,7 @@ class _YFinanceQuoteAdapter:
 
     def get_quote(self, provider_symbol: str) -> dict:
         try:
-            info = yf.Ticker(provider_symbol).info or {}
+            info = yf.Ticker(normalize_provider_symbol(provider_symbol)).info or {}
         except Exception as exc:
             from domain.provider_resilience import (
                 ProviderErrorCode,
@@ -153,6 +154,15 @@ async def background_price_monitor():
             updated = skipped = 0
             results = []
             for security in securities:
+                # Canonicalise the whole identity once: the provider call, the
+                # quote row and the SSE event must all carry the same ticker,
+                # even when the catalog row predates the suffix repair.
+                security = {
+                    **security,
+                    "provider_symbol": normalize_provider_symbol(
+                        security["provider_symbol"]
+                    ),
+                }
                 sid = int(security["security_id"])
                 psym = security["provider_symbol"]
                 # One provider request for this listing, guarded by both the
