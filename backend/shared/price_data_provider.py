@@ -5,6 +5,7 @@ from datetime import date
 
 import pandas as pd
 
+from domain.listing_identity import normalize_provider_symbol
 from shared.time_utils import now_utc
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class PriceDataProvider:
 
     @staticmethod
     def _resolve_symbol(symbol: str, exchange: str | None = None) -> str:
-        sym = symbol.upper()
+        sym = normalize_provider_symbol(symbol)
         if exchange:
             suffix = PriceDataProvider._EXCHANGE_SUFFIX_MAP.get(exchange.upper())
             # Idempotent: skip suffix if the symbol already carries it

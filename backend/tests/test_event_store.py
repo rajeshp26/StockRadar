@@ -470,3 +470,99 @@ class TestStateImportBackdatingGuard:
             data={"effective_date": captured, "holdings": []},
         )
         assert result["id"] == "evt-3"
+
+
+class TestExistingIdempotencyKeyLookup:
+    """Resumable imports depend on a precise, fail-loud key lookup."""
+
+    def test_returns_only_requested_keys_that_exist(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = mock_supabase_client.table.return_value
+        table.execute.return_value = MagicMock(
+            data=[
+                {"idempotency_key": "csv_wealthsimple_abc_0"},
+                {"idempotency_key": "csv_wealthsimple_other_0"},
+                {"idempotency_key": None},
+            ]
+        )
+
+        found = store.get_existing_idempotency_keys(
+            ["csv_wealthsimple_abc_0", "csv_wealthsimple_missing_0"]
+        )
+
+        assert found == {"csv_wealthsimple_abc_0"}
+        table.in_.assert_called_once_with(
+            "idempotency_key",
+            ["csv_wealthsimple_abc_0", "csv_wealthsimple_missing_0"],
+        )
+
+    def test_empty_lookup_does_not_query(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+
+        assert store.get_existing_idempotency_keys([]) == set()
+        mock_supabase_client.table.assert_not_called()
+
+    def test_chunks_large_searches(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = mock_supabase_client.table.return_value
+        keys = [f"csv_wealthsimple_{i}_0" for i in range(201)]
+        queried: list[list[str]] = []
+
+        def execute():
+            return MagicMock(data=[{"idempotency_key": keys[-1]}])
+
+        def in_(column, values):
+            queried.append(list(values))
+            return table
+
+        table.in_.side_effect = in_
+        table.execute.side_effect = execute
+
+        found = store.get_existing_idempotency_keys(keys)
+
+        assert found == {keys[-1]}
+        assert len(queried) > 1
+        # Every key is queried exactly once, in order, across the chunks.
+        assert [key for chunk in queried for key in chunk] == keys
+
+    def test_large_realistic_keys_stay_under_uri_limit(self, mock_supabase_client):
+        """Regression: 200 x 51-char keys build a ~10 KB URL -> 414 in production.
+
+        A mock that only counts keys cannot catch this; the fake below rejects
+        oversized URLs the way the real PostgREST endpoint does.
+        """
+        from postgrest.exceptions import APIError
+
+        store = EventStore(client=mock_supabase_client)
+        table = mock_supabase_client.table.return_value
+        keys = [f"csv_wealthsimple_{i:032x}_0" for i in range(2463)]
+        assert len(keys[0]) == 51
+        queried: list[list[str]] = []
+
+        def in_(column, values):
+            queried.append(list(values))
+            url_len = len(
+                "http://localhost:54321/rest/v1/portfolio_events?select=idempotency_key&idempotency_key=in.%28"
+                + "%2C".join(values)
+                + "%29"
+            )
+            if url_len > 8000:
+                raise APIError({"code": "414", "message": "URI too long"})
+            return table
+
+        table.in_.side_effect = in_
+        table.execute.side_effect = lambda: MagicMock(data=[])
+
+        found = store.get_existing_idempotency_keys(keys)
+
+        assert found == set()
+        assert len(queried) > 1
+        assert [key for chunk in queried for key in chunk] == keys
+
+    def test_query_failure_propagates(self, mock_supabase_client):
+        store = EventStore(client=mock_supabase_client)
+        table = mock_supabase_client.table.return_value
+        table.execute.side_effect = RuntimeError("database unavailable")
+
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            store.get_existing_idempotency_keys(["csv_wealthsimple_abc_0"])

@@ -1,6 +1,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -8,6 +9,8 @@ import pandas as pd
 import yfinance as yf
 
 from domain.interfaces.stock_provider import StockProvider
+from domain.listing_identity import normalize_provider_symbol
+from domain.provider_resilience import get_provider_pacer
 from shared.time_utils import now_utc, parse_db_timestamp
 
 from .base import StockDataProvider, StockDetails, TickerInfo
@@ -42,7 +45,9 @@ class YFinanceProvider(StockDataProvider, StockProvider):
         When exchange is not known, return the symbol as-is — the caller
         can fall back through .TO / .V suffixes on failure.
         """
-        symbol = ticker_symbol.upper()
+        # Stale catalog/company rows may still carry a doubled suffix; collapse it
+        # before applying the exchange rule so every yfinance entry point is safe.
+        symbol = normalize_provider_symbol(ticker_symbol)
         if exchange:
             suffix = EXCHANGE_SUFFIX_MAP.get(exchange.upper())
             # Idempotent: skip suffix if the stored symbol already carries it
@@ -63,6 +68,11 @@ class YFinanceProvider(StockDataProvider, StockProvider):
             return self._cache[ticker_upper]
 
         try:
+            # Share one throttle with the price monitor: Yahoo limits the egress,
+            # not the caller, so every yfinance entry point must use one clock.
+            wait = get_provider_pacer().acquire()
+            if wait > 0:
+                time.sleep(wait)
             tkr = yf.Ticker(ticker_upper)
             info = tkr.info or {}
 

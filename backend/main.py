@@ -18,6 +18,7 @@ from auth import get_current_user
 from config import settings
 from database import supabase
 from dependencies import get_current_user_dep, limiter
+from domain.listing_identity import normalize_provider_symbol
 from shared.api_tracing import RequestTracingMiddleware
 from shared.logging_setup import (
     CONSOLE_FORMAT,
@@ -58,22 +59,25 @@ class _YFinanceQuoteAdapter:
     """Adapts yfinance to the one-listing-at-a-time QuoteProvider protocol.
 
     No `.TO/.V/.NE` fan-out: the security already carries its exact provider
-    symbol. A rate-limit response is translated into RateLimitHit so the
-    per-security breaker can back off only that listing.
+    symbol. Yahoo throttles the shared egress, so a 429 is translated into a
+    provider-scoped hit that pauses every listing through one gate. Other
+    yfinance exceptions propagate unchanged (no silent swallowing).
     """
 
     def get_quote(self, provider_symbol: str) -> dict:
         try:
-            info = yf.Ticker(provider_symbol).info or {}
+            info = yf.Ticker(normalize_provider_symbol(provider_symbol)).info or {}
         except Exception as exc:
-            text = str(exc)
-            if (
-                "RateLimit" in type(exc).__name__
-                or "429" in text
-                or "Too Many Requests" in text
-            ):
-                from domain.provider_resilience import RateLimitHit
-                raise RateLimitHit(retry_after=60.0, message=text) from exc
+            from domain.provider_resilience import (
+                ProviderErrorCode,
+                ProviderRateLimitHit,
+                provider_error_code,
+            )
+
+            if provider_error_code(exc) is ProviderErrorCode.RATE_LIMIT:
+                raise ProviderRateLimitHit(
+                    retry_after=60.0, message=str(exc), provider="yfinance",
+                ) from exc
             raise
         return {
             "price": info.get("currentPrice") or info.get("regularMarketPrice"),
@@ -81,9 +85,12 @@ class _YFinanceQuoteAdapter:
         }
 
 
-# One breaker for the whole monitor, keyed by security_id so a throttled CDR
-# never silences its sibling listing or any other symbol.
+# Listing breaker: keyed by security_id so a symbol-local failure never
+# silences a sibling listing. Provider breaker: one shared gate for Yahoo's
+# IP-level 429s, so one episode logs once and pauses all listings together.
 _price_monitor_breaker = None  # initialised on first cycle (imports stay local)
+_price_monitor_provider_breaker = None
+_price_monitor_provider_logged = False
 
 
 async def background_price_monitor():
@@ -92,21 +99,39 @@ async def background_price_monitor():
     Exactly one provider request is issued per active listing, using its own
     provider_symbol. There is no N×3 suffix fan-out and no company-wide CDR
     adjustment: each security carries its own kind/ratio, and the SSE event carries
-    the full identity so META/NMS and META/NEO stay distinguishable. A rate limit
-    backs off only the throttled security_id, and resets after its retry window.
+    the full identity so META/NMS and META/NEO stay distinguishable. A symbol-local
+    limit backs off only that security_id; a provider-wide 429 pauses all
+    listings through one shared gate and logs once per episode.
     """
-    global _price_monitor_breaker
+    global _price_monitor_breaker, _price_monitor_provider_breaker
+    global _price_monitor_provider_logged
     from api.watchlists import broadcast_stock_update, symbol_subscribers
     from domain.provider_resilience import (
         ListingRateLimitBreaker,
+        ProviderRateLimitBreaker,
+        get_provider_pacer,
         refresh_listing,
+        should_log_provider_limit,
+        summarize_cycle,
     )
     from domain.valuation import ValuationError, price_for_listing
     from infrastructure.repositories.security_repository import SecurityRepository
 
+    provider_cooldown = float(
+        getattr(settings, "YF_PROVIDER_COOLDOWN_SECONDS", 60.0)
+    )
     if _price_monitor_breaker is None:
         _price_monitor_breaker = ListingRateLimitBreaker(cooldown_seconds=60.0)
+    if _price_monitor_provider_breaker is None:
+        _price_monitor_provider_breaker = ProviderRateLimitBreaker(
+            cooldown_seconds=provider_cooldown,
+        )
     breaker = _price_monitor_breaker
+    provider_breaker = _price_monitor_provider_breaker
+    pacer = get_provider_pacer()
+    pacer.min_interval_seconds = float(
+        getattr(settings, "YF_MIN_REQUEST_INTERVAL_SECONDS", 0.1)
+    )
     adapter = _YFinanceQuoteAdapter()
     interval = max(1, int(getattr(settings, "SSE_UPDATE_INTERVAL_SECONDS", 10)))
     catalog = SecurityRepository()
@@ -127,11 +152,26 @@ async def background_price_monitor():
                 continue
 
             updated = skipped = 0
+            results = []
             for security in securities:
+                # Canonicalise the whole identity once: the provider call, the
+                # quote row and the SSE event must all carry the same ticker,
+                # even when the catalog row predates the suffix repair.
+                security = {
+                    **security,
+                    "provider_symbol": normalize_provider_symbol(
+                        security["provider_symbol"]
+                    ),
+                }
                 sid = int(security["security_id"])
                 psym = security["provider_symbol"]
-                # One provider request for this listing, guarded by its own breaker.
-                result = refresh_listing(adapter, security, breaker)
+                # One provider request for this listing, guarded by both the
+                # listing breaker and the shared provider-wide gate.
+                result = refresh_listing(
+                    adapter, security, breaker,
+                    provider_breaker=provider_breaker, pacer=pacer,
+                )
+                results.append(result)
                 if result.skipped:
                     skipped += 1
                     if result.reason == "rate_limited":
@@ -174,12 +214,27 @@ async def background_price_monitor():
                 )
                 updated += 1
 
+            cycle = summarize_cycle(results)
+            if should_log_provider_limit(_price_monitor_provider_logged,
+                                         cycle.provider_limited):
+                logger.warning(
+                    "[PriceMonitor] Yahoo provider-wide rate limit: pausing all "
+                    "%d listings for %.0fs", cycle.provider_limited_count,
+                    provider_cooldown,
+                )
+            _price_monitor_provider_logged = cycle.provider_limited
+
             logger.debug("[PRICE-MONITOR] cycle: %s updated, %s skipped", updated, skipped)
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error(f"[PriceMonitor] error: {e}", exc_info=True)
+            from domain.provider_resilience import provider_error_code
+
+            logger.error(
+                "[PriceMonitor] failure code=%s", provider_error_code(e).value,
+                exc_info=True,
+            )
             await asyncio.sleep(interval)
 
 # -----------------------------------------------------------------------------

@@ -52,6 +52,12 @@ _KIND_HINTS: Final[tuple[tuple[str, str], ...]] = (
 
 _SYMBOL_RE: Final = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
 
+# Migration 020 appended an exchange suffix unconditionally, so seven already
+# suffixed tickers were stored as ENB.TO.TO / YTSL.NE.NE / ... and Yahoo answered
+# every refresh with 404. Only an *identical repeated* trailing suffix is a defect;
+# genuine dotted tickers (BRK.B, ABC.TO) must survive untouched.
+_REPEATED_PROVIDER_SUFFIX_RE: Final = re.compile(r"(\.TO|\.NE|\.V)\1+$", re.IGNORECASE)
+
 _ADD_REQUIRED: Final = (
     "watchlist_id",
     "security_id",
@@ -121,6 +127,26 @@ def normalize_symbol(value: Any) -> str:
         raise ListingIdentityError(
             "Symbol must be 1-20 uppercase letters, digits, dots or hyphens",
             ["symbol"],
+        )
+    return symbol
+
+
+def normalize_provider_symbol(value: Any) -> str:
+    """Return a provider ticker with a doubled exchange suffix collapsed once.
+
+    Repairing the stored catalog rows is necessary but not sufficient: a reader of
+    a stale row must still never emit an invalid ticker to the provider. This rule
+    is idempotent and intentionally narrow - it only collapses a repeated *same*
+    suffix at the end, so a legitimate dotted base symbol is never truncated.
+    """
+    symbol = str(value or "").strip().upper()
+    match = _REPEATED_PROVIDER_SUFFIX_RE.search(symbol)
+    if match:
+        symbol = symbol[: match.start()] + match.group(1).upper()
+    if not _SYMBOL_RE.match(symbol):
+        raise ListingIdentityError(
+            "Provider symbol must be 1-20 uppercase letters, digits, dots or hyphens",
+            ["provider_symbol"],
         )
     return symbol
 

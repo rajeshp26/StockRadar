@@ -123,6 +123,15 @@ export interface ImportResult {
   warning?: string;
 }
 
+export interface ImportSummary {
+  new_entries: number;
+  already_imported: number;
+  skipped_rows: number;
+  accounts_created: number;
+  accounts_updated: number;
+  symbols_created: number;
+}
+
 export interface ImportStatusResponse {
   success: boolean;
   import_batch_id: string;
@@ -131,7 +140,7 @@ export interface ImportStatusResponse {
   rows_parsed: number;
   rows_inserted: number;
   error?: string | null;
-  result?: Record<string, unknown> | null;
+  result?: ImportSummary | null;
 }
 
 export interface AddManualTransactionRequest {

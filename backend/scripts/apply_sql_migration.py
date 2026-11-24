@@ -2,9 +2,12 @@
 
 Used to verify a migration is idempotent: run it twice and confirm the second
 run changes nothing (idempotency is a claim until executed twice). The
-before/after comparison covers CDR state, installed triggers, and the event log,
-so a migration that only creates DDL is still measured rather than reported as a
-no-op it never was.
+before/after comparison covers CDR state, installed triggers, the event log,
+stale provider_symbol rows and check constraints on public.securities, so a
+migration that only creates DDL is still measured rather than reported as a
+no-op it never was. The provider_symbol count matters: migration 021 was once
+"verified" with a snapshot that could not see the seven rows it changed, and
+the defect stayed live.
 
 Usage:
     python scripts/apply_sql_migration.py 013_checkpoint_backdating_invariant.sql
@@ -62,7 +65,22 @@ def snapshot(conn) -> dict:
                     (SELECT count(*) FROM public.watchlist_items WHERE security_id IS NULL),
                     (SELECT count(*) FROM public.portfolio_holding_lots l
                        JOIN public.securities s ON s.security_id = l.security_id
-                      WHERE s.company_id = 145)
+                      WHERE s.company_id = 145),
+                    (SELECT count(*) FROM public.securities s
+                      WHERE s.provider_symbol IS DISTINCT FROM (
+                          CASE
+                              WHEN position('.' in s.symbol) > 0 THEN s.symbol
+                              ELSE s.symbol || CASE s.exchange
+                                  WHEN 'TSX' THEN '.TO'
+                                  WHEN 'NEO' THEN '.NE'
+                                  WHEN 'TSXV' THEN '.V'
+                                  ELSE ''
+                              END
+                          END
+                      )),
+                    (SELECT count(*) FROM pg_constraint
+                      WHERE conrelid = 'public.securities'::regclass
+                        AND contype = 'c')
             """)
             security_state = cur.fetchone()
 

@@ -20,6 +20,7 @@ from decimal import Decimal
 from typing import Any
 
 from shared.cdr_utils import CDR_PATTERNS as _SHARED_CDR_PATTERNS
+from shared.portfolio_event_payload import csv_row_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,10 @@ class ParsedTransaction:
 
     # Exchange override (e.g., "TOR" for CDR symbols detected during parsing)
     exchange_override: str | None = None
+
+    # Stable identity for resumable imports (populated by the parser)
+    row_fingerprint: str = ""
+    fingerprint_occurrence: int = 0
 
 
 @dataclass
@@ -172,10 +177,22 @@ class WealthsimpleParser(PortfolioParserBase):
     """
 
     SUPPORTED_ACCOUNT_TYPES = ["TFSA", "RRSP", "Non-registered", "FHSA"]
+
+    # Wealthsimple renamed ``transaction_date`` to ``effective_date`` and added
+    # ``effective_time`` / ``description`` columns. Both header generations are
+    # accepted; whichever date column is present is resolved once per file.
+    DATE_COLUMNS = ("transaction_date", "effective_date")
     REQUIRED_COLUMNS = [
-        "transaction_date", "account_id", "account_type", "activity_type",
-        "currency", "net_cash_amount"
+        "account_id", "account_type", "activity_type", "currency", "net_cash_amount"
     ]
+
+    # Rows of these types carry no cash amount. They are skipped with a warning
+    # instead of failing the whole file; the replay engine cannot apply them to
+    # holdings or cash, and silently coercing them to zero would hide that fact.
+    NON_CASH_ACTIVITY_TYPES = frozenset({
+        "CorporateAction", "LegacyCorporateAction", "Split", "StockDividend",
+        "Correction", "OptionAssign", "OptionExpiry", "NonCashDistribution",
+    })
 
     # CDR suffix patterns (Canadian Depositary Receipts)
     # Single source of truth: backend/shared/cdr_utils.py
@@ -187,10 +204,12 @@ class WealthsimpleParser(PortfolioParserBase):
         self.warnings = []
         transactions: list[ParsedTransaction] = []
         account_summary: dict[str, int] = {}
+        fingerprint_counts: dict[str, int] = {}
 
         try:
-            # Parse CSV
-            csv_file = io.StringIO(csv_content)
+            # A UTF-8 BOM is common in brokerage exports and would otherwise
+            # turn the first header into "\ufeffeffective_date".
+            csv_file = io.StringIO(csv_content.lstrip("\ufeff"))
             reader = csv.DictReader(csv_file)
 
             if not reader.fieldnames:
@@ -205,8 +224,9 @@ class WealthsimpleParser(PortfolioParserBase):
                     account_type_summary={},
                 )
 
-            # Validate columns
-            if not self._validate_columns(list(reader.fieldnames)):
+            headers = list(reader.fieldnames)
+            date_column = self._resolve_date_column(headers)
+            if not date_column or not self._validate_columns(headers):
                 return ParseResult(
                     success=False,
                     transactions=[],
@@ -230,8 +250,8 @@ class WealthsimpleParser(PortfolioParserBase):
                     continue
 
                 # Skip CSV footer row ("As of 2026-05-10 13:55 GMT-04:00")
-                raw_date = row.get("transaction_date")
-                if raw_date and not raw_date.strip()[:10].count("-") == 2:
+                raw_date = (row.get(date_column) or "").strip()
+                if not re.match(r"^\d{4}-\d{2}-\d{2}", raw_date):
                     skipped_rows += 1
                     continue
 
@@ -243,15 +263,20 @@ class WealthsimpleParser(PortfolioParserBase):
                     skipped_rows += 1
                     continue
 
-                # Skip corporate actions with a warning (no net_cash_amount, hand-led manually)
-                corp_action_types = {"LegacyCorporateAction", "CorporateAction", "Split", "StockDividend"}
-                if activity_type in corp_action_types:
-                    raw_symbol = (row.get("symbol") or "").strip() or None
-                    activity_sub = (row.get("activity_sub_type") or "").strip() or None
-                    self.warnings.append(
-                        f"Corporate action skipped (row: {activity_type}/{activity_sub} "
-                        f"for {raw_symbol or 'N/A'}) — manual adjustment may be needed"
-                    )
+                # Corporate actions have always been skipped: the replay engine
+                # cannot apply them and they need manual adjustment.
+                if activity_type in {"LegacyCorporateAction", "CorporateAction", "Split", "StockDividend"}:
+                    self._warn_non_cash_row(activity_type, row)
+                    skipped_rows += 1
+                    continue
+
+                # Other non-cash rows (quantity corrections, option events,
+                # legacy actions) used to raise and abort the entire file.
+                if (
+                    activity_type in self.NON_CASH_ACTIVITY_TYPES
+                    and not (row.get("net_cash_amount") or "").strip()
+                ):
+                    self._warn_non_cash_row(activity_type, row)
                     skipped_rows += 1
                     continue
 
@@ -260,7 +285,10 @@ class WealthsimpleParser(PortfolioParserBase):
 
                 # Parse transaction
                 try:
-                    tx = self._parse_row(row)
+                    tx = self._parse_row(row, date_column=date_column)
+                    occurrence = fingerprint_counts.get(tx.row_fingerprint, 0)
+                    fingerprint_counts[tx.row_fingerprint] = occurrence + 1
+                    tx.fingerprint_occurrence = occurrence
                     transactions.append(tx)
                 except Exception as e:
                     self.errors.append(f"Row {total_rows}: {e!s}")
@@ -298,11 +326,30 @@ class WealthsimpleParser(PortfolioParserBase):
                 account_type_summary={},
             )
 
-    def _parse_row(self, row: dict[str, str]) -> ParsedTransaction:
+    def _resolve_date_column(self, headers: list[str]) -> str | None:
+        """Return the date column used by this export, or record an error."""
+        for column in self.DATE_COLUMNS:
+            if column in headers:
+                return column
+        supported = ", ".join(self.DATE_COLUMNS)
+        self.errors.append(f"Missing required columns: one of {supported}")
+        return None
+
+    def _warn_non_cash_row(self, activity_type: str, row: dict[str, str]) -> None:
+        raw_symbol = (row.get("symbol") or "").strip() or None
+        activity_sub = (row.get("activity_sub_type") or "").strip() or None
+        self.warnings.append(
+            f"Non-cash {activity_type} skipped (row: {activity_type}/{activity_sub} "
+            f"for {raw_symbol or 'N/A'}) — manual adjustment may be needed"
+        )
+
+    def _parse_row(
+        self, row: dict[str, str], *, date_column: str = "transaction_date"
+    ) -> ParsedTransaction:
         """Parse a single CSV row into ParsedTransaction."""
 
         # Required fields
-        transaction_date = self._parse_date(row.get("transaction_date"))
+        transaction_date = self._parse_date(row.get(date_column))
         if not transaction_date:
             raise ValueError("Missing or invalid transaction_date")
 
@@ -354,6 +401,23 @@ class WealthsimpleParser(PortfolioParserBase):
         if net_cash is None:
             raise ValueError("Missing or invalid net_cash_amount")
 
+        identity = {
+            "account_external_id": account_external_id,
+            "transaction_date": transaction_date.isoformat(),
+            "effective_time": (row.get("effective_time") or "").strip() or None,
+            "activity_type": activity_type,
+            "activity_sub_type": activity_sub_type,
+            "direction": direction,
+            "symbol": symbol,
+            "security_name": security_name,
+            "currency": currency,
+            "quantity": quantity,
+            "unit_price": unit_price,
+            "commission": commission,
+            "net_cash_amount": net_cash,
+            "description": (row.get("description") or "").strip() or None,
+        }
+
         return ParsedTransaction(
             transaction_date=transaction_date,
             settlement_date=settlement_date,
@@ -371,6 +435,7 @@ class WealthsimpleParser(PortfolioParserBase):
             net_cash_amount=net_cash,
             exchange_override=exchange_override,
             raw_data=dict(row),  # Store original row
+            row_fingerprint=csv_row_fingerprint(identity),
         )
 
     def normalize_symbol(self, symbol: str, security_name: str) -> str:
@@ -409,6 +474,23 @@ class WealthsimpleParser(PortfolioParserBase):
         return normalized
 
 
+# The brokerages table contains legacy labels such as ``WS_TRADE`` while the
+# parser registry and the stable CSV idempotency keys use ``wealthsimple``.
+# Canonicalising here means selecting "Wealthsimple Trade" in the UI imports
+# through the same brokerage/parser and resumes against the same events instead
+# of creating a second copy of every row.
+_BROKERAGE_ALIASES = {
+    "ws_trade": "wealthsimple",
+    "wealthsimple_trade": "wealthsimple",
+}
+
+
+def canonical_brokerage_code(brokerage_code: str) -> str:
+    """Return the canonical code used for lookup, parsing and event keys."""
+    normalized = re.sub(r"[\s\-]+", "_", (brokerage_code or "").strip().lower())
+    return _BROKERAGE_ALIASES.get(normalized, normalized)
+
+
 # Factory function for getting the correct parser
 def get_parser(brokerage_code: str) -> PortfolioParserBase:
     """
@@ -430,7 +512,7 @@ def get_parser(brokerage_code: str) -> PortfolioParserBase:
         # "questrade": QuestradeParser,
     }
 
-    parser_class = parsers.get(brokerage_code.lower())
+    parser_class = parsers.get(canonical_brokerage_code(brokerage_code))
     if not parser_class:
         raise ValueError(
             f"Unsupported brokerage: {brokerage_code}. "
