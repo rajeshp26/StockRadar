@@ -95,6 +95,34 @@ def _get_portfolio_service() -> PortfolioService:
     return PortfolioService()
 
 
+def _import_status_summary(job: dict[str, Any]) -> dict[str, int]:
+    """Build the per-category breakdown shown in the import result card.
+
+    Older jobs predate the per-category counters, so fall back to deriving
+    them from the row pipeline: total -> parsed (skipped) -> inserted (the
+    remainder were already imported).
+    """
+    total_rows = job.get("total_rows") or 0
+    rows_parsed = job.get("rows_parsed") or 0
+    rows_inserted = job.get("imported_rows") or 0
+
+    duplicate_rows = job.get("duplicate_rows")
+    if duplicate_rows is None:
+        duplicate_rows = max(0, rows_parsed - rows_inserted)
+    skipped_rows = job.get("error_rows")
+    if skipped_rows is None:
+        skipped_rows = max(0, total_rows - rows_parsed)
+
+    return {
+        "new_entries": rows_inserted,
+        "already_imported": duplicate_rows,
+        "skipped_rows": skipped_rows,
+        "accounts_created": job.get("accounts_created") or 0,
+        "accounts_updated": job.get("accounts_updated") or 0,
+        "symbols_created": job.get("symbols_created") or 0,
+    }
+
+
 _portfolio_risk_service_instance: Optional["PortfolioRiskService"] = None
 
 
@@ -818,6 +846,8 @@ async def get_import_status(
         rows_parsed = job.get("rows_parsed", 0)
         rows_inserted = job.get("imported_rows", 0)
 
+        result = _import_status_summary(job)
+
         response = ImportStatusResponse(
             success=status in ("completed", "processing", "pending"),
             import_batch_id=import_batch_id,
@@ -826,6 +856,7 @@ async def get_import_status(
             rows_parsed=rows_parsed,
             rows_inserted=rows_inserted,
             error=job.get("error_message"),
+            result=result,
         )
 
         return response

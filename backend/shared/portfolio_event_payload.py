@@ -57,12 +57,18 @@ Fields deliberately NOT persisted
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
-from typing import Any
+from decimal import Decimal
+from typing import Any, Mapping
 
 __all__ = [
     "CANONICAL_TRANSACTION_EVENT_FIELDS",
+    "CSV_ROW_IDENTITY_FIELDS",
     "build_transaction_event_data",
+    "csv_import_event_key",
+    "csv_row_fingerprint",
     "normalise_backfill_key",
     "transaction_event_key",
 ]
@@ -160,6 +166,68 @@ def transaction_event_key(account_id: int, transaction_id: int) -> str:
             "the transaction row carries no transaction_id"
         )
     return f"backfill_{account_id}_{transaction_id}"
+
+
+#: Fields that identify one brokerage CSV row. Deliberately excludes
+#: ``settlement_date`` (it is often blank on the first export and filled in a
+#: later one) and the import batch id (which changes on every re-upload).
+CSV_ROW_IDENTITY_FIELDS: tuple[str, ...] = (
+    "account_external_id",
+    "transaction_date",
+    "effective_time",
+    "activity_type",
+    "activity_sub_type",
+    "direction",
+    "symbol",
+    "security_name",
+    "currency",
+    "quantity",
+    "unit_price",
+    "commission",
+    "net_cash_amount",
+    "description",
+)
+
+
+def _canonical_identity_value(value: Any) -> str | None:
+    """Render an identity field the same way across exports and Python types."""
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        text = format(value, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text or "0"
+    return str(value).strip() or None
+
+
+def csv_row_fingerprint(identity: Mapping[str, Any]) -> str:
+    """Stable fingerprint for one normalized brokerage CSV row.
+
+    Two rows with the same economic content produce the same fingerprint even
+    when one export spells a decimal ``1.0`` and the next spells it ``1``.
+    Identical rows in the same file are disambiguated by the occurrence index
+    passed to :func:`csv_import_event_key`, so legitimate duplicate dividends
+    are not collapsed.
+    """
+    payload = {
+        field: _canonical_identity_value(identity.get(field))
+        for field in CSV_ROW_IDENTITY_FIELDS
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:32]
+
+
+def csv_import_event_key(brokerage_code: str, row_fingerprint: str, occurrence: int) -> str:
+    """Idempotency key for a CSV-sourced ``transaction_imported`` event.
+
+    Unlike ``import_{batch_id}_{index}``, this key does not change when a new
+    export is uploaded: re-importing an overlapping file resolves to the same
+    keys and the event store skips them instead of duplicating history.
+    """
+    if not row_fingerprint:
+        raise ValueError("row_fingerprint is required")
+    return f"csv_{brokerage_code.strip().lower()}_{row_fingerprint}_{occurrence}"
 
 
 def normalise_backfill_key(key: str | None) -> str:

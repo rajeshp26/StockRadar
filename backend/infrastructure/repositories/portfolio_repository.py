@@ -995,6 +995,11 @@ class PortfolioRepository:
         rows_parsed: int | None = None,
         rows_inserted: int | None = None,
         error_message: str | None = None,
+        duplicate_rows: int | None = None,
+        skipped_rows: int | None = None,
+        accounts_created: int | None = None,
+        accounts_updated: int | None = None,
+        symbols_created: int | None = None,
     ) -> bool:
         """Update import job status and progress. Returns True on success."""
         try:
@@ -1005,6 +1010,16 @@ class PortfolioRepository:
                 payload["rows_parsed"] = rows_parsed
             if rows_inserted is not None:
                 payload["imported_rows"] = rows_inserted
+            if duplicate_rows is not None:
+                payload["duplicate_rows"] = duplicate_rows
+            if skipped_rows is not None:
+                payload["error_rows"] = skipped_rows
+            if accounts_created is not None:
+                payload["accounts_created"] = accounts_created
+            if accounts_updated is not None:
+                payload["accounts_updated"] = accounts_updated
+            if symbols_created is not None:
+                payload["symbols_created"] = symbols_created
             if error_message is not None:
                 payload["error_message"] = error_message
                 payload["status"] = "failed"

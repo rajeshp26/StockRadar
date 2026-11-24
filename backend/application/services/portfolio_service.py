@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import itertools
 import logging
+import re
 import time
 import uuid
 from collections import defaultdict
@@ -17,7 +18,11 @@ from typing import Any, ClassVar
 
 import numpy as np
 
-from application.parsers.portfolio_parser import ParseResult, get_parser
+from application.parsers.portfolio_parser import (
+    ParseResult,
+    canonical_brokerage_code,
+    get_parser,
+)
 from application.services.benchmark_series_guard import (
     BenchmarkSeriesGuard,
     compute_series_fingerprint,
@@ -44,7 +49,10 @@ from providers.base import StockDataProvider
 from providers.yfinance_provider import YFinanceProvider
 from shared.cdr_utils import CDR_RATIO, is_cdr_transaction
 from shared.fx_service import FXService
-from shared.portfolio_event_payload import build_transaction_event_data
+from shared.portfolio_event_payload import (
+    build_transaction_event_data,
+    csv_import_event_key,
+)
 from shared.portfolio_stats import (
     annualize_return,
     compute_annualized_volatility,
@@ -69,6 +77,33 @@ from shared.transfer_reconciliation import (
 from shared.valuation import adjust_cdr_price
 
 logger = logging.getLogger(__name__)
+
+# The CSV parser converts dots to hyphens (BBD.A -> BBD-A, ENB.TO -> ENB-TO) so
+# stored company tickers stay stable. Option/contract identifiers contain spaces
+# and are not tickers: keep them on the event, but never send them to a provider.
+_PROVIDER_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
+_PROVIDER_SUFFIX_RE = re.compile(r"-(TO|V|NE)$", re.IGNORECASE)
+
+
+def _is_provider_ticker(symbol: str | None) -> bool:
+    """True only for identifiers a market-data provider can resolve."""
+    return bool(symbol) and bool(_PROVIDER_SYMBOL_RE.fullmatch(symbol.strip().upper()))
+
+
+def _provider_lookup_symbol(symbol: str, exchange_override: str | None = None) -> str:
+    """Return the yfinance form of a stored portfolio ticker.
+
+    ``ENB-TO`` is the stored form (fingerprint-stable); ``ENB.TO`` is what Yahoo
+    understands. The conversion is confined to the provider boundary so stored
+    symbols and event idempotency keys never change.
+    """
+    provider = _PROVIDER_SUFFIX_RE.sub(lambda m: "." + m.group(1).upper(), symbol.strip().upper())
+    if exchange_override == "TOR" and not provider.endswith(".TO"):
+        provider += ".TO"
+    elif exchange_override == "VAN" and not provider.endswith(".V"):
+        provider += ".V"
+    return provider
+
 
 # Timing decorator
 def timed(logger_: logging.Logger = logger):
@@ -135,19 +170,34 @@ class PortfolioService:
         """
         Check if this CSV has been imported before.
 
+        A no-op re-upload also gets a history row, so report the most recent
+        import that actually inserted rows; otherwise the duplicate warning
+        claims the file was previously imported with "0 transactions".
+
         Returns:
             Previous import record if found, None otherwise
         """
         try:
+            def query():
+                return (
+                    supabase.table("portfolio_import_history")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .eq("csv_hash", csv_hash)
+                )
+
             res = (
-                supabase.table("portfolio_import_history")
-                .select("*")
-                .eq("user_id", user_id)
-                .eq("csv_hash", csv_hash)
+                query()
+                .eq("status", "completed")
+                .gt("imported_rows", 0)
                 .order("started_at", desc=True)
                 .limit(1)
                 .execute()
             )
+            if res.data:
+                return res.data[0]
+
+            res = query().order("started_at", desc=True).limit(1).execute()
             return res.data[0] if res.data else None
         except Exception as e:
             logger.error(f"Failed to check duplicate import: {e}")
@@ -171,24 +221,26 @@ class PortfolioService:
         Validates input, creates a pending job record, and kicks off
         async background processing. Returns immediately.
         """
+        # Legacy brokerage labels (e.g. WS_TRADE) must resolve to the same
+        # brokerage, parser and idempotency namespace as "wealthsimple";
+        # otherwise selecting "Wealthsimple Trade" would duplicate every row.
+        brokerage_code = canonical_brokerage_code(brokerage_code)
+
         csv_hash = self._calculate_csv_hash(csv_content)
         csv_size = len(csv_content.encode('utf-8'))
         import_batch_id = uuid.uuid4()
 
-        # 1. Check for duplicate CSV
+        # 1. Check for a previous upload of this exact file. It is informational
+        # only: imports are append-only and resume by row identity, so a repeat
+        # upload must be allowed to add rows that arrived after the last export.
         previous_import = await self.check_duplicate_import(user_id, csv_hash)
+        duplicate_warning = None
         if previous_import:
-            return {
-                "success": False,
-                "error": "This CSV file has already been imported",
-                "duplicate_import": True,
-                "previous_import_date": previous_import["started_at"],
-                "previous_import_id": previous_import["import_id"],
-                "warning": (
-                    f"Previously imported on {previous_import['started_at']}: "
-                    f"{previous_import['imported_rows']} transactions"
-                ),
-            }
+            duplicate_warning = (
+                "This CSV has already been imported; only new rows will be added. "
+                f"Previously imported on {previous_import['started_at']}: "
+                f"{previous_import['imported_rows']} transactions"
+            )
 
         # 2. Validate brokerage
         brokerage = self.portfolio_repo.get_brokerage_by_code(brokerage_code)
@@ -202,9 +254,13 @@ class PortfolioService:
         parse_result: ParseResult = parser.parse_csv(csv_content, account_filter)
 
         if not parse_result.success:
+            # Surface the parser's concrete reason (e.g. "Missing required
+            # columns: effective_date") — a bare "CSV parsing failed" is what
+            # made the UI show a generic failure for a fixable CSV problem.
+            details = "; ".join(parse_result.errors[:3]) if parse_result.errors else "Unknown parsing error"
             return {
                 "success": False,
-                "error": "CSV parsing failed",
+                "error": f"CSV parsing failed: {details}",
                 "errors": parse_result.errors,
                 "warnings": parse_result.warnings,
             }
@@ -246,11 +302,16 @@ class PortfolioService:
                 account_filter=account_filter,
                 parse_result=parse_result,
                 brokerage_id=brokerage_id,
+                brokerage_code=brokerage_code,
                 user_id=user_id,
             )
         )
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+        warnings = list(parse_result.warnings)
+        if duplicate_warning:
+            warnings.append(duplicate_warning)
 
         return {
             "success": True,
@@ -258,7 +319,15 @@ class PortfolioService:
             "status": "pending",
             "total_rows": total_rows,
             "account_types": parse_result.account_type_summary,
-            "warnings": parse_result.warnings,
+            "warnings": warnings,
+            "duplicate_import": bool(previous_import),
+            "previous_import_date": (
+                previous_import.get("started_at") if previous_import else None
+            ),
+            "previous_import_id": (
+                previous_import.get("import_id") if previous_import else None
+            ),
+            "warning": duplicate_warning,
         }
 
     async def _process_import_background(
@@ -269,16 +338,36 @@ class PortfolioService:
         account_filter: list[str] | None,
         parse_result: ParseResult,
         brokerage_id: int,
+        brokerage_code: str,
         user_id: int,
-    ) -> None:
+    ) -> dict[str, Any]:
         """
         Process a queued CSV import in the background.
         Updates progress in portfolio_import_history throughout.
         """
         repo = self.portfolio_repo
+        created_company_ids: list[int] = []
 
         try:
             repo.update_import_progress(import_batch_id, status="processing", rows_parsed=0)
+
+            # --- Resolve duplicates BEFORE any writes ---
+            # The event log is the only persisted import result. Resolving keys
+            # first means a failed lookup (e.g. PostgREST 414 on a large in.(...)
+            # filter) cannot leave orphan accounts/companies behind, and duplicate
+            # rows never trigger company creation.
+            from infrastructure.repositories.event_store import EventStore
+
+            event_store = EventStore()
+            event_keys = [
+                csv_import_event_key(
+                    brokerage_code, tx.row_fingerprint, tx.fingerprint_occurrence
+                )
+                for tx in parse_result.transactions
+            ]
+            existing_keys = event_store.get_existing_idempotency_keys(event_keys)
+            new_flags = [key not in existing_keys for key in event_keys]
+            duplicate_count = len(event_keys) - sum(new_flags)
 
             # --- Create accounts ---
             accounts_map: dict[str, int] = {}
@@ -302,9 +391,11 @@ class PortfolioService:
             repo.update_import_progress(import_batch_id, rows_parsed=len(parse_result.transactions))
 
             # --- Company lookup (with exchange override for CDR symbols) ---
+            # Only genuinely new rows may create companies; duplicate-only symbols
+            # have no event to reference their company and would be pure debris.
             symbols_meta: dict[str, str | None] = {}
-            for tx in parse_result.transactions:
-                if tx.symbol:
+            for tx, is_new in zip(parse_result.transactions, new_flags, strict=True):
+                if is_new and tx.symbol:
                     override = getattr(tx, "exchange_override", None)
                     if tx.symbol not in symbols_meta:
                         symbols_meta[tx.symbol] = override
@@ -313,18 +404,21 @@ class PortfolioService:
             companies_map, symbols_created = await self._ensure_companies_exist_with_tracking(
                 symbols_meta
             )
+            created_company_ids = [
+                companies_map[symbol] for symbol in symbols_created if symbol in companies_map
+            ]
 
             # --- Convert to DB records ---
             db_transactions = []
             symbols_missing = set()
 
-            for tx in parse_result.transactions:
+            for tx, is_new in zip(parse_result.transactions, new_flags, strict=True):
                 account_id = accounts_map[tx.account_external_id]
                 company_id = None
 
                 if tx.symbol:
                     company_id = companies_map.get(tx.symbol)
-                    if not company_id:
+                    if is_new and not company_id:
                         symbols_missing.add(tx.symbol)
 
                 db_transactions.append({
@@ -349,48 +443,53 @@ class PortfolioService:
                 })
 
             # --- Write events only (legacy transactions table is frozen) ---
-            inserted_count = len(db_transactions)
-            duplicate_count = 0
+            # Keys are derived from row content, not from this batch's UUID or
+            # row position, so an overlapping export resumes instead of
+            # duplicating history.
             transfer_reconciliation = None
-            try:
-                from infrastructure.repositories.event_store import EventStore
-                event_store = EventStore()
-                tx_events = []
-                for i, tx_data in enumerate(db_transactions):
-                    event_key = f"import_{import_batch_id}_{i}"
-                    tx_events.append({
-                        "event_type": "transaction_imported",
-                        "aggregate_id": f"account_{tx_data.get('account_id')}",
-                        "aggregate_type": "account",
-                        "data": build_transaction_event_data(
-                            account_id=tx_data.get("account_id"),
-                            company_id=tx_data.get("company_id"),
-                            transaction_date=tx_data.get("transaction_date"),
-                            settlement_date=tx_data.get("settlement_date"),
-                            activity_type=tx_data.get("activity_type"),
-                            activity_sub_type=tx_data.get("activity_sub_type"),
-                            direction=tx_data.get("direction"),
-                            symbol=tx_data.get("symbol"),
-                            security_name=tx_data.get("security_name"),
-                            exchange_override=tx_data.get("exchange_override"),
-                            quantity=tx_data.get("quantity"),
-                            unit_price=tx_data.get("unit_price"),
-                            net_cash_amount=tx_data.get("net_cash_amount"),
-                            currency=tx_data.get("currency"),
-                        ),
-                        "metadata": {
-                            "import_batch_id": str(import_batch_id),
-                            "entry_source": "csv_import",
-                        },
-                        "idempotency_key": event_key,
-                    })
-                event_store.append_events_batch(tx_events)
-                transfer_reconciliation = reconcile_transfers(tx_events)
-            except Exception as e:
-                logger.error(
-                    f"Dual-write event creation failed for batch {import_batch_id}: {e}. "
-                    f"Continuing import — events can be repaired via --repair-all."
-                )
+            new_events = []
+            for tx, tx_data, event_key, is_new in zip(
+                parse_result.transactions,
+                db_transactions,
+                event_keys,
+                new_flags,
+                strict=True,
+            ):
+                if not is_new:
+                    continue
+                new_events.append({
+                    "event_type": "transaction_imported",
+                    "aggregate_id": f"account_{tx_data.get('account_id')}",
+                    "aggregate_type": "account",
+                    "data": build_transaction_event_data(
+                        account_id=tx_data.get("account_id"),
+                        company_id=tx_data.get("company_id"),
+                        transaction_date=tx_data.get("transaction_date"),
+                        settlement_date=tx_data.get("settlement_date"),
+                        activity_type=tx_data.get("activity_type"),
+                        activity_sub_type=tx_data.get("activity_sub_type"),
+                        direction=tx_data.get("direction"),
+                        symbol=tx_data.get("symbol"),
+                        security_name=tx_data.get("security_name"),
+                        exchange_override=tx_data.get("exchange_override"),
+                        quantity=tx_data.get("quantity"),
+                        unit_price=tx_data.get("unit_price"),
+                        net_cash_amount=tx_data.get("net_cash_amount"),
+                        currency=tx_data.get("currency"),
+                    ),
+                    "metadata": {
+                        "import_batch_id": str(import_batch_id),
+                        "entry_source": "csv_import",
+                    },
+                    "idempotency_key": event_key,
+                })
+
+            # The event log is the only persisted import result: a failure here
+            # must fail the job, not report a successful import with zero rows.
+            if new_events:
+                event_store.append_events_batch(new_events)
+            inserted_count = len(new_events)
+            transfer_reconciliation = reconcile_transfers(new_events)
 
             repo.update_import_progress(import_batch_id, rows_inserted=inserted_count)
 
@@ -455,6 +554,11 @@ class PortfolioService:
                 status="completed",
                 rows_parsed=len(parse_result.transactions),
                 rows_inserted=inserted_count,
+                duplicate_rows=duplicate_count,
+                skipped_rows=parse_result.skipped_rows,
+                accounts_created=accounts_created,
+                accounts_updated=len(accounts_map),
+                symbols_created=len(symbols_created),
             )
 
             logger.info(
@@ -462,14 +566,46 @@ class PortfolioService:
                 f"{inserted_count} inserted, {duplicate_count} duplicates, "
                 f"{len(accounts_map)} accounts updated"
             )
+            return result
 
         except Exception as e:
             logger.error(f"Background import {import_batch_id} failed: {e}", exc_info=True)
+            # Compensate for companies this batch created: without events they
+            # are unreferenced debris. Never delete a company an event uses.
+            self._purge_unreferenced_companies(created_company_ids)
             repo.update_import_progress(
                 import_batch_id,
                 status="failed",
                 error_message=f"Import failed: {e!s}",
             )
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def _purge_unreferenced_companies(company_ids: list[int]) -> None:
+        """Delete only companies created by a failed import that no event references."""
+        if not company_ids:
+            return
+        try:
+            rows = (
+                supabase.table("portfolio_events")
+                .select("data")
+                .in_("data->>company_id", [str(cid) for cid in company_ids])
+                .execute()
+                .data
+                or []
+            )
+            referenced = {
+                int((row.get("data") or {}).get("company_id"))
+                for row in rows
+                if isinstance(row.get("data"), dict)
+                and (row.get("data") or {}).get("company_id") is not None
+            }
+            orphans = [cid for cid in company_ids if cid not in referenced]
+            if orphans:
+                supabase.table("companies").delete().in_("company_id", orphans).execute()
+                logger.warning(f"Removed {len(orphans)} company record(s) from failed import")
+        except Exception as cleanup_exc:
+            logger.warning(f"Could not clean up companies from failed import: {cleanup_exc}")
 
     async def _ensure_companies_exist_with_tracking(
         self, symbols: dict[str, str | None]
@@ -507,13 +643,23 @@ class PortfolioService:
         missing = set(symbols.keys()) - companies_map.keys()
         if missing:
             logger.info(f"Creating {len(missing)} missing companies")
-            for idx, symbol in enumerate(sorted(missing)):
+            provider_calls = 0
+            for symbol in sorted(missing):
+                if not _is_provider_ticker(symbol):
+                    # Option/contract identifiers (e.g. "GIS   260918P00030000")
+                    # are not tickers. Keep them on the event with no company_id;
+                    # never send them to a market-data provider.
+                    logger.warning(
+                        f"Skipping company creation for non-ticker identifier {symbol!r}"
+                    )
+                    continue
                 try:
                     # Rate-limit: insert a small delay between provider calls to
                     # avoid triggering Yahoo Finance rate limiting (especially
                     # during CSV imports with many unique tickers).
-                    if idx > 0:
+                    if provider_calls > 0:
                         await asyncio.sleep(0.5)
+                    provider_calls += 1
                     company_id = await self._create_company_from_symbol(symbol, exchange_override=symbols.get(symbol))
                     if company_id:
                         companies_map[symbol] = company_id
@@ -1373,28 +1519,30 @@ class PortfolioService:
             company_id if successful, None if failed
         """
         try:
-            # 1. Determine lookup symbol based on exchange override
-            lookup_symbol = symbol
-            if exchange_override == "TOR":
-                lookup_symbol = symbol + ".TO"
-            elif exchange_override == "VAN":
-                lookup_symbol = symbol + ".V"
+            # 1. Convert the stored (fingerprint-stable) ticker to provider form.
+            #    ENB-TO is stored in companies/events; Yahoo only knows ENB.TO.
+            base_symbol = _provider_lookup_symbol(symbol)
+            lookup_symbol = _provider_lookup_symbol(symbol, exchange_override)
 
             # Attempt lookup
             sd = self.stock_provider.get_stock_details(lookup_symbol)
 
             # 2. If override failed (e.g., CDR no longer trades on TSX),
-            #    fall back to unsuffixed lookup
+            #    fall back to the unsuffixed provider symbol
             if not sd and exchange_override:
                 logger.warning(f"Exchange override {exchange_override} failed for {symbol}, falling back to normal lookup")
-                sd = self.stock_provider.get_stock_details(symbol)
+                sd = self.stock_provider.get_stock_details(base_symbol)
 
-            # 3. Retry with Canadian exchange suffixes if still no data
+            # 3. Retry with Canadian exchange suffixes if still no data. Skip a
+            #    suffix already present: ENB.TO + .TO => ENB.TO.TO (404).
             if not sd:
                 for suffix in [".TO", ".V"]:
-                    sd = self.stock_provider.get_stock_details(symbol + suffix)
+                    if base_symbol.endswith(suffix):
+                        continue
+                    provider_symbol = base_symbol + suffix
+                    sd = self.stock_provider.get_stock_details(provider_symbol)
                     if sd:
-                        logger.info(f"Resolved {symbol} → {symbol + suffix}")
+                        logger.info(f"Resolved {symbol} → {provider_symbol}")
                         break
 
             if not sd:

@@ -16,7 +16,7 @@ import { useImportTransactions, useBrokerages, useImportStatus } from '../hooks/
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { QK } from '@/lib/query-keys';
-import { ACCOUNT_TYPE_LABELS } from '../types/portfolio.types';
+import { ACCOUNT_TYPE_LABELS, type ImportSummary } from '../types/portfolio.types';
 import { cn } from '@/lib/utils';
 
 interface ImportTransactionsModalProps {
@@ -30,6 +30,21 @@ const STEP_MESSAGES: Record<string, string> = {
     completed: 'Import complete!',
     failed: 'Import failed',
 };
+
+const countLabel = (n: number, singular: string, pluralForm?: string) =>
+    `${n.toLocaleString()} ${n === 1 ? singular : (pluralForm ?? `${singular}s`)}`;
+
+function describeImportError(raw?: string | null): string {
+    const message = raw?.trim();
+    if (!message) return 'An error occurred during import.';
+    if (/missing required columns/i.test(message)) {
+        return `${message.replace(/\.$/, '')}. Expected columns include effective_date (or transaction_date), account_id, activity_type, symbol and net_cash_amount.`;
+    }
+    if (/unsupported brokerage/i.test(message)) {
+        return `${message.replace(/\.$/, '')}. Select a supported brokerage and try again.`;
+    }
+    return message;
+}
 
 export function ImportTransactionsModal({ open, onOpenChange }: ImportTransactionsModalProps) {
     const { portfolioService } = useServices();
@@ -46,6 +61,22 @@ export function ImportTransactionsModal({ open, onOpenChange }: ImportTransactio
 
     const { data: importStatus } = useImportStatus(importBatchId);
 
+    // The status endpoint returns a per-category breakdown. Derive it from the
+    // row pipeline for jobs created before that breakdown existed, so an old
+    // job still explains an exact repeat upload correctly.
+    const summary: ImportSummary = importStatus?.result ?? {
+        new_entries: importStatus?.rows_inserted ?? 0,
+        already_imported: Math.max(0, (importStatus?.rows_parsed ?? 0) - (importStatus?.rows_inserted ?? 0)),
+        skipped_rows: Math.max(0, (importStatus?.total_rows ?? 0) - (importStatus?.rows_parsed ?? 0)),
+        accounts_created: 0,
+        accounts_updated: 0,
+        symbols_created: 0,
+    };
+    const isComplete = importStatus?.status === 'completed';
+    // An exact re-upload is a success, but "0 transactions imported" reads as
+    // a failure. Treat it as its own state with an unambiguous message.
+    const isNoOpReupload = isComplete && summary.new_entries === 0 && summary.already_imported > 0;
+
     const availableAccountTypes =
         selectedBrokerage === 'wealthsimple'
             ? ['TFSA', 'RRSP', 'Non-registered', 'FHSA']
@@ -61,18 +92,38 @@ export function ImportTransactionsModal({ open, onOpenChange }: ImportTransactio
             queryClient.invalidateQueries({ queryKey: QK.portfolioOverview() });
             queryClient.invalidateQueries({ queryKey: QK.portfolioAccounts() });
             queryClient.invalidateQueries({ queryKey: QK.portfolioHoldings() });
-            toast({
-                title: 'Import Successful',
-                description: `Imported ${importStatus.rows_inserted} transactions.`,
-            });
+
+            if (summary.new_entries === 0 && summary.already_imported > 0) {
+                toast({
+                    title: 'Already Up to Date',
+                    description: `All ${countLabel(summary.already_imported, 'row')} were already imported — no new transactions were added.`,
+                });
+            } else {
+                const breakdown = [
+                    summary.new_entries > 0
+                        ? `${countLabel(summary.new_entries, 'new transaction')} added`
+                        : null,
+                    summary.already_imported > 0
+                        ? `${countLabel(summary.already_imported, 'row')} already imported`
+                        : null,
+                    summary.skipped_rows > 0
+                        ? `${countLabel(summary.skipped_rows, 'row')} skipped`
+                        : null,
+                ].filter(Boolean);
+                toast({
+                    title: 'Import Successful',
+                    description: breakdown.join(' · ') || 'Import complete.',
+                });
+            }
         } else if (importStatus.status === 'failed') {
             toast({
                 title: 'Import Failed',
-                description: importStatus.error || 'An error occurred during import',
+                description: describeImportError(importStatus.error),
                 variant: 'destructive',
             });
         }
-    }, [importStatus, queryClient, toast]);
+        // Depend on the primitive counts, not the recreated `summary` object.
+    }, [importStatus, queryClient, toast, summary.new_entries, summary.already_imported, summary.skipped_rows]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -136,12 +187,13 @@ export function ImportTransactionsModal({ open, onOpenChange }: ImportTransactio
     // Determine display state
     const isQueued = importMutation.isSuccess && importMutation.data?.success && !importBatchId;
     const isPolling = !!importBatchId && (!importStatus || (importStatus.status !== 'completed' && importStatus.status !== 'failed'));
-    const isComplete = importStatus?.status === 'completed';
     const isFailed = (importStatus?.status === 'failed')
         || (importMutation.isError && !importBatchId)
         || (importMutation.data?.success === false && !importBatchId && !isDuplicateImport);
     const isProcessing = isQueued || isPolling;
-    const canImport = selectedBrokerage && selectedFile && !isProcessing && !importMutation.isPending && !isDuplicateImport;
+    // A duplicate CSV is no longer a hard stop: imports resume by row identity,
+    // so re-uploading is how a user picks up transactions added to a later export.
+    const canImport = selectedBrokerage && selectedFile && !isProcessing && !importMutation.isPending;
 
     const progressPct = importStatus && importStatus.total_rows > 0
         ? Math.round((Math.max(importStatus.rows_parsed, importStatus.rows_inserted) / importStatus.total_rows) * 100)
@@ -302,27 +354,59 @@ export function ImportTransactionsModal({ open, onOpenChange }: ImportTransactio
                                 <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
                                     <div
                                         className="h-full bg-indigo-500 rounded-full transition-all duration-500 ease-out"
-                                        style={{ width: `${Math.min(progressPct, 99)}%` }}
+                                        style={{ width: `${Math.min(progressPct, 99)}%` /* stack-allow: inline-style */ }}
                                     />
                                 </div>
                             )}
                         </div>
                     )}
 
-                    {/* SUCCESS */}
+                    {/* SUCCESS / NO-OP RE-UPLOAD */}
                     {isComplete && (
-                        <div className="glass-card p-4 border border-emerald-500/20">
+                        <div className={cn(
+                            'glass-card p-4 border',
+                            isNoOpReupload ? 'border-indigo-400/20' : 'border-emerald-500/20',
+                        )}>
                             <div className="flex items-start gap-3">
-                                <CheckCircle2 className="h-5 w-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                                <CheckCircle2 className={cn(
+                                    'h-5 w-5 flex-shrink-0 mt-0.5',
+                                    isNoOpReupload ? 'text-indigo-400' : 'text-emerald-400',
+                                )} />
                                 <div className="flex-1 space-y-2">
-                                    <p className="text-sm font-medium text-white">Import Successful</p>
+                                    <p className="text-sm font-medium text-white">
+                                        {isNoOpReupload ? 'Nothing New to Import' : 'Import Successful'}
+                                    </p>
                                     <div className="space-y-1">
-                                        <p className="text-xs text-white/60">
-                                            {importStatus.rows_inserted} transactions imported
-                                        </p>
-                                        {importStatus.total_rows - importStatus.rows_inserted > 0 && (
+                                        {summary.new_entries > 0 && (
+                                            <p className="text-xs text-emerald-400">
+                                                {countLabel(summary.new_entries, 'new transaction')} added
+                                            </p>
+                                        )}
+                                        {summary.already_imported > 0 && (
+                                            <p className="text-xs text-white/60">
+                                                {countLabel(summary.already_imported, 'row')} already imported — skipped
+                                            </p>
+                                        )}
+                                        {summary.skipped_rows > 0 && (
                                             <p className="text-xs text-amber-400">
-                                                {importStatus.total_rows - importStatus.rows_inserted} duplicate(s) skipped
+                                                {countLabel(summary.skipped_rows, 'row')} skipped (blank amounts or unsupported activity)
+                                            </p>
+                                        )}
+                                        {isNoOpReupload && (
+                                            <p className="text-xs text-white/40">
+                                                Your portfolio is already up to date. No changes were made.
+                                            </p>
+                                        )}
+                                        {(summary.accounts_created > 0 || summary.symbols_created > 0) && (
+                                            <p className="text-xs text-white/40">
+                                                {[
+                                                    summary.accounts_created > 0
+                                                        ? `${countLabel(summary.accounts_created, 'new account')} created`
+                                                        : null,
+                                                    summary.symbols_created > 0
+                                                        ? `${countLabel(summary.symbols_created, 'new company', 'new companies')} created`
+                                                        : null,
+                                                ].filter(Boolean).join(' · ')}
                                             </p>
                                         )}
                                     </div>
@@ -339,7 +423,11 @@ export function ImportTransactionsModal({ open, onOpenChange }: ImportTransactio
                                 <div className="flex-1">
                                     <p className="text-sm font-medium text-white">Import Failed</p>
                                     <p className="text-xs text-white/60">
-                                        {importStatus?.error || importMutation.error?.message || 'An error occurred during import'}
+                                        Reason: {describeImportError(
+                                            importStatus?.error
+                                            || importMutation.data?.error
+                                            || importMutation.error?.message
+                                        )}
                                     </p>
                                 </div>
                             </div>

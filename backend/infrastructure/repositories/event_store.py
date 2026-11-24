@@ -1,4 +1,5 @@
 from collections import Counter
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -15,6 +16,30 @@ PROJECTION_IMPORT_SOURCE = "portfolio_holdings"
 # Captured state, as opposed to recorded history. Checkpoints reset the account on replay
 # instead of adding to it, and are structurally incapable of being backdated.
 CHECKPOINT_EVENT_TYPE = "position_state_checkpoint"
+
+# PostgREST puts `in.(...)` filters in the GET query string. With real CSV keys
+# (51 chars) a 200-key chunk builds a ~10 KB URL and Supabase returns 414
+# "URI too long" — reproduced against the local stack (150 keys OK, 200 fail).
+# Pack by encoded length instead of a fixed count so longer keys cannot
+# silently push a chunk over the proxy limit.
+MAX_IDEMPOTENCY_FILTER_CHARS = 4000
+
+
+def _pack_idempotency_key_chunks(keys: list[str]) -> Iterator[list[str]]:
+    """Yield chunks whose estimated `in.(...)` filter stays under the URI budget."""
+    chunk: list[str] = []
+    size = 0
+    for key in keys:
+        # Separators and parens are percent-encoded as %2C/%28/%29; allow
+        # generous headroom plus the select/filter/table-path overhead.
+        cost = len(key) + 4
+        if chunk and size + cost > MAX_IDEMPOTENCY_FILTER_CHARS:
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(key)
+        size += cost
+    if chunk:
+        yield chunk
 
 
 def _assert_state_import_not_backdated(event: dict[str, Any], captured_on: date) -> None:
@@ -139,6 +164,30 @@ class EventStore:
                     inserted = self.client.table(self.TABLE).insert(pending).execute().data or []
                 return existing_rows + inserted
             raise
+
+    def get_existing_idempotency_keys(self, keys: list[str]) -> set[str]:
+        """Return the subset of ``keys`` already present in the event log.
+
+        Used by resumable CSV imports to append only rows that are genuinely
+        new. A failed lookup must raise: treating it as "nothing imported yet"
+        would duplicate the entire event history.
+        """
+        if not keys:
+            return set()
+        existing: set[str] = set()
+        for chunk in _pack_idempotency_key_chunks(keys):
+            res = (
+                self.client.table(self.TABLE)
+                .select("idempotency_key")
+                .in_("idempotency_key", chunk)
+                .execute()
+            )
+            chunk_keys = set(chunk)
+            for row in res.data or []:
+                key = row.get("idempotency_key")
+                if key in chunk_keys:
+                    existing.add(key)
+        return existing
 
     def get_all_events(
         self,

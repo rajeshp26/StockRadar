@@ -4,7 +4,12 @@ Tests for portfolio CSV parser — CDR detection and exchange_override.
 
 import pytest
 
-from application.parsers.portfolio_parser import ParsedTransaction, WealthsimpleParser
+from application.parsers.portfolio_parser import (
+    ParsedTransaction,
+    WealthsimpleParser,
+    canonical_brokerage_code,
+    get_parser,
+)
 
 
 @pytest.fixture
@@ -188,3 +193,14 @@ class TestWealthsimpleParserCDR:
         tx: ParsedTransaction = parser._parse_row(row)
         assert tx.symbol is None
         assert tx.exchange_override is None
+
+
+class TestBrokerageCodeCanonicalisation:
+    """Legacy brokerage labels must use the same parser and event namespace."""
+
+    @pytest.mark.parametrize("code", [
+        "wealthsimple", "Wealthsimple", "WS_TRADE", "ws_trade", "Wealthsimple Trade",
+    ])
+    def test_wealthsimple_labels_canonicalise_to_wealthsimple(self, code):
+        assert canonical_brokerage_code(code) == "wealthsimple"
+        assert isinstance(get_parser(code), WealthsimpleParser)
